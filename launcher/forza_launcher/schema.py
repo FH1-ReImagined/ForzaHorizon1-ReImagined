@@ -51,6 +51,22 @@ def add(*a, **k):
     S.append(Setting(*a, **k))
 
 
+add("data_out", "Data Out", "Controls", "bool", False,
+    "Experimental car telemetry over UDP. RPM, controls, tire slip and derived motion are available; "
+    "some channels are not mapped yet. Requires an updated game build.",
+    "Telemetry", restart=True)
+add("data_out_ip", "Destination IP", "Controls", "str", "127.0.0.1",
+    "127.0.0.1 for an app on this PC, or the numeric IPv4 address of a device on your network.",
+    "Telemetry", restart=True)
+add("data_out_port", "Destination port", "Controls", "int", 5300,
+    "Use the port your telemetry app listens on.", "Telemetry", lo=1, hi=65535, restart=True)
+add("data_out_rate", "Telemetry rate (Hz)", "Controls", "int", 60,
+    "Maximum UDP packets per second. A stale simulation sends race off.", "Telemetry", lo=1, hi=60, restart=True)
+add("data_out_format", "Telemetry format", "Controls", "choice", "horizon",
+    "Select the matching game profile in the receiving app.", "Telemetry",
+    choices=[("horizon", "Forza Horizon 4 / 5 / 6"), ("fm7", "Forza Motorsport 7 Dash")], restart=True)
+
+
 # --- Display ---------------------------------------------------------------------------
 CAMERA_FOVS = (
     ("forza_chase_near_fov", "Chase near", 48.5),

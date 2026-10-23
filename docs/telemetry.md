@@ -1,5 +1,56 @@
 # FH1 telemetry and adaptive triggers
 
+## External Data Out (draft)
+
+Settings > Controls > Telemetry adds opt-in UDP output, destination numeric IPv4,
+port (default 5300), rate (1–60 Hz, default 60), and format. Choose the matching
+Horizon 4/5/6 profile for 324-byte packets or FM7 Dash for 311-byte packets in
+the receiving app. Output works without either haptics option. An older game
+build is rejected with a rebuild message when this is enabled. Settings stay in
+launcher.json and become child-process environment, not unknown forza.toml cvars.
+
+The complete encoder follows the [published FH6 layout](https://support.forza.net/hc/en-us/articles/51744149102611-Forza-Horizon-6-Data-Out-Documentation).
+Horizon adds CarGroup, SmashableVelDiff and SmashableMass at offsets 232–243;
+position begins at 244. FM7 Dash starts position at 232. No raw C++ struct is
+sent. Floats and integers are explicitly little-endian, inputs are converted to
+bytes, and neutral is 11/reverse 0. No game assets are transmitted.
+
+Native sampling publishes one bounded latest sample with try-lock, while a
+separate worker owns socket setup and nonblocking UDP sends. There is no DNS,
+network I/O, unbounded queue or receiver acknowledgement on a guest thread.
+After 150 ms without a sample, the worker sends race-off/zero packets; closing
+the game stops the worker and sends a final release. Pause/rewind/menu state
+comes from the existing world-state gate, independently of controller rumble.
+Output is off by default and scoped to this process. Advanced direct launches
+can set FORZA_DATA_OUT_ENABLE=1, FORZA_DATA_OUT_IP, FORZA_DATA_OUT_PORT,
+FORZA_DATA_OUT_RATE and FORZA_DATA_OUT_FORMAT (horizon or fm7).
+
+**Field coverage is not yet full live telemetry.** The runtime currently fills:
+
+- Actual engine current/idle/maximum RPM, speed, gear and processed gas/brake/
+  steer/clutch/handbrake.
+- All four contact-filtered normalized longitudinal slips, normalized slip
+  angles, wheel rotation speeds, and suspension displacement from spring rest.
+- Position and heading; velocity and acceleration derived from position and
+  monotonic time, using the horizontal heading, with reset on car changes,
+  teleports and gaps. Pitch is from the forward vector; roll is not traced.
+
+The encoder supports every standard field, but fields without a qualified FH1
+source remain zero: angular velocity, roll, normalized suspension limits,
+per-tire rumble-strip/puddle flags, per-tire surface rumble and temperatures,
+car ordinal/class/PI/drivetrain/cylinders/group, smashable details, power/torque/
+boost/fuel/distance, lap/race statistics and driving-line/AI-braking indicators.
+These are unavailable values, not measured zeros. Suspension limits are not
+estimated from a rolling observed minimum/maximum. Full field-source tracing,
+real-game disc/TU4 runs and an independent dashboard check remain acceptance
+gates; this PR must remain draft until those gates are addressed.
+
+Windows validation covers the encoder's field offsets, units, input conversion,
+neutral/reverse and inactive packets; native compilation for both builds; and
+actual sampler-to-UDP probes for both formats with haptics disabled. The probes
+check real decoded synthetic RPM/slips/inputs, inactive/stale packets, output
+length and disabled silence. The encoder and sender compile on Fedora too.
+
 ## Physics-driven Xbox triggers
 
 Updated launchers request `FORZA_TELEMETRY_PHYSICS=1`. Updated games then send
