@@ -15,6 +15,7 @@
 #include "guest_memory.h"
 #include "car_physics.h"
 #include "data_out.h"
+#include "data_out_temperature.h"
 #include <rex/memory/utils.h>
 #include <array>
 #include <algorithm>
@@ -255,6 +256,10 @@ void Physics(uint8_t* base) {
     data_out::Sample sample;
     sample.driving = physics.valid && Player().State() == Drive::kDriving;
     sample.car = physics;
+    if (physics.valid) {
+      sample.temperature = data_out::ReadTireTemperatures(car, FORZA_TU4 != 0,
+          [base](uint32_t a, void* p, size_t n) { return Read(base, a, p, n); });
+    }
     sample.position = position;
     sample.acceleration = acceleration;
     const float horizontal = std::hypot(forward[0], forward[2]);

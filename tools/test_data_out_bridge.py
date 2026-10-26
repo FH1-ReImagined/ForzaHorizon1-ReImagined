@@ -8,7 +8,9 @@ import time
 
 
 def main():
-    for form, length, offset in (('horizon', 324, 244), ('fm7', 311, 232)):
+    for form, length, offset, bad_temperature in (
+            ('horizon', 324, 244, False), ('fm7', 311, 232, False),
+            ('horizon', 324, 244, True), ('fm7', 311, 232, True)):
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as receiver:
             receiver.bind(('127.0.0.1', 0))
             receiver.settimeout(.1)
@@ -17,7 +19,7 @@ def main():
                        FORZA_DATA_OUT_FORMAT=form)
             for key in ('FORZA_TELEMETRY_PORT', 'FORZA_TELEMETRY_TOKEN', 'FORZA_TELEMETRY_PHYSICS'):
                 env.pop(key, None)  # Export must work with the haptics bridge disabled.
-            proc = subprocess.Popen([sys.argv[1], '--xbox'], env=env)
+            proc = subprocess.Popen([sys.argv[1], '--bad-temperature' if bad_temperature else '--xbox'], env=env)
             frames = []
             try:
                 deadline = time.monotonic() + 4
@@ -38,7 +40,14 @@ def main():
                 assert struct.unpack_from('<4f', p, 84) == (.25, 1.25, 2.25, 3.25)
                 assert p[offset + 71:offset + 73] == bytes([128, 128])
                 assert p[offset + 75] == 3
-            print(form, 'native UDP samples', len(frames), 'active', len(active))
+                temperatures = struct.unpack_from('<4f', p, offset + 24)
+                assert temperatures == ((0, 0, 0, 0) if bad_temperature else (79, 92, 105, 118))
+                if not bad_temperature:
+                    celsius = tuple((f - 32) * 5 / 9 for f in temperatures)
+                    assert all(abs(c - expected) < .0001 for c, expected in
+                               zip(celsius, (26.111111, 33.333333, 40.555556, 47.777778)))
+            print(form, 'invalid thermals' if bad_temperature else 'Fahrenheit thermals',
+                  'native UDP samples', len(frames), 'active', len(active))
     # Off means no socket traffic, even though the native sampler probe runs.
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as receiver:
         receiver.bind(('127.0.0.1', 0))

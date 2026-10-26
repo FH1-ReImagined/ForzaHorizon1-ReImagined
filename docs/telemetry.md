@@ -31,13 +31,16 @@ FORZA_DATA_OUT_RATE and FORZA_DATA_OUT_FORMAT (horizon or fm7).
   steer/clutch/handbrake.
 - All four contact-filtered normalized longitudinal slips, normalized slip
   angles, wheel rotation speeds, and suspension displacement from spring rest.
+- A statically traced tire-temperature path averages the three native HUD zones for
+  each tire, in Fahrenheit. The disc/TU4 reader and native UDP fixtures cover this
+  path; actual-game temperature values in either build still need qualification.
 - Position and heading; velocity and acceleration derived from position and
   monotonic time, using the horizontal heading, with reset on car changes,
   teleports and gaps. Pitch is from the forward vector; roll is not traced.
 
 The encoder supports every standard field, but fields without a qualified FH1
 source remain zero: angular velocity, roll, normalized suspension limits,
-per-tire rumble-strip/puddle flags, per-tire surface rumble and temperatures,
+per-tire rumble-strip/puddle flags and per-tire surface rumble,
 car ordinal/class/PI/drivetrain/cylinders/group, smashable details, power/torque/
 boost/fuel/distance, lap/race statistics and driving-line/AI-braking indicators.
 These are unavailable values, not measured zeros. Suspension limits are not
@@ -50,6 +53,33 @@ neutral/reverse and inactive packets; native compilation for both builds; and
 actual sampler-to-UDP probes for both formats with haptics disabled. The probes
 check real decoded synthetic RPM/slips/inputs, inactive/stale packets, output
 length and disabled silence. The encoder and sender compile on Fedora too.
+
+### Tire-temperature source and wire units
+
+The disc HUD's `CTireTemperatures` view calls ICarDynamics slots `0x2c0`, `0x2c4`
+and `0x2cc` for three zones per wheel. Each getter adds the shared wheel baseline
+at +64 to its zone delta at +52, +56 or +60. The per-tire HUD view averages those
+three values. Both disc and TU4 getters were independently checked; wheel strides
+remain 1024 and 1040 respectively. The reader uses checked big-endian reads and
+known dynamics vtables, without guest calls or writes.
+
+The HUD formatter uses temperature type 24. Its conversion table includes an
+identity unit and a conversion `(value - 32) * 5/9`, with inverse `value * 9/5 + 32`;
+the raw values are therefore Fahrenheit. The official FH6 field list does not
+specify a temperature unit. The independent receiver implementations
+[forza-telemetry](https://github.com/0x20F/forza-telemetry/tree/1acdbcae666463952c8aea5718eb9b2423aef5d3)
+and [Forza-6-telemetry's packet decoder](https://github.com/ClickClickMedia/Forza-6-telemetry/blob/523e8ba188d0f7c0a5540139174db286198e851c/app/packet.py)
+document Fahrenheit on the wire and convert to Celsius for display. This producer
+keeps Fahrenheit in both Horizon and FM7 packets; it does not convert twice.
+
+Thermals have separate optional validity. An unreadable, non-finite or malformed
+thermal sample is unavailable and serializes as four zero placeholders, per the
+existing unavailable-field contract. It never turns valid core physics or haptics
+off. The packet format has no separate validity bit for these four fields; those
+placeholders must not be treated as measured zero temperatures. Native fixtures
+use distinct zones and wheels and decode both packet formats independently.
+This source trace and synthetic coverage do not replace actual disc/TU4 gameplay
+or dashboard acceptance, and this PR remains draft.
 
 ## Physics-driven Xbox triggers
 

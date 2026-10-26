@@ -3,13 +3,15 @@
 #pragma once
 #include "car_physics.h"
 #include <cstddef>
+#include <optional>
 
 namespace forza::data_out {
 struct Sample {
   bool driving = false;
   telemetry::CarPhysics car;
   std::array<float, 3> position{}, velocity{}, acceleration{}, angular_velocity{}, angles{};
-  std::array<float, 4> normalized_suspension{}, surface_rumble{}, temperature{};
+  std::array<float, 4> normalized_suspension{}, surface_rumble{};
+  std::optional<std::array<float, 4>> temperature;  // Fahrenheit; absent means unavailable.
   std::array<uint32_t, 4> rumble_strip{}, puddle{};
   int32_t ordinal = 0, car_class = 0, pi = 0, drivetrain = 0, cylinders = 0;
   uint32_t group = 0;
@@ -56,7 +58,8 @@ inline std::array<uint8_t, 324> Encode(const Sample& s, uint32_t timestamp, bool
   }
   const size_t d = horizon ? 244 : 232;
   vector(d, s.position); number(d + 12, std::abs(s.car.speed));
-  number(d + 16, s.power); number(d + 20, s.torque); vector(d + 24, s.temperature);
+  number(d + 16, s.power); number(d + 20, s.torque);
+  if (s.temperature) vector(d + 24, *s.temperature);
   number(d + 40, s.boost); number(d + 44, s.fuel); number(d + 48, s.distance);
   number(d + 52, s.best_lap); number(d + 56, s.last_lap);
   number(d + 60, s.current_lap); number(d + 64, s.race_time);

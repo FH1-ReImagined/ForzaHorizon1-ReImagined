@@ -8,8 +8,10 @@
 #include <cstdlib>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 
-int main(int argc, char**) {
+int main(int argc, char** argv) {
+  const bool bad_temperature = argc > 1 && std::strcmp(argv[1], "--bad-temperature") == 0;
   auto* base = static_cast<uint8_t*>(VirtualAlloc(nullptr, 0x100000000ull, MEM_RESERVE, PAGE_NOACCESS));
   if (!base) return 1;
   auto word = [&](uint32_t address, uint32_t value) {
@@ -31,8 +33,12 @@ int main(int argc, char**) {
     const auto wheel = 3936 + i * (FORZA_TU4 ? 1040u : 1024u);
     number(wheel, .1f); number(wheel + (FORZA_TU4 ? 876 : 860), .02f); number(wheel + 12, 100);
     number(wheel + 496, float(i) + .25f); number(wheel + 520, -.5f);
+    number(wheel + 64, 70.0f + 10 * i);
+    number(wheel + 52, 1.0f + 3 * i); number(wheel + 56, 7.0f + 3 * i);
+    number(wheel + 60, 19.0f + 3 * i);
     word(car + wheel + (FORZA_TU4 ? 800 : 796), 0x01000000);
   }
+  if (bad_temperature) number(3936 + 52, std::numeric_limits<float>::quiet_NaN());
   const auto now = forza::telemetry::DrivingNowMs();
   for (auto time : {now - 600, now - 300, now})
     forza::telemetry::Player().Frame(time, {.stepped = true});

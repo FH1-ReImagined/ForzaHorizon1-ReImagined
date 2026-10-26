@@ -9,12 +9,17 @@ from forza_launcher.haptics.telemetry import Decoder
 
 
 def main():
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as receiver:
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as receiver, \
+            socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as data_receiver:
         receiver.bind(('127.0.0.1', 0))
         receiver.settimeout(3)
         env = dict(os.environ, FORZA_TELEMETRY_PORT=str(receiver.getsockname()[1]),
                    FORZA_TELEMETRY_TOKEN='0000000000000001', FORZA_TELEMETRY_PHYSICS='1')
-        proc = subprocess.Popen([sys.argv[1]], env=env)
+        if len(sys.argv) > 2:
+            data_receiver.bind(('127.0.0.1', 0))
+            env.update(FORZA_DATA_OUT_ENABLE='1', FORZA_DATA_OUT_IP='127.0.0.1',
+                       FORZA_DATA_OUT_PORT=str(data_receiver.getsockname()[1]))
+        proc = subprocess.Popen([sys.argv[1], *sys.argv[2:]], env=env)
         try:
             decoder = Decoder(1)
             frames = [decoder.decode(receiver.recvfrom(4096)[0]) for _ in range(6)]
