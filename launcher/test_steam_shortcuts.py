@@ -207,7 +207,9 @@ class Transactions(unittest.TestCase):
             (alias / "steam").symlink_to(self.account.root, target_is_directory=True)
         except OSError:
             self.skipTest("directory symlinks unavailable")
-        self.assertEqual(steam.accounts(self.home), [self.account])
+        # Discovery canonicalizes roots, including Windows TEMP's 8.3 aliases.
+        expected = steam.Account(self.account.root.resolve(), self.account.user)
+        self.assertEqual(steam.accounts(self.home), [expected])
         other = self.account.root / "userdata/789"
         other.mkdir()
         (other / "config").symlink_to(self.account.config, target_is_directory=True)
