@@ -94,6 +94,11 @@ of the Corresponding Source.
 
 ## Third-party components
 
+The launcher Steam shortcut and Deck clock-check approaches in
+launcher/forza_launcher/steam_shortcuts.py and deck_clock.py are inspired by Pinyon Shift's
+tools/pinyon_steam.py and tools/pinyon_deck.py (BSD-3-Clause). Its notice is retained in
+forza-recomp/LICENSE-Pinyon-Shift.
+
 Files and directories of other holders keep their own licenses and notices; the relicensing of
 this project does not change them.
 

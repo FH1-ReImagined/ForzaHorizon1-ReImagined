@@ -67,6 +67,19 @@ class PlayPage(QWidget):
         self.warn.hide()
         lay.addWidget(self.warn)
 
+        self._clock_probe = None
+        self._clock_checked = 0.0
+        self.clock_notice = label("", "warn")
+        self.clock_notice.setTextFormat(Qt.PlainText)
+        self.clock_notice.hide()
+        lay.addWidget(self.clock_notice)
+        self.clock_guide = QPushButton("Steam Deck GPU clock guide")
+        self.clock_guide.setObjectName("link")
+        self.clock_guide.clicked.connect(lambda: QDesktopServices.openUrl(
+            QUrl(GITHUB_URL + "/blob/main/docs/steam_deck.md#manual-gpu-clock")))
+        self.clock_guide.hide()
+        lay.addWidget(self.clock_guide, 0, Qt.AlignLeft)
+
         self.tuning_notice = label("Native car tuning is enabled, but its resources are missing. "
                                    "Open Setup and press Build with Title Update 4 selected.", "warn")
         self.tuning_notice.setTextFormat(Qt.PlainText)
@@ -148,7 +161,21 @@ class PlayPage(QWidget):
         else:
             self.play_requested.emit()
 
+    def _clock_result(self, result):
+        self._clock_probe.deleteLater()
+        self._clock_probe = None
+        text = result.warning() if result is not None else ""
+        self.clock_notice.setText(text)
+        self.clock_notice.setVisible(bool(text))
+        self.clock_guide.setVisible(bool(text))
+
     def refresh(self):
+        if sys.platform == "linux" and self._clock_probe is None and time.monotonic() - self._clock_checked > 5:
+            from .. import deck_clock
+            self._clock_checked = time.monotonic()
+            self._clock_probe = workers.Probe(deck_clock.check, "read Deck GPU clock", self)
+            self._clock_probe.result.connect(self._clock_result)
+            self._clock_probe.start()
         cfg = self.cfg
         root = cfg.game_files()
         if (root / "default.xex").is_file():
@@ -1187,6 +1214,11 @@ class AboutPage(QWidget):
         from .updates import UpdateCard
         self.updates = UpdateCard(cfg, window)
         lay.addWidget(self.updates)
+        self.steam = None
+        if sys.platform == "linux":
+            from .steam import SteamCard
+            self.steam = SteamCard(self)
+            lay.addWidget(self.steam)
         for text, url in (("Project page and source", GITHUB_URL),
                           ("Releases", GITHUB_URL + "/releases/latest"),
                           ("Privacy policy", PRIVACY_URL),

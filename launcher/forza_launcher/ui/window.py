@@ -300,6 +300,11 @@ class MainWindow(QMainWindow):
             self.status("Stopping the radio build before closing…")
             e.ignore()
             return
+        if self.about.steam is not None and self.about.steam.busy():
+            self.status("Finishing the Steam shortcut before closing. Keep Steam closed…")
+            QTimer.singleShot(100, self.close)
+            e.ignore()
+            return
         if self.catalogs.busy():
             self.catalogs.closing = True
             self.catalogs.cancel_task()
