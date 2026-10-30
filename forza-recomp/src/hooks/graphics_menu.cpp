@@ -748,8 +748,9 @@ bool Relevant(size_t i) {
 #endif
   if (i == 2) return BackendMode() == "off";
   if (i == kAntiAliasing) return settings[1].value == "off";
-  // The occlusion is a pass of the Vulkan renderer (SDK patch 0350).
-  if (i == kAmbientOcclusion) return rex::cvar::GetFlagByName("gpu_backend") != "d3d12";
+  // The occlusion is a pass of the Vulkan renderer (SDK patch 0350) and of the ReGPU plugin.
+  if (i == kAmbientOcclusion) return rex::cvar::GetFlagByName("gpu_backend") != "d3d12" ||
+                                     rex::cvar::GetFlagByName("gpu_plugin") == "regpu";
   if (i == 6) return rex::cvar::GetFlagByName("forza_ultrawide") == "true" ||
                      rex::cvar::GetFlagByName("forza_hud_layout") == "true";
   return true;
