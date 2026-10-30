@@ -366,7 +366,8 @@ bool ReadSlot(GuestFunc sdk, PPCContext& ctx, uint8_t* base, uint32_t slot, uint
   ctx.r4.u64 = r4;
   ctx.r5.u64 = r5;
   out = connected && buffer ? Decode(GuestPtr(base, buffer)) : PadState{};
-  if (slot == 0 && !replay.empty()) {
+  // (Once the recording has ended the pad, and the debug server's presses, take over again.)
+  if (slot == 0 && !replay.empty() && Now() <= replay.back().t + 0.5) {
     const double now = Now();
     auto it = std::upper_bound(replay.begin(), replay.end(), now,
                                [](double t, const Sample& s) { return t < s.t; });
