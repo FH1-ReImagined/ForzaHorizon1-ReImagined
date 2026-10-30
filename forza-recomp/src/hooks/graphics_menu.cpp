@@ -417,6 +417,11 @@ void Snapshot() {
                                {"fsr3_balanced", "FSR 3 Balanced"},
                                {"fsr3_performance", "FSR 3 Performance"}});
   }
+  // The ReGPU plugin's own upscaler (Glue2GPU).
+  if (rex::cvar::GetFlagByName("gpu_plugin") == "regpu")
+    modes.insert(modes.end(), {{"fsr1_quality", "FSR 1 Quality"},
+                               {"fsr1_balanced", "FSR 1 Balanced"},
+                               {"fsr1_performance", "FSR 1 Performance"}});
   for (auto &setting : settings) {
     if (setting.key == "preset" || setting.key == "anti_aliasing") continue;
     setting.value = rex::cvar::GetFlagByName(setting.cvar);
@@ -1213,8 +1218,7 @@ void Tick(PPCContext& ctx, uint8_t* base) {
       success = CommitSettings();
       completed = true;
       message = success ? "Settings saved." : "Applied, but could not save settings.";
-    } else if (rex::cvar::GetFlagByName("gpu_backend") != "vulkan" ||
-               !rex::cvar::GetFlagInfo("fh1_graphics_request")) {
+    } else if (!rex::cvar::GetFlagInfo("fh1_graphics_request")) {  // a renderer that answers it
       completed = true;
       message = "Live graphics requires the updated Vulkan renderer.";
     } else {
