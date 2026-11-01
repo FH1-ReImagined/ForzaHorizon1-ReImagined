@@ -61,7 +61,8 @@ TODO(trailer): there is no trailer yet. When one exists, add a "## Trailer" sect
 > Check the launcher you downloaded against `SHA256SUMS` ([how](#install-with-the-launcher)).
 
 **Forza Horizon 1: ReImagined** runs **Forza Horizon (Xbox 360)** natively on Windows and Linux.
-The original PowerPC executable is statically recompiled to C++ with the
+The original PowerPC executable is statically recompiled to C++ with
+[ReIGlue](https://github.com/FH1-ReImagined/ReIGlue), the project's fork of the
 [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk), the same approach as
 [RecompiledHaloReach](https://github.com/Dyotson/RecompiledHaloReach). What the project adds is under [Playing online](#playing-online) and [What you can play](#what-you-can-play).
 
