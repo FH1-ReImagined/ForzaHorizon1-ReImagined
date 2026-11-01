@@ -458,6 +458,19 @@ wheel (the first player's; ...)`. Tested with a virtual vJoy (1234:bead, listed 
 feedback: the base is the wheel; `wheel_device` set to the vJoy makes it the wheel, and as the pedal device it is
 no wheel at all.
 
+**A device the launcher and the game name differently (#562).** The launcher (SDL 2) and the game (SDL 3) can read
+different names for the same device on Windows: a Thrustmaster wheel or pedal set (a TX, a T-LCM) is
+"Thrustmaster TX Racing Wheel" in the launcher and `"44F B669"` in the game, which gets no name for it. A device
+picked by name then matched nothing in the game (the log said `wheel_pedal_device "T-LCM Pedals" is not
+connected`, and the pedals were never read). Bindings now saves the wheel, pedal, shifter and handbrake devices by
+their USB ids (`wheel_pedal_device = 044f:b371`), which both read alike, and rewrites a device saved by its name
+the next time Controls is open with it connected. In the game, a name that matches nothing is also taken for a
+joystick without a name of its own that is a known device of that kind (a T-LCM for the pedal device, a TH8 for
+the shifter, a Thrustmaster wheel for `wheel_device`), and when a configured device is not found the log lists
+every joystick the game sees once (`Wheel: SDL sees N joystick(s)`, then their name, GUID, VID, PID, axes,
+buttons and hats), so a report shows what the game has. Not tested with a real TX and T-LCM: please report them
+with the `Wheel:` lines.
+
 **Analog handbrake (#303).** The game's wheel layouts bind the handbrake to the left stick up and down as well as
 to B (gamedb.slt `WheelLayouts`, as the clutch is on the right stick Y): the Xbox 360 wheel's analog handbrake.
 The game takes the stronger of the two, and a stick direction is analog (0 to 1), so the driver sends a handbrake
@@ -480,13 +493,13 @@ edited by hand:
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `wheel_mode` | `auto` | `auto`: SDL says it is a wheel, or its name looks like one (G29, T300, Fanatec, Moza, ...). `on`: every controller without a gamepad mapping is a wheel. `off`: wheel support off |
-| `wheel_device` | found | The wheel (#306): the first player's, which pedal, shifter and handbrake devices are read with. Empty: one with force feedback first, then one SDL lists as a wheel, then the first; a device name (as Bindings lists it), SDL GUID or `vid:pid` picks one and makes it a wheel (launcher: Use as the wheel) |
+| `wheel_device` | found | The wheel (#306): the first player's, which pedal, shifter and handbrake devices are read with. Empty: one with force feedback first, then one SDL lists as a wheel, then the first; a device name (as Bindings lists it), SDL GUID or `vid:pid` (what Bindings saves) picks one and makes it a wheel (launcher: Use as the wheel) |
 | `wheel_rotation`, `wheel_lock` | 900, 900 | The wheel's rotation as set in its driver, and the travel (lock to lock) that gives the game's full steering. 900/540 makes the steering about 1.7 times quicker |
 | `wheel_deadzone`, `wheel_invert_steering` | 0, off | Steering deadzone (0 to 0.5); swap left and right |
 | `wheel_steer_offset` | 0.05 | Only with `wheel_900_steering` off: compensates an inner steering deadzone (below) |
 | `wheel_pedals` | `auto` | Separate pedals; `combined` is one axis with throttle one way and brake the other |
 | `wheel_invert_throttle`, `wheel_invert_brake` | off | Pedals found backwards |
-| `wheel_pedal_device` | found | Pedals on their own USB device: empty finds a known pedal set or one named like pedals; a device name (as Bindings lists it), SDL GUID or `vid:pid` picks one; `none` reads the wheel's own pedals |
+| `wheel_pedal_device` | found | Pedals on their own USB device: empty finds a known pedal set or one named like pedals; a device name (as Bindings lists it), SDL GUID or `vid:pid` (what Bindings saves) picks one; `none` reads the wheel's own pedals |
 | `wheel_pedal_axes` | by model or detected | Axis numbers on the pedal device, e.g. `throttle=2,brake=1,clutch=0`; a pedal set here reads the pedal device, one set in `wheel_axes` the wheel |
 | `wheel_throttle_curve`, `wheel_brake_curve` | 1.0 | Gamma: 1 linear, above 1 softer at the start |
 | `wheel_axes` | detected | e.g. `steer=0,throttle=2,brake=5,clutch=1`; a number past the wheel's axes (Clear writes 99) unbinds, a negative one means the default. `handbrake=N`: an analog handbrake on the wheel (#303; 99: none, also no handbrake device) |
