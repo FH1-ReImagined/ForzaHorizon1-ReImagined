@@ -535,7 +535,7 @@ class BindingsEditor(QWidget):
         if d is None:
             return
         named = bindings.wheel_device_match(self.settings(), d) > 0
-        self.apply({"wheel_device": "" if named else d.name})
+        self.apply({"wheel_device": "" if named else bindings.device_ref(d, self.devices)})
         self.status.setText("The wheel is chosen automatically again." if named else
                             f"{d.name} is the wheel: the first player drives with it, and pedals, "
                             "a shifter or a handbrake on their own USB device are read with it. "
@@ -616,12 +616,14 @@ class BindingsEditor(QWidget):
     def parts(self):
         """The wheel and its extras as merged snapshots lay them out (bindings.merge)."""
         axes, buttons, _ = self.backend.counts
-        out = [bindings.Part(self.device.instance, self.device.name, axes, buttons)]
+        out = [bindings.Part(self.device.instance, self.device.name, axes, buttons,
+                             bindings.device_ref(self.device, self.devices))]
         for d in self.extras():
             a, b, _ = self.backend.extra_counts(d.instance) if hasattr(self.backend, "extra_counts") \
                 else (0, 0, 0)
             if a or b:
-                out.append(bindings.Part(d.instance, d.name, a, b))
+                out.append(bindings.Part(d.instance, d.name, a, b,
+                                         bindings.device_ref(d, self.devices)))
         return out
 
     def read_parts(self, parts, snap, fallback=None):
@@ -645,6 +647,11 @@ class BindingsEditor(QWidget):
             return
         current = self.device.instance if self.device else None
         self.devices = devices
+        # A device saved by its name (an earlier launcher) is saved by its USB ids from now on: the
+        # game may read another name for it (#562).
+        moved = bindings.migrate_device_settings(self.settings(), devices)
+        if moved:
+            self.apply(moved)
         self.picker.blockSignals(True)
         self.picker.clear()
         primary = self.primary()
@@ -874,19 +881,19 @@ class BindingsEditor(QWidget):
     def finish(self, row, found, parts=()):
         self.binding = None
         label_ = self.label_of(row.action)
-        where = ""
+        where = ref = ""
         if found.kind in ("axis", "button") and len(parts) > 1:
             part, number = bindings.split(parts, found.kind, found.number)
             found = dataclasses.replace(found, number=number)
             if part:
-                where = parts[part].name
+                where, ref = parts[part].name, parts[part].setting
         if where and found.kind == "button" and bindings.is_handbrake_row(row.action):
             # The driver reads only the wheel's buttons; on a handbrake device, its axis.
             self.status.setText(f"{label_}: buttons on {where} are not read. Pull the handbrake "
                                 "(an axis) or press a button on the wheel.")
             self.refresh()
             return
-        self.apply(self.changes_for(row.action, found, where))
+        self.apply(self.changes_for(row.action, found, where, ref))
         what = bindings.source_text(found.source, self.names()) if found.source else found.describe()
         self.status.setText(f"{label_}: {what}{' on ' + where if where else ''}.")
         self.refresh()
@@ -895,19 +902,22 @@ class BindingsEditor(QWidget):
         text = self.settings().get("controller_remap", "")
         return {"controller_remap": bindings.set_controller_binding(text, self.device.guid, action, source)}
 
-    def changes_for(self, action, found, device=""):
+    def changes_for(self, action, found, device="", ref=""):
+        """The settings that bind `action` to `found`; `device` is the name of the pedal, shifter or
+        handbrake device it was found on, `ref` what the settings save for it (its USB ids)."""
         settings = self.settings()
+        ref = ref or device
         if found.kind == "source":
             return self.remap_changes(action, found.source)
         if bindings.is_handbrake_row(action):
-            changes = bindings.set_handbrake_binding(settings, found.kind, found.number, device)
+            changes = bindings.set_handbrake_binding(settings, found.kind, found.number, ref)
             if found.kind == "axis":
                 full = 32767 if found.direction > 0 else -32768
                 invert, _ = bindings.pedal_calibration(found.rest, full, False)
                 changes["wheel_invert_handbrake"] = invert
             return changes
         if device:
-            changes = bindings.set_aux_binding(settings, action, device, found.number)
+            changes = bindings.set_aux_binding(settings, action, ref, found.number, device)
         else:
             changes = bindings.set_row_on_wheel(settings, action, found.number, self.aux())
         if found.kind == "axis":

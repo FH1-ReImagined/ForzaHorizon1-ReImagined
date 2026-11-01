@@ -435,6 +435,71 @@ def device_match(setting, device):
     return 1 if s in _squash(device.name) else 0
 
 
+# --- how the settings name a device (#562) ---------------------------------------------------
+# The launcher's SDL 2 and the game's SDL 3 can read different names for the same Windows device: a
+# Thrustmaster wheel or pedal set is "Thrustmaster TX Racing Wheel" here (the product name Windows
+# registers) and "44F B669" in the game, which gets no name for it. The device settings
+# (`wheel_device` and the pedal, shifter and handbrake devices) are therefore saved by the device's
+# USB ids, "0483:0525", which both read the same and the driver matches exactly; a device without
+# ids, or one that shares them with another listed device, is saved by its name. A setting saved by
+# name (a hand-written one, or by an earlier launcher) keeps working where the names agree; Bindings
+# rewrites one that names a connected device exactly (migrate_device_settings), and the driver
+# takes a nameless known device for a name that matches nothing.
+DEVICE_KEYS = ("wheel_device", "wheel_pedal_device", "wheel_shifter_device",
+               "wheel_handbrake_device")
+_USB_ID = re.compile(r"^([0-9a-f]{4}):([0-9a-f]{4})$")
+
+
+def usb_id(text):
+    """(vid, pid) for a setting written as "0483:0525", else None."""
+    m = _USB_ID.match(_squash(text))
+    return (int(m[1], 16), int(m[2], 16)) if m else None
+
+
+def device_ref(device, devices=()):
+    """What the device settings save for `device` (a DeviceInfo): its USB ids, or its name when it
+    has none or another of `devices` has the same."""
+    if device.vid or device.pid:
+        shared = any(d.instance != device.instance and (d.vid, d.pid) == (device.vid, device.pid)
+                     for d in devices)
+        if not shared:
+            return f"{device.vid:04x}:{device.pid:04x}"
+    return device.name
+
+
+def known_device_name(vid, pid):
+    """The name of a device the launcher knows by its USB ids, else None."""
+    m = find_aux_model(vid, pid)
+    return m.name if m else known_wheel(vid, pid)
+
+
+def device_label(setting, fallback=""):
+    """A device setting as the Controls page names the device while it is not connected: a name
+    stays, "0483:0525" becomes the known model's name."""
+    text = str(setting or "").strip()
+    ids = usb_id(text)
+    if not ids:
+        return text or fallback
+    return known_device_name(*ids) or f"USB device {text.lower()}"
+
+
+def migrate_device_settings(settings, devices):
+    """{setting: "vid:pid"} for the device settings that name a connected device by exactly its
+    name: the same device, saved so that the game finds it whatever it calls it. Partial names,
+    GUIDs, ids and names no connected device has stay as they are."""
+    out = {}
+    for key in DEVICE_KEYS:
+        value = settings.get(key, "")
+        if device_choice(value) != "named" or usb_id(value):
+            continue
+        refs = {device_ref(d, devices) for d in devices if _squash(d.name) == _squash(value)}
+        if len(refs) == 1:
+            ref = refs.pop()
+            if _squash(ref) != _squash(value):
+                out[key] = ref
+    return out
+
+
 @dataclass(frozen=True)
 class AuxPick:
     pedals: int | None = None   # index into the device list
@@ -563,7 +628,8 @@ def row_device(action, settings, aux):
         own = parse_kv(settings.get("wheel_pedal_axes", "")).get(action.field, -1)
         wheel = parse_kv(settings.get("wheel_axes", "")).get(action.field, -1)
         if own >= 0:
-            return aux.get("pedals") or AuxInfo(settings.get("wheel_pedal_device") or "the pedal device")
+            return aux.get("pedals") or AuxInfo(device_label(settings.get("wheel_pedal_device"),
+                                                             "the pedal device"))
         if wheel < 0 and aux.get("pedals"):
             return aux["pedals"]
     elif is_gear_row(action) and aux.get("shifter"):
@@ -612,16 +678,18 @@ def wheel_binding_text(action, settings, wheel, aux=None):
     return text + (" (default)" if default and n is not None else "")
 
 
-def set_aux_binding(settings, action, device_name, number):
-    """The settings changes that bind a pedal or gear row on its own device `device_name`: it
-    becomes the pedal or shifter device, and bindings made on another one are dropped. None clears
-    the row there, "default" goes back to the device's default."""
+def set_aux_binding(settings, action, device_name, number, alias=""):
+    """The settings changes that bind a pedal or gear row on its own device `device_name` (what the
+    settings save for it: device_ref; `alias` is the device's name, which a setting made by name
+    also means): it becomes the pedal or shifter device, and bindings made on another one are
+    dropped. None clears the row there, "default" goes back to the device's default."""
     pedal = is_pedal_row(action)
     device_key = "wheel_pedal_device" if pedal else "wheel_shifter_device"
     key = "wheel_pedal_axes" if pedal else "wheel_shifter_device_buttons"
     values = parse_kv(settings.get(key, ""))
     out = {}
-    if device_name is not None and _squash(settings.get(device_key, "")) != _squash(device_name):
+    same = {_squash(device_name), _squash(alias)} - {""}
+    if device_name is not None and _squash(settings.get(device_key, "")) not in same:
         values = {}  # those were another device's numbers
         out[device_key] = device_name
     if number == "default":
@@ -778,11 +846,21 @@ def reset_handbrake(settings):
 
 @dataclass(frozen=True)
 class Part:
-    """One device in a merged snapshot: its axes and buttons follow the previous parts'."""
+    """One device in a merged snapshot: its axes and buttons follow the previous parts'. `ref` is
+    what the device settings save for it (device_ref); empty: its name."""
     instance: int
     name: str
     axes: int
     buttons: int
+    ref: str = ""
+
+    @property
+    def setting(self):
+        return self.ref or self.name
+
+    def matches(self, setting):
+        """Whether a device setting already names this device (by ids or by name)."""
+        return bool(_squash(setting)) and _squash(setting) in (_squash(self.setting), _squash(self.name))
 
 
 def merge(parts, snaps):
@@ -1552,7 +1630,7 @@ class Calibration:
         # first other device a pedal was found on becomes the pedal device.
         pedal_axes = parse_kv(settings.get("wheel_pedal_axes", ""))
         old_device = settings.get("wheel_pedal_device", "")
-        device = None
+        device = None  # the Part the pedals were found on
 
         def place(name, axis):
             nonlocal device, pedal_axes
@@ -1561,12 +1639,11 @@ class Calibration:
                 axes[name] = n
                 pedal_axes.pop(name, None)
                 return True
-            part_name = self.parts[part].name
             if device is None:
-                device = part_name
-                if _squash(old_device) != _squash(device):
+                device = self.parts[part]
+                if not device.matches(old_device):
                     pedal_axes = {}
-            if part_name != device:
+            if self.parts[part] != device:
                 return False
             pedal_axes[name] = n
             axes.pop(name, None)
@@ -1598,8 +1675,8 @@ class Calibration:
                 out["wheel_invert_clutch"], _ = pedal_calibration(rest, full, known(axis))
         if axes != parse_kv(settings.get("wheel_axes", "")):
             out["wheel_axes"] = format_kv(axes, AXIS_ORDER)
-        if device is not None and _squash(old_device) != _squash(device):
-            out["wheel_pedal_device"] = device
+        if device is not None and not device.matches(old_device):
+            out["wheel_pedal_device"] = device.setting
         if pedal_axes != parse_kv(settings.get("wheel_pedal_axes", "")):
             out["wheel_pedal_axes"] = format_kv(pedal_axes, PEDAL_KEYS)
         if deadzone is not None:

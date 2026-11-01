@@ -140,7 +140,7 @@ class Editor(unittest.TestCase):
         self.assertFalse(ed.use_wheel.isHidden())
         self.assertEqual(ed.use_wheel.text(), "Use as the wheel")
         ed.use_wheel.click()
-        self.assertEqual(self.cfg.settings["wheel_device"], "vJoy - Virtual Joystick")
+        self.assertEqual(self.cfg.settings["wheel_device"], "1234:bead")
         self.assertEqual(self.label(self.vjoy), "vJoy - Virtual Joystick (wheel)")
         self.assertEqual(self.label(self.wheel), "FANATEC Wheel (wheel, a second controller)")
         self.assertEqual(ed.use_wheel.text(), "Choose the wheel automatically")
