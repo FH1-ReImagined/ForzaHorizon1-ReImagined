@@ -280,6 +280,17 @@ std::string IpString(uint32_t ip) {
          std::to_string((ip >> 8) & 0xFF) + "." + std::to_string(ip & 0xFF);
 }
 
+// Another player's address as the log shows it. Players attach forza.log to public issues,
+// so a public address keeps only its first two numbers; private and LAN addresses stay whole.
+std::string PeerIpForLog(uint32_t ip) {
+  const uint32_t a = ip >> 24, b = (ip >> 16) & 0xFF;
+  const bool private_ip = a == 10 || a == 127 || (a == 172 && (b & 0xF0) == 16) ||
+                          (a == 192 && b == 168) || (a == 100 && (b & 0xC0) == 64) ||
+                          (a == 169 && b == 254);
+  if (private_ip) return IpString(ip);
+  return std::to_string(a) + "." + std::to_string(b) + ".x.x";
+}
+
 // Guest XNADDR: ina, inaOnline, wPortOnline, abEnet[6], abOnline[20].
 // LAN form: the host IP and UDP port of the instance.
 void WriteLanXnAddr(uint8_t* p, uint32_t ip, uint16_t port) {
@@ -853,7 +864,7 @@ class VNet {
     uint32_t vip = kVipNet + next_vip_++;
     vip_by_endpoint_[key] = vip;
     endpoint_by_vip_[vip] = endpoint;
-    REXLOG_INFO("FORZA_NET: peer {}:{} is 0.77.{}.{}", IpString(endpoint.ip), endpoint.port,
+    REXLOG_INFO("FORZA_NET: peer {}:{} is 0.77.{}.{}", PeerIpForLog(endpoint.ip), endpoint.port,
                 (vip >> 8) & 0xFF, vip & 0xFF);
     return vip;
   }
@@ -1162,7 +1173,7 @@ class VNet {
           if (relay_only_ || Load32(p + 4) != live_id_ || Load16(p + 8) != live_epoch_) return;
           LivePeer& peer = LivePeerLocked(id);
           if (!peer.direct.ip) {  // the first path that works; punches may arrive on several
-            REXLOG_INFO("FORZA_LIVE: direct path to player #{} via {}:{}", id, IpString(from.ip),
+            REXLOG_INFO("FORZA_LIVE: direct path to player #{} via {}:{}", id, PeerIpForLog(from.ip),
                         from.port);
             peer.direct = from;
           }
