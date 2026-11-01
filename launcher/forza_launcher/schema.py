@@ -346,8 +346,9 @@ add("wheel_mode", "Racing wheel", "Controls", "choice", "auto",
 add("wheel_device", "Wheel device", "Controls", "str", "",
     "The wheel the first player drives with, and the one pedals, a shifter or a handbrake on their "
     "own USB device are read with. Empty picks one with force feedback first (a wheel base before "
-    "a vJoy or button box); a device name as Bindings lists it (Use as the wheel), SDL GUID or "
-    "vid:pid picks that one, and makes it a wheel.", "Racing wheel", restart=True)
+    "a vJoy or button box); a device name as Bindings lists it, SDL GUID or vid:pid picks that "
+    "one, and makes it a wheel. Use as the wheel saves the vid:pid, which the game reads "
+    "whatever name Windows gives the device.", "Racing wheel", restart=True)
 add("wheel_rotation", "Wheel rotation (degrees)", "Controls", "int", 900,
     "Lock to lock, as set in the wheel's own driver.", "Racing wheel", lo=90, hi=2520, step=10)
 add("wheel_lock", "Steering lock (degrees)", "Controls", "int", 900,
@@ -392,8 +393,8 @@ add("wheel_buttons", "Button numbers", "Controls", "str", "",
 add("wheel_pedal_device", "Pedal device", "Controls", "str", "",
     "Pedals on their own USB device, read with the wheel. Empty finds known pedals (Simagic, "
     "Fanatec, Thrustmaster T-LCM, Heusinkveld, Moza, Logitech) or a device named like pedals; a "
-    "device name as Bindings lists it picks one; none reads the wheel's own pedals. Binding a "
-    "pedal row by pressing the pedal sets it.", "Racing wheel")
+    "device name as Bindings lists it, or its vid:pid, picks one; none reads the wheel's own "
+    "pedals. Binding a pedal row by pressing the pedal sets it (as vid:pid).", "Racing wheel")
 add("wheel_pedal_axes", "Pedal device axes", "Controls", "str", "",
     "Axis numbers on the pedal device, e.g. throttle=0,brake=1,clutch=2. Empty uses known pedals' "
     "layout, else detects them from where each axis rests when the game starts (pedals "
@@ -402,8 +403,9 @@ add("wheel_pedal_axes", "Pedal device axes", "Controls", "str", "",
 add("wheel_handbrake_device", "Handbrake device", "Controls", "str", "",
     "An analog handbrake on its own USB device, read with the wheel. Empty finds known handbrakes "
     "(Simagic TB-1 and TB-RS, Fanatec ClubSport Handbrake, Thrustmaster TSS) or a device named "
-    "like one; a device name as Bindings lists it picks one (also the pedal or shifter device); "
-    "none reads none. Binding the Handbrake row by pulling the handbrake sets it.",
+    "like one; a device name as Bindings lists it, or its vid:pid, picks one (also the pedal or "
+    "shifter device); none reads none. Binding the Handbrake row by pulling the handbrake sets "
+    "it (as vid:pid).",
     "Racing wheel")
 add("wheel_handbrake_axis", "Handbrake device axis", "Controls", "int", 0,
     "The handbrake's axis number on the handbrake device.", "Racing wheel", lo=0, hi=99)
@@ -480,8 +482,9 @@ add("wheel_shifter_follow_slot", "Gear follows the lever's slot", "Controls", "b
 add("wheel_shifter_device", "Shifter device", "Controls", "str", "",
     "A shifter on its own USB device, read with the wheel. Empty finds known shifters (Simagic "
     "DS-8X, Fanatec ClubSport SQ, Thrustmaster TH8 RS, Moza HGP, Heusinkveld, Logitech) or a "
-    "device named like one (a TH8A); a device name as Bindings lists it picks one; none reads "
-    "the wheel's own buttons. Binding a gear row by pressing it on the shifter sets it.",
+    "device named like one (a TH8A); a device name as Bindings lists it, or its vid:pid, picks "
+    "one; none reads the wheel's own buttons. Binding a gear row by pressing it on the shifter "
+    "sets it (as vid:pid).",
     "Shifter and clutch", restart=True)
 add("wheel_shifter_device_buttons", "Shifter device buttons", "Controls", "str", "",
     "Button numbers on the shifter device, e.g. 1=0,2=1,3=2,4=3,5=4,6=5,r=6 or up=..,down=.. "

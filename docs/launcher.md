@@ -344,7 +344,10 @@ held counts only after it is released), gives up after 10 seconds, and Esc cance
   their own USB devices (#272) bind on the wheel's pedal and gear rows: while such a row waits, the editor
   watches every other connected device that is no game controller too (`bindings.merge`, `split`), and a press
   there writes `wheel_pedal_device` / `wheel_pedal_axes` or `wheel_shifter_device` /
-  `wheel_shifter_device_buttons` (`set_aux_binding`). The picker shows them as *pedals* or *shifter, read with
+  `wheel_shifter_device_buttons` (`set_aux_binding`). The device settings hold the device's USB ids
+  (`device_ref`: `0483:0525`), not its name, since the game's SDL 3 can read another name than the launcher's
+  SDL 2 for a Windows device (a Thrustmaster has none there, #562); opening Controls rewrites a device saved by
+  its name (`migrate_device_settings`). The picker shows them as *pedals* or *shifter, read with
   the wheel* (`pick_aux`, the driver's choice ported with its table of known devices). On Linux, devices SDL 2
   leaves out (no X and Y axis) are read from evdev (`evdev_joysticks.py`).
 - **Controllers** write `controller_remap` (SDK patch 0116), a profile per controller model by SDL GUID;
