@@ -64,7 +64,7 @@ jobs:
       - if: runner.os == 'Linux'
         name: Forza Live server tests (the server/ submodule's pinned commit)
         working-directory: server
-        run: python -m unittest discover -p 'test_*.py'
+        run: python -m unittest discover -s tests -t .
       - name: forza.exe DPI manifest (#418)
         run: python tools/test_dpi_manifest.py -v
       - name: Livery codec tests

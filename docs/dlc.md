@@ -150,7 +150,7 @@ What the update changed for the hooks, and the fixes:
   has `requiredOfferId`, a u64 after `intermissionTimeMs`); with the server's empty
   answer the game showed only its default playlist ("The Forza Horizon service is not
   available"). The server answers it (no offer needed). A dump of TU4's service records
-  from a running game (`server/forza_xtsw_all.py`) found the other 292 unchanged and 7
+  from a running game (`server/forza_live/network/xtsw_all.py`) found the other 292 unchanged and 7
   new: `GetListEx`, `Challenge.ChallengeCompleted(carId u16, challengeThumbprint u32)`
   (the 1000 Club; no results), `SharedCar.CreateEx` / `GetClubCarsEx` (the car data with
   `hasRallyUpgrades`, rows with `contentId`), now handled like `Create` / `GetClubCars`.

@@ -58,7 +58,7 @@ work gets in. The details live in `docs/` (start with `docs/PROJECT.md`).
   (`git clone --recurse-submodules`, or `git submodule update --init` in an existing clone).
   Server changes are pull requests there; then a pull request here moves `server/` to the
   new commit (`git -C server fetch && git -C server checkout <commit> && git add server`).
-  Tests: `cd server && python3 -m unittest discover -p 'test_*.py'`.
+  Tests: `cd server && python3 -m unittest discover -s tests -t .`.
 
 ## Testing
 

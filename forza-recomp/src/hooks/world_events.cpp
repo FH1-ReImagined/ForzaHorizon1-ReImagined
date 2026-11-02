@@ -2,7 +2,7 @@
 //
 // The Horizon World (Find Game's playlist 3, world_drop_in.cpp) runs one endless free
 // roam per session. The Forza Live server turns a world's next round into one of the
-// game's festival events (server/forza_world.py); this file is the client side, on the
+// game's festival events (server/forza_live/world/world.py); this file is the client side, on the
 // world session's host:
 //
 // 1. Taking an event. The server sends WORLD_EVENT to the world's host (net.cpp ->
@@ -32,7 +32,7 @@
 //    the game again inside it and tore the session down under it, and the outer teardown
 //    read the freed session (null). The nested removal is dropped.
 // 5. Campaign rounds (#309, docs/coop_campaign.md): in a Co-op Festival world (playlist 20)
-//    the host's /event makes a festival event the next round (server/forza_campaign.py).
+//    the host's /event makes a festival event the next round (server/forza_live/world/campaign.py).
 //    The server sends every console of the world the event's own CPU skill (WORLD_EVENT
 //    op 2: its AISkillMed / AITemperamentMed rows, the career's Medium); the online AI's
 //    levels come from MPAIDifficultyMap (Easy 20/8 is stronger than a festival event's Pro).
@@ -177,7 +177,7 @@ uint32_t CallGuest(PPCContext& ctx, uint8_t* base, PPCFunc* fn, uint32_t r3, uin
 }
 
 // The rule of the vision: the human share of the grid sets the CPU drivers' level
-// (MPAIDifficultyMap rows 0 Easy, 1 Medium, 2 Hard). server/forza_world.py has the same.
+// (MPAIDifficultyMap rows 0 Easy, 1 Medium, 2 Hard). server/forza_live/world/world.py has the same.
 uint8_t AiDifficulty(uint32_t humans, uint32_t grid) {
   if (3 * humans <= grid) return 0;
   if (3 * humans >= 2 * grid) return 2;
@@ -187,7 +187,7 @@ uint8_t AiDifficulty(uint32_t humans, uint32_t grid) {
 // The online world game when its round is the campaign round the server described (an
 // event round on that event's track), else 0.
 uint32_t CampaignGame(uint8_t* base) {
-  constexpr uint32_t kCoopPlaylist = 20;  // server/forza_live_lsp.py COOP_HOPPER
+  constexpr uint32_t kCoopPlaylist = 20;  // server/forza_live/title_services/lsp.py COOP_HOPPER
   if (forza::LiveMatchPlaylist() != kCoopPlaylist) return 0;
   const uint32_t game = REXCVAR_GET(world_events) ? WorldPlaylistGame(base) : 0;
   if (!game || !campaign_event.load() || !campaign_skill.load()) return 0;
@@ -768,7 +768,7 @@ extern "C" REX_FUNC(sub_82CF7278) {
 namespace forza {
 // WORLD_EVENT from the server (net.cpp): op u8 (1: an event waits for this world's host),
 // event id u32, world session id (8 bytes). Op 2 (to every console of a Co-op Festival
-// world, server/forza_campaign.py ai_message): the campaign round's event id u32, world
+// world, server/forza_live/world/campaign.py ai_message): the campaign round's event id u32, world
 // session id, track u32, AISkills row u32, AITemperaments row u32.
 void LiveWorldEvent(const uint8_t* p, size_t n) {
   if (n >= 25 && p[0] == 2) {

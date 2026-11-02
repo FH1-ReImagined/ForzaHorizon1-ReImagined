@@ -3,7 +3,7 @@
 The shader list upload (shader_share.py) and the co-op results (coop_grant.py) prove the player
 like the game does: an Ed25519 signature (ed25519.py) over the request, made with the
 signing_seed of live_identity.txt, in X-Forza-Auth. The server keeps only the public key, which
-the game registered at its sign-in (server/forza_auth.py has the scheme; the game's is
+the game registered at its sign-in (server/forza_live/core/auth.py has the scheme; the game's is
 forza-recomp/src/kernel/live_signing.h):
 
 - server name: the host of the server's address, lowercased, without the port;

@@ -35,7 +35,7 @@
 //   (0xFC/0x58023) hands the game the invite they accepted, which then joins our session.
 // - XNetLogonGetTitleID / XNetLogonGetMachineID: the SDK stubs return garbage.
 // - XUserReadStats / XSessionWriteStats (0xFB/0xB0021, 0xB0025): Xbox LIVE stats rows
-//   (Forza's only view is TrueSkill) kept and rated by the server (server/forza_stats.py);
+//   (Forza's only view is TrueSkill) kept and rated by the server (server/forza_live/competition/stats.py);
 //   the SDK left the results empty and Forza crashed creating its party session.
 //
 // Everything else goes to the SDK. FORZA_NETTRACE=1 logs every XMsg call (as net.cpp
@@ -1019,13 +1019,13 @@ uint32_t XSessionSearchPlain(uint8_t* base, uint32_t buffer) {
                         Load32(b + 24), Load32(b + 28));
 }
 
-// --- Xbox LIVE stats (server/forza_stats.py) ----------------------------------------
+// --- Xbox LIVE stats (server/forza_live/competition/stats.py) ----------------------------------------
 //
 // Forza's SPA defines one stats view, the TrueSkill view 0xFFFF0000 (columns 61 skill, 62
 // games played, 63 mu, 64 sigma). The game writes it at the end of an online game
 // (XSessionWriteStats: each player's relative score and team) and reads it for its party
 // (XUserReadStats). Both go to the Forza Live server, which rates the games and keeps a row
-// per player; its leaderboards proper are title services (Scoreboard, forza_scores.py).
+// per player; its leaderboards proper are title services (Scoreboard, forza_live/competition/scores.py).
 
 struct StatsColumn {
   uint16_t id = 0;
@@ -1496,7 +1496,7 @@ void LiveMatchResults(const uint8_t* p, size_t n) {
   match_answered.notify_all();
 }
 
-// The server's rows for a stats read (server/forza_stats.py): request u32, view count u8,
+// The server's rows for a stats read (server/forza_live/competition/stats.py): request u32, view count u8,
 // per view: id u32, total rows u32, row count u8, per row: XUID u64, rank u32, rating i64,
 // gamertag (u8 length + bytes), column count u8, per column: id u16, type u8, value (8).
 void LiveStatsRows(const uint8_t* p, size_t n) {

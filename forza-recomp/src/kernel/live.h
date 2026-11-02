@@ -86,7 +86,7 @@ void LiveMatchResults(const uint8_t* body, size_t size);
 // The playlist our last matchmaking search was for (Find Game: the hopper id; 0 before the
 // first search). Hooks use it to tell the Horizon World from other playlists.
 uint32_t LiveMatchPlaylist();
-// The playlists that run as a Horizon World (server/forza_live_lsp.py WORLD_HOPPERS): the
+// The playlists that run as a Horizon World (server/forza_live/title_services/lsp.py WORLD_HOPPERS): the
 // Horizon World (3) and the Co-op Festival (20, #309: the same world among friends, whose
 // host starts festival events with /event in World chat).
 inline bool LiveIsWorldPlaylist(uint32_t playlist) { return playlist == 3 || playlist == 20; }
@@ -103,12 +103,12 @@ void LiveMatchTick();
 // (hooks/world_events.cpp takes it), or a campaign round's CPU skill for our world.
 void LiveWorldEvent(const uint8_t* body, size_t size);
 
-// Head-to-head challenges (hooks/world_challenge.cpp, server/forza_challenge.py): send a
+// Head-to-head challenges (hooks/world_challenge.cpp, server/forza_live/competition/challenge.py): send a
 // CHALLENGE message to the server; the network thread hands the server's to LiveChallenge.
 void LiveSendChallenge(const std::vector<uint8_t>& body);
 void LiveChallenge(const uint8_t* body, size_t size);
 
-// Xbox LIVE stats on the server (live_xmsg.cpp, server/forza_stats.py): send a STATS message
+// Xbox LIVE stats on the server (live_xmsg.cpp, server/forza_live/competition/stats.py): send a STATS message
 // (a write or a read); the network thread hands the server's rows to LiveStatsRows.
 void LiveSendStats(const std::vector<uint8_t>& body);
 void LiveStatsRows(const uint8_t* body, size_t size);
@@ -126,7 +126,7 @@ void LiveResumed(double seconds);
 // game its friends' presence changed, or that friends came or went.
 void LiveRosterChanged(bool membership_changed);
 
-// --- Friends (live_friends.cpp, server/forza_friends.py, #92) ---
+// --- Friends (live_friends.cpp, server/forza_live/social/friends.py, #92) ---
 // The server keeps each player's friends; a game that has its list shows only those
 // players as friends. Until the server sent one (an older server), every player in the
 // room counts as a friend, as before.
@@ -180,7 +180,7 @@ void InstallFriendsKey();
 // The invite picker or an invite prompt shows (live_invites.cpp).
 bool LiveInviteBusy();
 
-// --- Text chat (live_friends.cpp's Chat tab, server/forza_chat.py, #92) ---
+// --- Text chat (live_friends.cpp's Chat tab, server/forza_live/social/chat.py, #92) ---
 // A CHAT message to the server, and the server's (network thread).
 bool LiveSendChat(const std::vector<uint8_t>& body);
 // Sends a chat line as the Chat tab would (channel 1 session, 2 world, 4 club) and shows it in
