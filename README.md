@@ -11,7 +11,7 @@
 <p align="center">
   The official online services closed on 22 August 2023
   (<a href="https://forza.net/news/forza-horizon-online-services-closure">Turn 10's notice</a>).
-  ReImagined is a static recompilation (recomp) of the Xbox 360 game: it runs natively on your PC, the Steam Deck included, and brings online play back through a public server,
+  ReImagined is a static recompilation (recomp) of the Xbox 360 game: it runs natively on your PC and brings online play back through a public server,
   or one you host yourself. You bring your own copy; no game code or data is included.
 </p>
 
