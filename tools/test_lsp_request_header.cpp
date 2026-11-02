@@ -101,6 +101,23 @@ int main() {
     }
     CHECK(out == Expected("abc") && h.Pending() == 0);
   }
+  {  // the build line (#517) goes in next to the signature, and is not added to a request that has one
+    CHECK(forza::LspRequestHeader::BuildLine(Request("a"), "0.2.1", 4) == "X-Forza-Build: 0.2.1/tu4\r\n");
+    CHECK(forza::LspRequestHeader::BuildLine(Request("a"), "git-908ea56c5b", 0) ==
+          "X-Forza-Build: git-908ea56c5b/tu0\r\n");
+    CHECK(forza::LspRequestHeader::BuildLine(Request("a", "x-forza-build: other/tu4\r\n"), "0.2.1", 4).empty());
+    forza::LspRequestHeader h([](const std::string& head, const std::string& body) {
+      return forza::LspRequestHeader::BuildLine(head, "0.2.1", 4) + Lines(head, body);
+    });
+    std::string want = Request("abc");
+    want.insert(want.find("\r\n\r\n") + 2, "X-Forza-Build: 0.2.1/tu4\r\n" + kLine);
+    CHECK(Feed(h, Request("abc")) == want);
+    // a head that names its build keeps that one and gets the signature only
+    std::string named = Request("abc", "X-Forza-Build: other/tu4\r\n");
+    std::string want_named = named;
+    want_named.insert(want_named.find("\r\n\r\n") + 2, kLine);
+    CHECK(Feed(h, named) == want_named);
+  }
   {  // the lines see the whole head and body
     std::string seen_head, seen_body;
     forza::LspRequestHeader h([&](const std::string& head, const std::string& body) {

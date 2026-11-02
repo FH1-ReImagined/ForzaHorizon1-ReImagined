@@ -8,7 +8,8 @@
 // requests are HTTP/1.1 with Content-Length over one kept-alive connection
 // (docs/title_services.md); each request is held until its head and body are complete (the
 // signature covers the body), the lines go in before the head's blank line, and the request
-// goes out. A body over kMaxBody passes through unsigned (the server takes 8 MB).
+// goes out. A body over kMaxBody passes through unsigned (the server takes 8 MB). The lines
+// also name the game's build (BuildLine, X-Forza-Build).
 // LspTitleStream keeps the socket's nonblocking contract on top of that (live_tcp.cpp).
 // Header-only so tools/test_lsp_request_header.cpp can test it without the runtime.
 
@@ -94,6 +95,15 @@ class LspRequestHeader {
   static bool Has(const std::string& head, const std::string& name) {
     const std::string lower = Lower(head);
     return !name.empty() && lower.find("\r\n" + name + ":") != std::string::npos;
+  }
+
+  // The line that names the game's build to the server (X-Forza-Build, #517; the server keeps it
+  // with each leaderboard row): "<id>/tu<0|4>", the id being the launcher's version or
+  // git-<commit>. Nothing when the head names one already.
+  static std::string BuildLine(const std::string& head, const std::string& build_id,
+                               int title_update) {
+    if (Has(head, "x-forza-build")) return {};
+    return "X-Forza-Build: " + build_id + "/tu" + std::to_string(title_update) + "\r\n";
   }
 
  private:

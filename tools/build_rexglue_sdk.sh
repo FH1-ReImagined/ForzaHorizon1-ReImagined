@@ -50,7 +50,7 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # A reviewed full commit can be pinned before a maintainer publishes a tag.
 # When a tag is supplied, its target must still match this immutable commit.
 REIGLUE_TAG=
-REIGLUE_COMMIT=330770d17b64bdf17fcff975b82789418c230db5  # 0412 (#562), on top of merged #17 (0411)
+REIGLUE_COMMIT=49359eba78cf7db989d6fc7c3c8b856b42e39788  # merge of #20: 0413 (engine note breaking up), on top of 0412 (#562)
 REIGLUE_URL="${REIGLUE_URL:-https://github.com/FH1-ReImagined/ReIGlue}"
 NIGHTLY="${REXSDK_NIGHTLY:-$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64}"
 SRC="${REXSDK_SRC:-$HOME/rexglue-sdk-src-forza/sdk}"
@@ -164,9 +164,17 @@ apply_series() {
     fi
     rm -f "$patched_index"
 }
+# FFmpeg (the XMA decoder in the runtime): the same for patches/ffmpeg/ (0413: the xmaframes
+# decoder reports each frame's skip fields, which the XMA context needs to drop a wave's
+# warm-up frame). An empty or missing patches/ffmpeg/ leaves the glob as it is and apply_series
+# skips it, so then this only checks the submodule out at its recorded commit; an SDK without
+# the submodule has nothing to patch.
 if [ "${REIGLUE_DEV:-0}" != 1 ]; then
     apply_series "$SRC/thirdparty/sdl3" "$(git -C "$SRC" rev-parse "HEAD:thirdparty/sdl3")" SDL \
         "$SRC"/patches/sdl3/*.patch
+    if ffmpeg_commit="$(git -C "$SRC" rev-parse --verify --quiet "HEAD:thirdparty/FFmpeg")"; then
+        apply_series "$SRC/thirdparty/FFmpeg" "$ffmpeg_commit" FFmpeg "$SRC"/patches/ffmpeg/*.patch
+    fi
 fi
 [ "$SOURCE_ONLY" = 0 ] || exit 0
 

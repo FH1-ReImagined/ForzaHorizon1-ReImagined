@@ -25,6 +25,10 @@
 #include <mutex>
 #include <random>
 
+#ifndef FORZA_BUILD_ID  // CMake sets it (FORZA_BUILD_ID: the launcher's version, or git-<commit>)
+#define FORZA_BUILD_ID "dev"
+#endif
+
 namespace forza::live_auth {
 
 namespace ls = forza::live_signing;
@@ -156,10 +160,13 @@ std::vector<uint8_t> HelloTail(const std::vector<uint8_t>& signed_part) {
 }
 
 std::string RequestLines(const std::string& head, const std::string& body) {
+  // The build goes with every request, signed or not (a game without a Live identity names it
+  // too): the server keeps it with the leaderboard rows the call writes (#517).
+  std::string lines = LspRequestHeader::BuildLine(head, FORZA_BUILD_ID, FORZA_TITLE_UPDATE);
   std::lock_guard<std::mutex> lock(mutex);
-  if (!st.ready || LspRequestHeader::Has(head, "x-forza-auth")) return {};
-  std::string lines = ls::AuthHeaderLine(st.key, st.name, forza::IdentityXuid(), Now(),
-                                         ls::Hex(RandomBytes(16)), head, body);
+  if (!st.ready || LspRequestHeader::Has(head, "x-forza-auth")) return lines;
+  lines += ls::AuthHeaderLine(st.key, st.name, forza::IdentityXuid(), Now(),
+                              ls::Hex(RandomBytes(16)), head, body);
   if (st.welcomed && !st.signed_server && !st.main) {
     lines += "X-Friends-Key: " + ls::Hex(st.old_key, true) + "\r\n";
   }

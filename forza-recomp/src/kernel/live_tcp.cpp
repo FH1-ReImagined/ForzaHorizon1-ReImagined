@@ -9,7 +9,8 @@
 // codes, and connections to the Forza Live server's address sent to its HTTP port
 // (forza::LiveServerHttp), whatever LSP port the game picked. Requests on those connections
 // are signed with our Live identity's friends key (lsp_request_header.h, live_auth.cpp; the key
-// itself is never sent), which tells the server the call is this player's own.
+// itself is never sent), which tells the server the call is this player's own, and name the
+// game's build (X-Forza-Build), which the server keeps with each leaderboard row (#517).
 
 #include "live_tcp.h"
 
