@@ -222,9 +222,10 @@ class ProcessChecks(unittest.TestCase):
     def test_native_exit_codes_and_timeout(self):
         for code in (0, 1, 2, 3, 127):
             result = subprocess.CompletedProcess([], code, b"", b"")
-            with patch.object(steam.subprocess, "run", return_value=result):
+            with patch.object(steam.subprocess, "run", return_value=result) as run:
                 if code == 1:
                     steam.require_closed(False)
+                    self.assertEqual(run.call_args.kwargs.get("env"), steam.cleanenv.clean_environment())
                 else:
                     with self.assertRaises(steam.SteamError):
                         steam.require_closed(False)

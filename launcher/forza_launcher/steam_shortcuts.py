@@ -15,7 +15,7 @@ import tempfile
 import uuid
 import zlib
 
-from . import paths
+from . import cleanenv, paths
 
 NAME = "Forza Horizon 1: ReImagined"
 MAX_VDF = 16 * 1024 * 1024
@@ -77,7 +77,8 @@ def require_closed(in_flatpak: bool | None = None) -> None:
                          "Use Games > Add a Non-Steam Game in Steam; see the Steam Deck guide.")
     command = ["pgrep", "-x", "steam|steamwebhelper"]
     try:
-        result = subprocess.run(command, capture_output=True, timeout=5, check=False)
+        result = subprocess.run(command, capture_output=True, timeout=5, check=False,
+                                env=cleanenv.clean_environment())
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise SteamError("Could not check whether Steam is closed. See the Steam Deck guide for manual setup.") from exc
     if result.returncode == 0:
