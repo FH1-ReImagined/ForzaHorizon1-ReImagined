@@ -49,8 +49,8 @@ either option is on) and **Texture packs page…** (below). Both default off. Se
 [texture packs](texture_packs.md).
 
 No prebuilt game is ever shipped (the generated C++ is translated game code). The release
-holds only the **launcher**, the project's own sources, the Forza Live server and the patched
-ReXGlue SDK pieces (SDK code, BSD-3-Clause). The launcher builds the game on the player's
+holds only the **launcher**, the project's own sources, the Forza Live server and pieces of
+ReIGlue, the project's fork of the ReXGlue SDK (SDK code, BSD-3-Clause). The launcher builds the game on the player's
 machine from their own copy:
 
 1. **Setup > Game files**: the player's Games on Demand package (`4D5309C9/00007000/<name>`
@@ -620,7 +620,7 @@ the measurements: [texture packs](texture_packs.md). Tests: `launcher/test_textu
   must come from the system (`g++`/`libstdc++` dev package: Debian `build-essential`, Fedora
   `gcc-c++`); the launcher tests a C++23 compile and says so if that fails.
 * The SDK: the pinned ReXGlue nightly (`nightly-20261002-bd833a2a`, downloaded from the SDK's
-  release) plus the project's patched plugin, runtime and codegen tool from
+  release) plus ReIGlue's plugin, runtime and codegen tool (the project's fork, built at its pinned commit) from
   `sdk-overlay/rexglue-overlay-<os>-amd64.tar.gz`, which CI builds and the installer carries.
   Redistribution: the SDK is BSD-3-Clause (copyright Tom Clay, portions Xenia); the binary
   form must reproduce the notice, which `licenses/rexglue-sdk.txt` in every package does.
