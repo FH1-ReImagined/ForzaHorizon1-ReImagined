@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Pre-release checks, non-interactive: one PASS/FAIL line per check and a summary. Full
-# output goes to ~/.cache/forza-prerelease/<timestamp>/<check>.log; a failing check prints
-# the last lines of its log. Exit status = number of failed checks.
+# Pre-release checks, non-interactive: one PASS/FAIL line per check (SKIP: a check that
+# cannot run on this machine, with the reason) and a summary. Full output goes to
+# ~/.cache/forza-prerelease/<timestamp>/<check>.log; a failing check prints the last lines of
+# its log. Exit status = number of failed checks (skipped ones do not count).
 #
 # Usage: tools/prerelease.sh [--skip-build] [--only CHECK[,CHECK...]] [--iso PATH] [--ci]
 #   --skip-build  skip the "sdk" and "build" checks (use the binaries as they are)
@@ -24,12 +25,20 @@
 #             screen is gone). Needs Pillow and 10 GB of free memory.
 #   server    a local Forza Live server on ports 21310/21311: the TU4 build signs in to it, reaches
 #             the main menu and sends its stats reads (XUserReadStats) without hanging
+#   render    (#507) tools/render_test.py check: the TU4 build plays the six render scenes (title,
+#             free roam at midday and dawn, cockpit, photo mode, a race start) and each is compared
+#             with the image baselines in ~/.local/share/forza-render-baselines (FORZA_RENDER_BASELINES;
+#             record them once on a known-good build: docs/render-tests.md). SKIP when there are no
+#             baselines; FAIL when a scene differs beyond its tolerance or cannot be captured. About
+#             3 min, needs Pillow and 10 GB of free memory. Extra game flags for a graphics change
+#             go in PRERELEASE_RENDER_FLAGS, e.g. "--anisotropic_override=0".
 #   launcher  the launcher the way the frozen build runs it (LD_LIBRARY_PATH pointing at foreign
 #             libraries, #53): default.xex out of the disc image and its check, the AES helper
 #   ci        (--ci) gh workflow run release.yml and wait; prints the run id
 #
 # Environment: FORZA_XENIA_CONTENT (default ~/xenia_canary_windows/content), FORZA_XUID (the Xenia
-# profile; default the only one with a Forza Horizon save), PRERELEASE_JOBS (ninja jobs, default 4).
+# profile; default the only one with a Forza Horizon save), PRERELEASE_JOBS (ninja jobs, default 4),
+# FORZA_RENDER_BASELINES (default ~/.local/share/forza-render-baselines), PRERELEASE_RENDER_FLAGS.
 # Only starts processes it stops again; one game at a time.
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -54,7 +63,7 @@ while [ $# -gt 0 ]; do
         --only) only=",$2,"; shift ;;
         --iso) iso="$2"; shift ;;
         --ci) ci=1 ;;
-        -h|--help) sed -n 2,35p "$0"; exit 0 ;;
+        -h|--help) awk 'NR > 1 { if (/^#/) print; else exit }' "$0"; exit 0 ;;
         *) echo "unknown option $1" >&2; exit 2 ;;
     esac
     shift
@@ -69,8 +78,9 @@ wanted() {  # wanted CHECK
     esac
 }
 
-fails=0; passes=0
-run_check() {  # run_check NAME FUNCTION: FUNCTION's output goes to $LOG/NAME.log; its status is the verdict
+fails=0; passes=0; skips=0
+SKIP_RC=77
+run_check() {  # run_check NAME FUNCTION: FUNCTION's output goes to $LOG/NAME.log; its status is the verdict (0 pass, 77 skip)
     local name="$1" fn="$2" t0 rc detail
     wanted "$name" || return 0
     t0=$(date +%s)
@@ -80,6 +90,9 @@ run_check() {  # run_check NAME FUNCTION: FUNCTION's output goes to $LOG/NAME.lo
     if [ $rc -eq 0 ]; then
         passes=$((passes + 1))
         printf 'PASS %-9s %4ds  %s\n' "$name" $(( $(date +%s) - t0 )) "$detail"
+    elif [ $rc -eq $SKIP_RC ]; then
+        skips=$((skips + 1))
+        printf 'SKIP %-9s %4ds  %s\n' "$name" $(( $(date +%s) - t0 )) "$detail"
     else
         fails=$((fails + 1))
         printf 'FAIL %-9s %4ds  %s\n' "$name" $(( $(date +%s) - t0 )) "$detail"
@@ -272,6 +285,51 @@ check_server() {
     return $rc
 }
 
+# ---------------------------------------------------------------- render (#507)
+check_render() {
+    local base build rep rc flags=()
+    base="$(realpath -m "${FORZA_RENDER_BASELINES:-$HOME/.local/share/forza-render-baselines}")"
+    # The baselines are game images, recorded by hand on a known-good build and never in the
+    # repository (docs/render-tests.md); without them there is nothing to compare with.
+    if [ ! -f "$base/save/save.json" ] || ! compgen -G "$base/*/baseline.json" > /dev/null; then
+        echo "RESULT: no baselines in $base (record them once: tools/render_test.py record --save SAVE --xuid XUID, docs/render-tests.md)"
+        return $SKIP_RC
+    fi
+    build="$(realpath -m "$BUILD_ROOT/linux-tu4")"
+    [ -x "$build/forza" ] || { echo "no build linux-tu4"; return 1; }
+    python3 -c 'import PIL' 2> /dev/null || { echo "render_test.py needs Pillow (python3-pillow)"; return 1; }
+    # shellcheck disable=SC2206
+    flags=(${PRERELEASE_RENDER_FLAGS:-})
+    # The tool refuses a path that goes through a symlink (/home is one on this machine): resolved here.
+    rep="$(realpath -m "$LOG")/render-report"
+    python3 tools/render_test.py check --baselines "$base" --build "$build" --report "$rep" --retries 2 \
+        ${flags[@]:+-- "${flags[@]}"}
+    rc=$?
+    if [ -f "$rep/report.json" ]; then
+        python3 -I - "$rep" <<'PYEOF' || rc=1
+import json, sys
+rep = sys.argv[1]
+rows = json.load(open(rep + "/report.json"))["scenes"]
+bad = [r for r in rows if r["result"] != "PASS"]
+for r in bad:
+    if r["result"] == "ERROR":
+        print(f"{r['scene']}: not captured: {r['error'][:200]}")
+    else:
+        print(f"{r['scene']}: dssim {r['dssim']:.4f} (tolerance {r['max_dssim']}), "
+              f"changed {r['bad']:.2%} ({r['max_bad']:.2%})")
+if bad:
+    print("RESULT: " + ", ".join(f"{r['scene']} {r['result']}" for r in bad)
+          + f" ({len(rows) - len(bad)}/{len(rows)} pass; {rep}/index.html)")
+    sys.exit(1)
+print(f"RESULT: {len(rows)}/{len(rows)} scenes match the baselines ({rep}/index.html)")
+PYEOF
+    else
+        echo "RESULT: render_test.py check ended without a report (status $rc)"
+        [ $rc = 0 ] && rc=1
+    fi
+    return $rc
+}
+
 # ---------------------------------------------------------------- launcher (#53)
 check_launcher() {
     local isos=() fake="$LOG/fakelibs" rc
@@ -390,7 +448,8 @@ run_check build check_build
 run_check unit check_unit
 run_check boot check_boot
 run_check server check_server
+run_check render check_render
 run_check launcher check_launcher
 run_check ci check_ci
-echo "summary: $passes passed, $fails failed (logs: $LOG)"
+echo "summary: $passes passed, $fails failed$([ $skips -gt 0 ] && echo ", $skips skipped") (logs: $LOG)"
 exit $(( fails > 255 ? 255 : fails ))
