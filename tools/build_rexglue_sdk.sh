@@ -164,9 +164,17 @@ apply_series() {
     fi
     rm -f "$patched_index"
 }
+# FFmpeg (the XMA decoder in the runtime): the same for patches/ffmpeg/ (0413: the xmaframes
+# decoder reports each frame's skip fields, which the XMA context needs to drop a wave's
+# warm-up frame). An empty or missing patches/ffmpeg/ leaves the glob as it is and apply_series
+# skips it, so then this only checks the submodule out at its recorded commit; an SDK without
+# the submodule has nothing to patch.
 if [ "${REIGLUE_DEV:-0}" != 1 ]; then
     apply_series "$SRC/thirdparty/sdl3" "$(git -C "$SRC" rev-parse "HEAD:thirdparty/sdl3")" SDL \
         "$SRC"/patches/sdl3/*.patch
+    if ffmpeg_commit="$(git -C "$SRC" rev-parse --verify --quiet "HEAD:thirdparty/FFmpeg")"; then
+        apply_series "$SRC/thirdparty/FFmpeg" "$ffmpeg_commit" FFmpeg "$SRC"/patches/ffmpeg/*.patch
+    fi
 fi
 [ "$SOURCE_ONLY" = 0 ] || exit 0
 

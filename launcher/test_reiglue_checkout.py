@@ -15,6 +15,8 @@ BASH = (str(Path("C:/Program Files/Git/bin/bash.exe")) if os.name == "nt" and
 
 @unittest.skipUnless(BASH and shutil.which("git"), "requires bash and git")
 class ReiglueCheckout(unittest.TestCase):
+    with_ffmpeg = True  # the SDK has the FFmpeg submodule and a patch for it (0413)
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -28,11 +30,21 @@ class ReiglueCheckout(unittest.TestCase):
         (self.sdl / "sdl.txt").write_text("patched SDL\n")
         patch = self.git(self.sdl, "diff").stdout
         (self.sdl / "sdl.txt").write_text("base SDL\n")
+        if self.with_ffmpeg:
+            self.ffmpeg = self.root / "ffmpeg-origin"
+            self.init(self.ffmpeg)
+            (self.ffmpeg / "ffmpeg.txt").write_text("base FFmpeg\n")
+            self.commit(self.ffmpeg, "FFmpeg base")
+            (self.ffmpeg / "ffmpeg.txt").write_text("patched FFmpeg\n")
+            ffmpeg_patch = self.git(self.ffmpeg, "diff").stdout
+            (self.ffmpeg / "ffmpeg.txt").write_text("base FFmpeg\n")
         self.origin = self.root / "origin"
         self.init(self.origin)
         (self.origin / "sdk.txt").write_text("base SDK\n")
         (self.origin / "README.md").write_text("upstream README\n")
         self.git(self.origin, "submodule", "add", "--quiet", str(self.sdl), "thirdparty/sdl3")
+        if self.with_ffmpeg:
+            self.git(self.origin, "submodule", "add", "--quiet", str(self.ffmpeg), "thirdparty/FFmpeg")
         self.base = self.commit(self.origin, "SDK base")
         (self.origin / "sdk.txt").write_text("patched SDK\n")
         (self.origin / "new-runtime.txt").write_text("new runtime source\n")
@@ -41,6 +53,10 @@ class ReiglueCheckout(unittest.TestCase):
         patches = self.origin / "patches/sdl3"
         patches.mkdir(parents=True)
         (patches / "0147.patch").write_text(patch)
+        if self.with_ffmpeg:
+            patches = self.origin / "patches/ffmpeg"
+            patches.mkdir(parents=True)
+            (patches / "0413.patch").write_text(ffmpeg_patch)
         self.target = self.commit(self.origin, "SDK changes")
         self.git(self.origin, "tag", "--no-sign", "-a", TAG, "-m", "fixture tag")
         self.source = self.root / "checkout with spaces"
@@ -80,6 +96,9 @@ class ReiglueCheckout(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.git(self.source, "rev-parse", "HEAD").stdout.strip(), self.target)
         self.assertEqual((self.source / "thirdparty/sdl3/sdl.txt").read_text(), "patched SDL\n")
+        if self.with_ffmpeg:
+            self.assertEqual((self.source / "thirdparty/FFmpeg/ffmpeg.txt").read_text(),
+                             "patched FFmpeg\n")
 
     def old_checkout(self):
         self.git(self.root, "clone", "--quiet", "--no-checkout", str(self.origin), str(self.source))
@@ -94,6 +113,16 @@ class ReiglueCheckout(unittest.TestCase):
 
     def test_fresh_checkout_and_sdl_patch(self):
         self.ready()
+
+    def test_local_ffmpeg_edit_is_refused_without_mutation(self):
+        if not self.with_ffmpeg:
+            self.skipTest("needs the FFmpeg submodule")
+        self.ready()
+        (self.source / "thirdparty/FFmpeg/ffmpeg.txt").write_text("my FFmpeg work\n")
+        before = self.snapshot()
+        result = self.prepare()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.snapshot(), before)
 
     def test_repeat_keeps_source_timestamps(self):
         self.ready()
@@ -260,3 +289,8 @@ class ReiglueCheckout(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReiglueCheckoutWithoutFFmpeg(ReiglueCheckout):
+    """An SDK with no FFmpeg submodule (and so no patches/ffmpeg/) builds as before."""
+    with_ffmpeg = False
