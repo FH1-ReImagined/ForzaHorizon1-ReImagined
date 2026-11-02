@@ -274,6 +274,28 @@ add_subdirectory(texcompress)
 add_custom_command(TARGET forza POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/forza-telemetry.json" "$<TARGET_FILE_DIR:forza>/forza-telemetry.json")
 target_compile_definitions(forza PRIVATE FORZA_TITLE_UPDATE=${FORZA_TITLE_UPDATE})
+
+# The build the game names to the Forza Live server on its title service calls (X-Forza-Build,
+# src/kernel/live_auth.cpp RequestLines), which the server keeps with each leaderboard row (#517). The
+# launcher passes its version; a source build takes the commit it was configured at.
+set(FORZA_BUILD_ID "" CACHE STRING "Build name sent to the Forza Live server (empty: git-<commit>, or dev)")
+set(_forza_build_id "${FORZA_BUILD_ID}")
+if(_forza_build_id STREQUAL "")
+    set(_forza_build_id dev)
+    find_package(Git QUIET)
+    if(GIT_FOUND)
+        execute_process(COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_CURRENT_SOURCE_DIR}" rev-parse --short=10 HEAD
+                        OUTPUT_VARIABLE _forza_commit OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET
+                        RESULT_VARIABLE _forza_git)
+        if(_forza_git EQUAL 0 AND _forza_commit MATCHES "^[0-9a-f]+$")
+            set(_forza_build_id "git-${_forza_commit}")
+        endif()
+    endif()
+endif()
+string(REGEX REPLACE "[^A-Za-z0-9._+-]" "_" _forza_build_id "${_forza_build_id}")
+string(SUBSTRING "${_forza_build_id}" 0 40 _forza_build_id)
+set_source_files_properties(src/kernel/live_auth.cpp PROPERTIES
+    COMPILE_DEFINITIONS "FORZA_BUILD_ID=\"${_forza_build_id}\"")
 forza_apply_native_pause(forza)
 
 # Experimental CPU optimization, independent of the GPU/driver. Keep the host

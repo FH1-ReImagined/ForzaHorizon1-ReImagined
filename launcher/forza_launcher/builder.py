@@ -187,6 +187,13 @@ CPU_TOO_OLD = ("The game was built for a newer CPU (x86-64-v3: AVX2, FMA, BMI2, 
                "start here. Rebuild it on this PC: Setup > Build.")
 
 
+def build_id_arg() -> str:
+    """The CMake option that names this build to the Forza Live server (FORZA_BUILD_ID, sent as
+    X-Forza-Build on every title service call, and kept with each leaderboard row: #517): the
+    launcher's version, which is what a player's game was built by."""
+    return "-DFORZA_BUILD_ID=" + re.sub(r"[^A-Za-z0-9._+-]", "_", __version__)[:40]
+
+
 def cpu_target() -> str:
     """The CPU the game's generated code is compiled for (FORZA_CPU_TARGET, #220, docs/perf.md): x86-64-v3 when
     this PC's CPU and OS have all of it (the game's code then needs 8-11% less CPU time), else baseline (SSE4.1,
@@ -1072,6 +1079,7 @@ def _run_build(opts: Options, rep: Reporter, game_files: Path) -> Path:
         if not (src / manifest).is_file():
             raise BuildError("These project sources have no Title Update 4 support (forza_manifest_tu4.toml).")
     cmake_extra.append("-DFORZA_TITLE_UPDATE=" + ("4" if tu is not None else "0"))
+    cmake_extra.append(build_id_arg())
     rep.log("building " + ("with Title Update 4 (" + manifest + ")" if tu is not None else "the base game"))
     target = cpu_target()
     cmake_extra.append("-DFORZA_CPU_TARGET=" + target)
