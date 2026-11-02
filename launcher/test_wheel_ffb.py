@@ -118,5 +118,36 @@ class WheelMinimumForce(unittest.TestCase):
         self.assertEqual(schema.coerce(schema.BY_KEY["wheel_ffb_min_strength"], 150), 100)
 
 
+class WheelVibrationRate(unittest.TestCase):
+    """#467 (ReIGlue 0403 follow-up): the vibration's updates per second, 60 by default, 15 to 120,
+    next to the other rumble settings."""
+    def test_setting(self):
+        setting = schema.BY_KEY["wheel_vibration_rate"]
+        self.assertEqual((setting.kind, setting.default, setting.lo, setting.hi), ("int", 60, 15, 120))
+        self.assertEqual((setting.group, setting.section), ("Controls", "Racing wheel"))
+        self.assertEqual(setting.label, "Wheel vibration updates per second")
+        self.assertIn("Lower it if your wheel's vibration feels too strong.", setting.help)
+        self.assertFalse(setting.restart)  # read on every update
+        keys = [s.key for s in schema.for_group("Controls")]
+        # After the rumble strengths, before the rumble style.
+        self.assertEqual(keys[keys.index("wheel_rumble_road_strength") + 1], "wheel_vibration_rate")
+        self.assertEqual(keys[keys.index("wheel_vibration_rate") + 1], "wheel_rumble_style")
+
+    def test_roundtrip_and_clamp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        cfg = Config(Path(folder.name) / "launcher.json")
+        self.assertNotIn("wheel_vibration_rate", render_toml(cfg))  # the default stays out
+        cfg.settings["wheel_vibration_rate"] = 30
+        text = render_toml(cfg)
+        self.assertIn("wheel_vibration_rate = 30", text)
+        imported = Config(Path(folder.name) / "other.json")
+        import_toml(imported, text)
+        self.assertEqual(imported.settings["wheel_vibration_rate"], 30)
+        setting = schema.BY_KEY["wheel_vibration_rate"]
+        self.assertEqual(schema.coerce(setting, 500), 120)
+        self.assertEqual(schema.coerce(setting, 1), 15)
+
+
 if __name__ == "__main__":
     unittest.main()

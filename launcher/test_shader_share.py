@@ -22,6 +22,7 @@ from xxh3 import xxh3_64  # noqa: E402
 
 VERSION = "fbo:20260228/20261018"
 KEY = "AB" * 16
+SEED = "CD" * 32
 XUID = "0009000000000001"
 
 
@@ -70,7 +71,7 @@ class Base(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
         (self.root / "id").mkdir()
-        (self.root / "id" / "live_identity.txt").write_text(f"# x\nxuid={XUID}\ngamertag=Me\nfriends_key={KEY}\n")
+        (self.root / "id" / "live_identity.txt").write_text(f"# x\nxuid={XUID}\ngamertag=Me\nfriends_key={KEY}\nsigning_seed={SEED}\n")
         self.unrebuildable = set()
 
     def tearDown(self):
@@ -139,7 +140,7 @@ class UploadTests(Base):
         self.assertEqual(self.share(), "sent 2")
         base, identity, body = self.sent[0]
         self.assertEqual(base, "http://forza-reimagined.playit.plus:56678")
-        self.assertEqual(identity, (XUID, KEY))
+        self.assertEqual(identity, (XUID, KEY, SEED))
         self.assertEqual(body["version"], VERSION)
         self.assertEqual(sorted(p["vs"] for p in body["pipelines"]), ["%016X" % 0x1001, "%016X" % 0x1002])
         self.assertIn("%016X" % 0x2001, body["shaders"])
@@ -231,10 +232,11 @@ class UploadTests(Base):
             seen.update(timeout=timeout, headers=dict(req.header_items()), url=req.full_url)
             return Reply()
         with mock.patch.object(shader_share.urllib.request, "urlopen", fake):
-            self.assertEqual(shader_share.post("http://h:1", (XUID, KEY), b"{}"), 200)
+            self.assertEqual(shader_share.post("http://h:1", (XUID, KEY, SEED), b"{}"), 200)
         self.assertLessEqual(seen["timeout"], 10)
         self.assertEqual(seen["headers"]["X-xuid"], XUID)
-        self.assertEqual(seen["headers"]["X-friends-key"], KEY)
+        self.assertIn("Signature=", seen["headers"]["X-forza-auth"])
+        self.assertNotIn("X-friends-key", seen["headers"])  # the key never leaves the PC (#515)
         self.assertEqual(seen["url"], "http://h:1/shader-lists/upload")
 
 
@@ -244,7 +246,8 @@ class SettingTests(Base):
         self.assertIs(s.default, True)
         self.assertEqual(s.group, "Online")
         # What the request carries is said (#497): not "nothing personal", since it sends the XUID and key.
-        for words in ("shader hashes", "render settings", "no game data", "player id and friends key"):
+        for words in ("shader hashes", "render settings", "no game data", "player id and a signature made with "
+                      "your signing key"):
             self.assertIn(words, s.help.lower().replace("\n", " "))
         self.assertNotIn("nothing personal", s.help.lower())
         self.assertTrue(self.cfg.settings["share_shader_list"])

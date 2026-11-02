@@ -119,6 +119,7 @@ set(FORZA_SOURCES
     src/main.cpp
     src/debug/audio_level.cpp
     src/hooks/radio_station.cpp
+    src/hooks/radio_events.cpp
     src/debug/cpu_profile.cpp
     src/debug/codriver_log.cpp
     src/debug/dlc_log.cpp
@@ -170,16 +171,21 @@ set(FORZA_SOURCES
     src/hooks/resource_data_release.cpp
     src/hooks/resource_cache_eviction.cpp
     src/hooks/resource_stream_trace.cpp
+    src/hooks/bigshot_readback.cpp
     src/hooks/thumbnail_sync.cpp
     src/hooks/world_challenge.cpp
     src/hooks/ambient_leaderboard.cpp
     src/hooks/teleport_velocity.cpp
     src/hooks/custom_race.cpp
+    src/hooks/smashables_lookup.cpp
     src/hooks/challenge_hud.cpp
+    src/hooks/car_placeholder.cpp
     src/hooks/lobby_buckets.cpp
     src/hooks/world_drop_in.cpp
     src/hooks/world_events.cpp
     src/hooks/telemetry.cpp
+    src/hooks/discord_details.cpp
+    src/kernel/content_manifest.cpp
     src/kernel/critical_section.cpp
     src/kernel/file_delete_on_close.cpp
     src/kernel/file_size_refresh.cpp
@@ -187,6 +193,7 @@ set(FORZA_SOURCES
     src/kernel/identity.cpp
     src/kernel/live_lsp.cpp
     src/kernel/live_tcp.cpp
+    src/kernel/live_auth.cpp
     src/kernel/live_friends.cpp
     src/kernel/live_invites.cpp
     src/kernel/live_xmsg.cpp
@@ -268,6 +275,28 @@ add_subdirectory(texcompress)
 add_custom_command(TARGET forza POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/forza-telemetry.json" "$<TARGET_FILE_DIR:forza>/forza-telemetry.json")
 target_compile_definitions(forza PRIVATE FORZA_TITLE_UPDATE=${FORZA_TITLE_UPDATE})
+
+# The build the game names to the Forza Live server on its title service calls (X-Forza-Build,
+# src/kernel/live_auth.cpp RequestLines), which the server keeps with each leaderboard row (#517). The
+# launcher passes its version; a source build takes the commit it was configured at.
+set(FORZA_BUILD_ID "" CACHE STRING "Build name sent to the Forza Live server (empty: git-<commit>, or dev)")
+set(_forza_build_id "${FORZA_BUILD_ID}")
+if(_forza_build_id STREQUAL "")
+    set(_forza_build_id dev)
+    find_package(Git QUIET)
+    if(GIT_FOUND)
+        execute_process(COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_CURRENT_SOURCE_DIR}" rev-parse --short=10 HEAD
+                        OUTPUT_VARIABLE _forza_commit OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET
+                        RESULT_VARIABLE _forza_git)
+        if(_forza_git EQUAL 0 AND _forza_commit MATCHES "^[0-9a-f]+$")
+            set(_forza_build_id "git-${_forza_commit}")
+        endif()
+    endif()
+endif()
+string(REGEX REPLACE "[^A-Za-z0-9._+-]" "_" _forza_build_id "${_forza_build_id}")
+string(SUBSTRING "${_forza_build_id}" 0 40 _forza_build_id)
+set_source_files_properties(src/kernel/live_auth.cpp PROPERTIES
+    COMPILE_DEFINITIONS "FORZA_BUILD_ID=\"${_forza_build_id}\"")
 forza_apply_native_pause(forza)
 
 # Experimental CPU optimization, independent of the GPU/driver. Keep the host

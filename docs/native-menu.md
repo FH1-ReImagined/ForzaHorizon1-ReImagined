@@ -9,7 +9,10 @@ runtime adapters and build configuration have been retired.
 
 ## Current scope and validation
 
-The pause feature adds four pages: Home, Cars, Social and Settings. Car Tuning
+The pause feature adds Home, Cars, Social and Settings, plus contextual Activity
+and Horizon pages for native race, PR Stunt, Rally, 1000 Club and other available
+actions. See [the stock context/action checklist](pause-menu-contexts.md) for
+native routing and outstanding runtime validation. Car Tuning
 comes from the standalone implementation merged in #363; this feature adds only
 the parent visibility bridge needed to enter and return from the Cars tile.
 Bucket List is excluded. The feature remains opt-in.

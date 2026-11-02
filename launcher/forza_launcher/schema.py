@@ -354,8 +354,9 @@ add("wheel_mode", "Racing wheel", "Controls", "choice", "auto",
 add("wheel_device", "Wheel device", "Controls", "str", "",
     "The wheel the first player drives with, and the one pedals, a shifter or a handbrake on their "
     "own USB device are read with. Empty picks one with force feedback first (a wheel base before "
-    "a vJoy or button box); a device name as Bindings lists it (Use as the wheel), SDL GUID or "
-    "vid:pid picks that one, and makes it a wheel.", "Racing wheel", restart=True)
+    "a vJoy or button box); a device name as Bindings lists it, SDL GUID or vid:pid picks that "
+    "one, and makes it a wheel. Use as the wheel saves the vid:pid, which the game reads "
+    "whatever name Windows gives the device.", "Racing wheel", restart=True)
 add("wheel_rotation", "Wheel rotation (degrees)", "Controls", "int", 900,
     "Lock to lock, as set in the wheel's own driver.", "Racing wheel", lo=90, hi=2520, step=10)
 add("wheel_lock", "Steering lock (degrees)", "Controls", "int", 900,
@@ -400,8 +401,8 @@ add("wheel_buttons", "Button numbers", "Controls", "str", "",
 add("wheel_pedal_device", "Pedal device", "Controls", "str", "",
     "Pedals on their own USB device, read with the wheel. Empty finds known pedals (Simagic, "
     "Fanatec, Thrustmaster T-LCM, Heusinkveld, Moza, Logitech) or a device named like pedals; a "
-    "device name as Bindings lists it picks one; none reads the wheel's own pedals. Binding a "
-    "pedal row by pressing the pedal sets it.", "Racing wheel")
+    "device name as Bindings lists it, or its vid:pid, picks one; none reads the wheel's own "
+    "pedals. Binding a pedal row by pressing the pedal sets it (as vid:pid).", "Racing wheel")
 add("wheel_pedal_axes", "Pedal device axes", "Controls", "str", "",
     "Axis numbers on the pedal device, e.g. throttle=0,brake=1,clutch=2. Empty uses known pedals' "
     "layout, else detects them from where each axis rests when the game starts (pedals "
@@ -410,8 +411,9 @@ add("wheel_pedal_axes", "Pedal device axes", "Controls", "str", "",
 add("wheel_handbrake_device", "Handbrake device", "Controls", "str", "",
     "An analog handbrake on its own USB device, read with the wheel. Empty finds known handbrakes "
     "(Simagic TB-1 and TB-RS, Fanatec ClubSport Handbrake, Thrustmaster TSS) or a device named "
-    "like one; a device name as Bindings lists it picks one (also the pedal or shifter device); "
-    "none reads none. Binding the Handbrake row by pulling the handbrake sets it.",
+    "like one; a device name as Bindings lists it, or its vid:pid, picks one (also the pedal or "
+    "shifter device); none reads none. Binding the Handbrake row by pulling the handbrake sets "
+    "it (as vid:pid).",
     "Racing wheel")
 add("wheel_handbrake_axis", "Handbrake device axis", "Controls", "int", 0,
     "The handbrake's axis number on the handbrake device.", "Racing wheel", lo=0, hi=99)
@@ -445,6 +447,10 @@ add("wheel_rumble_engine_strength", "Engine rumble (%)", "Controls", "int", 50,
 add("wheel_rumble_road_strength", "Road rumble (%)", "Controls", "int", 80,
     "The vibration from the road surface, kerbs and impacts (the game's left motor), 0 to 100 "
     "percent of the force feedback strength.", "Racing wheel", lo=0, hi=100, step=5)
+# How often the vibration effects are updated (ReIGlue 0403 follow-up, #467); read on every update.
+add("wheel_vibration_rate", "Wheel vibration updates per second", "Controls", "int", 60,
+    "Lower it if your wheel's vibration feels too strong. 15 to 120.", "Racing wheel",
+    lo=15, hi=120, step=5)
 add("wheel_rumble_style", "Rumble style", "Controls", "choice", "fine",
     "How the game's rumble plays on the wheel's motor. Fine: the engine and the road each as a "
     "light, quick vibration (about 70 and 40 Hz). Classic: one strong, slower vibration, as the "
@@ -484,8 +490,9 @@ add("wheel_shifter_follow_slot", "Gear follows the lever's slot", "Controls", "b
 add("wheel_shifter_device", "Shifter device", "Controls", "str", "",
     "A shifter on its own USB device, read with the wheel. Empty finds known shifters (Simagic "
     "DS-8X, Fanatec ClubSport SQ, Thrustmaster TH8 RS, Moza HGP, Heusinkveld, Logitech) or a "
-    "device named like one (a TH8A); a device name as Bindings lists it picks one; none reads "
-    "the wheel's own buttons. Binding a gear row by pressing it on the shifter sets it.",
+    "device named like one (a TH8A); a device name as Bindings lists it, or its vid:pid, picks "
+    "one; none reads the wheel's own buttons. Binding a gear row by pressing it on the shifter "
+    "sets it (as vid:pid).",
     "Shifter and clutch", restart=True)
 add("wheel_shifter_device_buttons", "Shifter device buttons", "Controls", "str", "",
     "Button numbers on the shifter device, e.g. 1=0,2=1,3=2,4=3,5=4,6=5,r=6 or up=..,down=.. "
@@ -545,11 +552,17 @@ add("audio_mute", "Mute", "Audio", "bool", False, "", "Output")
 add("audio_maxqframes", "Audio buffer (frames)", "Audio", "int", 8,
     "4 to 64. Lower is less delay but may crackle.", "Output", lo=4, hi=64)
 add("radio_station_switch", "Station changes", "Audio", "choice", "game",
-    "Game: as the game shipped, the next station can be picked about 3.5 s after the last "
-    "(not while the station banner shows) and the music fades out and in over 0.5 s each. "
-    "Fast: a new station every 0.15 s, also while the banner shows, with the game's own "
-    "0.25 s fades for player changes; quick presses end on the last station picked.",
-    "Radio", choices=[("game", "Game"), ("fast", "Fast")])
+    "Game: original radio HUD delay and 0.5 s fades. Fast: 0.15 s repeat guard and 0.25 s fades. "
+    "Instant: 0.075 s repeat guard and 0.04 s fades. Fast and Instant accept the latest station "
+    "during a fade. Applies to stock and custom stations. Stream startup still adds latency.",
+    "Radio", choices=[("game", "Game"), ("fast", "Fast"), ("instant", "Instant")])
+
+
+add("radio_keep_in_events", "Keep radio during races", "Audio", "bool", False,
+    "Keep your selected stock or custom station, including Radio Off, through qualified "
+    "career and Rally race-opening music cues. Story cinematics, post-race music, dialogue "
+    "and sound effects keep their native behavior. Loading/finish fades still apply.",
+    "Radio", restart=True)
 
 # --- Online ----------------------------------------------------------------------------
 add("live_signin", "Sign in to Xbox LIVE", "Online", "bool", True,
@@ -660,14 +673,16 @@ add("share_shader_list", "Share shader list", "Online", "bool", True,
     "After a game session, send the shader hashes and render settings from your pipeline cache to the "
     "server you play on (the public server or your own), once per entry. No game data, file paths or "
     "gamertag are sent, only pipeline descriptions: which shaders were used and how. The request carries "
-    "your player ID and friends key so that the server counts each player once. The server publishes "
+    "your player ID and a signature made with your signing key (not the key itself) so that the server "
+    "counts each player once. The server publishes "
     "the entries several players reported, and Prebuild shaders builds that list from your own game files, "
     "so new places and cars stop compiling shaders while you drive. Nothing is sent offline or to a "
     "server on this PC.", "Shader prebuild")
 # Launcher only: see coop_grant.py, #309.
 add("coop_results", "Co-op campaign results", "Online", "bool", True,
     "After a game session, ask the server you play on for your co-op campaign results and add the "
-    "ones you earned to the save you played with. The request carries your player ID and friends key. "
+    "ones you earned to the save you played with. The request carries your player ID and a signature "
+    "made with your signing key (not the key itself). "
     "Nothing is asked offline or of a server on this PC.", "Co-op campaign")
 # Discord status display is on by default; the "Online features" choice (PRIVACY.md) and this
 # switch turn it off. The application ID is public maintainer setup, separated from the
@@ -675,6 +690,11 @@ add("coop_results", "Co-op campaign results", "Online", "bool", True,
 add("discord_presence", "Share activity on Discord", "Online", "bool", True,
     "Show your activity in the Discord desktop app: free roam, racing, shops and online lobbies. "
     "Only when the Discord desktop app runs; Discord's own activity privacy settings apply. "
+    "Applies on the next game launch.", "Discord",
+    restart=True)
+add("discord_presence_details", "Share car, event and area", "Online", "bool", True,
+    "Also show your car with its class and PI, the event you race in and the area of Colorado you "
+    "drive in, with the names the game uses. Off: only the activity, as before. "
     "Applies on the next game launch.", "Discord",
     restart=True)
 add("discord_application_id", "Discord application ID", "Advanced", "str", "1563015276583460934",

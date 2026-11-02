@@ -18,6 +18,7 @@ enum class PauseAction {
   Garage, Autoshow, TuneCar, Difficulty, Graphics, Audio, Controls, Hud, Video,
   Friends, Chat, SocialStats, FreeRoam, CreateGame, FriendRequests, ConnectionGuide, SocialRoot,
   SessionPage, InviteFriends, LeaveSession, SessionNext,
+  NativeActivity,
 };
 
 struct PauseActionBinding {
@@ -53,6 +54,81 @@ inline constexpr std::array kPauseActions{
     PauseActionBinding{"session_invite", PauseAction::InviteFriends},
     PauseActionBinding{"session_leave", PauseAction::LeaveSession},
     PauseActionBinding{"session_next", PauseAction::SessionNext},
+    PauseActionBinding{"quit_stunt", PauseAction::NativeActivity},
+    PauseActionBinding{"restart_stunt", PauseAction::NativeActivity},
+    PauseActionBinding{"restart_race", PauseAction::NativeActivity},
+    PauseActionBinding{"quit_race", PauseAction::NativeActivity},
+    PauseActionBinding{"end_free_roam", PauseAction::NativeActivity},
+    PauseActionBinding{"finish_race", PauseAction::NativeActivity},
+    PauseActionBinding{"horizon_rally", PauseAction::NativeActivity},
+    PauseActionBinding{"thousand_club", PauseAction::NativeActivity},
+    PauseActionBinding{"coop_challenges", PauseAction::NativeActivity},
+    PauseActionBinding{"sponsor_challenges", PauseAction::NativeActivity},
+    PauseActionBinding{"message_center", PauseAction::NativeActivity},
+    PauseActionBinding{"native_multiplayer", PauseAction::NativeActivity},
+    PauseActionBinding{"head_tracking", PauseAction::NativeActivity},
+};
+
+struct NativePauseBinding {
+  std::string_view id;
+  uint32_t action;
+  bool activity;
+};
+inline constexpr std::array<NativePauseBinding,13> kNativePauseBindings{{
+    NativePauseBinding{"quit_race",14,true}, {"restart_race",10,true},
+    {"quit_stunt",0,true}, {"restart_stunt",1,true},
+    {"finish_race",16,true}, {"end_free_roam",15,true},
+    {"horizon_rally",6,false}, {"thousand_club",19,false},
+    {"coop_challenges",4,false}, {"sponsor_challenges",8,false},
+    {"message_center",5,false}, {"native_multiplayer",7,false},
+    {"head_tracking",13,false},
+}};
+
+inline std::optional<uint32_t> NativePauseDialog(uint32_t action) {
+  switch (action) {
+    case 0: case 1: return action;
+    case 6: return 23;
+    case 7: return 3;
+    case 10: return 5;
+    case 14: return 17;
+    case 15: return 18;
+    case 16: return 19;
+    case 17: return 2;
+    default: return {};
+  }
+}
+enum class PauseDialogOutcome { Ignored, Child, Cancel, Leave, Restart };
+inline bool NativePauseDialogReturns(uint32_t dialog) {
+  // Information/error prompts return without an activity transition.
+  // Marketplace choices first run the common native 827618F8 handler; the
+  // adapter must respect its keep-open flag and any follow-up child request.
+  return dialog == 16 || dialog == 20 || dialog == 21 || dialog == 22 ||
+      dialog == 100005 || dialog == 100007 || dialog == 100011 || dialog == 100012 ||
+      dialog == 100013 || dialog == 100014;
+}
+inline PauseDialogOutcome NativePauseDialogOutcome(uint32_t dialog, uint32_t choice) {
+  if (NativePauseDialogReturns(dialog)) return PauseDialogOutcome::Cancel;
+  // Restart's B result is 3; X=6 opens native difficulty. Quit's X=6
+  // is the party-leader leave-with-party choice, not cancellation.
+  if (dialog == 5)
+    return choice == 0 ? PauseDialogOutcome::Restart : choice == 3 ?
+        PauseDialogOutcome::Cancel : PauseDialogOutcome::Child;
+  switch (dialog) {
+    case 0: case 1: case 2: case 3: case 17: case 18: case 19: case 23:
+      return choice == 0 || (dialog == 2 && choice == 6) ?
+          PauseDialogOutcome::Leave : PauseDialogOutcome::Cancel;
+    default: return PauseDialogOutcome::Child;
+  }
+}
+inline std::optional<uint32_t> NativePauseAction(std::string_view id) {
+  for (const auto& binding : kNativePauseBindings)
+    if (binding.id == id) return binding.action;
+  return {};
+}
+
+struct NativePauseRow {
+  bool present = false, enabled = false;
+  std::string label;
 };
 
 inline std::optional<PauseAction> FindPauseAction(std::string_view id) {
@@ -78,7 +154,23 @@ struct PauseCapabilities {
   bool session_more = false;
   bool end_free_roam = false;
   bool change_car = false;
+  std::array<NativePauseRow,20> native{};
 };
+
+inline std::string_view PauseEntryPage(const PauseCapabilities& caps) {
+  for (const uint32_t action : {0u,14u,16u})
+    if (caps.native[action].present && caps.native[action].enabled &&
+        !caps.native[action].label.empty()) return "activity";
+  return "home";
+}
+
+inline bool DesktopQuitContext(const PauseCapabilities& caps, bool activity_known,
+                               uint32_t presence, uint32_t region) {
+  if (!caps.world_map || !activity_known || presence != 1 || region != 0) return false;
+  for (const uint32_t action : {0u,1u,14u,16u,18u})
+    if (caps.native[action].present) return false;
+  return true;
+}
 
 inline std::vector<Page> MakePausePages(const PauseCapabilities& caps = {}, bool social_help=false,
                                       bool social_session=false) {
@@ -109,7 +201,8 @@ inline std::vector<Page> MakePausePages(const PauseCapabilities& caps = {}, bool
           {"social_connection", "SESSION & CONNECTION", {64, 464, 560, 106}, "social_session"},
       }},
       {"settings", "SETTINGS", {
-          {"difficulty", "DIFFICULTY", {64, 166, 374, 194}, "difficulty"},
+          {"difficulty", "DIFFICULTY", {64, 166, 374, 194}, "difficulty", true,
+              caps.my_profile || caps.native[18].enabled},
           {"graphics", "GRAPHICS", {454, 166, 372, 194}, "graphics"},
           {"audio", "AUDIO", {842, 166, 374, 194}, "audio"},
           {"controls", "CONTROLS", {64, 376, 374, 194}, "controls"},
@@ -132,6 +225,28 @@ inline std::vector<Page> MakePausePages(const PauseCapabilities& caps = {}, bool
       {"social_connection","CONNECTION & HELP",{936,376,280,194},"social_connection"},
       {"social_back","BACK TO SOCIAL",{64,464,560,106},"social_back"},
   };
+  // The native rows supply the context-specific/localized title (for example
+  // Quit Race versus Retire). Never turn an absent DLC/event row into a tile.
+  // Six donors are reused per page; additional actions get a navigable page.
+  for (const bool activity : {true,false}) {
+    unsigned count = 0;
+    for (const auto& binding : kNativePauseBindings) {
+      const auto& row = caps.native[binding.action];
+      if (binding.activity != activity || !row.present || row.label.empty()) continue;
+      const unsigned index = count++ % 6;
+      if (!index) {
+        const std::string name = activity ? "activity" : "horizon";
+        const unsigned number = (count - 1) / 6;
+        pages.push_back({name + (number ? "_" + std::to_string(number + 1) : ""),
+                         std::string(activity ? "ACTIVITY" : "HORIZON") +
+                             (number ? " " + std::to_string(number + 1) : ""), {}});
+      }
+      const double x = 64 + (index % 3) * 390;
+      const double y = 166 + (index / 3) * 210;
+      pages.back().tiles.push_back({std::string(binding.id),row.label,
+          {x,y,374,194},std::string(binding.id),true,row.enabled});
+    }
+  }
   return pages;
 }
 

@@ -13,6 +13,10 @@
 REXCVAR_DEFINE_BOOL(discord_presence, true, "Social",
                     "Share the current activity with the local Discord desktop client")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(discord_presence_details, true, "Social",
+                    "Also share the car with its class and PI, the event and the area of Colorado "
+                    "(names the game shows; off: only the activity)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_STRING(discord_application_id, "1563015276583460934", "Social",
                       "Public Discord application ID (not a bot token or client secret)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
@@ -22,6 +26,7 @@ namespace {
 using Clock = std::chrono::steady_clock;
 struct Service {
   std::atomic<bool> enabled{false};
+  std::atomic<bool> details{false};
   std::mutex lifecycle;
   std::mutex mutex;
   std::condition_variable wake;
@@ -87,6 +92,11 @@ void Initialize() {
   std::lock_guard lifetime_lock(service.lifecycle);
   if (service.stop) return;
   if (service.worker.joinable()) return;
+  {
+    std::lock_guard lock(service.mutex);
+    service.model.show_details = REXCVAR_GET(discord_presence_details);
+  }
+  service.details = REXCVAR_GET(discord_presence_details);
   service.enabled = true;
   try {
     service.worker = std::thread(Run, id);
@@ -108,5 +118,15 @@ void Party(uint32_t count, uint32_t capacity) {
   std::lock_guard lock(service.mutex);
   service.model.count = count;
   service.model.capacity = capacity;
+}
+bool Wanted() {
+  auto& service = State();
+  return service.enabled.load(std::memory_order_relaxed) && service.details.load(std::memory_order_relaxed);
+}
+void Details(const GameDetails& details) {
+  auto& service = State();
+  if (!Wanted()) return;
+  std::lock_guard lock(service.mutex);
+  service.model.game = details;
 }
 }  // namespace forza::discord

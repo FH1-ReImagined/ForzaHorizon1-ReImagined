@@ -270,7 +270,9 @@ void ChildOwnershipAndInputPolicy() {
 }
 
 void DefaultPausePages() {
-  const PauseCapabilities all{true,true,true,true,true,true,true,true,true,true,true,true,false,true};
+  PauseCapabilities all{true,true,true,true,true,true,true,true,true,true,true,true,false,true};
+  for (const auto& binding : kNativePauseBindings)
+    all.native[binding.action]={true,true,std::string(binding.id)};
   const auto pages = MakePausePages(all);
   Controller menu;
   menu.SetPages(pages);
@@ -444,6 +446,73 @@ void DefaultPausePages() {
   assert(menu.Update(Mask(Button::Confirm), 0).action == "controls");
 }
 
+void NativeContextPages() {
+  // Native model snapshots, not host guesses about DLC installation.
+  PauseCapabilities caps;
+  caps.world_map=true;
+  assert(DesktopQuitContext(caps,true,1,0));
+  assert(!DesktopQuitContext(caps,false,1,0));
+  assert(!DesktopQuitContext(caps,true,2,0));
+  assert(!DesktopQuitContext(caps,true,1,1));
+  for (const uint32_t action : {0u,1u,14u,16u,18u}) {
+    caps.native[action].present=true;
+    assert(!DesktopQuitContext(caps,true,1,0)); // Even stale free-roam presence is insufficient.
+    caps.native[action]={};
+  }
+  caps={};
+  caps.native[14]={true,true,"QUIT RACE"};
+  caps.native[10]={true,true,"RESTART"};
+  assert(PauseEntryPage(caps)=="activity");
+  Controller menu;
+  menu.SetPages(MakePausePages(caps));
+  assert(menu.SelectPage("activity"));
+  menu.FocusTile("quit_race");assert(menu.Activate()=="quit_race");
+  assert(NativePauseAction(*menu.Activate())==14);
+  caps.native[14].label="RETIRE";
+  caps.native[10].enabled=false;
+  const auto changed=MakePausePages(caps);
+  assert(changed[4].tiles[0].label=="RETIRE");
+  menu.SetPages(changed);
+  assert(menu.focused_tile_id()=="quit_race" && !menu.FocusTile("restart_race"));
+  caps.native[14]={};caps.native[10]={};
+  assert(PauseEntryPage(caps)=="home");
+  menu.SetPages(MakePausePages(caps));
+  assert(!menu.SelectPage("activity"));
+  assert(!NativePauseAction("unknown") && !NativePauseAction("native_999"));
+
+  caps.native[6]={true,false,"HORIZON RALLY"};
+  caps.native[19]={true,true,"1000 CLUB"};
+  menu.SetPages(MakePausePages(caps));
+  assert(menu.SelectPage("horizon"));
+  assert(!menu.FocusTile("horizon_rally"));
+  menu.FocusTile("thousand_club");assert(NativePauseAction(*menu.Activate())==19);
+  caps.native[19]={};
+  menu.SetPages(MakePausePages(caps));
+  assert(!menu.FocusTile("thousand_club"));
+  // Rally-only model: Resume, Difficulty and Restart. No profile dependency.
+  caps={};caps.native[3]={true,true,"RESUME"};
+  caps.native[18]={true,true,"DIFFICULTY"};caps.native[10]={true,true,"RESTART"};
+  menu.SetPages(MakePausePages(caps));menu.SelectPage("settings");
+  menu.FocusTile("difficulty");assert(menu.focused_tile_id()=="difficulty");
+  caps.native[18].enabled=false;
+  menu.SetPages(MakePausePages(caps));assert(!menu.FocusTile("difficulty"));
+
+  using O=PauseDialogOutcome;
+  for (uint32_t action : {0u,1u,6u,7u,10u,14u,15u,16u,17u}) {
+    const auto dialog=NativePauseDialog(action);assert(dialog);
+    assert(NativePauseDialogOutcome(*dialog,0)==(*dialog==5?O::Restart:O::Leave));
+    assert(NativePauseDialogOutcome(*dialog,*dialog==5?3:1)==O::Cancel);
+  }
+  assert(NativePauseDialog(0)==0); // Zero is a real confirmation ID.
+  assert(!NativePauseDialog(19));
+  assert(NativePauseDialogOutcome(5,6)==O::Child);
+  assert(NativePauseDialogOutcome(2,6)==O::Leave);
+  for (uint32_t dialog : {16u,20u,21u,22u,100005u,100007u,100011u,100012u,100013u,100014u})
+    for (uint32_t choice : {0u,1u,3u,6u})
+      assert(NativePauseDialogOutcome(dialog,choice)==O::Cancel);
+  assert(NativePauseDialogOutcome(999,0)==O::Child);
+}
+
 void NativeLayoutContract() {
   namespace layout = forza::native_pause_layout;
   const auto defaults = MakePausePages({true, true, true, true, true});
@@ -544,6 +613,7 @@ int main() {
   GateTiming();
   ChildOwnershipAndInputPolicy();
   DefaultPausePages();
+  NativeContextPages();
   NativeLayoutContract();
   std::puts("Native menu model: availability, spatial focus, stable IDs, input timing, child ownership, default pages and layout contracts passed");
 }

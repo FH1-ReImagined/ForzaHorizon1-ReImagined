@@ -494,7 +494,8 @@ Data flow:
    them are not worth sending and are noted as done. Up to 3000 pipelines per session, 400 per
    request.
 2. **Upload**: `POST /shader-lists/upload` on the server's HTTP port (UDP port plus one), signed
-   with the player's XUID and friends key from `live_identity.txt`, 8 s timeout. Only when
+   with the player's XUID and signing key from `live_identity.txt` (an Ed25519 signature,
+   `launcher/forza_launcher/live_auth.py`: the key itself is not sent), 8 s timeout. Only when
    Settings > Online > **Share shader list** is on (default), and the online mode is the public
    server or the player's own server: never offline, never "This PC". Failures are silent and logged
    to the launcher log; entries that were not accepted are tried again after the next session; it

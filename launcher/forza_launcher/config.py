@@ -27,6 +27,7 @@ def _default():
         "mods": {"order": [], "disabled": []},
         # Texture packs (#384, texture_packs.py): the same for the folders in <data>/textures.
         "texture_packs": {"order": [], "disabled": []},
+        "custom_radio": {"version": 1, "ffmpeg": "", "stations": {}},
         "check_updates": True,    # one background check per packaged launcher session
         "game_package": "",       # the Games on Demand package (file)
         "tu_package": "",         # the player's title update package (TU4)
@@ -99,6 +100,10 @@ class Config:
             return
         if isinstance(data, dict):
             _merge(self.d, data)
+            # Station slot names are dynamic keys, unlike the fixed settings schema.
+            custom = data.get("custom_radio")
+            if isinstance(custom, dict) and isinstance(custom.get("stations"), dict):
+                self.d["custom_radio"]["stations"] = custom["stations"]
             self.loaded = True
         # Migrate the former combined AA/upscaling selectors before choice coercion.
         if self.d["settings"].get("fh1_upscaler") == "dlaa":

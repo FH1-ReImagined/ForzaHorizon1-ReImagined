@@ -57,6 +57,7 @@ struct Identity {
   uint64_t xuid = 0;
   std::string gamertag;
   std::string friends_key;  // 16 random bytes (#92; the file keeps them in hex)
+  std::string signing_seed;  // 32 random bytes: the Ed25519 key of signed requests (#515)
 };
 
 bool IsHex(const std::string& s) {
@@ -92,6 +93,11 @@ Identity LoadOrCreateLiveIdentity() {
           id.friends_key += char(std::stoi(value.substr(2 * i, 2), nullptr, 16));
         }
       }
+      if (key == "signing_seed" && value.size() == 64 && IsHex(value)) {
+        for (size_t i = 0; i < 32; ++i) {
+          id.signing_seed += char(std::stoi(value.substr(2 * i, 2), nullptr, 16));
+        }
+      }
     }
   }
   bool changed = false;
@@ -108,6 +114,15 @@ Identity LoadOrCreateLiveIdentity() {
     }
     changed = true;
   }
+  if (id.signing_seed.size() != 32) {
+    // Kept with the friends key: an identity file copied to another PC keeps its sign-in.
+    id.signing_seed.clear();
+    for (int i = 0; i < 8; ++i) {
+      const uint32_t r = rd();
+      for (int b = 0; b < 4; ++b) id.signing_seed += char(r >> (8 * b));
+    }
+    changed = true;
+  }
   if (id.gamertag.empty()) {
     const char* user = std::getenv("USER");
     id.gamertag = CleanGamertag(user ? user : "");
@@ -120,14 +135,20 @@ Identity LoadOrCreateLiveIdentity() {
     std::ofstream out(path);
     char xuid[17];
     std::snprintf(xuid, sizeof(xuid), "%016llX", (unsigned long long)id.xuid);
-    char key[33] = {};
+    char key[33] = {}, seed[65] = {};
     for (size_t i = 0; i < 16; ++i) {
       std::snprintf(key + 2 * i, 3, "%02X", unsigned(uint8_t(id.friends_key[i])));
     }
+    for (size_t i = 0; i < 32; ++i) {
+      std::snprintf(seed + 2 * i, 3, "%02X", unsigned(uint8_t(id.signing_seed[i])));
+    }
     out << "# Forza Live identity: your online XUID and gamertag (15 characters max).\n"
-        << "# friends_key proves to the server that your friends list is yours: keep it with\n"
-        << "# the XUID (copy this file to play as you on another computer).\n"
-        << "xuid=" << xuid << "\ngamertag=" << id.gamertag << "\nfriends_key=" << key << "\n";
+        << "# friends_key and signing_seed prove to the server that your friends list is yours:\n"
+        << "# keep them private and with the XUID (copy this file to play as you on another\n"
+        << "# computer). signing_seed signs every request; servers keep only its public key, and\n"
+        << "# friends_key is sent once, to move an older binding to it.\n"
+        << "xuid=" << xuid << "\ngamertag=" << id.gamertag << "\nfriends_key=" << key
+        << "\nsigning_seed=" << seed << "\n";
     REXLOG_INFO("FORZA_LIVE: created identity {} ({})", id.gamertag, path.string());
   }
   return id;
@@ -185,6 +206,8 @@ bool LiveSignin() {
 uint64_t IdentityXuid() { return Get().xuid; }
 
 const std::string& IdentityFriendsKey() { return Get().friends_key; }
+
+const std::string& IdentitySigningSeed() { return Get().signing_seed; }
 
 uint64_t ProfileXuid() {
   static const uint64_t xuid = [] {

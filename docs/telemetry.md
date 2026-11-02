@@ -1,5 +1,56 @@
 # FH1 telemetry and adaptive triggers
 
+## Physics-driven Xbox triggers
+
+Updated launchers request `FORZA_TELEMETRY_PHYSICS=1`. Updated games then send
+FH1T v2 (140 bytes): the existing 96-byte prefix, version 2 and size 140, followed
+by little-endian `<10fI>`: RPM, redline RPM, speed (m/s), processed brake, throttle,
+handbrake, normalized FL/FR/RL/RR longitudinal slips, and the game's ABS-active
+word reduced to 0/1. Flag 16 says the physics fields are valid. Without it the
+receiver retains pressure-based effects. Older launchers still receive v1, and
+updated launchers accept v1 from older games. The session nonce, sequence,
+endpoint checks, output acknowledgements and expiry rules still apply.
+
+The brake trigger pulses at about 12 Hz while the game's ABS is active and the
+car moves; tire lock beyond peak grip also produces feedback. The throttle
+trigger combines RPM and tire spin beyond peak grip. Both are multiplied by
+the game's processed pedal input and the existing independent user strengths.
+Airborne wheels contribute no slip. Slip is corrected for reverse gear.
+V2 driving state uses the existing world-state gate (pause, rewind, loading,
+menu and simulation), rather than treating a retained car as proof of driving.
+Normal controller body rumble and DualSense resistance remain separate.
+
+`car_physics.h` reads ICarDynamics through checked guest ranges and rejects
+unknown vtables, non-finite/out-of-range samples and inaccessible fields. The
+common offsets are engine angular velocity +324, redline +452, maximum +456,
+idle +1228, gear byte +2240, ABS +3020, speed +3128, controls +3904. Wheels start
+at +3936: disc stride **1024**, TU4 stride **1040**. Each wheel has rotation
+speed +12, normalized longitudinal slip +496, normalized slip angle +520 and
+contact byte +796 on disc, +800 on TU4; suspension displacement is +0 minus spring rest +860 on disc, +876 on TU4.
+
+A Windows TU4 copied-save run on 2026-10-23 exposed and corrected both moved
+wheel fields. An independent UDP receiver captured 2,699 Horizon packets,
+including 2,084 active samples, engine speed to 8,004 RPM, speed to 24.7 m/s,
+full processed throttle/brake input and inactive packets after pause. The same
+sampler feeds FH1T v2. Disc/TU4 native UDP probes and strict reader tests pass;
+physical Xbox trigger output still requires controller hardware validation.
+Angular velocity becomes RPM by 60/(2*pi). Gear 0 is reverse, 9 neutral.
+
+Research reference: [Pinyon Shift's car dynamics findings](https://github.com/arcanite24/pinyon-shift/blob/main/src/pinyon_shift_runtime_hooks.cpp).
+The disc and TU4 HUD getters were independently inspected for this implementation;
+notably TU4 getters multiply wheel indices by 1040 (`mulli ... 1040`), while the
+disc getters shift by 10. The known interface vtables are disc 82003EEC/8223759C,
+TU4 82003F0C/8224A6E4. No generated game code or game data is included here.
+
+Validation: 640 Windows launcher tests pass (37 skips); the checked reader's
+synthetic disc/TU4 tests, native compilation of both telemetry adapters for both
+builds, and actual native UDP v1/v2 probes pass. V2 probes verify RPM, all four
+wheel strides, invalid input, remote-car exclusion and unmapped memory. Physical
+Xbox controller feel/transport and real-game samples still require validation;
+synthetic probes do not establish hardware or live offset qualification.
+
+The following sections describe the original v1 bridge and its baseline effects.
+
 The launcher Controls page offers optional DualSense / DualSense Edge throttle
 and brake resistance. It uses the HorizonHaptics MIT-licensed trigger encoders
 and USB/Bluetooth transport; attribution and local changes are recorded in

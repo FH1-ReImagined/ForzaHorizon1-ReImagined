@@ -1,1 +1,1 @@
-{"protocol": "FH1T", "version": 1, "xbox_trigger_rumble": 1, "capabilities": ["position", "derived_velocity", "derived_acceleration", "raw_controller_inputs"]}
+{"protocol": "FH1T", "version": 1, "physics_version": 2, "xbox_trigger_rumble": 1, "capabilities": ["position", "derived_velocity", "derived_acceleration", "raw_controller_inputs", "engine_rpm", "abs", "tire_slip", "processed_car_inputs"]}

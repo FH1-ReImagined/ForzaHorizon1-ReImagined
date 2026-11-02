@@ -29,9 +29,15 @@ bool LiveSignin();
 // 0 (no Live account).
 uint64_t IdentityXuid();
 
-// The friends key of the saved Live identity (16 bytes; empty outside Live mode): the
-// server binds the XUID's friends list to the first key that uses it (#92).
+// The friends key of the saved Live identity (16 bytes; empty outside Live mode): servers bound
+// the XUID's friends list to it before signed requests (#92); the game sends it only once, to
+// the main server, to move that binding to its public key (live_auth.cpp, #515).
 const std::string& IdentityFriendsKey();
+
+// The Ed25519 seed of the saved Live identity (32 bytes; empty outside Live mode): every
+// request to the Forza Live server is signed with it, and servers keep only its public key
+// (live_auth.cpp, #515).
+const std::string& IdentitySigningSeed();
 
 // Offline XUID of the signed-in profile when overridden (profile_xuid / FORZA_XUID), else 0
 // (keep the runtime's profile). Forza's save is tied to it.

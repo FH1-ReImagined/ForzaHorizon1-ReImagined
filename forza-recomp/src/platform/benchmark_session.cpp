@@ -31,6 +31,7 @@ std::atomic<bool> automatic{false}, boot_input{false}, confirm_input{false},
 std::filesystem::path source_root, settings_snapshot;
 uint32_t title_menu = 0, single_player_id = 10;
 bool title_started = false, event_started = false;
+[[maybe_unused]] bool title_listed = false;
 Clock::time_point started = Clock::now(), world_ready{};
 
 void Environment(const char *name, const std::string &value) {
@@ -378,16 +379,22 @@ void FlowTick(PPCContext &ctx, uint8_t *base) {
     return;
   }
 #if defined(FORZA_TITLE_UPDATE) && FORZA_TITLE_UPDATE == 4
-  if (!title_started && Valid(title_menu) &&
-      Read(base, title_menu + 0x260) == 12) {
-    const auto component = Read(base, title_menu + 0x170);
-    if (!Valid(component))
+  // The title list ignores presses until its scene has loaded, which takes seconds on a
+  // new profile. Calling its choice handler (sub_82836928) on the first tick that listed
+  // the rows started the game's Single Player transition too early: it read guest
+  // address 4 and the game closed (#540). Boot's A presses (boot_input) choose the
+  // highlighted Single Player as a player's do, once the game takes them; the menu's
+  // state is then Single Player's id.
+  if (!title_started && Valid(title_menu)) {
+    const auto state = Read(base, title_menu + 0x260);
+    if (state == 12)
+      title_listed = true;
+    else if (title_listed && state == single_player_id) {
+      boot_input.store(false);
+      title_started = true;
+      REXLOG_INFO("BENCHMARK: loading single player for fixed event FR02");
       return;
-    boot_input.store(false);
-    title_started = true;
-    Call(ctx, base, 0x82836928,
-         {title_menu, 2, component + 8, single_player_id});
-    REXLOG_INFO("BENCHMARK: loading single player for fixed event FR02");
+    }
   }
   if (title_started && !event_started) {
     const auto activities = Activities(base);

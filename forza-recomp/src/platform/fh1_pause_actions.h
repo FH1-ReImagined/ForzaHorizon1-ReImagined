@@ -3,6 +3,7 @@
 #include "guest_addr.h"
 #include <cstdint>
 #include <initializer_list>
+#include <optional>
 #include <rex/ppc/context.h>
 
 #if FORZA_TU4
@@ -50,7 +51,95 @@ private:
 inline bool IsPause(uint8_t* base, uint32_t screen) {
   return base && screen && Read(base, screen) == 0x82061F94;
 }
+struct GuardObservation {
+  uint8_t* base;
+  uint32_t screen, action;
+  bool rejected = false;
+};
+inline thread_local GuardObservation* guard_observation = nullptr;
+struct ObserveGuard {
+  GuardObservation* previous;
+  explicit ObserveGuard(GuardObservation& observation)
+      : previous(guard_observation) { guard_observation = &observation; }
+  ~ObserveGuard() { guard_observation = previous; }
+};
 } // namespace detail
+
+// Only the scoped native dispatch observes this result. The original guard
+// still runs once and retains all content/license prompts and side effects.
+inline void ObserveClubGuard(uint8_t* base, uint32_t screen, bool accepted) {
+  auto* observation = detail::guard_observation;
+  if (observation && observation->base == base && observation->screen == screen &&
+      observation->action == 19) observation->rejected = !accepted;
+}
+
+struct DialogRequest {
+  uint32_t id = 0, params = 0;
+};
+inline bool ChildQueued(uint8_t* base, uint32_t screen) {
+  // 82F240C8 sets +264 only after accepting a native child request and
+  // transfers its owned parameters to +160. The later child retains them.
+  return detail::IsPause(base, screen) && GuestPtr(base, screen + 264)[0] != 0;
+}
+inline std::optional<DialogRequest> QueuedDialog(const PPCContext& context,
+                                                uint8_t* base, uint32_t screen) {
+  if (!ChildQueued(base, screen)) return {};
+  const auto params = detail::Read(base, screen + 160);
+  if (!params) return {};
+  const auto table = detail::Read(base, params);
+  const auto getter = table ? detail::Read(base, table + 4) : 0;
+  if (!getter) return {};
+  detail::Native native(context, base);
+  // This is the same native ID getter used by 82F28AD0 when returning a child.
+  return DialogRequest{native.Call(getter, {params}), params};
+}
+inline bool MatchesDialog(uint8_t* base, uint32_t screen, const DialogRequest& request,
+                          uint32_t id, uint32_t child) {
+  return detail::IsPause(base, screen) && child && request.params && id == request.id &&
+      detail::Read(base, child + 156) == screen &&
+      detail::Read(base, child + 164) == request.params;
+}
+inline bool HasRequiredExitCallback(uint8_t* base, uint32_t screen,
+                                    uint32_t dialog, uint32_t choice) {
+  if (!detail::IsPause(base, screen)) return false;
+  // These 827E5CA8 branches close without a transition when their callback
+  // has disappeared since the confirmation opened. Other accepted branches
+  // perform their own activity work before (or without) the done callback.
+  uint32_t offset=0;
+  switch (dialog) {
+    case 2: offset=choice==6?508:504;break;
+    case 3: offset=484;break;
+    case 17: offset=512;break;
+    case 23: offset=488;break;
+    default: return true;
+  }
+  return detail::Read(base,screen+offset)!=0;
+}
+
+struct Row {
+  uint32_t address = 0, text = 0;
+  bool enabled = false;
+};
+// Read the native display-order vector, including its enabled flag. A numeric
+// ID alone is not authorization: the builders own event, DLC and party gates.
+inline std::optional<Row> FindRow(uint8_t* base, uint32_t screen, uint32_t action) {
+  if (!detail::IsPause(base, screen) || action > 19) return {};
+  const auto begin = detail::Read(base, screen + 0x19C);
+  const auto end = detail::Read(base, screen + 0x1A0);
+  if (!begin || end < begin || end - begin > 1024 || (end - begin) % 4) return {};
+  std::optional<Row> result;
+  for (auto entry = begin; entry < end; entry += 4) {
+    const auto row = detail::Read(base, entry);
+    if (!row || detail::Read(base, row + 8) != action) continue;
+    if (result) return {}; // An ambiguous model must not dispatch an action.
+    result = Row{row, detail::Read(base, row + 12), GuestPtr(base, row + 20)[0] != 0};
+  }
+  return result;
+}
+inline bool Available(uint8_t* base, uint32_t screen, uint32_t action) {
+  const auto row = FindRow(base, screen, action);
+  return row && row->enabled;
+}
 
 // Call once from the imported scene's replacement for 827DFB18, on the guest UI
 // thread with its live PPC context. Both model builders finish by calling
@@ -83,11 +172,15 @@ inline bool InitModel(const PPCContext& context, uint8_t* base, uint32_t screen)
 // Custom Graphics/Difficulty IDs belong to the host adapter, not this helper.
 inline bool Dispatch(const PPCContext& context, uint8_t* base, uint32_t screen,
                      uint32_t action) {
-  if (!detail::IsPause(base, screen) || action > 19) return false;
+  if (!Available(base, screen, action)) return false;
   detail::Native native(context, base);
   native.Call(0x827DABD0, {screen});
+  detail::GuardObservation observation{base, screen, action};
+  detail::ObserveGuard scope(observation);
   native.Call(0x827EBEE0, {screen, 2, 0, action});
-  return true; // Dispatched, not a claim that the requested screen opened.
+  // Club can reject without a prompt (missing resource/availability). A
+  // rejection with an accepted child is still a native prompt to return from.
+  return !observation.rejected || ChildQueued(base, screen);
 }
 
 // Original COptions selection branches. These branches use only the common

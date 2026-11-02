@@ -7,22 +7,23 @@
 // CHudStatusRadio: the station logo and track name) is up. A change sets the cooldown to
 // 1 s; the HUD comes up with the new station, about 0.6 s after the press, and stays
 // about 2.5 s, so the next change can come 3 to 3.5 s after the first. The station index
-// goes to the audio thread (CAudioManagerDeferred, 35-70 ms later), where the radio system
-// (RadioSystem::CRadioSystem) fades the music out, starts the new station's stream at a
-// point in a track and fades in. The fades take stationChangeFadeTimeNormal (0.5 s each)
-// from media/audio/radio/RadioSystem.xml: the shorter stationChangeFadeTimeUser (0.25 s)
-// is chosen by a flag (+0x164) that nothing sets. Starting the stream takes 10-40 ms
-// (FMOD getSubSound and setPosition), and its first audio is in the next mix: our XMA and
-// audio path add nothing measurable. A change asked for while the music fades out is
-// dropped, and one during the fade in cuts the music at once.
+// goes to CAudioManagerDeferred, then RadioSystem::CRadioSystem. The native normal
+// fades are 0.5 s each; the user rate is 0.25 s but its selector (+0x164) is not
+// set by this path. Historical stock and custom station logs on 2026-10-28 show
+// 11-14 ms admission-to-audio-request, 508-560 ms admission-to-new-stream state,
+// and 960-1007 ms until the fade settles. Those state logs do not isolate stream
+// load/decode time or measure the first audible sample. The original drops
+// requests while fading out and switches immediately during fade-in.
 //
-// radio_station_switch=fast (launcher: Audio, Radio): a change needs only 0.15 s since the
-// last one, the radio HUD does not hold it back (it shows the new station), player
-// changes fade over the game's own 0.25 s, and a change during a fade goes to the newest
-// station: during the fade out the music fades on to it, during the fade in it fades out
-// again from where it is (no cut), and going back to the station that plays fades it back
-// in. game (the default) keeps the game's behaviour. FORZA_RADIOLOG=1 logs each press,
-// station change and fade.
+// radio_station_switch=fast keeps the existing 150 ms repeat guard and 250 ms ramps.
+// instant uses a 75 ms repeat guard and 40 ms station-only ramps. Both accept the
+// newest request during a ramp and retain the native zero-volume stream handoff.
+// The short repeat guard also bounds bindings configured to repeat while held.
+// No global level, ducking, speech, or event fade is changed. Stock and custom
+// stations use this same native path. Actual output latency includes the audio
+// queue, stream startup and mixer; "instant" does not mean zero latency.
+// game (the default) preserves the original behavior. FORZA_RADIOLOG=1 logs
+// admission, station requests and native fade-state changes.
 
 // tu_address_map: TU4 addresses
 #include "../platform/guest_addr.h"
@@ -56,9 +57,8 @@
 #endif
 
 REXCVAR_DEFINE_STRING(radio_station_switch, "game", "Audio",
-                      "Radio station changes: game (one change about every 3.5 s, 0.5 s fades) or "
-                      "fast (a change every 0.15 s, 0.25 s fades, presses during a fade go to the "
-                      "newest station)");
+                      "Radio station changes: game, fast (150 ms repeat guard, 250 ms ramps), "
+                      "or instant (75 ms repeat guard, 40 ms ramps)");
 
 // RadioChangeAllowed(player): bool. Says yes when the cooldown is 0 and no radio HUD is up,
 // and then sets the cooldown to 1 s.
@@ -76,20 +76,27 @@ constexpr uint32_t kCooldown = 0xA4;  // float, seconds
 // CRadioSystem
 constexpr uint32_t kFadeLevel = 0x160;     // float, 0..1
 constexpr uint32_t kUserFadeFlag = 0x164;  // byte: fade at the user rate (+0x224), else +0x220
+constexpr uint32_t kUserFadeRate = 0x224;  // float, reciprocal seconds
+constexpr uint32_t kStationLock = 0x7C;   // nonzero rejects unforced changes
 constexpr uint32_t kChangeUser = 0x21C;    // byte: the pending change is a player's
 constexpr uint32_t kFadeState = 0x22C;     // int
 constexpr uint32_t kIdle = 0, kFadingOut = 1, kFadingIn = 3;
 
 constexpr float kFastCooldown = 0.15f;
+constexpr float kInstantCooldown = 0.075f;
+constexpr float kInstantFadeRate = 1.0f / 0.04f;
 
-bool Fast() {
-  static const bool fast = [] {
-    const bool on = REXCVAR_GET(radio_station_switch) == "fast";
-    if (on) REXLOG_INFO("Radio: fast station changes (radio_station_switch=fast)");
-    return on;
+enum class SwitchMode { Game, Fast, Instant };
+SwitchMode Mode() {
+  static const SwitchMode mode = [] {
+    const std::string value = REXCVAR_GET(radio_station_switch);
+    if (value == "instant") return SwitchMode::Instant;
+    if (value == "fast") return SwitchMode::Fast;
+    return SwitchMode::Game;
   }();
-  return fast;
+  return mode;
 }
+bool Quicker() { return Mode() != SwitchMode::Game; }
 
 bool Log() {
   static const bool on = [] {
@@ -133,10 +140,11 @@ extern "C" REX_FUNC(RadioChangeAllowed) {
   OriginalRadioChangeAllowed(ctx, base);
   bool allowed = (ctx.r3.u32 & 0xFF) != 0;
   const bool hud = !allowed && cooldown <= 0.0f;  // only the radio HUD said no
-  if (Fast()) {
+  if (Quicker()) {
     if (hud) allowed = true;
     if (allowed) {
-      StoreFloat(base, player + kCooldown, kFastCooldown);
+      StoreFloat(base, player + kCooldown,
+                 Mode() == SwitchMode::Instant ? kInstantCooldown : kFastCooldown);
       ctx.r3.u64 = 1;
     }
   }
@@ -150,8 +158,10 @@ extern "C" REX_FUNC(ChangeStation) {
   const bool user = (ctx.r5.u32 & 0xFF) != 0;
   const uint32_t state = Load32(base, radio + kFadeState);
   // The game takes a change only while idle or fading in, and fading in it switches at once.
-  // Fast: seen as idle, the change fades out from the current level to the newest station.
-  const bool retarget = Fast() && user && (state == kFadingOut || state == kFadingIn);
+  // Quicker modes: seen as idle, the change fades out from the current level to the newest station.
+  const bool locked = Load32(base, radio + kStationLock) != 0 && (ctx.r6.u32 & 0xFF) == 0;
+  const bool retarget = Quicker() && user && !locked &&
+                        (state == kFadingOut || state == kFadingIn);
   if (retarget) Store32(base, radio + kFadeState, kIdle);
   OriginalChangeStation(ctx, base);
   uint32_t now = Load32(base, radio + kFadeState);
@@ -167,9 +177,17 @@ extern "C" REX_FUNC(UpdateStationFade) {
   uint8_t* user_rate = forza::GuestPtr(base, radio + kUserFadeFlag);
   const uint8_t saved = *user_rate;
   const uint32_t state = Log() ? Load32(base, radio + kFadeState) : 0;
-  if (Fast() && *forza::GuestPtr(base, radio + kChangeUser)) *user_rate = 1;
+  const bool player_change = Quicker() && *forza::GuestPtr(base, radio + kChangeUser);
+  const uint32_t saved_rate = Load32(base, radio + kUserFadeRate);
+  if (player_change) {
+    *user_rate = 1;
+    if (Mode() == SwitchMode::Instant)
+      StoreFloat(base, radio + kUserFadeRate, kInstantFadeRate);
+  }
   OriginalUpdateStationFade(ctx, base);
   *user_rate = saved;
+  if (player_change && Mode() == SwitchMode::Instant)
+    Store32(base, radio + kUserFadeRate, saved_rate);
   if (Log()) {
     const uint32_t now = Load32(base, radio + kFadeState);
     if (now != state)

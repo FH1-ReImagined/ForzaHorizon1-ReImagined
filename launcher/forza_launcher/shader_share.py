@@ -9,8 +9,9 @@ server the player plays on. The server publishes the entries several players rep
 
 Nothing from the game leaves the PC: no shader code, no game files, nothing personal (the entries
 carry hashes and render state; the upload is signed with the player's Forza Live XUID and friends
-key, like the friends list). Only the public server and the player's own server are used, never
-offline or the server on this PC, and only when Settings > Online > "Share shader list" is on.
+key, like the friends list, live_auth.py: the key itself is not sent). Only the public server and
+the player's own server are used, never offline or the server on this PC, and only when
+Settings > Online > "Share shader list" is on.
 Everything here has short timeouts, fails silently (the launcher log has it) and runs in a
 background thread: it never holds up Play."""
 import hashlib
@@ -22,7 +23,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from . import TITLE_ID, paths, shader_prebuild
+from . import TITLE_ID, live_auth, paths, shader_prebuild
 
 SHARE_MODES = ("public", "custom")
 DEFAULT_UDP_PORT = 21200
@@ -78,7 +79,9 @@ def sharing_on(cfg) -> bool:
 # --- What ---------------------------------------------------------------------------------------
 
 def read_identity(dirs) -> tuple | None:
-    """(XUID, friends key) in hex from the first live_identity.txt in `dirs`, or None."""
+    """(XUID, friends key, signing seed) in hex from the first live_identity.txt in `dirs`, or
+    None. A file without a signing seed (a game before signed requests made it, #515) is none:
+    the game adds it at its next start."""
     for d in dirs:
         try:
             lines = (Path(d) / "live_identity.txt").read_text(encoding="utf-8", errors="replace").splitlines()
@@ -86,8 +89,10 @@ def read_identity(dirs) -> tuple | None:
             continue
         found = dict(line.split("=", 1) for line in lines if "=" in line and not line.startswith("#"))
         xuid, key = found.get("xuid", "").strip().upper(), found.get("friends_key", "").strip().upper()
-        if len(xuid) == 16 and len(key) == 32 and all(c in "0123456789ABCDEF" for c in xuid + key):
-            return xuid, key
+        seed = found.get("signing_seed", "").strip().upper()
+        if len(xuid) == 16 and len(key) == 32 and len(seed) == 64 and \
+                all(c in "0123456789ABCDEF" for c in xuid + key + seed):
+            return xuid, key, seed
     return None
 
 
@@ -173,10 +178,8 @@ def save_record(path: Path, rec: dict):
 # --- Upload -------------------------------------------------------------------------------------
 
 def post(base: str, identity: tuple, body: bytes, timeout=UPLOAD_TIMEOUT) -> int:
-    req = urllib.request.Request(base + "/shader-lists/upload", data=body, method="POST", headers={
-        "Content-Type": "application/json", "X-Xuid": identity[0], "X-Friends-Key": identity[1]})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with live_auth.urlopen(base + "/shader-lists/upload", identity, body, timeout=timeout) as r:
             r.read(4096)
             return r.status
     except urllib.error.HTTPError as e:

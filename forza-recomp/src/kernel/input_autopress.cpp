@@ -23,7 +23,8 @@
 // controller between presses instead of a disconnected one. "SCENE:<name>" lines label
 // the frame statistics (RECOMP_PERF, src/debug/frame_stats.cpp); "PROF:START" and
 // "PROF:STOP" run the CPU sampler (src/debug/cpu_profile.cpp); "SAY:<text>" says <text> in
-// World chat (live_friends.cpp; the Co-op Festival's /event in scripted tests).
+// World chat and "SAYC:<text>" in Club chat (live_friends.cpp; the Co-op Festival's /event and
+// the /club commands in scripted tests).
 
 #include "input_caps.h"
 #include "live.h"
@@ -192,6 +193,12 @@ void ReadFifo(std::string path, std::vector<Press>* schedule,
     }
     if (line.rfind("SAY:", 0) == 0) {  // a World chat line, as typed (live_friends.cpp)
       forza::LiveChatSay(2, line.substr(4));
+      REXLOG_INFO("FORZA_AUTOPRESS_FIFO: t={:.2f}s {}", now, line);
+      line.clear();
+      continue;
+    }
+    if (line.rfind("SAYC:", 0) == 0) {  // a Club chat line, as typed (live_friends.cpp)
+      forza::LiveChatSay(4, line.substr(5));
       REXLOG_INFO("FORZA_AUTOPRESS_FIFO: t={:.2f}s {}", now, line);
       line.clear();
       continue;

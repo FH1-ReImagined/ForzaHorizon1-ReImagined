@@ -2,6 +2,7 @@
 #include "../src/platform/benchmark_session.cpp"
 #include <cassert>
 #include <iostream>
+#include <vector>
 
 REXCVAR_DEFINE_INT32(frame_rate, 30, "Display", "Test frame cap");
 
@@ -89,6 +90,31 @@ int main(int argc, char** argv) try {
         }
         PrepareRuntime();
         assert(rex::cvar::GetFlagByName("frame_rate") == "37");
+        // The title list (#540): FlowTick must not run the choice handler on the tick that
+        // listed the rows (its scene is not loaded yet; the game closed). Boot's A presses
+        // choose Single Player, and the menu leaving the listed state (12) for Single
+        // Player's id ends the title step.
+        {
+          std::vector<uint8_t> arena(0x300000);
+          const uint32_t menu = 0x200000, state = menu + 0x260;
+          auto write = [&](uint32_t address, uint32_t value) {
+            auto *p = forza::GuestPtr(arena.data(), address);
+            p[0] = uint8_t(value >> 24); p[1] = uint8_t(value >> 16);
+            p[2] = uint8_t(value >> 8); p[3] = uint8_t(value);
+          };
+          assert(automatic.load() && boot_input.load() && !title_started);
+          TitleReady(menu, 10);
+          write(menu + 0x170, 0x210000); // the component the old call passed
+          write(state, 10);
+          FlowTick(ctx, arena.data());
+          assert(!title_started && boot_input.load()); // Single Player before the list was shown
+          write(state, 12);
+          FlowTick(ctx, arena.data()); // would have called the handler: no guest code here
+          assert(!title_started && boot_input.load());
+          write(state, 10);
+          FlowTick(ctx, arena.data());
+          assert(title_started && !boot_input.load());
+        }
         Close();
         FlowTick(ctx, nullptr);
         assert(restarts == 1 && std::filesystem::exists(root / "benchmark-return.txt"));

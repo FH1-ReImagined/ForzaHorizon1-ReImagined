@@ -581,7 +581,8 @@ class SetupPage(QWidget):
 
     # ---- state ------------------------------------------------------------------------
     def busy(self):
-        return self.task is not None and self.task.isRunning()
+        return ((self.task is not None and self.task.isRunning())
+                or getattr(self.window, "radio_busy", lambda: False)())
 
     def refresh_folder(self):
         cfg = self.cfg

@@ -55,10 +55,9 @@ import sqlite3
 import threading
 import time
 import urllib.error
-import urllib.request
 import uuid
 
-from . import garage, paths, save_editor, saves, shader_share
+from . import garage, live_auth, paths, save_editor, saves, shader_share
 
 FETCH_TIMEOUT = 6
 SESSIONS_NAME = 'coop_sessions.json'
@@ -289,9 +288,7 @@ def apply(cfg, profile, results, cancelled=lambda: False, progress=lambda *_: No
 # --- the server ----------------------------------------------------------------------------------
 
 def _request(base, identity, path, body=None, timeout=FETCH_TIMEOUT):
-    req = urllib.request.Request(base+path, data=body, method='POST' if body is not None else 'GET', headers={
-        'Content-Type': 'application/json', 'X-Xuid': identity[0], 'X-Friends-Key': identity[1]})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with live_auth.urlopen(base+path, identity, body, timeout=timeout) as r:
         return json.loads(r.read(1 << 20) or b'{}')
 
 

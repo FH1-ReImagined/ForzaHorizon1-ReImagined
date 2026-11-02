@@ -174,8 +174,8 @@ class PolicyTextTests(unittest.TestCase):
     def test_the_policy_names_the_settings_that_exist(self):
         from forza_launcher import schema
         text = (REPO / "PRIVACY.md").read_text(encoding="utf-8")
-        for key in ("share_shader_list", "coop_results", "discord_presence", "live_signin",
-                    "world_challenges", "live_accept_invites"):
+        for key in ("share_shader_list", "coop_results", "discord_presence", "discord_presence_details",
+                    "live_signin", "world_challenges", "live_accept_invites"):
             self.assertIn(f'"{schema.BY_KEY[key].label}"', text)
         self.assertIn("Settings > Profile > " + schema.BY_KEY["gamertag"].label, text)
         self.assertIn('"Check for updates when the launcher opens"', text)

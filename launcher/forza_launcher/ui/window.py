@@ -20,10 +20,12 @@ from .controls_page import ControlsPage
 from .saves_page import SavesPage
 from .mods_page import ModsPage
 from .texture_packs_page import TexturePacksPage
+from .radio_page import RadioPage
 from .widgets import label
 
 MODS_PAGE_ID = 8
 TEXTURE_PACKS_PAGE_ID = 9
+RADIO_PAGE_ID = 10
 
 
 class VrChecklist(QDialog):
@@ -144,18 +146,21 @@ class MainWindow(QMainWindow):
         self.saves = SavesPage(cfg, self)
         self.mods = ModsPage(cfg, self)
         self.texture_packs = TexturePacksPage(cfg, self)
+        self.radio = RadioPage(cfg, self)
+        self._close_after_radio = False
+        self.radio.idle.connect(lambda: QTimer.singleShot(0, self.close) if self._close_after_radio else None)
         self.navs = QButtonGroup(self)
         self._pages = {0: self.play, 1: self.setup, 2: self.settings, 3: self.about,
                        4: self.gallery, 5: self.controls, 6: self.saves,
                        CATALOG_PAGE_ID: self.catalogs, MODS_PAGE_ID: self.mods,
-                       TEXTURE_PACKS_PAGE_ID: self.texture_packs}
+                       TEXTURE_PACKS_PAGE_ID: self.texture_packs, RADIO_PAGE_ID: self.radio}
         # In id order, so a page's stack index is its id.
         for page in self._pages.values():
             self.stack.addWidget(page)
         for i, name in ((0, "Play"), (4, "Photo gallery"),
                         (CATALOG_PAGE_ID, "Designs && vinyls"), (1, "Setup"),
                         (5, "Controls"), (2, "Settings"), (6, "Saves"), (MODS_PAGE_ID, "Mods"),
-                        (TEXTURE_PACKS_PAGE_ID, "Texture packs"), (3, "About")):
+                        (TEXTURE_PACKS_PAGE_ID, "Texture packs"), (RADIO_PAGE_ID, "Radio"), (3, "About")):
             btn = QPushButton(name)
             btn.setObjectName("nav")
             btn.setCheckable(True)
@@ -256,6 +261,8 @@ class MainWindow(QMainWindow):
             self.mods.refresh()
         elif self._pages[i] is self.texture_packs:
             self.texture_packs.refresh()
+        elif self._pages[i] is self.radio:
+            self.radio.refresh()
         self.status("")
 
     def refresh_all(self):
@@ -278,7 +285,21 @@ class MainWindow(QMainWindow):
     def set_busy(self, busy):
         self._busy = busy
 
+    def radio_busy(self):
+        return hasattr(self, "radio") and self.radio.busy()
+
+    def lock_radio_navigation(self, locked):
+        # Keeps folder changes, installs and other publishers out of a radio build.
+        for button in self.navs.buttons():
+            button.setEnabled(not locked or self.navs.id(button) == RADIO_PAGE_ID)
+
     def closeEvent(self, e):
+        if self.radio.busy():
+            self._close_after_radio = True
+            self.radio.cancel()
+            self.status("Stopping the radio build before closing…")
+            e.ignore()
+            return
         if self.catalogs.busy():
             self.catalogs.closing = True
             self.catalogs.cancel_task()
@@ -436,6 +457,9 @@ class MainWindow(QMainWindow):
         self.start_game(True)
 
     def start_game(self, vr=None):
+        if self.radio.busy():
+            self.play.show_message("Wait for the radio build to finish before starting the game.", True)
+            return
         if vr is not None:   # the DLSS download starts the game again without asking: keep the choice
             self._vr_start = vr
         if self.catalogs.busy():

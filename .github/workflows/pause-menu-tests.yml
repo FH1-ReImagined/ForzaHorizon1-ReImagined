@@ -28,6 +28,7 @@ on:
       - 'forza-recomp/tests/pause_stubs_test.cpp'
       - 'forza-recomp/tests/pause-cars/**'
       - 'forza-recomp/tests/pause_cars_test.cpp'
+      - 'forza-recomp/tests/pause_actions_test.cpp'
       - 'forza-recomp/tests/social_presence_test.cpp'
       - 'forza-recomp/tests/live-connection/**'
       - 'forza-recomp/tests/live_connection_test.cpp'

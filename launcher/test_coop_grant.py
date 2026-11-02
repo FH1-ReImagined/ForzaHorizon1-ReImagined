@@ -221,7 +221,7 @@ class GrantTests(unittest.TestCase):
             return {'results': results} if path == '/coop/results' else {'applied': 2}
         with patch.object(coop_grant, '_request', side_effect=request):
             out = coop_grant.after_session(self.cfg, self.profile, lines.append,
-                                           base='http://server:21201', identity=('0009000000001241', 'AB' * 16))
+                                           base='http://server:21201', identity=('0009000000001241', 'AB' * 16, 'CD' * 32))
         return out, sent, lines
 
     def test_results_go_only_to_the_save_of_the_session_they_were_earned_in(self):
@@ -327,7 +327,7 @@ class GrantTests(unittest.TestCase):
         with patch.object(coop_grant, '_request', side_effect=request), \
                 patch.object(coop_grant.paths, 'log_error') as logged:
             out = coop_grant.after_session(self.cfg, self.profile, lines.append,
-                                           base='http://server:21201', identity=('0009000000001241', 'AB' * 16))
+                                           base='http://server:21201', identity=('0009000000001241', 'AB' * 16, 'CD' * 32))
         self.assertEqual(out, 'applied 1, unchanged 0, locked 0, waiting 0')
         self.assertEqual(lines, ['Co-op results: FR05 at place 1 (was not raced): +100 XP, +3,000 CR, '
                                  '1 event(s) unlocked'])

@@ -2,6 +2,7 @@
 // Link with platform/telemetry.cpp, rexruntime and ws2_32, then receive FH1T UDP.
 #include "../src/platform/telemetry.h"
 #include "../src/platform/guest_addr.h"
+#include "../src/platform/driving_gate.h"
 #include <windows.h>
 #include <bit>
 #include <cstdlib>
@@ -21,6 +22,20 @@ int main(int argc, char**) {
   word(FORZA_ADDR(0x832DF024), root); word(root+4, holder); word(holder+4, list);
   word(list+0x80, slots); word(list+0x84, slots+4); word(slots, vehicle);
   word(vehicle+0x2DD0, 0); word(vehicle+0x2D90, car);
+  word(car, FORZA_TU4 ? 0x82003f0c : 0x82003eec);
+  auto number = [&](uint32_t offset, float value) { word(car + offset, std::bit_cast<uint32_t>(value)); };
+  number(324, 500); number(452, 700); number(456, 750); number(1228, 100); number(3128, 20);
+  word(car + 2240, 0x03000000); word(car + 3020, 1);
+  for (unsigned i = 0; i < 5; ++i) number(3904 + i * 4, .5f);
+  for (unsigned i = 0; i < 4; ++i) {
+    const auto wheel = 3936 + i * (FORZA_TU4 ? 1040u : 1024u);
+    number(wheel, .1f); number(wheel + (FORZA_TU4 ? 876 : 860), .02f); number(wheel + 12, 100);
+    number(wheel + 496, float(i) + .25f); number(wheel + 520, -.5f);
+    word(car + wheel + (FORZA_TU4 ? 800 : 796), 0x01000000);
+  }
+  const auto now = forza::telemetry::DrivingNowMs();
+  for (auto time : {now - 600, now - 300, now})
+    forza::telemetry::Player().Frame(time, {.stepped = true});
   auto position = [&](float x) {
     for (int i = 0; i < 3; ++i) {
       word(car-0xA20+i*4, std::bit_cast<uint32_t>(i == 0 ? x : 0.f));

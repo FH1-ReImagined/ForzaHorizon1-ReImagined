@@ -2,7 +2,7 @@
 
 This policy covers Forza Horizon 1: ReImagined: the Windows installer, the Linux packages, the launcher, the game the launcher builds on your PC, and the project's public Forza Live server. It says what is sent over the network, when, where it goes, what is stored and for how long, what is public, and how to turn each thing off.
 
-Last updated: 2026-10-28. Every change to this policy is a change to this file, so its history on GitHub lists them: https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/commits/main/PRIVACY.md
+Last updated: 2026-11-02. Every change to this policy is a change to this file, so its history on GitHub lists them: https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/commits/main/PRIVACY.md
 
 ## In short
 
@@ -11,13 +11,14 @@ Last updated: 2026-10-28. Every change to this policy is a change to this file, 
   - online play on the project's public Forza Live server;
   - after each session online: sharing shader lists with that server, and asking it for your co-op campaign results;
   - a check for launcher updates on GitHub each time the launcher opens;
-  - your activity in the game, shown through the Discord desktop app if it is running.
+  - your activity in the game (with your car, the event and the area of Colorado), shown through the Discord desktop app if it is running.
 - One choice turns all of them off: "Online features" in the Windows installer, or the same question the launcher asks the first time it opens on Linux. You can also turn each one off later in the launcher; see "How to turn each thing off".
 - Separately, on Windows with an NVIDIA graphics card, the first Play downloads NVIDIA's DLSS runtime from GitHub, and actions you start (Build, Make HD pack) download tools. See "Downloads".
 - Settings > Online > Server > "Offline" stops all contact with game servers.
-- When you play online, the server receives your gamertag, a random player ID (your XUID) and your IP addresses. Other players see your gamertag and XUID.
-- Traffic to the game server is not encrypted. That includes chat messages and your friends key.
+- When you play online, the server receives your gamertag, a random player ID (your XUID) and your IP addresses. Other players see your gamertag and XUID, and the server gives the players in your room your IP addresses so that their games can connect to yours.
+- Traffic to the game server is not encrypted. That includes chat messages. Your keys are not sent: the game and the launcher sign their requests with your signing key, and the server keeps only its public key. The one exception is your friends key from older versions, which the game sends once to the public server to move your account to the signing key.
 - The public server keeps most records with no time limit. Its status page and leaderboards are public.
+- What you choose to share is public: a photo mode **Big Shot** you upload is published on the project website with your gamertag, and paint jobs and vinyl groups you share on the storefront can be found, downloaded and rated by other players in the game, with their previews shown on the project website. Your XUID is not published with them.
 
 ## Who is involved
 
@@ -45,7 +46,7 @@ Their privacy policies:
 ### Shader-list sharing (on by default when you play online)
 
 - What: after each game session, the launcher sends the server descriptions of the graphics pipelines the game built: shader hashes, render settings, how to rebuild each shader from your own game files, and which kind of render-target path your graphics card supports. Each entry is sent once; shader_share.json on your PC records what was sent. No game code or data, file paths, gamertag or logs are sent.
-- The request headers carry your XUID and your friends key, so that the server counts each player once. The request uses plain HTTP, so it is not encrypted.
+- The request headers carry your XUID and a signature made with your signing key (not the key itself), so that the server counts each player once. The request uses plain HTTP, so it is not encrypted.
 - Where: the server you play on (the public server or your own). Nothing is sent in "Offline" or "This PC" mode.
 - What the server keeps: for each entry, a hashed form of your XUID, with no time limit, and counters per day that are cleared every day. It publishes only entries that several players reported, without player IDs.
 - Turn off: Settings > Online > "Share shader list". "Offline" and "This PC" also stop it.
@@ -53,7 +54,7 @@ Their privacy policies:
 
 ### Co-op campaign results (on by default when you play online)
 
-- What: after each session on "Public server" or "My own server", the launcher asks the server for your pending co-op campaign results, then confirms the ones it handled. It does this only when you have a save and a Forza Live identity on this PC. These requests carry your XUID and friends key over plain HTTP. The answer can include the gamertag of the player who hosted the event.
+- What: after each session on "Public server" or "My own server", the launcher asks the server for your pending co-op campaign results, then confirms the ones it handled. It does this only when you have a save and a Forza Live identity on this PC. These requests carry your XUID and a signature made with your signing key (not the key itself) over plain HTTP. The answer can include the gamertag of the player who hosted the event.
 - Turn off: Settings > Online > "Co-op campaign results". "Offline" and "This PC" also stop it.
 
 ### Downloads
@@ -91,7 +92,7 @@ While a server is set, the game sends it the following every few seconds, from t
 - your XUID, a random player ID created on your PC the first time you play online;
 - your gamertag. If you have not set one in Settings > Profile > Gamertag, the game makes one: your computer's login name where it can read one (on Linux and the Steam Deck it can), otherwise "Driver" and four digits;
 - your PC's local network (LAN) IP address and the game's network port;
-- your room name and your friends key.
+- your room name, your public key and a signature made with your signing key (not the key itself), which proves to the server that the XUID is yours. If the public server still has your account under the friends key of an older version, the game also sends that friends key once, to move the account to your signing key.
 
 The server also sees the IP address you connect from. On the public server you connect through playit.gg's tunnel, so playit.gg sees it. These messages are sent even when "Sign in to Xbox LIVE" is off. Only "Offline" stops them.
 
@@ -100,23 +101,25 @@ While "Sign in to Xbox LIVE" is on (the default), the game also:
 - publishes your presence: your online status, your current car and the session you host;
 - sends your matchmaking searches and the sessions you host, and Xbox LIVE skill stats around online races;
 - syncs your friends list every 10 seconds, and sends the friend requests, blocks and gamertag searches you make;
-- sends the chat messages you write, and the list of sessions you are in;
+- sends the chat messages you write, the list of sessions you are in, and the content your game has that changes which cars exist: the numbers of the DLC packs installed and the names of the mods you loaded that change cars or the game database (not your other mods). The server compares it with the players in your session and tells you, and them, what you do not share, because a car that one game lacks looks like a plain placeholder in the other. It is kept in memory only, never written to disk, and shared only with the players of your session as that notice, and asks the server every 10 seconds which car club you are in;
 - in Horizon World free roam, sends your car's in-game position, heading and speed four times a second, for head-to-head challenges (Settings > Online > "Head-to-head challenges" turns this off);
 - sends an invite only when you send one ("Show game invites" controls whether invites from others are shown to you);
-- uses the server's title services over plain HTTP: sign-in (gamertag and career level), profile progress (XP, credits, race history), race scores and lap times, Rivals ghost replays, photos you upload or share (image, preview, title, description), car clubs and the cars shared in them, auctions and gifts, and Message Center checks. Each of these requests carries your XUID and friends key.
+- uses the server's title services over plain HTTP: sign-in (gamertag and career level), profile progress (XP, credits, race history), race scores and lap times, Rivals ghost replays, photos you upload or share (image, preview, title, description), photo mode Big Shots you upload (a 3840x2160 picture and its file name), paint jobs and vinyl groups you share on the storefront (the design, its preview, title, description and keywords, and the car it is for), car clubs and the cars shared in them, auctions and gifts, and Message Center checks. Each of these requests carries your XUID, a signature made with your signing key (not the key itself) and the version of the game that sends it (for example 0.2.1/tu4).
 
 None of this traffic is encrypted.
 
 Turning "Sign in to Xbox LIVE" off stops the list above, but it does not hide you. The server still receives the messages described before it, counts you as online, lists you on its status page, and gives the players in your room your gamertag and XUID. Only "Offline" hides you.
 
 Your IP address and other players:
-- On the public server, which you reach through playit.gg, the server does not give other players your IP address.
-- On a server you connect to directly ("My own server" without a tunnel), the server gives the other players in your room your public IP address and port and your LAN IP address and port, and the game connects to them directly when it can. They can then see your public IP address.
+- The server gives the other players in your room your public IP address and port and your LAN IP address and port, and the game connects to them directly when it can, as the Xbox 360 game did. They can then see your public IP address.
+- This is the same on the public server, which you reach through playit.gg, and on a server you connect to directly ("My own server"). The public server learns your public address from the tunnel. Until late October 2026 it could not, and it gave other players no IP address.
+- When the server does not know your public address (a tunnel that does not report it), it gives other players none, and the traffic between you and them goes through the server.
 
 ### Discord activity (on by default)
 
 - If the Discord desktop app is running, the game tells it what you are doing (for example "Exploring Colorado", "Racing online", or the number of players in an online lobby) and when you started. This goes to the Discord app on your PC over a local connection. Discord then shows it to your Discord contacts, under Discord's own privacy settings and privacy policy. Your gamertag, XUID and IP address are not part of it.
-- Turn off: Settings > Online > "Share activity on Discord".
+- It also tells it your current car with its class and PI, the event you are racing in and, in free roam, the area of Colorado you are in (for example "Red Rock"), with the names the game uses. Nothing you type is part of it.
+- Turn off: Settings > Online > "Share activity on Discord". To keep only the activity: Settings > Online > "Share car, event and area".
 
 ### What stays on your PC
 
@@ -144,31 +147,34 @@ Your IP address and other players:
   - saves, the built game, downloaded tools and shader caches;
   - forza.log, the game's log;
   - shader_share.json, which records the shader entries already sent;
-  - live_identity.txt, which holds your XUID, gamertag and friends key;
+  - live_identity.txt, which holds your XUID, gamertag, friends key and signing key;
   - with "This PC": the local server's data in live_server, including its server.log and its player and friends records;
   - with "Continue a Xenia Canary save": a copy of that save in a xenia-<XUID> folder.
 - In the Flatpak, both folders are inside ~/.var/app/io.github.dyotson.ForzaHorizon1ReImagined.
 - Uninstalling keeps all of these files. Delete the folders yourself to remove them.
-- forza.log can record your LAN IP address, your public IP address (on a server you connect to directly), the server's address, your country and language settings, other players' IP addresses, gamertags and XUIDs, and the chat messages you send and receive. Check it before you attach it to a public issue.
-- Keep live_identity.txt private. Its friends key is the secret that proves to the server that your friends list is yours.
+- forza.log can record your LAN IP address, your public IP address (on a server you connect to directly), the server's address, your country and language settings, other players' LAN IP addresses, the first two numbers of their public IP addresses (from 0.2.4; older versions wrote them whole), their gamertags and XUIDs, and the chat messages you send and receive. Check it before you attach it to a public issue.
+- Keep live_identity.txt private. Its signing key (and, for older versions, its friends key) is the secret that proves to the server that your friends list is yours.
 
 ## What the public server keeps, and for how long
 
 Records are kept by XUID.
 - Player record: gamertag, last sign-in time, number of sign-ins, career level and progress, credits, and details of your last race. No time limit.
-- Friends: your gamertag, when you were last seen, a hash of your friends key, and your friends, friend requests, blocks and chat mutes. If you have no friends, requests or blocks, the record is removed when the server restarts more than 180 days after you were last seen. Otherwise there is no time limit.
-- Scores and Rivals ghosts: your best score on each leaderboard, with gamertag, date, car, class and assists, and your best ghost replay. A new best replaces the old one. No time limit. The maintainer may use the driven lines in ghost replays to draw roads on the map on the project website; no names or player IDs are shown there.
+- Friends: your gamertag, when you were last seen, the public key of your signing key (until your game has moved your account to it: a hash of your friends key), and your friends, friend requests, blocks and chat mutes. If you have no friends, requests or blocks, the record is removed when the server restarts more than 180 days after you were last seen. Otherwise there is no time limit.
+- Scores and Rivals ghosts: your best score on each leaderboard, with gamertag, date, car, class and assists, and your best ghost replay (the server clears your gamertag from the replay). Each score also records the name of the server that took it, the game version that sent it, and whether the request was signed with your key. A result from a request that was not, or whose ghost fails the server's checks, is kept off the leaderboards for review (your best such result on each leaderboard, with its ghost). A new best replaces the old one. No time limit. The maintainer may use the driven lines in ghost replays to draw roads on the map on the project website; no names or player IDs are shown there.
 - Skill stats: rating and number of games, with gamertag. No time limit.
 - Photos you upload: image, preview, title, description and time, up to 100 per player. You can remove shared photos in the game, and the oldest can be replaced. No time limit.
-- Car clubs, auctions and gifts: club memberships, roles and history, shared cars, auction listings and bids, and gifts with their messages. No time limit.
+- Community photos (Big Shots), only from games that sign their requests: a 1920x1080 copy of the picture, with your gamertag at the time, the upload time and your XUID (kept private, to apply limits and bans). The 3840x2160 original is not kept. Up to 10 a day and 200 in total per player. The copy is kept until the maintainer removes it; to have a photo removed, see "Contact". New photos may be checked automatically for nudity, violence or hate symbols before they are published; that check runs on the server and sends the picture nowhere else.
+- Shared designs (paint jobs and vinyl groups): the design, its preview, title, description, keywords, car, share code, your XUID (private) and gamertag, the time, its downloads and ratings, and which players reported it. Up to 25 of each kind per player. The design itself contains your XUID, so it is only given to players who download it in the game, never published elsewhere. You can remove a design in the game (REMOVE in MY SHARED DESIGNS); a design reported by three players is hidden. No time limit.
+- Car clubs, auctions and gifts: club memberships, roles and history, shared cars, auction listings and bids, and gifts with their messages. No time limit. The server uses your club membership to deliver your Club chat messages, to show your clubmates (by gamertag, with `/club`) that you are online and, in the same room, whether you are in a Horizon World or Co-op Festival world and how many players it has, and to offer you a Horizon World with a clubmate first when you search. Players who have blocked each other don't see each other this way.
 - Message Center notifications: removed when you clear them. After 30 days they are no longer shown, but they are not deleted.
 - Co-op campaign results: removed once they are handled, or after 30 days.
 - Shader lists: see "Shader-list sharing" above.
-- Community events, only if an organizer enrolled you: your XUID, a hash of your friends key, attendance times and rewards. No time limit.
-- Chat: the last 200 messages are held in memory, where only the server's administrator can read them. They are lost when the server restarts and are not written to disk. Mutes and bans set by the administrator are stored until they expire.
+- Community events, only if an organizer enrolled you: your XUID, your public key (or a hash of your friends key), attendance times and rewards. No time limit.
+- Content lists: the DLC pack numbers and car mod names your game reports are held in memory while you are online, to tell the players of a session what they do not share. They are not written to disk and are lost when the server restarts.
+- Chat: the last 200 messages are held in memory, where only the server's administrator can read them. A message to your car club (the Club channel) goes to every member of your club who is online, wherever they are, and is held the same way, with the club's tag. They are lost when the server restarts and are not written to disk. Mutes and bans set by the administrator are stored until they expire.
 - Connection state: for the players online at that moment, the server writes their addresses and ports, session token, XUID, gamertag, room and presence to a file every 30 seconds, so that a restart does not drop them. The file is overwritten, not deleted.
 - Backups: the server may keep one previous copy of each of its data files.
-- Server log: the log records sign-ins (gamertag, XUID, room and the address and ports the player connected from), web requests with the address they came from, profile and race updates, scores, friend and block actions, and gift messages. Chat text is not logged. For players who come through the playit.gg tunnel, the log shows the tunnel's address, not theirs. The log is not published. There is no fixed period after which it is deleted yet.
+- Server log: the log records sign-ins (gamertag, XUID, room and the address and ports the player connected from), web requests with the address they came from, profile and race updates, scores, friend and block actions, and gift messages. Chat text is not logged. For players who come through the playit.gg tunnel, the log records the address the tunnel reports for them, which is their own. The log is not published. There is no fixed period after which it is deleted yet.
 
 To have your records on the public server removed, see "Contact".
 
@@ -178,8 +184,12 @@ To have your records on the public server removed, see "Contact".
 - Leaderboards (/leaderboards on the same address, and the project website https://forza.dyotson.dev, updated daily): gamertag, score, car, class, date, and a player ID made from your XUID and a secret. A score stays published for as long as it is on the server.
 - Treat these as public too, since the game shows them to players through the server:
   - your gamertag, XUID, presence and car (to players in your room);
+  - your public and LAN IP addresses and ports (to players in your room; see "Your IP address and other players");
   - your scores and ghost replays;
   - your shared photos, with your gamertag and XUID;
+  - your shared paint jobs and vinyl groups: preview, title, description, car, share code, downloads, rating and your gamertag;
+- Shared designs on the project website's designs page (https://forza.dyotson.dev/designs.html): the preview, title, description, share code, car, downloads and rating, and your gamertag, once the design has passed the automatic check. The design itself and your XUID are not published.
+- Community photos (Big Shots you upload): the 1920x1080 copy, your gamertag and the upload time, in the server's public gallery feed and on the project website's photo pages, for as long as the photo is kept.
   - in the car club invite list, the gamertag, XUID, career level and online XP of every player who has signed in to the server and is not in a club.
 - The published shader list, which contains no player IDs.
 - Your Discord activity, for your Discord contacts.
@@ -195,10 +205,10 @@ To have your records on the public server removed, see "Contact".
 - Shader-list sharing: Settings > Online > "Share shader list".
 - Co-op campaign results: Settings > Online > "Co-op campaign results".
 - Update check: About > "Check for updates when the launcher opens".
-- Discord activity: Settings > Online > "Share activity on Discord".
+- Discord activity: Settings > Online > "Share activity on Discord". Only the car, event and area in it: Settings > Online > "Share car, event and area".
 - Your computer's login name as gamertag: set Settings > Profile > Gamertag.
 - The DLSS download: Settings > Display > "Graphics API" set to Direct3D 12, with "NVIDIA DLSS" and "NVIDIA DLAA" off.
 
 ## Contact
 
-For questions or corrections, or to ask for your records on the public server to be removed, open an issue at https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/issues. Issues are public. Include your gamertag, but never post your friends key or the contents of live_identity.txt.
+For questions or corrections, or to ask for your records on the public server to be removed, open an issue at https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/issues. Issues are public. Include your gamertag, but never post your friends key, your signing key or the contents of live_identity.txt.

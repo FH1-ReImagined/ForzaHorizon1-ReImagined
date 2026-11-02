@@ -77,6 +77,12 @@ jobs:
           cmake -S forza-recomp/tests/thumbnail-sync -B "$RUNNER_TEMP/thumbnail-sync"
           cmake --build "$RUNNER_TEMP/thumbnail-sync" --config Release --parallel 1
           ctest --test-dir "$RUNNER_TEMP/thumbnail-sync" -C Release --output-on-failure
+      - if: runner.os == 'Linux'
+        name: Radio station production wrapper regressions (disc and TU4)
+        run: |
+          cmake -S forza-recomp/tests/radio-station -B "$RUNNER_TEMP/radio-station" -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$RUNNER_TEMP/radio-station" --parallel 1
+          ctest --test-dir "$RUNNER_TEMP/radio-station" --output-on-failure
       - name: Render comparison and session safety tests (no game)
         run: |
           python -m pip install Pillow
@@ -105,6 +111,11 @@ jobs:
         run: |
           g++ -std=c++20 -O2 -I forza-recomp/src/kernel forza-recomp/tests/gamertag_text_test.cpp -o "$RUNNER_TEMP/gamertag-test"
           "$RUNNER_TEMP/gamertag-test"
+      - if: runner.os == 'Linux'
+        name: Content manifest text
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src/kernel forza-recomp/tests/content_manifest_test.cpp -o "$RUNNER_TEMP/content-manifest-test"
+          "$RUNNER_TEMP/content-manifest-test"
       - if: runner.os == 'Linux'
         name: On-screen keyboard
         run: |
@@ -140,6 +151,11 @@ jobs:
         run: |
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src tools/test_lsp_request_header.cpp -o "$RUNNER_TEMP/lsp-request-header-test"
           "$RUNNER_TEMP/lsp-request-header-test"
+      - if: runner.os == 'Linux'
+        name: Signed requests to the Forza Live server
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src tools/test_live_signing.cpp -o "$RUNNER_TEMP/live-signing-test"
+          "$RUNNER_TEMP/live-signing-test"
       - if: runner.os == 'Linux'
         name: Effective startup performance settings
         run: |
@@ -211,13 +227,19 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+      - name: Test scoped event radio wrappers (disc and TU4)
+        run: |
+          cmake -S forza-recomp/tests/radio-events -B "$RUNNER_TEMP/radio-events" -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$RUNNER_TEMP/radio-events" --config Release --parallel 1
+          ctest --test-dir "$RUNNER_TEMP/radio-events" -C Release --output-on-failure
+
       - name: Test Linux dependency retry handling
         run: python3 -m unittest launcher/test_ci_linux_sdk_setup.py
       - id: cache
         uses: actions/cache@v4
         with:
           path: rexglue-overlay-linux-amd64.tar.gz
-          key: sdk-overlay-linux-${{ hashFiles('tools/tests/auto-pause/**','forza-recomp/tests/auto_pause*','forza-recomp/src/platform/auto_pause*','forza-recomp/src/hooks/telemetry.cpp','forza-recomp/src/platform/camera_fov.h','forza-recomp/src/platform/driving_gate.h','forza-recomp/src/platform/guest_*.h','forza-recomp/src/platform/sdk_import.*','forza-recomp/src/platform/xr.h','forza-recomp/src/tu4_addresses.h','tools/test_presenter_reconnect.cpp', 'tools/build_rexglue_sdk.sh', 'tools/test_readback_history.cpp', 'tools/test_frame_cost.cpp', 'tools/test_world_ao.cpp', 'tools/test_vr_stereo.cpp', 'tools/test_texture_pack_dds.cpp', 'tools/test_shader_load_memo.cpp', 'tools/test_pipeline_lookahead.cpp', 'forza-recomp/tests/wheel_ff_log_test.cpp', 'forza-recomp/tests/wheel_ff_reject_test.cpp', 'forza-recomp/tests/wheel_thrustmaster_test.cpp', 'forza-recomp/tests/wheel_rumble_test.cpp', 'forza-recomp/tests/wheel_ff_test.cpp', 'forza-recomp/tests/wheel_devices_test.cpp', 'forza-recomp/tests/wheel_buttons_test.cpp', 'forza-recomp/tests/wheel_shifter_test.cpp', 'forza-recomp/tests/wheel_min_force_test.cpp', 'forza-recomp/tests/wheel_gear_request_test.cpp', 'forza-recomp/tests/wheel_handbrake_test.cpp', 'forza-recomp/tests/wheel_primary_test.cpp', 'tools/test_wait_wakeups.cpp', 'tools/test_driver_pipeline_cache.cpp', 'tools/test_pipeline_store.cpp', 'tools/test_fh1_screen_raster.cpp', 'tools/test_render_target_trim.cpp', 'tools/test_vulkan_memory_placement.cpp', 'tools/test_submission_watch.cpp', 'tools/test_gamepad_remap.cpp', 'tools/test_pipeline_prebuild.cpp', 'tools/test_vfs_host_errors.cpp', 'tools/test_xma_invalid_input.cpp', 'launcher/packaging/ci_linux_sdk_setup.sh', 'launcher/packaging/ci_toolchain_debs.txt', 'launcher/forza_launcher/pins.py') }}
+          key: sdk-overlay-linux-${{ hashFiles('tools/tests/auto-pause/**','forza-recomp/tests/auto_pause*','forza-recomp/src/platform/auto_pause*','forza-recomp/src/hooks/telemetry.cpp','forza-recomp/src/platform/camera_fov.h','forza-recomp/src/platform/driving_gate.h','forza-recomp/src/platform/guest_*.h','forza-recomp/src/platform/sdk_import.*','forza-recomp/src/platform/xr.h','forza-recomp/src/tu4_addresses.h','tools/test_presenter_reconnect.cpp', 'tools/build_rexglue_sdk.sh', 'tools/test_readback_history.cpp', 'tools/test_frame_cost.cpp', 'tools/test_world_ao.cpp', 'tools/test_vr_stereo.cpp', 'tools/test_texture_pack_dds.cpp', 'tools/test_shader_load_memo.cpp', 'tools/test_pipeline_lookahead.cpp', 'forza-recomp/tests/wheel_ff_log_test.cpp', 'forza-recomp/tests/wheel_ff_reject_test.cpp', 'forza-recomp/tests/wheel_thrustmaster_test.cpp', 'forza-recomp/tests/wheel_rumble_test.cpp', 'forza-recomp/tests/wheel_rumble_pace_test.cpp', 'forza-recomp/tests/wheel_ff_test.cpp', 'forza-recomp/tests/wheel_devices_test.cpp', 'forza-recomp/tests/wheel_buttons_test.cpp', 'forza-recomp/tests/wheel_shifter_test.cpp', 'forza-recomp/tests/wheel_min_force_test.cpp', 'forza-recomp/tests/wheel_gear_request_test.cpp', 'forza-recomp/tests/wheel_handbrake_test.cpp', 'forza-recomp/tests/wheel_primary_test.cpp', 'tools/test_wait_wakeups.cpp', 'tools/test_driver_pipeline_cache.cpp', 'tools/test_pipeline_store.cpp', 'tools/test_fh1_screen_raster.cpp', 'tools/test_render_target_trim.cpp', 'tools/test_vulkan_memory_placement.cpp', 'tools/test_submission_watch.cpp', 'tools/test_gamepad_remap.cpp', 'tools/test_pipeline_prebuild.cpp', 'tools/test_vfs_host_errors.cpp', 'tools/test_xma_invalid_input.cpp', 'launcher/packaging/ci_linux_sdk_setup.sh', 'launcher/packaging/ci_toolchain_debs.txt', 'launcher/forza_launcher/pins.py') }}
       - if: steps.cache.outputs.cache-hit != 'true'
         name: Build dependencies, LLVM, CMake and the pinned SDK nightly
         run: |
@@ -291,9 +313,10 @@ jobs:
           # #303: the minimum force, the H-pattern gear on lever moves (and the shifter it sits
           # on), the analog handbrake and which device is the wheel (patches 0131-0134, #306);
           # #308: Thrustmaster wheels and refused effects (0135, 0136); #304: the force feedback
-          # in the log and the effects kept playing (0145, 0146).
+          # in the log and the effects kept playing (0145, 0146); #467: the vibration at a fixed pace
+          # (ReIGlue 0403); #468: an H-pattern shift through neutral (0404, wheel_gear_request).
           for t in wheel_shifter wheel_min_force wheel_gear_request wheel_handbrake \
-                   wheel_primary wheel_thrustmaster wheel_ff_reject wheel_ff_log; do
+                   wheel_primary wheel_thrustmaster wheel_ff_reject wheel_ff_log wheel_rumble_pace; do
             clang++ -std=c++17 -Wall -Wextra -Werror -I"$HOME/rexglue-sdk-src-forza/sdk/include" \
               -I"$HOME/rexglue-sdk-src-forza/sdk/src/input/wheel" \
               "forza-recomp/tests/${t}_test.cpp" -o "$RUNNER_TEMP/${t}-test"

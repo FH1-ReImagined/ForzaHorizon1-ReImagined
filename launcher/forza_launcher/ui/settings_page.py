@@ -45,6 +45,7 @@ class DSpin(_Wheelless, DoubleSpinBox):
 DEPENDS = {  # key -> the bool setting that must be on for it to matter
     "mnk_mouse": "mnk_mode", "mnk_sensitivity": "mnk_mode", "mnk_passthrough": "mnk_mode",
     "mnk_stick_ramp": "mnk_mode",
+    "discord_presence_details": "discord_presence",
 }
 
 
