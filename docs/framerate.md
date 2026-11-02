@@ -138,7 +138,7 @@ about 100 at 60, 150-200 at 144, more when the render thread keeps up): a 144 fp
 sends up to twice the traffic of a 60 fps one (about 50 KB/s to each peer at about 250
 bytes a datagram in that test; through the relay with four players, one datagram a frame of
 about 100 bytes per car, about 14 KB/s per peer at 144 fps: `docs/online_vision.md`, "Three
-and four players"). The server's relay budget (256 KB/s per player, `--rate-limit`, `docs/hosting.md`) covers a world
+and four players"). The server's relay budget (256 KB/s per player, `--rate-limit`, forza-live's `docs/configuration.md`) covers a world
 of 8 at 240 fps; direct peer-to-peer paths are not limited. Seen in both
 runs and unrelated to the frame rate: the host's race clock started about 12 s before the
 peer's (A 00:15.150, B 00:03.100 at the same moment, 60 against 60).

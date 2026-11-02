@@ -947,7 +947,7 @@ player ids, while their lobby (the other game's old id, XNADDR and VIP) and the 
 records of a world still named the old ids: each game saw the lobby without the other, and
 in a world A and C each became "the game's host" (#12).
 
-Fix (server only): `live_state.json` in the data folder (see docs/hosting.md) holds the
+Fix (server only): `live_state.json` in the data folder (see forza-live's docs/configuration.md) holds the
 registrations, presence and session records; a start loads it if it is at most 10 minutes
 old. The choice over "the client asks for its previous id": the games already send the
 same token every 5 s from the same socket, so a restored registration answers the first
