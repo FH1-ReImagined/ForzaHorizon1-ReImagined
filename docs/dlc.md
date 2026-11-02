@@ -380,6 +380,21 @@ in the Lamborghini Aventador LP700-4, car 1398) and a local Forza Live server.
   A and "TOP 1%" on B; X went through Favorites, Near Me and Global (views 3, 1, 0), same
   rows. The score column is the medal count, the date the latest medal's (UTC). The
   server side is in docs/title_services.md (scoreboards).
+- **Speed trap and speed zone challenges (#564):** a car's `carchallenges_<carId>.xml` can
+  hold a `speed_camera` element with a `type` (`trap` or `zone`), a `name` that ends in the
+  board id (traps 201-230 of `Colorado/speed_camera.xml`, zones 101-112 of
+  `average_speed.xml`) and `min_speed` in mph. The game fires one event per trap pass (the
+  speed at the camera, in mph) and one per completed zone (the average speed over the
+  stretch, in mph); each carries the type and the board id, and a challenge
+  (`CarChallenge::CSpeedCameraTrigger`, handler sub_824FD2C8 in TU4, event sub_8295D038)
+  counts it only when both match and the speed reaches `min_speed`. So a pass of the Rt. 27
+  Speed Trap (227) never counts for a challenge on the Rt. 27 Speed Zone (109), however
+  fast, and the game words such a challenge "Set a speed above 60 mph at the Rt. 27 Speed
+  Zone" (the 2012 MINI John Cooper Works Coupe's fifth). Checked 2026-11-02 with a TU4 game
+  and a local server (a car's challenge file swapped for a test one; gdb breakpoints on the
+  two functions): a trap pass at 35 mph completed a trap challenge with `min_speed` 30 and
+  was ignored by the zone ones; driving the zone at a 76.7 mph average completed both zone
+  challenges (60 and 30), and the server got a `ChallengeCompleted` for each.
 
 ## Every package (#18)
 
