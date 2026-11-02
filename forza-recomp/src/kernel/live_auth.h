@@ -28,7 +28,8 @@ bool OnWelcome(const uint8_t* tail, size_t size);
 // server before signed requests) or nothing. `signed_part`: the HELLO up to its features byte.
 std::vector<uint8_t> HelloTail(const std::vector<uint8_t>& signed_part);
 
-// The header lines for one complete title server request (lsp_request_header.h Lines).
+// The header lines for one complete title server request (lsp_request_header.h Lines): the
+// signature, and the game's build (X-Forza-Build, #517), which goes without a signature too.
 std::string RequestLines(const std::string& head, const std::string& body);
 
 // Whether title server requests are signed (a Live identity and a server name).
