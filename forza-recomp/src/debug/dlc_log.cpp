@@ -11,6 +11,7 @@
 // when a Title Update 4 build has no Rally Expansion Pack: Horizon Rally then says "Xbox LIVE
 // Marketplace error: Failed to download required Xbox LIVE Marketplace data" (#79).
 
+#include "../kernel/live.h"
 #include "../platform/guest_addr.h"
 
 #include <rex/filesystem.h>
@@ -106,6 +107,13 @@ void LogDlcPackages(const std::filesystem::path& user_data_root) {
         }
       }
     }
+  }
+  {
+    std::set<uint32_t> installed;
+    for (int o : offers) {
+      if (o > 0) installed.insert(uint32_t(o));
+    }
+    SetInstalledDlcOffers(installed);  // the content manifest the server gets (#567)
   }
   if (packages == 0) {
     REXLOG_INFO("DLC: no packages in {}", rex::path_to_utf8(dir));

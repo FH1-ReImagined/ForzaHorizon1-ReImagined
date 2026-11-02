@@ -21,6 +21,8 @@
 // reads each one; a mod that cannot be read is skipped with the reason.
 
 #include "../platform/mod_archive.h"
+#include "content_manifest.h"
+#include "live.h"
 
 #include <rex/cvar.h>
 #include <rex/filesystem.h>
@@ -319,6 +321,11 @@ void InstallModsUnguarded(rex::filesystem::VirtualFileSystem* vfs, const fs::pat
       REXLOG_ERROR("Mods: skipped {}: {}", name, mod.error);
     } else {
       REXLOG_INFO("Mods: {}: {} file(s)", mod.Title(), mod.files.size());
+      // The content manifest the server gets (#567): mods that change which cars exist.
+      const bool changes_cars = std::any_of(mod.files.begin(), mod.files.end(), [](const auto& f) {
+        return forza::ChangesCars(f.name);
+      });
+      forza::NoteLoadedMod(mod.manifest.name.empty() ? mod.folder : mod.manifest.name, changes_cars);
     }
     scanned.push_back(std::move(mod));
   }
