@@ -74,11 +74,8 @@ def main():
         copy(REPO / "tools" / resource, stage / "project" / "tools" / resource)
     if not (REPO / "server" / "forza_live_server.py").is_file():
         sys.exit("server/ is empty: the Forza Live server is a git submodule (git submodule update --init server)")
-    for f in sorted((REPO / "server").glob("*.py")):
-        if not f.name.startswith("test_"):
-            copy(f, stage / "server" / f.name)
-    if (REPO / "server" / "playground_rounds.xml").is_file():
-        copy(REPO / "server" / "playground_rounds.xml", stage / "server" / "playground_rounds.xml")
+    for f in builder.server_files(REPO / "server"):
+        copy(REPO / "server" / f, stage / "server" / f)
     if a.overlay:
         copy(Path(a.overlay), stage / "sdk-overlay" / f"rexglue-overlay-{a.platform}-amd64.tar.gz")
     copy(REPO / "LICENSE", stage / "licenses" / "ForzaHorizon1-ReImagined.txt")

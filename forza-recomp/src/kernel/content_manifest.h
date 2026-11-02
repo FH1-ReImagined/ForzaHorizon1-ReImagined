@@ -4,7 +4,7 @@
 // game lacks sees that player's car as a plain placeholder (the game's own fallback when a
 // car is not in its database or its files are missing). The game tells the Forza Live server
 // what it has, as a short text, and the server tells the players of one session what they
-// do not share (server/forza_chat.py, chat op 5).
+// do not share (server/forza_live/social/chat.py, chat op 5).
 //
 // The text is ASCII and at most kMaxManifestBytes long:
 //   dlc=729,732,1100;mods=Car pack,Traffic unlocker

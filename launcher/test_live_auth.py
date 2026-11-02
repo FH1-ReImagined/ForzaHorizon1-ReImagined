@@ -1,6 +1,6 @@
 """Signed requests to the Forza Live server (live_auth.py, ed25519.py, #515): the launcher's shader
 list upload and co-op results are signed with the identity's Ed25519 key and never carry the
-friends key or the seed. RFC 8032's vectors, and the vector the server (server/test_forza_auth.py)
+friends key or the seed. RFC 8032's vectors, and the vector the server (server/tests/core/test_auth.py)
 and the game (tools/test_live_signing.cpp) check too. No network: urlopen is a stand-in."""
 import email.message
 import hashlib

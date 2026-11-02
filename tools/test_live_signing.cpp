@@ -1,7 +1,7 @@
 // Standalone: c++ -std=c++20 -I forza-recomp/src tools/test_live_signing.cpp -o test_live_signing
 // Signed requests to the Forza Live server (forza-recomp/src/kernel/live_signing.h, ed25519.h,
 // #515): SHA-256, HMAC, SHA-512 and Ed25519 against their published vectors (FIPS 180, RFC 4231,
-// RFC 8032), and the scheme against the vectors server/test_forza_auth.py and
+// RFC 8032), and the scheme against the vectors server/tests/core/test_auth.py and
 // launcher/test_live_auth.py check too.
 #include "kernel/live_signing.h"
 
@@ -112,7 +112,7 @@ int main() {
   CHECK(ls::IsMain("forza.dyotson.dev") && !ls::IsMain("my.server.example"));
   CHECK(ls::Hex(ls::OldServerKey(Bytes(16), "my.server.example")) == "d809345837c85fbdd0453daf311b4ef6");
 
-  // a title service call (server/test_forza_auth.py VECTOR)
+  // a title service call (server/tests/core/test_auth.py VECTOR)
   const auto key = ls::SigningKey::FromSeed(Bytes(32));
   CHECK(ls::Hex(key.Public()) == "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8");
   CHECK(ls::HeaderValue(kHead, "x-classname") == "Forza.WebServices.User, Forza.WebServices");

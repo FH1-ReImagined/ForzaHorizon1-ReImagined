@@ -39,7 +39,7 @@ Raise the Horizon World's cap of 8 players (`docs/online_vision.md`, "Session ca
   to read.
 - Server side: 8 is also in the server, in the placement (one world per 8 players,
   `server/forza_live_server.py`), the served playlist's `MaxPlayers`
-  (`server/forza_live_lsp.py`) and `MAX_PLAYERS` (event grids, `server/forza_world.py`).
+  (`server/forza_live/title_services/lsp.py`) and `MAX_PLAYERS` (event grids, `server/forza_live/world/world.py`).
   A broadcast counts once per recipient against the sender's relay budget
   (256 KB/s, `--rate-limit`, sized for a world of 8 at 240 fps), so a larger world needs a larger
   budget.

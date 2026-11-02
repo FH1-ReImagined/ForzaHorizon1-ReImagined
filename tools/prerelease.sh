@@ -15,7 +15,7 @@
 #             ~/.cache/forza-prerelease/sdk.stamp). Reinstalling affects every running game.
 #   build     ninja -j4 (nice) of forza-recomp/out/build/linux-tu4 and linux, then restores
 #             forza-recomp/generated/rexglue.cmake (codegen rewrites it)
-#   unit      unit tests: server/test_*.py, launcher/test_*.py
+#   unit      unit tests: server/tests/, launcher/test_*.py
 #   boot      the TU4 build to the main menu on a scratch profile (a copy of the Xenia save,
 #             $FORZA_XENIA_CONTENT, never ~/.local/share/forza) once per present_effect bilinear,
 #             cas, fsr, fsr3 (temporal, Performance at 1440p), smaa (SMAA 1x at 1440p, #132); the base build once. "Main menu
@@ -121,7 +121,7 @@ check_unit() {
         [ "${PIPESTATUS[0]}" = 0 ] || rc=1
         n=$((n + 1))
     done
-    (cd server && python3 -m unittest discover -p 'test_*.py' 2>&1 | tail -n 3; exit "${PIPESTATUS[0]}") || rc=1
+    (cd server && python3 -m unittest discover -s tests -t . 2>&1 | tail -n 3; exit "${PIPESTATUS[0]}") || rc=1
     [ $rc = 0 ] && echo "RESULT: $n launcher test files and the server tests"
     return $rc
 }
@@ -264,7 +264,7 @@ check_server() {
         grep -a "XUserReadStats" "$g" | tail -2 | cut -c1-200
         grep -aq "XUserReadStats.*from the server" "$g" || { echo "stats read not answered by the server"; rc=1; }
     else
-        echo "(no XUserReadStats call before the main menu; the stats protocol is covered by server/test_forza_stats.py)"
+        echo "(no XUserReadStats call before the main menu; the stats protocol is covered by server/tests/competition/test_stats.py)"
     fi
     cleanup_game
     kill $spid 2>/dev/null; wait $spid 2>/dev/null

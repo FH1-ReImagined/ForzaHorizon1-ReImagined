@@ -33,7 +33,7 @@ the next players drop into yours. The world is an endless online free roam.
 
 ### The trigger: a "Horizon World" playlist in Find Game
 
-The Forza Live server serves a third playlist (hopper 3, `server/forza_live_lsp.py`),
+The Forza Live server serves a third playlist (hopper 3, `server/forza_live/title_services/lsp.py`),
 listed first, whose rounds are online free roam: `GameTypePreset="7"`
 (`IDS_PresetFreeRoam` in `media/gametunablesettings/GameOptionPresets.xml`), the festival
 as the starting location (track 1101), `StartType="OpenWorld"`, `MaxPlayers="8"`.
@@ -70,7 +70,7 @@ Why this trigger:
 - The server logs every decision (`match #id 'name' playlist 3: 1 open session(s), first
   <session> from #host (1/8)` or `no open session, it hosts`), and its status page lists
   each player's published session (`match`: playlist, players, slots).
-- Car clubs (#145, `server/forza_club_world.py`): the server cannot move a game that is
+- Car clubs (#145, `server/forza_live/world/club_world.py`): the server cannot move a game that is
   already in a world; it only orders the answer to a search. For a player in a car club the
   open worlds with one of its online clubmates come first (the one with the most clubmates,
   then the fullest as above); the line then ends `, N clubmate(s) in it`. A full world is
@@ -188,7 +188,7 @@ next round is the server's choice). Players (host or not) can QUIT at any time.
 - A host whose game was closed stays registered until it times out (30 s); the game moves
   the host after about 16 s. A session that a member reports to host (op 4) is then no
   longer advertised under the player that published it, and the latest member to report
-  it leads (`server/forza_world_host.py`; see "Three and four players").
+  it leads (`server/forza_live/world/world_host.py`; see "Three and four players").
 - `XSessionMigrateHost` (0xB001E) is handled anyway (the SDK left the info untouched): the
   new host gets its own address in the info and publishes the session as its own.
 
@@ -272,9 +272,9 @@ traffic cars around it (its own pool stayed unplaced at the festival), so a car 
 meets is not there for the others. The server keeps it off; an operator can serve
 `UseTraffic="true"` in `hoppers/3.xml` with that caveat.
 
-Code: `server/forza_world.py` (events, world state, the AI rule), `forza_live_server.py`
+Code: `server/forza_live/world/world.py` (events, world state, the AI rule), `forza_live_server.py`
 (`WORLD_EVENT` message, `/world/event`, the `worlds` of the status page),
-`forza_live_lsp.py` (`GetGameOptions` answers the event), `src/hooks/world_events.cpp`
+`forza_live/title_services/lsp.py` (`GetGameOptions` answers the event), `src/hooks/world_events.cpp`
 (the client side), `net.cpp` (message 18).
 
 ### How a round's options reach the game (traced)
@@ -518,7 +518,7 @@ guest call chain and the CPU drivers' owner and level. Related scripts: `t10.sh`
 
 ### The events
 
-From the game's database (`server/forza_world.py`): `Events` with `CareerTypeId` 1 or 2
+From the game's database (`server/forza_live/world/world.py`): `Events` with `CareerTypeId` 1 or 2
 (the festival road races; 4 are street races, 7/8/11/12 the showcases and specials),
 `IsDLC = 0`, joined with their first `Races` row (track, laps) on a track with
 `VisibleInMP = 1` and `RibbonConfiguration` 0 (circuit, `GameTypePreset` 1) or 2 (point to
@@ -606,7 +606,7 @@ session changes.
   X with a car ahead sends REQUEST and is kept from the game; without one the game gets
   X (in free roam X opens the LEADERBOARDS screen). While a prompt shows, X accepts and B
   declines, and both are kept from the game.
-- **The server** (`server/forza_challenge.py`, message `CHALLENGE` = UDP kind 19, ops in
+- **The server** (`server/forza_live/competition/challenge.py`, message `CHALLENGE` = UDP kind 19, ops in
   the module's docstring) decides: on REQUEST the closest player in the same world (the
   session id of its hosted or joined Horizon World session) within `--challenge-range`
   (40 m) and ahead of the challenger; PROMPT to it; ANSWER, or no answer after 10 s; on
@@ -876,14 +876,14 @@ KB/s per player, 1500 datagrams/s per address) held up to about 200 fps; the def
 other use the relay. D, set to 144, ran at 115-140 fps with four games (and two more) on this
 8-core machine.
 
-Fixed (server, `server/forza_world_host.py`): a session that one of its members reports to
+Fixed (server, `server/forza_live/world/world_host.py`): a session that one of its members reports to
 host (op 4) is no longer the session of the player that published it, and among the members
 that report it, the latest to become the host leads. Searchers and world events reach that
 player at once instead of after the gone host's timeout. Left: the game itself takes about
 16 s to notice that its host is gone; a player who searches in that time is still placed with
 the gone host, fails to join and opens a world of its own.
 
-Tests: `server/test_forza_world_players.py` (a closed host's record and two hosts in a row
+Tests: `server/tests/world/test_world_players.py` (a closed host's record and two hosts in a row
 give way to the game's latest host, a claim in another world changes nothing, a minute of a
 full world at 240 fps through the relay loses nothing).
 
@@ -917,7 +917,7 @@ Method: three TU4 games (DriverA, B, C; copies of one Xenia save, own `XDG_DATA_
 - Not done: head-to-head challenges with a third player nearby (a server restart in the
   middle of the world split it: A and C each became "the game's host"; fixed in #93, see
   "Server restart" below), 4 to 8 players, 144 fps with three players.
-- `server/test_forza_world_players.py`: placement of the third player, fullest world first,
+- `server/tests/world/test_world_players.py`: placement of the third player, fullest world first,
   full worlds not offered, the standby host after the host left, AI level per human count.
 
 ## A game that went silent (#140)
@@ -937,7 +937,7 @@ the machine slept: `FORZA_LIVE: back after 45 s; signing in to ... again`, then 
 (player #484)` with the same id. Tested with a hosted Horizon World on a local server, the game
 stopped (SIGSTOP) for 10 s, 45 s and 2 minutes: after the two that outlasted the timeout the
 server logged `back  #484` and had the world's record again at once (same session, 1/8), and
-the game drove on in the world. `server/test_forza_live_resume.py`.
+the game drove on in the world. `server/tests/server/test_resume.py`.
 
 ## Server restart in a lobby or a world (#93)
 
@@ -955,7 +955,7 @@ HELLO (or any packet) with the same id and epoch; it works with every released c
 the epoch in the XNADDR does not change either (punches and forwards check it). A HELLO
 from a new address with the token and XUID of a restored player that was not heard from
 yet moves the registration (a NAT port that changed meanwhile); a live registration is never
-moved. `server/test_forza_live_restart.py`: same ids and epoch, relay continues without a
+moved. `server/tests/server/test_restart.py`: same ids and epoch, relay continues without a
 HELLO, rooms and presence, a world with its host and joiner (and a second world), the
 standby host, an old or damaged file ignored, ids not reused, restored players that do not
 return time out.
@@ -989,7 +989,7 @@ and the database's `Tracks` has 0 and 10 for the world's track 1101.
   skipped, so the buckets keep "any" (255). The server now sends -1 for the world
   (`ANY_CAR_CLASS`, as the game's presets; the Races playlist keeps 255, `RACES_CAR_CLASS`).
   The TU4 address came from `tools/tu_address_map.py` (`tu4_addresses.h`).
-- Events keep their own class (`TargetClass`, `forza_world.py`): the event lobby of event 178
+- Events keep their own class (`TargetClass`, `forza_live/world/world.py`): the event lobby of event 178
   said class A and both players drove A-class cars. The Races playlist is unchanged.
 - Test (two TU4 games, local server, copies of one Xenia save): A in a Ford Focus RS500 (A,
   600) hosted, B in a Fiat Abarth 500 (D, 287) was placed into the world, both drove in
@@ -998,7 +998,7 @@ and the database's `Tracks` has 0 and 10 for the world's track 1101.
   were back in the world lobby after it (`..._event_lobby_a_class.jpg`).
 - The effect needs the client build with the hook; the server's -1 is the game's own value
   (an old client with the new server was not tested).
-- `server/test_forza_round_options.py`: the world's round says -1 in the three places, the
+- `server/tests/title_services/test_round_options.py`: the world's round says -1 in the three places, the
   Races rounds 255.
 
 ## A car the other game lacks (#567, checked 2026-11-02)
@@ -1056,7 +1056,7 @@ report says which cars a game could not show.
 exist: the offers of the installed DLC packages and the names of the loaded mods that have files
 under `media/db`, `media/cars` or `media/wheels` (a radio or text mod is not listed), as text
 (`dlc=729,732;mods=A,B`, `src/kernel/content_manifest.h`) in chat op 4 at sign-in and every 30 s.
-The server (`forza_chat.py`, `test_forza_content.py`) compares the manifests of the players of
+The server (`forza_live/social/chat.py`, `tests/social/test_content_manifests.py`) compares the manifests of the players of
 one session (a Horizon World excepted) and tells each side once what they do not share: "X has
 Traffic unlocker that you do not: their car may look like a plain placeholder to you" and "Y does not
 have Traffic unlocker: your car may look like a plain placeholder to them". Nothing is stored; a
