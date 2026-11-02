@@ -627,7 +627,7 @@ and only the first after the start counts: the game writes again for the session
 world's next free roam ends, which the first two-game run showed). A result goes to the career
 when the player is the round's requester (milestone 1: the host's own career), finished, on the
 grid, and its game's write (if any) agrees. The launcher asks for its player's results and
-confirms what it settled, signed like the shader list upload (X-Xuid and X-Friends-Key):
+confirms what it settled, signed like the shader list upload (X-Forza-Auth, #515):
 `GET /coop/results`, `POST /coop/results/applied {"ids": [...]}`. Kept in
 `DATA_DIR/coop_ledger.json`, written from the server's tick at most every 2 s (not per report):
 30 days, a round dropped once settled or when it closed without a result, at most 20 rounds a

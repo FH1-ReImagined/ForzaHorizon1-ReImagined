@@ -41,6 +41,7 @@
 #include "gamertag_text.h"
 #include "identity.h"
 #include "live.h"
+#include "live_auth.h"
 #include "live_connection.h"
 #include "live_tcp.h"
 #include "../platform/socket.h"
@@ -277,6 +278,17 @@ struct LivePeer {
 std::string IpString(uint32_t ip) {
   return std::to_string(ip >> 24) + "." + std::to_string((ip >> 16) & 0xFF) + "." +
          std::to_string((ip >> 8) & 0xFF) + "." + std::to_string(ip & 0xFF);
+}
+
+// Another player's address as the log shows it. Players attach forza.log to public issues,
+// so a public address keeps only its first two numbers; private and LAN addresses stay whole.
+std::string PeerIpForLog(uint32_t ip) {
+  const uint32_t a = ip >> 24, b = (ip >> 16) & 0xFF;
+  const bool private_ip = a == 10 || a == 127 || (a == 172 && (b & 0xF0) == 16) ||
+                          (a == 192 && b == 168) || (a == 100 && (b & 0xC0) == 64) ||
+                          (a == 169 && b == 254);
+  if (private_ip) return IpString(ip);
+  return std::to_string(a) + "." + std::to_string(b) + ".x.x";
 }
 
 // Guest XNADDR: ina, inaOnline, wPortOnline, abEnet[6], abOnline[20].
@@ -852,7 +864,7 @@ class VNet {
     uint32_t vip = kVipNet + next_vip_++;
     vip_by_endpoint_[key] = vip;
     endpoint_by_vip_[vip] = endpoint;
-    REXLOG_INFO("FORZA_NET: peer {}:{} is 0.77.{}.{}", IpString(endpoint.ip), endpoint.port,
+    REXLOG_INFO("FORZA_NET: peer {}:{} is 0.77.{}.{}", PeerIpForLog(endpoint.ip), endpoint.port,
                 (vip >> 8) & 0xFF, vip & 0xFF);
     return vip;
   }
@@ -903,6 +915,7 @@ class VNet {
       spec.resize(colon);
     }
     server_host_ = spec;
+    forza::live_auth::SetServer(server_host_);
   }
 
   bool ResolveServer() {
@@ -953,15 +966,15 @@ class VNet {
     // Features (older games send none): 0x01, invites go only to players the player picked
     // and an invite asks before joining (live_invites.cpp, #90). The server delivers invites
     // only between games that have it. 0x02, the game keeps its friends list on the server
-    // (live_friends.cpp, #92), followed by our friends key (u8 length + bytes), which the
-    // server binds our XUID's friends to. 0x04, text chat (#92). 0x08, the Co-op Festival
-    // playlist runs as a Horizon World (world_drop_in.cpp, world_events.cpp, #309): the
-    // server lists it only to games that say so. 0x10, our standby records follow the lobby
-    // (its game type, and as the game's host its own description; live_xmsg.cpp, #391).
+    // (live_friends.cpp, #92), followed by the proof of our friends key (u8 length + bytes;
+    // live_auth.cpp: the key itself never goes out), which the server binds our XUID's
+    // friends to. 0x04, text chat (#92). 0x08, the Co-op Festival playlist runs as a Horizon
+    // World (world_drop_in.cpp, world_events.cpp, #309): the server lists it only to games
+    // that say so. 0x10, our standby records follow the lobby (its game type, and as the
+    // game's host its own description; live_xmsg.cpp, #391).
     body.push_back(0x1F);
-    const std::string& key = forza::IdentityFriendsKey();
-    body.push_back(uint8_t(key.size()));
-    body.insert(body.end(), key.begin(), key.end());
+    const std::vector<uint8_t> tail = forza::live_auth::HelloTail(body);
+    body.insert(body.end(), tail.begin(), tail.end());
     SendLive(server_, kHello, body);
   }
 
@@ -1098,6 +1111,11 @@ class VNet {
         const uint32_t id = Load32(p), public_ip = Load32(p + 6);
         const uint16_t epoch = Load16(p + 4), public_port = Load16(p + 10);
         const size_t motd_size = std::min<size_t>(Load16(p + 12), n - 14);
+        // After the title server port (and no events byte: our HELLO has no feature 0x20): the
+        // server's clock, our challenge and how our XUID is bound there (live_auth.cpp).
+        const size_t auth_at = 14 + motd_size + 2;
+        const bool hello_now = forza::live_auth::OnWelcome(n > auth_at ? p + auth_at : nullptr,
+                                                           n > auth_at ? n - auth_at : 0);
         bool changed;
         {
           std::lock_guard<std::mutex> lock(mutex_);
@@ -1116,6 +1134,7 @@ class VNet {
                       public_port, motd_size ? ": " : "",
                       std::string(reinterpret_cast<const char*>(p + 14), motd_size));
         }
+        if (hello_now) SendHello();  // the challenge's answer
         return;
       }
       case kError: {
@@ -1154,7 +1173,7 @@ class VNet {
           if (relay_only_ || Load32(p + 4) != live_id_ || Load16(p + 8) != live_epoch_) return;
           LivePeer& peer = LivePeerLocked(id);
           if (!peer.direct.ip) {  // the first path that works; punches may arrive on several
-            REXLOG_INFO("FORZA_LIVE: direct path to player #{} via {}:{}", id, IpString(from.ip),
+            REXLOG_INFO("FORZA_LIVE: direct path to player #{} via {}:{}", id, PeerIpForLog(from.ip),
                         from.port);
             peer.direct = from;
           }

@@ -6,6 +6,8 @@
 //       -I $SDK/src/input/wheel forza-recomp/tests/wheel_devices_test.cpp -o wheel-devices-test
 //   ./wheel-devices-test
 #include <wheel_devices.h>
+#include <wheel_handbrake.h>
+#include <wheel_primary.h>
 
 #include <cstdio>
 #include <cstdlib>
@@ -124,6 +126,72 @@ int main() {
   // Two pedal sets: the first is used, the second is no wheel either.
   pick = PickAuxDevices({p1000, evo, Joy("FANATEC ClubSport Pedals V3", 0x0EB7, 0x183B)}, "", "");
   Check(pick.pedals == 0 && pick.other.size() == 1 && pick.other[0] == 2, "second pedal set");
+
+  // --- a device with no name of its own (#562) -----------------------------------------------
+  // Windows gives Thrustmaster's USB devices no name in the game's SDL 3 ("44F B371"), while the
+  // launcher shows the product name the Windows driver registers ("T-LCM Pedals"): a name setting
+  // matches nothing. Matching by vid:pid and by GUID works, and a name setting that matches
+  // nothing finds a known device of that role that has no name.
+  const JoyInfo tx = Joy("44F B669", 0x044F, 0xB669, false, "0300db814f04000069b6000000000000");
+  const JoyInfo tlcm = Joy("44F B371", 0x044F, 0xB371);
+  const JoyInfo th8 = Joy("Thustmaster T500 RS Gear Shift", 0x044F, 0xB660);
+  Check(IsNamelessJoystick(tx) && IsNamelessJoystick(tlcm), "SDL's Windows fallback name");
+  Check(IsNamelessJoystick(Joy("", 0x044F, 0xB371)), "an empty name");
+  Check(IsNamelessJoystick(Joy("0x044f/0xb371", 0x044F, 0xB371)), "SDL 3's own fallback name");
+  Check(IsNamelessJoystick(Joy("044f b371", 0x044F, 0xB371)), "any case and padding");
+  Check(!IsNamelessJoystick(Joy("44F B371", 0x044F, 0xB372)), "ids that are not the joystick's");
+  Check(!IsNamelessJoystick(Joy("44F B371 B372", 0x044F, 0xB371)), "three numbers");
+  Check(!IsNamelessJoystick(th8) && !IsNamelessJoystick(p1000) && !IsNamelessJoystick(evo),
+        "a name is a name");
+  Check(!IsNamelessJoystick(Joy("Cafe", 0xCAFE, 0)), "a word that happens to be hex");
+  Check(DeviceMatch("Thrustmaster TX Racing Wheel", tx) == 0, "the launcher's name is not the game's");
+  Check(DeviceMatch("044f:b669", tx) == 2 && DeviceMatch("044F:B669", tx) == 2, "vid:pid finds it");
+  Check(DeviceMatch("0300db814f04000069b6000000000000", tx) == 2, "GUID finds it");
+  Check(WheelDeviceMatch("044f:b669", tx) == 2, "wheel_device by vid:pid");
+  // A pedal set named by the launcher's name, the game's SDL nameless.
+  pick = PickAuxDevices({tx, tlcm, th8}, "T-LCM Pedals", "Thustmaster T500 RS Gear Shift");
+  Check(pick.pedals == 1 && pick.pedals_nameless, "the nameless T-LCM stands for the name");
+  Check(pick.shifter == 2 && !pick.shifter_nameless, "the shifter matched by its name");
+  Check(!pick.IsAux(0) && pick.IsAux(1) && pick.IsAux(2), "the base stays a wheel");
+  pick = PickAuxDevices({tx, tlcm, th8}, "044f:b371", "044f:b660");
+  Check(pick.pedals == 1 && !pick.pedals_nameless && pick.shifter == 2, "by vid:pid, as the launcher saves");
+  // Both nameless; a name that matches nothing; the role decides.
+  const JoyInfo th8_nameless = Joy("44F B660", 0x044F, 0xB660);
+  pick = PickAuxDevices({tx, th8_nameless, tlcm}, "T-LCM Pedals", "TH8A shifter");
+  Check(pick.pedals == 2 && pick.pedals_nameless && pick.shifter == 1 && pick.shifter_nameless,
+        "a nameless pedal set and shifter, each by its role");
+  // A device with a name never stands in, and an unknown nameless one neither.
+  pick = PickAuxDevices({tx, p1000}, "T-LCM Pedals", "");
+  Check(pick.pedals == -1 && !pick.pedals_nameless && pick.IsAux(1), "a named device stays missing");
+  pick = PickAuxDevices({tx, Joy("1234 5678", 0x1234, 0x5678)}, "T-LCM Pedals", "TH8A shifter");
+  Check(pick.pedals == -1 && pick.shifter == -1, "a nameless device of no known model");
+  pick = PickAuxDevices({tx, tlcm}, "T-LCM Pedals", "T-LCM Pedals");
+  Check(pick.pedals == 1 && pick.shifter == -1, "a pedal set is no shifter");
+  // none and auto are unchanged.
+  pick = PickAuxDevices({tx, tlcm}, "none", "");
+  Check(pick.pedals == -1 && !pick.pedals_nameless && pick.IsAux(1), "none reads the wheel");
+  pick = PickAuxDevices({tx, tlcm}, "", "");
+  Check(pick.pedals == 1 && !pick.pedals_nameless, "auto finds it by id");
+  // A handbrake the same way.
+  const JoyInfo tss = Joy("44F B695", 0x044F, 0xB695);
+  bool nameless = false;
+  Check(PickHandbrakeDevice({tx, tss}, "TSS Handbrake", &nameless) == 1 && nameless,
+        "a nameless handbrake");
+  nameless = false;
+  Check(PickHandbrakeDevice({tx, tss}, "044f:b695", &nameless) == 1 && !nameless, "handbrake by id");
+  Check(PickHandbrakeDevice({tx, tlcm}, "TSS Handbrake") == -1, "no handbrake among the others");
+  // The line the log gets for each joystick.
+  JoyInfo described = tlcm;
+  described.axes = 3;
+  described.buttons = 0;
+  described.hats = 0;
+  const std::string line = DescribeJoystick(described);
+  Check(line == "\"44F B371\" GUID() VID(0x044F) PID(0xB371) axes(3) buttons(0) hats(0), no name of "
+                "its own, known: Thrustmaster T-LCM",
+        "joystick line");
+  Check(DescribeJoystick(evo) ==
+            "\"SIMAGIC EVO PRO\" GUID(03000000703600000205000000000000) VID(0x3670) PID(0x0502), SDL wheel",
+        "joystick line, a wheel without counts");
 
   // --- which device each pedal reads ---------------------------------------------------------
   std::map<std::string, int> none, wheel_thr{{"throttle", 2}}, pedal_clutch{{"clutch", 0}},

@@ -8,14 +8,15 @@
 // net.cpp hands stream sockets to this file instead: host TCP sockets, Winsock error
 // codes, and connections to the Forza Live server's address sent to its HTTP port
 // (forza::LiveServerHttp), whatever LSP port the game picked. Requests on those connections
-// carry our Live identity's friends key (lsp_request_header.h), which tells the server the
-// call is this player's own.
+// are signed with our Live identity's friends key (lsp_request_header.h, live_auth.cpp; the key
+// itself is never sent), which tells the server the call is this player's own, and name the
+// game's build (X-Forza-Build), which the server keeps with each leaderboard row (#517).
 
 #include "live_tcp.h"
 
 #include "../platform/guest_memory.h"
-#include "identity.h"
 #include "live.h"
+#include "live_auth.h"
 #include "lsp_request_header.h"
 
 #include "../platform/socket.h"
@@ -62,10 +63,10 @@ void Store32(uint8_t* p, uint32_t v) {
 
 std::mutex mutex;
 std::unordered_map<uint32_t, sock::Handle> fds;  // guest handle -> host socket
-// Connections to the title servers: each request gets the X-Friends-Key line, and what the
-// socket has not taken yet waits in the stream (lsp_request_header.h LspTitleStream).
+// Connections to the title servers: each request is signed, and what the socket has not taken
+// yet waits in the stream (lsp_request_header.h LspTitleStream).
 struct Title {
-  explicit Title(std::string line) : stream(std::move(line)) {}
+  Title() : stream(forza::live_auth::RequestLines) {}
   std::mutex mutex;
   LspTitleStream stream;
 };
@@ -76,19 +77,6 @@ std::shared_ptr<Title> TitleOf(uint32_t handle) {
   std::lock_guard<std::mutex> lock(mutex);
   auto it = titles.find(handle);
   return it == titles.end() ? nullptr : it->second;
-}
-
-// The friends key line, or empty without a Live identity.
-std::string FriendsKeyLine() {
-  const std::string& key = forza::IdentityFriendsKey();
-  if (key.size() != 16) return {};
-  std::string line = "X-Friends-Key: ";
-  char hex[3];
-  for (char c : key) {
-    std::snprintf(hex, sizeof(hex), "%02X", unsigned(uint8_t(c)));
-    line += hex;
-  }
-  return line + "\r\n";
 }
 
 // The socket write a title stream uses: bytes written, or -1 (would_block when it is full;
@@ -167,10 +155,9 @@ int32_t Connect(uint32_t handle, uint32_t ip, uint16_t port) {
                   http_port);
     }
     port = http_port;
-    const std::string line = FriendsKeyLine();
-    if (!line.empty()) {
+    if (forza::live_auth::Ready()) {
       std::lock_guard<std::mutex> lock(mutex);
-      titles[handle] = std::make_shared<Title>(line);
+      titles[handle] = std::make_shared<Title>();
     }
   }
   sockaddr_in a{};
@@ -201,7 +188,7 @@ int32_t Send(uint32_t handle, const uint8_t* data, uint32_t size) {
   sock::Handle fd = Fd(handle);
   if (fd == sock::kInvalid) return Fail(kENotSock);
   if (const auto title = TitleOf(handle)) {
-    // The request stream with the key line, nonblocking: the game's bytes are taken once
+    // The request stream with the signature, nonblocking: the game's bytes are taken once
     // older output has gone out (else WSAEWOULDBLOCK, nothing taken), and what the socket
     // does not take now waits for the next send, recv or select.
     std::lock_guard<std::mutex> lock(title->mutex);

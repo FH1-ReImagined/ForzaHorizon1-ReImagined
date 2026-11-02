@@ -164,12 +164,12 @@ game_run() {
     d="$LOG/$name"; ud="$d/ud"
     mkdir -p "$ud/B13EBABEBABEBABE" "$d"
     cp -r "$CONTENT/$xuid/$TITLE" "$ud/B13EBABEBABEBABE/" || return 1
-    local args=(--user_data_root="$ud" --present_effect="$effect")
+    local args=(--user_data_root="$ud" --present_effect="$effect" --audio_mute)
     # fsr3: the launcher's AMD FSR 3 (temporal) arguments, Performance at 1440p (FSR 1 presents)
-    [ "$effect" = fsr3 ] && args=(--user_data_root="$ud" --present_effect=fsr --resolution=1440p
+    [ "$effect" = fsr3 ] && args=(--user_data_root="$ud" --audio_mute --present_effect=fsr --resolution=1440p
         --resolution_scale=2 --fh1_output_width=2560 --fh1_output_height=1440
         --fh1_upscaler=fsr3_performance)
-    [ "$effect" = smaa ] && args=(--user_data_root="$ud" --present_effect=fsr --resolution=1440p
+    [ "$effect" = smaa ] && args=(--user_data_root="$ud" --audio_mute --present_effect=fsr --resolution=1440p
         --swap_post_effect=none --fh1_upscaler=smaa --fh1_scene_720p_native_hud=true
         --fh1_native_scene_scale=2 --resolution_scale=2 --fh1_output_width=2560 --fh1_output_height=1440)
     [[ "$build" == *tu4* ]] && args+=(--update_data_root="${FORZA_UPDATE:-$ROOT/extracted/tu4}")

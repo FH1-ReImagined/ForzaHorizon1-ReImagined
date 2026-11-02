@@ -220,7 +220,7 @@ class EditorWithAHandbrake(unittest.TestCase):
         self.step()
         self.assertIsNone(ed.binding)
         self.assertEqual((st["wheel_handbrake_device"], st["wheel_handbrake_axis"]),
-                         ("SIMAGIC TB-RS Handbrake", 0))
+                         ("3670:0a04", 0))
         self.assertFalse(st["wheel_invert_handbrake"])
         self.handbrake.axis(0, -32768)
         # A button on the wheel joins it.

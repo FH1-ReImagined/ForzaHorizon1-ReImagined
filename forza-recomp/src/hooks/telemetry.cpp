@@ -2,7 +2,9 @@
 // sub_82D4DE30 (TU4 82E100B0) is called only by its substep loop. The world update around it
 // (sub_823E40D8, TU4 82414068: once a frame while a world is loaded, `this` the main loop's
 // game + 4) tells the racing wheel whether the player is driving (platform/driving_gate.h
-// PlayerGate, platform/wheel_bridge.cpp).
+// PlayerGate, platform/wheel_bridge.cpp) and samples the Discord status details
+// (discord_details.cpp).
+#include "discord_details.h"
 #include "../platform/driving_gate.h"
 #include "../platform/camera_fov.h"
 #include "../platform/guest_addr.h"
@@ -37,4 +39,5 @@ extern "C" REX_FUNC(sub_823E40D8) {
   f.rewinding = std::bit_cast<float>(std::byteswap(scale)) < 0.0f;
   f.stepped = g_substeps.load(std::memory_order_relaxed) != substeps;
   forza::telemetry::Player().Frame(forza::telemetry::DrivingNowMs(), f);
+  forza::discord::WorldFrame(ctx, base);
 }

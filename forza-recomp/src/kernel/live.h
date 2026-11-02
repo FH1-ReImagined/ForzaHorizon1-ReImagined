@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <array>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 #include "../platform/social_presence.h"
@@ -182,13 +183,21 @@ bool LiveInviteBusy();
 // --- Text chat (live_friends.cpp's Chat tab, server/forza_chat.py, #92) ---
 // A CHAT message to the server, and the server's (network thread).
 bool LiveSendChat(const std::vector<uint8_t>& body);
-// Sends a chat line as the Chat tab would (channel 1 session, 2 world) and shows it in the
-// tab: scripted tests (FORZA_AUTOPRESS_FIFO "SAY:<text>" says it in World chat).
+// Sends a chat line as the Chat tab would (channel 1 session, 2 world, 4 club) and shows it in
+// the tab: scripted tests (FORZA_AUTOPRESS_FIFO "SAY:<text>" says it in World chat, "SAYC:" in
+// Club chat).
 void LiveChatSay(uint8_t channel, const std::string& text);
 void LiveChatMessage(const uint8_t* body, size_t size);
 // The ids of the sessions we host or joined (live_xmsg.cpp): the "session" chat channel
 // reaches the players in one of them.
 std::vector<uint64_t> LiveSessionIds();
+// The content this game has that changes which cars exist (kernel/content_manifest.h, #567):
+// the installed DLC offers (dlc_log.cpp) and the loaded mods that change cars or the database
+// (mod_overlay.cpp). The Chat message "content" (op 4) tells the server, which tells the
+// players of a session what they do not share.
+void SetInstalledDlcOffers(const std::set<uint32_t>& offers);
+void NoteLoadedMod(const std::string& name, bool changes_cars);
+std::string CurrentContentManifest();
 
 // Newest presence session, copied under the session lock. Members are XUIDs
 // observed through XSessionJoin/Leave, never the unrelated server-room roster.

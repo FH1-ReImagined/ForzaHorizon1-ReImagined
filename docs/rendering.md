@@ -409,6 +409,23 @@ input 960x540 is below the native 1280x720; using 1280x720`. At a 1080p output F
 and Balanced therefore run a 1280x720 input (Quality 1280x720 as before); 1440p and 4K are
 unchanged. DLSS 1080p Performance asked NGX for 960x540 and had the same hole.
 
+**Startup movies at a 1080p output (#539).** With the scene/HUD split at a 1080p output (FSR 3
+in every mode and SMAA 1x; DLSS and DLAA take the same path, not tested) the movies showed only their
+top-left 75%, enlarged, and the legal screen before them filled only the top-left 1280x720.
+1440p and 4K were not affected. The HUD target's raster at 1080p is 1920x1080 of the 2560x1440
+that render scale 2 gives, and the HUD's shaders scale the coordinates of every scaled screen
+texture to that part. A movie frame is decoded into a target in the scene, whose raster fills
+the whole surface, and a HUD draw then puts it on screen. ReIGlue 0409 records for each resolve
+whether it came from the scene and leaves those textures' coordinates unscaled. It also presents
+a frame without the HUD layer (the legal screen, unscaled; a frame between two movies) at its own
+size, letterboxed, instead of the output size. Such a size change replaces the presenter's output
+images; the log lists the first 16 (`FH1 split: frame N presents WxH ...`). A boot to free roam
+at 1080p has 8 or 9, at the legal screen, between movies and at loading, never one a frame. Checked
+with the startup movies on (TU4, RADV, in a 1280x720 window): FSR 3 Native AA, FSR 3 Quality and
+SMAA 1x now frame the movies and the legal screen as game default does. FSR 3 Native AA at
+1440p and game default are unchanged. The menus, the HUD in free roam and the pause menu still
+present at the output size.
+
 Quality, from the race screenshots (FSR 3 output at 1440p against the 720p FSR 1 input
 enlarged with Lanczos as a stand-in for EASU, so the FSR 1 side is if anything kinder than
 the real filter): the player car's panel lines and the engine cover slats are continuous with
@@ -669,6 +686,50 @@ memory reaches 90 % of the driver's budget, or after an allocation failed
 (answering No) does not write a picture; saving one does, and wrote correct pictures at scale 3
 before and after trimming. A picture already broken stays until the car's design is saved
 again.
+
+## Photo mode's Big Shot was the loading screen (#552)
+
+BIG SHOT : 8.3 MEGAPIXEL (RB in photo mode's camera, then "create a large photo and upload it to
+ForzaMotorsport.net") sends a 3840x2160 BMP (`LargeFileUpload.Create(..., "ForzaBigshot.bmp")`,
+then `Content.UploadContent`). With the default `readback_resolve = some` all nine 1280x720 tiles
+of it were the first loading screen; with `full` it was right.
+
+How the game makes it (TU4 addresses; the disc build's are in `src/hooks/bigshot_readback.cpp`):
+YES posts the request (`sub_828006B8` calls `sub_826103D0` with 3840x2160), and the render thread
+starts it in `sub_82614850`. The tile state (the object of `sub_8248B278` + 148) gets the 3840x2160
+buffer and the flag that sends the tiles there. Each tile is accumulated over 96 frames. On the
+last one `sub_825F4418` calls `sub_825F3CE8`, which locks that frame's front buffer (one of the
+renderer's two D3D textures at 0x833D5150 and 0x833D5184: 1280x720 2_10_10_10 at physical
+0x1BDB1000 and 0x1C149000) and untiles it into the buffer. After the ninth tile `sub_82CF45C8`
+resets the state, and the BMP is uploaded. Hardware watchpoints on the front buffers (gdb `awatch`
+on their 0xC0000000 view) caught nine reads during a Big Shot, all from `sub_825F3CE8` (through
+`sub_82B010E0`, the untiling).
+
+The game resolves both front buffers twice every frame. `some` copies a resolve back to guest
+memory only when its key (range, source, format) is new or its readback buffer was dropped after
+60 unused frames. The front buffers are never unused, so they were copied back once, at the first
+loading screen, and the CPU read that picture for every tile. A trace of every resolve during a
+Big Shot showed no resolve of its own for the tiles. The only new key is the 1280x720 float
+accumulation target at 0x1E759000, which the CPU does not read.
+
+Fix: ReIGlue 0411 adds `readback_resolve_wait_range`, a guest physical range whose resolves wait
+for the GPU and are copied back as with `full` (Vulkan and D3D12; 0 for none).
+`src/hooks/bigshot_readback.cpp` sets it to the two front buffers (from their fetch constants)
+once `sub_82614850` has started a capture to the CPU buffer, and clears it in `sub_82CF45C8` (or
+after 10 minutes if the end never comes). Only the front buffers' resolves during a Big Shot pay:
+1,728 copies (2 a frame for 864 frames), about 2.5 ms of GPU waits a frame while it runs. At a
+60 fps cap the capture took 15.1 s, against 14.5 s before. Other frames do not change.
+`FORZA_BIGSHOT_READBACK=0` switches it off. `readback_resolve = none` still turns readback off,
+and the Big Shot with it.
+
+Checked (TU4, RADV on an RX 9060 XT, render scale 1, `some`): a Big Shot taken in free roam is the
+photographed scene, nine different tiles that join without seams, and the local server publishes it
+(forza-live #17). A photo saved with SAVE loads correctly from VIEW PHOTO and its thumbnail is
+right. An Auto Upgrade at the Montano Plains outpost wrote a correct car thumbnail. FSR 3 Native AA at
+render scale 2 (1080p output) gives a correct Big Shot too; its capture takes 21 s. The built-in
+benchmark at render scale 1 (1280x720, 240 fps cap, four runs each, alternating) stays within its
+run-to-run spread: median 141.2 fps (120.2 to 148.1) against 143.3 (136.6 to 146.7) on main, 1% low
+93.9 against 92.8, p99 9.71 against 9.60 ms. The D3D12 path was not run.
 
 ## Festival video flashes purple (#91, open)
 

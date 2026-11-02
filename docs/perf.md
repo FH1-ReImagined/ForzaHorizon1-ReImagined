@@ -2400,3 +2400,231 @@ source hashes were unchanged. Static AMD64 PE inspection found the required
 selection hints, and the plugin imports `rexruntime.dll`. Its DLSS capability
 manifest matches its SHA-256. No DLL was loaded, no shared prefix installed,
 and no game, persistence/restart reuse or HDD stutter validation was performed.
+
+## Steam Deck: ideas from Pinyon Shift (#559, #476, #475, #474)
+
+Three ideas from a read-only study of Pinyon Shift (BSD-3; same executable as ours) aimed at the thread the
+frame waits for on a Deck, the GPU command processor ([the benchmark](#steam-deck-and-4-core-cpus-the-built-in-benchmark-45-2026-10-23)).
+Each is a ReIGlue commit behind a cvar that defaults to off; credits are in ReIGlue's `NOTICE` and in the commit
+messages. This section holds the measurements. No Deck was available.
+
+**Machine and method.** Ryzen 7 7800X3D (8 cores, no SMT, 5 GHz), RX 9060 XT (RADV). The game on CPUs 0-3
+(`taskset -c 0-3`, set once; the samplers are not pinned), the launcher's Steam Deck preset
+([steam_deck.md](steam_deck.md)): 30 fps, render scale 1, AMD FSR 1, `scene_msaa=off`, 720p scene, background shader
+compilation; the TU4 build of main with a ReIGlue plugin and runtime built from the branches below, the golden TU4
+save, audio muted, offline, scratch `--user_data_root`, warm scratch shader cache. Scenes: the built-in benchmark
+(Recaro Rush, 15 s settling and 60 s measured, [benchmark.md](benchmark.md)) and a free-roam drive (90 s at full throttle from the spawn). Because four
+5 GHz Zen 4 cores hold 30 fps easily (the command processor is busy about 15 % of the frame), two harder
+configurations stand in for the Deck's slower cores: **uncapped** (`--frame_rate=240`: the frame rate then
+follows the CPU side) and **busy loops** (one busy loop per core at the same priority, so a game thread gets about
+half a core, "p4h1" above). These show how the time divides; they are not the Deck's frame rate.
+
+**In-run alternation.** The machine was shared with other jobs (builds and other benchmarks, which took the benchmark lock
+in turn), and the benchmark's race is not the same twice (the AI cars are not deterministic: the fps over the minute
+differs by 15 % from run to run). So the cvar is flipped while the game
+runs (hot-reload cvars: #476 through the cvar's storage in the running process, a test aid; #475 through `REX_THREAD_CORES_FILE`), every 3-4 s over
+the benchmark's measured minute, and the table pools the windows: frame times of all "on" windows against all "off"
+windows of the same runs, and the paired change of each "on" window against the "off" window next to it. Runs were
+started with the opposite state first in turn. The first 0.5 s of each window is left out.
+
+### Present without waiting for the frame's replay (#476, ReIGlue 0414)
+
+Every swap ended the frame's submission and then waited for the submission thread to replay the whole frame
+(`AwaitSubmissionThread`), because the presenter's step after the swap (making the image the next one to present,
+painting it, the VR export, the fence that tracks the refresher's use of the image) queues work that reads the image
+and must follow the frame on the queue. The command processor sat idle for that replay, about 1.3-1.4 ms a frame on
+this PC (the "Vulkan submission" row of the thread table above).
+
+`--vulkan_present_on_submission_thread=true` (hot reload, default off) queues the presenter's step as a job on the
+submission thread behind the frame's submission; the next swap waits for it only if it has not run, which a frame
+later it nearly always has. Shutdown and a switch-off wait for the queued steps first. The frame tag of the swap
+(`rexui_SetNextGuestOutputTag`, which the command processor clears as soon as the swap returns) is captured when the
+refresh is made. The change is contained in `IssueSwap`, the presenter's `RefreshGuestOutput` (split into the
+refresh and `PublishGuestOutput`) and the Vulkan presenter; D3D12 is untouched.
+
+**Results (#476).** In-run alternation over the benchmark's measured minute (free roam: over a 90 s drive at full
+throttle from the golden save's spawn, from 10 s on), the cvar flipped every 3 s (9 windows of each state per run in
+the benchmark), Deck preset, CPUs 0-3, off against on. Rows are the pooled frames of all windows of all runs;
+the last row of a group is the change of each "on" window against the "off" window next to it. Command processor =
+its CPU time per frame (`fh1_frame_cost_csv`); it does not change, the gain is the time it no longer waits.
+
+| Configuration | State | Runs | fps | p99 ms | 1% low fps | Frames over 50 ms | Command processor ms/frame |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 4 cores, uncapped (`--frame_rate=240`) | off | 4 | 147.8 | 9.4 | 98.4 | 0 | 4.66 |
+| | on | 4 | 169.2 | 8.4 | 105.8 | 0 | 4.68 |
+| | paired | 68 pairs | **+15.3 %** (67 of 68 pairs higher) | | | | -0.2 % |
+| 4 cores, a busy loop on each, 30 fps | off | 4 | 29.9 | 40.7 | 21.5 | 5 | 4.68 |
+| | on | 4 | 30.0 | 41.9 | 21.2 | 5 | 4.65 |
+| | paired | 68 pairs | +0.1 % (39 of 68) | | | | +2.7 % |
+| 4 cores, 30 fps | off | 2 | 30.0 | 36.1 | 27.0 | 0 | 4.88 |
+| | on | 2 | 30.0 | 36.1 | 26.5 | 1 | 4.82 |
+| | paired | 34 pairs | -0.0 % (14 of 34) | | | | -1.0 % |
+| Free roam (90 s of driving), 4 cores, uncapped | off | 2 | 219.6 | 7.5 | 89.5 | 0 | 2.74 |
+| | on | 2 | 226.2 | 7.0 | 110.9 | 0 | 2.74 |
+| | paired | 48 pairs | **+3.6 %** (35 of 48 pairs higher) | | | | +0.4 % |
+| Free roam, 4 cores, 30 fps | off | 1 | 30.0 | 40.1 | 23.2 | 1 | 2.69 |
+| | on | 1 | 30.0 | 38.4 | 22.8 | 2 | 2.63 |
+| | paired | 24 pairs | +0.0 % (12 of 24) | | | | -1.7 % |
+
+With the game's own 4x MSAA (`scene_msaa=game`, three EDRAM tiles; the same three configurations, run earlier while
+another job still used the machine): uncapped 115.5 against 127.2 fps (+10.3 %, 60 of 68 pairs higher), with busy loops
+29.9 against 29.9 and at 30 fps 30.0 against 30.0 (the cap holds), 1% low 18.9 against 20.5 and 25.6 against 27.5 fps,
+frames over 50 ms 6 against 4 and 1 against 0.
+
+- The gain shows where the frame waits for the command processor: uncapped, the frame rate rises 10-15 % in the benchmark's
+  race (4,000 draws a frame; the frame loses the replay of its last submission, about 0.8-1 ms of 6.8) and 3.6 % in free
+  roam (2,100 draws a frame, the command processor busy 60 % of a 4.5 ms frame). At the 30 fps cap nothing is left to gain on four
+  5 GHz cores (the command processor is busy about 15 % of the frame), and with a busy loop on each core the run queue,
+  not the command processor, sets the frame times. A Deck at 20 fps is the case in between; its replay is slower too
+  (about 1.3 ms here, so 3 ms if it scales as the rest of the thread table), so 5-10 % is the guess for a Deck, not a
+  measurement.
+- Alternation is needed because the benchmark's race is not the same twice. Whole runs started with and without the cvar
+  (2 pairs, uncapped, `--vulkan_present_on_submission_thread=true` on the command line, the benchmark's own minute)
+  gave 166.4 [163.1-169.8] against 168.6 [167.6-169.5] fps, but the fps over that minute runs from 137-155 early to
+  164-185 late and differs from run to run (the AI cars are not deterministic), more than the effect; the alternating
+  runs cover a slightly earlier, heavier stretch (the off windows average 148 fps). Two controls with the same marks
+  but the value never changed show that the switching itself does nothing: always on, both kinds of window 168.5 and
+  168.3 fps (2 runs, 34 pairs, -0.0 %); always off, 144.8 and 144.6 fps (2 runs, -0.3 %). The first off window of a run
+  (never on before) is already the slow one (122-125 fps against 155-158 for the next on window).
+- Hitches: no frame over 50 ms in the uncapped runs in either state with the Deck preset; the counts with busy loops
+  (5 against 5) and at 30 fps are within the noise of a 60 s window. With the game's MSAA one run had a cluster of 65
+  and 69 ms frames at the end of an "on" window that the others did not repeat in 36 further switches; 2 frames over
+  50 ms in the on windows against 0 in the off windows of that set.
+- Picture: a paused free-roam scene (the pause menu over the Aventador on the road) shown in turn with the cvar on, off,
+  on (two runs of five screenshots each): all screenshots are pixel-identical (largest difference 0 of 255). Standing
+  at the spawn and driving with the cvar on (screenshots every 4 s, two while driving) shows no artifacts.
+
+### Thread placement by name (#475, ReIGlue 0415)
+
+No thread had an affinity: the scheduler moved the command processor, the simulation, the render thread and the audio
+mixer around the four cores of a Deck and let any thread run on the command processor's core.
+`--linux_thread_cores=...` (hot reload, default `off`) pins threads by name:
+
+- `NAME=CORES;NAME=CORES;*=CORES`: `NAME` is the start of the thread's name or of its guest entry (`Guest_825CEC88`;
+  `_` also matches a space), `*` every thread no other entry names, `CORES` a list such as `6-7` or `0,2-5` inside the CPUs
+  the process may use (so `taskset` still applies). Guest threads are matched by their entry because their names carry
+  a host address that differs from run to run (`XThread7FFF86C0`): `XThread` registers `Guest_<entry>` for each one.
+- `auto`: for a CPU of four cores with two threads each (a Deck: 4 Zen 2 cores, 8 threads), from the SMT siblings in
+  `/sys/devices/system/cpu/cpuN/topology/thread_siblings_list` among the CPUs the process may use: the main loop
+  (`Guest_825CEC88`) and the audio mixer (`Guest_83075D18`) on core 0, the render thread (`Guest_8261E318`) and
+  `Vulkan Submission` on core 1, `GPU Commands` alone on core 2's first CPU, everything else on the rest. A Deck gives
+  `Guest_825CEC88=0;Guest_83075D18=1;Guest_8261E318=2;Vulkan_Submiss=3;GPU_Commands=4;*=5-7`. Any other CPU is left to
+  the scheduler: the same layout on four cores without SMT (below) was slower. This is Pinyon Shift's Deck layout
+  (ShiftGlue `2849938`); they measured it on a Deck at process CPU -6.1 and -6.8 % and p95 0.8-1.7 ms better. It is not
+  measured on a Deck here.
+- A placement thread applies the rules every 0.5 s for the first 20 s (threads inherit the mask of the thread that starts
+  them) and every 5 s after; setting the value to `off` puts every pinned thread back on the process's original mask.
+- `REX_THREAD_CORES_FILE=path` (environment): the first line of the file, while it exists, replaces the cvar's value and
+  is read every 250 ms. It is how the in-run comparisons below switch a layout on and off.
+
+**Results (#475).** This PC has no SMT, so the Deck's case (two threads on one core) cannot be measured here. What can be
+measured is whether pinning by name helps or hurts on four cores with one thread each: CPUs 0-3, the cvar's value switched
+through `REX_THREAD_CORES_FILE` every 4 s over the benchmark's minute (first 0.8 s of each window left out), Deck preset,
+`off` restores the process's mask. Two layouts: the four-core form of the Deck layout (`Guest_825CEC88=0;
+Guest_83075D18=0;Guest_8261E318=1;Vulkan_Submiss=1;GPU_Commands=2;*=3`, what `auto` produced on four cores without SMT
+in these runs) and the command processor alone on a CPU (`GPU_Commands=3;*=0-2`).
+
+| Configuration | State | Runs | fps | p99 ms | 1% low fps | Frames over 50 ms | Command processor ms/frame |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Deck layout on 4 cores, uncapped | off | 3 | 152.4 | 9.8 | 87.5 | 0 | 4.49 |
+| | on | 3 | 143.7 | 11.4 | 68.7 | 0 | 4.57 |
+| | paired | 39 pairs | **-4.4 %** (11 of 39 pairs higher) | | | | +0.3 % |
+| Deck layout on 4 cores, 30 fps | off | 2 | 30.0 | 36.6 | 25.4 | 0 | 4.97 |
+| | on | 2 | 30.0 | 40.4 | 22.2 | 2 | 5.01 |
+| Deck layout on 4 cores, free roam, uncapped | off | 2 | 202.6 | 7.9 | 89.8 | 0 | 2.94 |
+| | on | 2 | 171.2 | 13.4 | 55.5 | 0 | 3.11 |
+| | paired | 36 pairs | **-15.3 %** (2 of 36 pairs higher) | | | | +5.8 % |
+| Command processor alone, uncapped | off | 3 | 141.7 | 9.7 | 92.5 | 0 | 4.93 |
+| | on | 3 | 138.4 | 10.6 | 82.3 | 0 | 4.99 |
+| | paired | 39 pairs | -1.3 % (13 of 39 pairs higher) | | | | +0.2 % |
+
+- Pinning does what it says (`tasks.txt` of a run with `auto`: `GPU Commands` allowed on CPU 2 only, the main loop and the
+  audio mixer on 0, the render thread on 1, `Vulkan Submission` on 1, every other thread on 3), and costs nothing at
+  default: the cvar is off, nothing starts. But on four CPUs with one thread each it is slower, not faster: the Deck
+  layout puts all other threads (the pipeline compilers, the XMA decoder, the game's workers, the disk and driver
+  threads) on one CPU, and a command processor that has a CPU to itself runs no faster than one the scheduler moves.
+  So `auto` does nothing on a CPU without SMT.
+- The SMT gain Pinyon Shift measured (the command processor with its sibling free, the simulation and the audio mixer
+  not sharing with it) is exactly what this PC cannot show. The mechanism and the layout need one run on a Deck:
+  Settings, Advanced, extra arguments `--linux_thread_cores=auto`, then the benchmark, with and without; the log
+  lists each pinned thread (`linux_thread_cores:` lines).
+### Decoding and recording on two threads (#474): plan, not built
+
+Not built: the two changes above and their measurements took the window. What a build needs, from reading ReIGlue `origin/main`
+(`src/graphics/command_processor.cpp`, `src/graphics/vulkan/command_processor.cpp`) and Pinyon Shift's
+`gpu_record_thread` (ShiftGlue `9362a07`, 419 changed lines in the same Xenia-derived processor).
+
+**Shape.** Keep PM4 parsing (`ExecutePrimaryBuffer`, `ExecutePacket*`) on the "GPU Commands" thread, the decoder. It
+reads a *shadow* register file (`decode_regs()` in Pinyon) and appends, in order, to a batch: register runs (copied:
+the ring and the game's constant memory are reused after the packet), and closures or small records for the backend
+work (draw, copy/resolve, shader load, swap, event/fence writes, interrupts). A second thread, the recorder, takes
+batches and applies them to the real `register_file_` and the backend (`VulkanCommandProcessor::WriteRegister`
+bookkeeping, `IssueDraw`, `IssueCopy`, `IssueSwap`...). The decoder publishes a batch when it is full, at a swap,
+and before it waits.
+
+**What stays on the decoder and what moves.** Today's cost sits in `WriteRegistersFromMem` (per-register
+`WriteRegister` dispatch and the Vulkan constant-block invalidation), `ExecutePacket`, `IM_LOAD`
+(`fh1_shader_load_memo.h`, patch 0140) and the draw's front half. After the split the decoder only compares and copies
+words (Pinyon: drop unchanged register writes `9bf779f`, merge float-constant runs `99f52ca`, compare four registers
+at a time `e00387b`), the recorder owns everything that reads the register file, the caches and the Vulkan state.
+The memos 0140/0340/0360-0362 run on the recorder side (they read the register file and caches); the `IM_LOAD`
+address-to-shader memo needs the recorded dwords, so `IM_LOAD` is recorded whole and memoized on the recorder.
+
+**Ordering rules (what the guest can observe).**
+- `MEM_WRITE`, `COND_WRITE`, `REG_TO_MEM`, `EVENT_WRITE_SHD/EXT` that the CPU reads, and occlusion queries
+  (`EVENT_WRITE_ZPD`, `VIZ_QUERY`): the decoder `RecordSync()`s first (the recorder has run everything before),
+  then performs them itself. Rare packets.
+- `WAIT_REG_MEM` (about a frame boundary and the "GPU idle" waits): publish the recorded work, then poll. The register it
+  polls is the *real* file for registers the recorder writes (`COHER_STATUS_HOST`, scratch) and memory otherwise;
+  `MakeCoherent` runs on the recorder.
+- Fence writes (`EVENT_WRITE_SHD`) are recorded, not waited for: the game must see a fence only after the recorder
+  has consumed the draws before it, because it reuses their memory after the fence. Avoid Pinyon's `b3b3cbb`
+  (awaiting a fence before the worker has submitted it): `AwaitSubmissionThread`/`CheckSubmissionFenceAndDeviceLoss`
+  must be asked about submissions the recorder has made, not the decoder's count.
+- `XE_SWAP` is recorded; the swap's `IssueSwap` runs on the recorder (with #476 the presenter step is queued on the
+  submission thread behind it). `rexui_SetNextGuestOutputTag`, `fh1_frame_trace::OnSwap` and `Fh1StereoOnSwap` must
+  be recorded with it (they bracket the swap on the decoder today).
+- SDK 0115's futex wake (`WakeWordWaiters` after scratch/MEM_WRITE stores) and the `gpu_wait` / `render_idle` hooks
+  must fire when the *recorder* publishes the store, not when the decoder parses the packet.
+- The stereo/VR recording (`Fh1StereoOnDraw/Replay`, patch 0396) replays whole draw segments: record the segment
+  markers and keep that state on the recorder, or leave the split off while `vr_mode` is on.
+
+**Register file readers on the decoder** (these need the shadow file or a recorder round trip): the packet loop reads
+`PA_SC_VIZ_QUERY` (draw skip), `VGT_*` (it writes them), `COHER_*`, `SCRATCH_*`, `RB_*` only through `IssueDraw`
+(recorder). `ReadRegisterValue` callers in `WAIT_REG_MEM`, `REG_RMW` (read-modify-write: the decoder can do it on the
+shadow and record the result), `REG_TO_MEM`. The shadow is written by every packet write (cheap) and never by the
+backend; the few registers the backend itself writes (`WriteRegister` from `OnPrimaryBufferEnd`, gamma ramp
+sequence, scratch) need the same write recorded on both files.
+
+**Cvar and rollout.** `gpu_record_thread` (restart), default off, the Vulkan backend opts in
+(`SupportsRecordThread()`); D3D12 and the VR stereo path stay on one thread. Same thread-naming rule as #475
+(`GPU Recorder` next to `GPU Commands`) so `linux_thread_cores` can give each a core.
+
+**Measure** with the harness used for #476/#475: Deck-like limits (`taskset -c 0-3`, 30 fps and uncapped, the
+busy-loop slow-CPU variant), benchmark and free roam, in-run toggling is not possible (restart cvar), so ABBA pairs;
+metrics: fps and 1% lows, `fh1_frame_cost_csv` CP ms (now two numbers: decoder and recorder) and the sum, process CPU
+per frame (the split adds copying: expect +3-6 % total CPU, which the Deck pays for on the SMT sibling), hitches
+(`GPU slow frames`, `FORZA_STALL`). Correctness: paused-scene screenshots at the same spots, the `render_tests`
+captures (`tools/render_tests`), a race with 7 AI cars, a photo-mode Big Shot (readback resolve), and a cvar-off run
+that is bit-identical to today's.
+
+**Cost estimate.** Pinyon's first step was 419 changed lines; ours also has per-register Vulkan invalidation, the
+stereo path, readback-resolve `RecordSync` points (`readback_resolve_wait_range`, #552, 0411) and the pipeline
+look-ahead (`fh1_pipeline_lookahead`, run at the frame end), so budget 2-3 days of work plus the measurements, in
+steps that each leave the cvar-off path unchanged: (1) the batch/recorder thread running closures for draws and
+copies only, registers still written by the decoder under a sync at every draw (correct but slow, tests the ordering);
+(2) shadow register file and recorded runs; (3) the sync rules for the CPU-visible packets; (4) the follow-ups
+(unchanged-write drop, constant-run merge). Expected gain: the 25-30 % decode share of the thread's 7-8 ms on this PC
+(2-2.5 times that on a Deck) comes off the thread the frame waits for, minus the batch hand-off; Pinyon measured
+18.1 to 17.0 ms (6 %) from the split alone.
+
+### Where this leaves #559
+
+Nothing here is on by default and nothing here was measured on a Deck. `--vulkan_present_on_submission_thread=true`
+removes an idle wait from the thread the frame waits for and showed +12.7 % uncapped on four cores with the Deck
+preset, with identical pictures and no extra hitches; it should be tried on a Deck (Settings, Advanced, extra arguments)
+and, before it becomes the default, on the paths that use the deferred step differently: the VR export (frame tag and
+pose pairing), native upscaling with DLSS (the replay's split submission), and a Windows run. `--linux_thread_cores=auto`
+is the Deck layout of Pinyon Shift; it does nothing on a CPU without SMT because on four cores with one thread each it
+measured slower, so only a Deck can say whether it helps. The command processor split (#474) is the large item and is
+not started.

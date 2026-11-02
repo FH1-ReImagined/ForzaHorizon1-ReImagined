@@ -41,6 +41,14 @@ tools/run_forza.sh 120        # a two-minute test run; logs in ${XDG_RUNTIME_DIR
   fixtures cover rapid retargeting and native locks; live sub-ramp input stress
   and scripted-event transitions were not exercised. Global music, dialogue,
   ducking and scripted-event fade rates retain their original values.
+- **Radio during races:** Audio > Radio > **Keep radio during races**
+  (`radio_keep_in_events = true`, off by default; restart after changing) restores the
+  selected stock or custom station, including Radio Off, at qualified career
+  and Rally race-opening music cues. Earlier unqualified intro music remains native.
+  The original soundtrack remains the default.
+  Story cinematics, post-race music, dialogue and sound effects keep their native
+  behavior; normal loading and finish fades still apply. Unrecognized or numbered
+  fallback cues retain the original soundtrack.
 - **Rubber banding (#433):** the game's CPU drivers race against where you are. Their event's
   `AIRubberbands` row (or their skill's) starts a slow-down mode 1-50 m ahead of you and cuts
   their torque from 10-600 m ahead (the weaker drivers' down to a fifth); 40-150 m behind (20
@@ -111,20 +119,30 @@ tools/run_forza.sh 120        # a two-minute test run; logs in ${XDG_RUNTIME_DIR
   what you can do: send a friend request, accept, decline, take a request back, remove,
   block, unblock. A request or an accepted one shows a short notice. A blocked player can't
   invite you or send you requests (they are dropped without telling them). Your friends
-  are tied to `friends_key` in `live_identity.txt`: keep that file (it also holds your
-  XUID) to keep your friends on another computer. With a server older than this, everyone
+  are tied to `signing_seed` (and, for older versions, `friends_key`) in
+  `live_identity.txt`: keep that file private (it also holds your XUID), and copy it to keep
+  your friends on another computer. With a server older than this, everyone
   online counts as a friend, as before.
   **Text chat (#92):** `F9` (`live_chat_key`) opens the friends screen on its **Chat** tab
   (with a controller: hold the left stick press, then LB to Chat; a friend's "Send a
   message" goes there too). Up/Down picks where the message goes: **Session** (the players
-  in your party or game session), **Horizon World** (the players in your world), or a
-  friend online (a direct message; only friends). Type and press Enter; with a controller,
+  in your party or game session), **Horizon World** (the players in your world), **Club**
+  (shown when you are in a car club, #145: the members of your club who are online, wherever
+  they are), or a friend online (a direct message; only friends). Type and press Enter; with a controller,
   A or Y opens the on-screen keyboard and Start sends. A message that arrives while the tab
   isn't open pops up for 6 s. "Mute in chat" in a player's menu hides their messages (also
   players who are not your friends: find them on Add friend); blocking hides them both ways.
   At most 200 characters a message and 5 messages in 10 s. Messages are not stored: the
   server passes them on to the players online and keeps only the last 200 in memory for its
-  admin. A player in free roam restarts the game to join,
+  admin. Lines that start with `/` are commands for the server, whichever channel you type
+  them in; its answers appear in the chat log. **Car clubs in the Horizon World (#145):**
+  `/club` lists the members of your club who are online and where they are (a Horizon
+  World with its players, a Co-op Festival world, or just online). In Multiplayer, Find
+  Game, Horizon World the server places you in a world with one of them first, when one has
+  room, and in the fullest world as before otherwise. `/club join Gamertag` (or `/club join`
+  for the world with most of them) puts that clubmate's world first for 10 minutes: if you
+  are in a world, leave it, then pick Horizon World again. Your clubmates see that you are
+  online and in which kind of world; blocking a player removes them from both. A player in free roam restarts the game to join,
   as on the console, which takes a few seconds. `live_accept_invites = false` ignores all
   invites. Games up to v0.1.12 invited everyone online and joined every invite at once
   (#90). The party leader then picks Create Custom Game, sets the game
@@ -449,6 +467,19 @@ wheel (the first player's; ...)`. Tested with a virtual vJoy (1234:bead, listed 
 feedback: the base is the wheel; `wheel_device` set to the vJoy makes it the wheel, and as the pedal device it is
 no wheel at all.
 
+**A device the launcher and the game name differently (#562).** The launcher (SDL 2) and the game (SDL 3) can read
+different names for the same device on Windows: a Thrustmaster wheel or pedal set (a TX, a T-LCM) is
+"Thrustmaster TX Racing Wheel" in the launcher and `"44F B669"` in the game, which gets no name for it. A device
+picked by name then matched nothing in the game (the log said `wheel_pedal_device "T-LCM Pedals" is not
+connected`, and the pedals were never read). Bindings now saves the wheel, pedal, shifter and handbrake devices by
+their USB ids (`wheel_pedal_device = 044f:b371`), which both read alike, and rewrites a device saved by its name
+the next time Controls is open with it connected. In the game, a name that matches nothing is also taken for a
+joystick without a name of its own that is a known device of that kind (a T-LCM for the pedal device, a TH8 for
+the shifter, a Thrustmaster wheel for `wheel_device`), and when a configured device is not found the log lists
+every joystick the game sees once (`Wheel: SDL sees N joystick(s)`, then their name, GUID, VID, PID, axes,
+buttons and hats), so a report shows what the game has. Not tested with a real TX and T-LCM: please report them
+with the `Wheel:` lines.
+
 **Analog handbrake (#303).** The game's wheel layouts bind the handbrake to the left stick up and down as well as
 to B (gamedb.slt `WheelLayouts`, as the clutch is on the right stick Y): the Xbox 360 wheel's analog handbrake.
 The game takes the stronger of the two, and a stick direction is analog (0 to 1), so the driver sends a handbrake
@@ -471,13 +502,13 @@ edited by hand:
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `wheel_mode` | `auto` | `auto`: SDL says it is a wheel, or its name looks like one (G29, T300, Fanatec, Moza, ...). `on`: every controller without a gamepad mapping is a wheel. `off`: wheel support off |
-| `wheel_device` | found | The wheel (#306): the first player's, which pedal, shifter and handbrake devices are read with. Empty: one with force feedback first, then one SDL lists as a wheel, then the first; a device name (as Bindings lists it), SDL GUID or `vid:pid` picks one and makes it a wheel (launcher: Use as the wheel) |
+| `wheel_device` | found | The wheel (#306): the first player's, which pedal, shifter and handbrake devices are read with. Empty: one with force feedback first, then one SDL lists as a wheel, then the first; a device name (as Bindings lists it), SDL GUID or `vid:pid` (what Bindings saves) picks one and makes it a wheel (launcher: Use as the wheel) |
 | `wheel_rotation`, `wheel_lock` | 900, 900 | The wheel's rotation as set in its driver, and the travel (lock to lock) that gives the game's full steering. 900/540 makes the steering about 1.7 times quicker |
 | `wheel_deadzone`, `wheel_invert_steering` | 0, off | Steering deadzone (0 to 0.5); swap left and right |
 | `wheel_steer_offset` | 0.05 | Only with `wheel_900_steering` off: compensates an inner steering deadzone (below) |
 | `wheel_pedals` | `auto` | Separate pedals; `combined` is one axis with throttle one way and brake the other |
 | `wheel_invert_throttle`, `wheel_invert_brake` | off | Pedals found backwards |
-| `wheel_pedal_device` | found | Pedals on their own USB device: empty finds a known pedal set or one named like pedals; a device name (as Bindings lists it), SDL GUID or `vid:pid` picks one; `none` reads the wheel's own pedals |
+| `wheel_pedal_device` | found | Pedals on their own USB device: empty finds a known pedal set or one named like pedals; a device name (as Bindings lists it), SDL GUID or `vid:pid` (what Bindings saves) picks one; `none` reads the wheel's own pedals |
 | `wheel_pedal_axes` | by model or detected | Axis numbers on the pedal device, e.g. `throttle=2,brake=1,clutch=0`; a pedal set here reads the pedal device, one set in `wheel_axes` the wheel |
 | `wheel_throttle_curve`, `wheel_brake_curve` | 1.0 | Gamma: 1 linear, above 1 softer at the start |
 | `wheel_axes` | detected | e.g. `steer=0,throttle=2,brake=5,clutch=1`; a number past the wheel's axes (Clear writes 99) unbinds, a negative one means the default. `handbrake=N`: an analog handbrake on the wheel (#303; 99: none, also no handbrake device) |

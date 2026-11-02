@@ -1,11 +1,13 @@
 """Exercise actual SDK staging/cache decisions with fake downloads and disposable files."""
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from forza_launcher import builder as b
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from forza_launcher import builder as b  # noqa: E402
 
 
 HELPER = "lib/cmake/rexglue/rexglue_helpers.cmake"

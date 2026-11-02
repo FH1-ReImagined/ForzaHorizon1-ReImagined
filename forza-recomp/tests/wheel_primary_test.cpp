@@ -73,6 +73,31 @@ int main() {
         "a device that is not there: auto");
   Check(WheelOrder({}, {}, {}, {}, "").empty(), "no joysticks");
   Check(WheelOrder(joys, none, ffb, none, "").empty(), "nothing wheel-like");
+  // #562: wheel_device saved under the launcher's name ("Thrustmaster TX Racing Wheel") while the
+  // game's SDL has no name for the TX ("44F B669"). A name that matches nothing stands for a
+  // wheel-like joystick without a name of its own; a vid:pid or a name that does match wins.
+  const std::vector<JoyInfo> tx_joys = {
+      Joy("Shaul Eizikovich vJoy - Virtual Joystick", 0x1234, 0xBEAD),
+      Joy("44F B669", 0x044F, 0xB669, true),
+      Joy("44F B371", 0x044F, 0xB371)};  // the T-LCM, read as the pedal device
+  const std::vector<bool> tx_like = {true, true, true};
+  const std::vector<bool> tx_aux = {false, false, true};
+  const std::vector<bool> tx_ffb = {false, false, false};
+  Check(WheelOrder(tx_joys, tx_like, tx_ffb, tx_aux, "Thrustmaster TX Racing Wheel") == V{1, 0},
+        "a name no joystick has: the nameless wheel is the wheel, before the vJoy");
+  Check(WheelOrder(tx_joys, tx_like, tx_ffb, tx_aux, "044f:b669") == V{1, 0}, "by vid:pid");
+  Check(WheelOrder(tx_joys, tx_like, tx_ffb, tx_aux, "") == V{1, 0}, "auto: SDL's wheel first");
+  Check(WheelOrder(tx_joys, tx_like, tx_ffb, tx_aux, "vJoy - Virtual")[0] == 0,
+        "a name that matches names the one it matches");
+  Check(WheelOrder(tx_joys, tx_like, tx_ffb, tx_aux, "none") == V{1, 0}, "none is auto");
+  const std::vector<bool> only_vjoy = {true, false, true};
+  Check(WheelOrder(tx_joys, only_vjoy, tx_ffb, tx_aux, "Thrustmaster TX Racing Wheel") == V{0},
+        "a nameless joystick that is no wheel does not stand in");
+  Check(WheelOrder({Joy("Wheel A", 1, 2, true), Joy("Wheel B", 3, 4, true)}, {true, true},
+                   {false, false}, {false, false}, "Wheel C") == V{0, 1},
+        "a name that matches nothing, no nameless wheel: auto");
+  const std::vector<int> scores = WheelDeviceScores(tx_joys, tx_like, tx_aux, "TX Racing Wheel");
+  Check(scores == std::vector<int>{0, 1, 0}, "scores: the nameless wheel, not the pedals");
   std::puts("wheel primary: ok");
   return 0;
 }

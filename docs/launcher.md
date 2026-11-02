@@ -49,8 +49,8 @@ either option is on) and **Texture packs page…** (below). Both default off. Se
 [texture packs](texture_packs.md).
 
 No prebuilt game is ever shipped (the generated C++ is translated game code). The release
-holds only the **launcher**, the project's own sources, the Forza Live server and the patched
-ReXGlue SDK pieces (SDK code, BSD-3-Clause). The launcher builds the game on the player's
+holds only the **launcher**, the project's own sources, the Forza Live server and pieces of
+ReIGlue, the project's fork of the ReXGlue SDK (SDK code, BSD-3-Clause). The launcher builds the game on the player's
 machine from their own copy:
 
 1. **Setup > Game files**: the player's Games on Demand package (`4D5309C9/00007000/<name>`
@@ -344,7 +344,10 @@ held counts only after it is released), gives up after 10 seconds, and Esc cance
   their own USB devices (#272) bind on the wheel's pedal and gear rows: while such a row waits, the editor
   watches every other connected device that is no game controller too (`bindings.merge`, `split`), and a press
   there writes `wheel_pedal_device` / `wheel_pedal_axes` or `wheel_shifter_device` /
-  `wheel_shifter_device_buttons` (`set_aux_binding`). The picker shows them as *pedals* or *shifter, read with
+  `wheel_shifter_device_buttons` (`set_aux_binding`). The device settings hold the device's USB ids
+  (`device_ref`: `0483:0525`), not its name, since the game's SDL 3 can read another name than the launcher's
+  SDL 2 for a Windows device (a Thrustmaster has none there, #562); opening Controls rewrites a device saved by
+  its name (`migrate_device_settings`). The picker shows them as *pedals* or *shifter, read with
   the wheel* (`pick_aux`, the driver's choice ported with its table of known devices). On Linux, devices SDL 2
   leaves out (no X and Y axis) are read from evdev (`evdev_joysticks.py`).
 - **Controllers** write `controller_remap` (SDK patch 0116), a profile per controller model by SDL GUID;
@@ -617,7 +620,7 @@ the measurements: [texture packs](texture_packs.md). Tests: `launcher/test_textu
   must come from the system (`g++`/`libstdc++` dev package: Debian `build-essential`, Fedora
   `gcc-c++`); the launcher tests a C++23 compile and says so if that fails.
 * The SDK: the pinned ReXGlue nightly (`nightly-20261002-bd833a2a`, downloaded from the SDK's
-  release) plus the project's patched plugin, runtime and codegen tool from
+  release) plus ReIGlue's plugin, runtime and codegen tool (the project's fork, built at its pinned commit) from
   `sdk-overlay/rexglue-overlay-<os>-amd64.tar.gz`, which CI builds and the installer carries.
   Redistribution: the SDK is BSD-3-Clause (copyright Tom Clay, portions Xenia); the binary
   form must reproduce the notice, which `licenses/rexglue-sdk.txt` in every package does.
@@ -712,6 +715,12 @@ uses a 0.15 s repeat guard and 0.25 s station fades; Instant uses a 0.075 s guar
 stations. Stream startup and mixing still add latency; TU4 custom test-tone output
 crossed a fixed amplitude threshold after 0.216 and 0.250 s in two observations
 ([measurement and coverage limits](playing.md#running-the-game)).
+Audio > Radio > **Keep radio during races** (`radio_keep_in_events`, off by default)
+restores the chosen stock/custom station or Radio Off at qualified career/Rally
+race-opening music cues. Earlier unqualified intro music retains its native path.
+Restart after changing it. Story/post-race music and native dialogue, effects and
+loading/finish fades retain their behavior
+([scope](playing.md#running-the-game)).
 Gameplay > CPU drivers > **Rubber banding** (`ai_rubber_banding`, Game by default, #433): Off
 races every CPU driver at its own skill wherever you are, in single-player races and free roam;
 online races keep the game's AI ([playing.md](playing.md#running-the-game)).

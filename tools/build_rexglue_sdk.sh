@@ -44,12 +44,13 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # ReIGlue PR #11), and 0407: connect only to an already-loaded RenderDoc (#511,
 # ReIGlue PR #12), and the D3D12 out-of-submission fence HRESULT correction
 # (ReIGlue PR #14), and 0403/0404: racing wheel vibration rate and H-shifter neutral
-# (#467, #468, ReIGlue PR #8), and 0410: first-seen resolve readbacks without a GPU wait
-# (#536, ReIGlue PR #15).
+# (#467, #468, ReIGlue PR #8), and 0409: the startup movies whole with the scene/HUD split
+# at a 1080p output (#539), and 0411: resolves into readback_resolve_wait_range copied back
+# with a GPU wait (photo mode's Big Shot, #552).
 # A reviewed full commit can be pinned before a maintainer publishes a tag.
 # When a tag is supplied, its target must still match this immutable commit.
 REIGLUE_TAG=
-REIGLUE_COMMIT=69ba3b17b13e10c0a1ebdb483b8b834b16b4865e  # ReIGlue #15 (0410), on top of merged #8
+REIGLUE_COMMIT=49359eba78cf7db989d6fc7c3c8b856b42e39788  # merge of #20: 0413 (engine note breaking up), on top of 0412 (#562)
 REIGLUE_URL="${REIGLUE_URL:-https://github.com/FH1-ReImagined/ReIGlue}"
 NIGHTLY="${REXSDK_NIGHTLY:-$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64}"
 SRC="${REXSDK_SRC:-$HOME/rexglue-sdk-src-forza/sdk}"
@@ -163,9 +164,17 @@ apply_series() {
     fi
     rm -f "$patched_index"
 }
+# FFmpeg (the XMA decoder in the runtime): the same for patches/ffmpeg/ (0413: the xmaframes
+# decoder reports each frame's skip fields, which the XMA context needs to drop a wave's
+# warm-up frame). An empty or missing patches/ffmpeg/ leaves the glob as it is and apply_series
+# skips it, so then this only checks the submodule out at its recorded commit; an SDK without
+# the submodule has nothing to patch.
 if [ "${REIGLUE_DEV:-0}" != 1 ]; then
     apply_series "$SRC/thirdparty/sdl3" "$(git -C "$SRC" rev-parse "HEAD:thirdparty/sdl3")" SDL \
         "$SRC"/patches/sdl3/*.patch
+    if ffmpeg_commit="$(git -C "$SRC" rev-parse --verify --quiet "HEAD:thirdparty/FFmpeg")"; then
+        apply_series "$SRC/thirdparty/FFmpeg" "$ffmpeg_commit" FFmpeg "$SRC"/patches/ffmpeg/*.patch
+    fi
 fi
 [ "$SOURCE_ONLY" = 0 ] || exit 0
 

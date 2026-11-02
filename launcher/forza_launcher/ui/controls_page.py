@@ -284,8 +284,8 @@ class ControlsPage(QWidget):
         content.addWidget(self.xbox_status)
         content.addWidget(label('Uses LT brake and RT throttle in the default driving layout. '
                                 'Normal game rumble stays independent. Trigger vibration stops '
-                                'when driving telemetry stops. ABS, traction and road effects '
-                                'are not mapped yet.', 'help'))
+                                'when driving telemetry stops. Updated game builds use engine RPM, '
+                                'ABS and tire slip; older builds use trigger pressure.', 'help'))
         layout.addWidget(frame)
         self.xbox_enabled.toggled.connect(self.save_haptics)
         self.haptics_timer = QTimer(self)

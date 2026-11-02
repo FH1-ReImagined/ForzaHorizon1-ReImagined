@@ -1,6 +1,6 @@
 // Standalone: c++ -std=c++17 tools/test_lsp_request_header.cpp -o test_lsp_request_header
-// The friends key line added to the game's title server requests, and the nonblocking stream
-// that sends them (forza-recomp/src/kernel/lsp_request_header.h).
+// The header lines added to the game's title server requests once each is complete, and the
+// nonblocking stream that sends them (forza-recomp/src/kernel/lsp_request_header.h).
 #include "../forza-recomp/src/kernel/lsp_request_header.h"
 
 #include <chrono>
@@ -18,7 +18,12 @@
 #define CHECK(x) do { if (!(x)) { std::fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #x); std::exit(1); } } while (false)
 
 namespace {
-const std::string kLine = "X-Friends-Key: 000102030405060708090A0B0C0D0E0F\r\n";
+const std::string kLine = "X-Forza-Auth: FORZA-ED25519-V1 Signature=00\r\n";
+
+// The lines for a request: kLine, unless the request already has the header.
+std::string Lines(const std::string& head, const std::string&) {
+  return forza::LspRequestHeader::Has(head, "x-forza-auth") ? std::string() : kLine;
+}
 
 std::string Feed(forza::LspRequestHeader& h, const std::string& s) {
   return h.Feed(reinterpret_cast<const uint8_t*>(s.data()), s.size());
@@ -80,68 +85,105 @@ void GuestSend(forza::LspTitleStream& stream, Send& send, const std::string& dat
 
 int main() {
   {  // one call: head and body together, then a second request on the kept-alive connection
-    forza::LspRequestHeader h(kLine);
+    forza::LspRequestHeader h(Lines);
     const std::string body("\0\1\r\n\r\nbody bytes that look like a head", 39);
     CHECK(Feed(h, Request(body)) == Expected(body));
     CHECK(Feed(h, Request("x")) == Expected("x"));
     CHECK(h.Pending() == 0);
   }
-  {  // byte by byte: nothing goes out before the head is complete
-    forza::LspRequestHeader h(kLine);
+  {  // byte by byte: nothing goes out before the request is complete
+    forza::LspRequestHeader h(Lines);
     const std::string req = Request("abc");
-    const size_t head = req.find("\r\n\r\n") + 4;
     std::string out;
     for (size_t i = 0; i < req.size(); ++i) {
       out += Feed(h, req.substr(i, 1));
-      if (i + 1 < head) CHECK(out.empty());
+      if (i + 1 < req.size()) CHECK(out.empty() && h.Pending() == i + 1);
     }
-    CHECK(out == Expected("abc"));
+    CHECK(out == Expected("abc") && h.Pending() == 0);
+  }
+  {  // the build line (#517) goes in next to the signature, and is not added to a request that has one
+    CHECK(forza::LspRequestHeader::BuildLine(Request("a"), "0.2.1", 4) == "X-Forza-Build: 0.2.1/tu4\r\n");
+    CHECK(forza::LspRequestHeader::BuildLine(Request("a"), "git-908ea56c5b", 0) ==
+          "X-Forza-Build: git-908ea56c5b/tu0\r\n");
+    CHECK(forza::LspRequestHeader::BuildLine(Request("a", "x-forza-build: other/tu4\r\n"), "0.2.1", 4).empty());
+    forza::LspRequestHeader h([](const std::string& head, const std::string& body) {
+      return forza::LspRequestHeader::BuildLine(head, "0.2.1", 4) + Lines(head, body);
+    });
+    std::string want = Request("abc");
+    want.insert(want.find("\r\n\r\n") + 2, "X-Forza-Build: 0.2.1/tu4\r\n" + kLine);
+    CHECK(Feed(h, Request("abc")) == want);
+    // a head that names its build keeps that one and gets the signature only
+    std::string named = Request("abc", "X-Forza-Build: other/tu4\r\n");
+    std::string want_named = named;
+    want_named.insert(want_named.find("\r\n\r\n") + 2, kLine);
+    CHECK(Feed(h, named) == want_named);
+  }
+  {  // the lines see the whole head and body
+    std::string seen_head, seen_body;
+    forza::LspRequestHeader h([&](const std::string& head, const std::string& body) {
+      seen_head = head;
+      seen_body = body;
+      return kLine;
+    });
+    const std::string body("x\0y\r\n\r\nz", 8);
+    CHECK(Feed(h, Request(body)) == Expected(body));
+    CHECK(seen_head + seen_body == Request(body) && seen_body == body);
+  }
+  {  // a body over kMaxBody passes through unsigned
+    forza::LspRequestHeader h(Lines);
+    const std::string head = "POST /big HTTP/1.1\r\nContent-Length: " +
+                             std::to_string(forza::LspRequestHeader::kMaxBody + 1) + "\r\n\r\n";
+    CHECK(Feed(h, head + "abc") == head + "abc");
+    CHECK(h.Pending() == 0);
   }
   {  // the head split across calls, body and the next head in one buffer
-    forza::LspRequestHeader h(kLine);
+    forza::LspRequestHeader h(Lines);
     const std::string two = Request("12345") + Request("");
     std::string out = Feed(h, two.substr(0, 30));
     CHECK(out.empty() && h.Pending() == 30);
     out += Feed(h, two.substr(30));
     CHECK(out == Expected("12345") + Expected(""));
+    CHECK(h.Pending() == 0);
   }
   {  // a request that already has the header keeps its own
-    forza::LspRequestHeader h(kLine);
-    const std::string req = Request("z", "x-friends-key: FFFF\r\n");
+    forza::LspRequestHeader h(Lines);
+    const std::string req = Request("z", "x-forza-auth: FFFF\r\n");
     CHECK(Feed(h, req) == req);
   }
   {  // no Content-Length: a request without a body
-    forza::LspRequestHeader h(kLine);
+    forza::LspRequestHeader h(Lines);
     const std::string get = "GET /status HTTP/1.1\r\nHost: forza\r\n\r\n";
     std::string want = get;
     want.insert(want.size() - 2, kLine);
     CHECK(Feed(h, get + get) == want + want);
   }
   {  // not HTTP: a head that never ends is passed through after kMaxHead bytes
-    forza::LspRequestHeader h(kLine);
+    forza::LspRequestHeader h(Lines);
     const std::string junk(forza::LspRequestHeader::kMaxHead + 10, 'j');
     CHECK(Feed(h, junk) == junk);
     CHECK(Feed(h, "more\r\n\r\n") == "more\r\n\r\n");
   }
   {  // a full socket: the game's bytes are taken all or none, the stream goes out once
-    forza::LspTitleStream stream(kLine);
+    forza::LspTitleStream stream(Lines);
     FakeSocket sock;
     std::string body(200000, '\0');
     for (size_t i = 0; i < body.size(); ++i) body[i] = char(i * 7);
-    const std::string two = Request(body) + Request("tail");
+    // the second request's sends wait while the first one goes out
+    const std::string three = Request(body) + Request(body) + Request("tail");
     size_t blocked = 0, max_pending = 0;
-    GuestSend(stream, sock, two, 4096, [&] { ++blocked; sock.Drain(); }, &max_pending);
+    GuestSend(stream, sock, three, 4096, [&] { ++blocked; sock.Drain(); }, &max_pending);
     while (stream.Pending()) {
       CHECK(stream.Flush(sock) == forza::LspTitleStream::kWouldBlock);
       sock.Drain();
       if (stream.Flush(sock) == 0) break;
     }
-    CHECK(sock.wire == Expected(body) + Expected("tail"));
+    CHECK(sock.wire == Expected(body) + Expected(body) + Expected("tail"));
     CHECK(blocked > 100);
-    CHECK(max_pending <= 4096 + kLine.size());  // one send's worth, no more
+    // a request goes out once complete: at most the first request, then one send's worth
+    CHECK(max_pending <= Expected(body).size() + 4096);
   }
   {  // a socket that fails after taking bytes: those are not taken twice, the error follows
-    forza::LspTitleStream stream(kLine);
+    forza::LspTitleStream stream(Lines);
     FakeSocket sock;
     sock.room = 10;
     const std::string req = Request("abc");
@@ -171,15 +213,17 @@ int main() {
       ssize_t n;
       while ((n = ::recv(sv[1], buf, sizeof(buf), 0)) > 0) received.append(buf, size_t(n));
     };
-    forza::LspTitleStream stream(kLine);
+    forza::LspTitleStream stream(Lines);
     std::string body(1 << 20, 'b');
     const std::string req = Request(body) + Request("second");
-    // the peer reads nothing at first: the stream fills the socket, then says "would block"
+    // the peer reads nothing at first: the stream holds the first request until it is
+    // complete, fills the socket with it, then says "would block"
     int64_t took = 0;
     size_t at = 0, blocked = 0;
-    while (blocked == 0) {
+    while (blocked == 0 && at < req.size()) {
       const auto t0 = std::chrono::steady_clock::now();
-      took = stream.Send(reinterpret_cast<const uint8_t*>(req.data()) + at, 4096, send);
+      took = stream.Send(reinterpret_cast<const uint8_t*>(req.data()) + at,
+                         std::min<size_t>(4096, req.size() - at), send);
       CHECK(std::chrono::steady_clock::now() - t0 < std::chrono::milliseconds(50));
       if (took == forza::LspTitleStream::kWouldBlock) ++blocked;
       else at += size_t(took);

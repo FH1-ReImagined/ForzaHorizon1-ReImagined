@@ -85,6 +85,14 @@ and 60 fps only make it slower. Cutscene audio that does not match the picture c
 `GPU minute` line a minute and a `GPU slow frames` line for each slow stretch, with the cause; Steam's
 performance overlay at level 4 shows the CPU and GPU load.
 
+**Experimental switches (off by default, not yet tried on a Deck).** Two options of the GPU emulation aim at the thread the
+frame waits for: `--vulkan_present_on_submission_thread=true` (the swap no longer waits for the frame's replay; +15 %
+fps uncapped on four desktop cores with the Deck preset, nothing at the 30 fps cap) and `--linux_thread_cores=auto`
+(Pinyon Shift's thread placement for a Deck's four cores with SMT; it did not help on four cores without SMT). To try
+them, add them under Settings, Advanced, extra arguments, run the built-in benchmark with and without and report the
+numbers in [#559](https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/issues/559); the measurements and what is
+still untested are in [perf.md](perf.md#steam-deck-ideas-from-pinyon-shift-559-476-475-474).
+
 ## Controls
 
 The Deck's controls are an Xbox pad for the game and the launcher (Steam Input; pick a **Gamepad** layout

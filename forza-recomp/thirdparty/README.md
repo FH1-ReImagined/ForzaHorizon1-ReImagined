@@ -10,6 +10,12 @@ local copies without downloading dependencies.
 | `bc7enc_rdo` | `forza-texcompress` (texture packs, #413) | [richgel999/bc7enc_rdo@b9438627eef73a1157e84201b6fa6eb2ffd6d9f0](https://github.com/richgel999/bc7enc_rdo/tree/b9438627eef73a1157e84201b6fa6eb2ffd6d9f0) | `bbb33d1dbb6178a3a2c044956c3cc0b8ea9fc2f2903824379dd86f87d53b64c6` |
 | `openxr` (`include/openxr/openxr.h`, `openxr_platform.h`, `openxr_platform_defines.h`) | VR setting (`src/platform/xr.cpp`; the loader is opened at run time, not linked) | [KhronosGroup/OpenXR-SDK release-1.1.62](https://github.com/KhronosGroup/OpenXR-SDK/tree/release-1.1.62) | `dcc7c89b6af5d0364447debfe1b0437713bcedd0e8c0c2819c75ec6f546b393d` |
 
+Not vendored: `src/kernel/ed25519.h` (Ed25519 signing and SHA-512 for signed requests to the
+Forza Live server, #515) is this project's code in the formulation of TweetNaCl (Bernstein et
+al., public domain), checked against the RFC 8032 vectors by `tools/test_live_signing.cpp`. The
+launcher's `forza_launcher/ed25519.py` and the server's `forza_ed25519.py` derive from RFC 8032's
+reference code (Simplified BSD License, `launcher/forza_launcher/RFC8032-LICENSE.txt`).
+
 The hashes refer to the upstream `codeload.github.com/<owner>/<repo>/tar.gz/<revision>`
 archives. Verify them before updating the vendored files. Keep upstream license
 notices: `discord-rpc/LICENSE`, `rapidjson/license.txt`, `bc7enc_rdo/LICENSE` and `openxr/LICENSE-*.txt`

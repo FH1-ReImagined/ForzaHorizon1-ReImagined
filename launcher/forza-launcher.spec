@@ -64,6 +64,8 @@ for name in ("change_car", "tune_car", "garage", "autoshow", "social_friends", "
     datas.append((str(repo / "tools" / "native_menu" / "icons" / (name + ".xds")), "tools/native_menu/icons"))
 for name in ("ATTRIBUTION.md", "FONT-AWESOME-LICENSE.txt"):
     datas.append((str(repo / "tools" / "native_menu" / "icons" / name), "tools/native_menu/icons"))
+# The licence of the RFC 8032 code forza_launcher/ed25519.py is derived from (#515).
+datas.append((str(root / "forza_launcher" / "RFC8032-LICENSE.txt"), "forza_launcher"))
 # The shipped pipeline list (hashes and render state only).
 datas.append((str(root / "forza_launcher" / "data" / "pipelines-4D5309C9.json"), "forza_launcher/data"))
 # The known-good DLC files (sizes and SHA-1 only, forza_launcher/dlccheck.py, #422).

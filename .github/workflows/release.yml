@@ -112,6 +112,11 @@ jobs:
           g++ -std=c++20 -O2 -I forza-recomp/src/kernel forza-recomp/tests/gamertag_text_test.cpp -o "$RUNNER_TEMP/gamertag-test"
           "$RUNNER_TEMP/gamertag-test"
       - if: runner.os == 'Linux'
+        name: Content manifest text
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src/kernel forza-recomp/tests/content_manifest_test.cpp -o "$RUNNER_TEMP/content-manifest-test"
+          "$RUNNER_TEMP/content-manifest-test"
+      - if: runner.os == 'Linux'
         name: On-screen keyboard
         run: |
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src/kernel forza-recomp/tests/osk_test.cpp -o "$RUNNER_TEMP/osk-test"
@@ -146,6 +151,11 @@ jobs:
         run: |
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src tools/test_lsp_request_header.cpp -o "$RUNNER_TEMP/lsp-request-header-test"
           "$RUNNER_TEMP/lsp-request-header-test"
+      - if: runner.os == 'Linux'
+        name: Signed requests to the Forza Live server
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src tools/test_live_signing.cpp -o "$RUNNER_TEMP/live-signing-test"
+          "$RUNNER_TEMP/live-signing-test"
       - if: runner.os == 'Linux'
         name: Effective startup performance settings
         run: |
@@ -217,6 +227,12 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+      - name: Test scoped event radio wrappers (disc and TU4)
+        run: |
+          cmake -S forza-recomp/tests/radio-events -B "$RUNNER_TEMP/radio-events" -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$RUNNER_TEMP/radio-events" --config Release --parallel 1
+          ctest --test-dir "$RUNNER_TEMP/radio-events" -C Release --output-on-failure
+
       - name: Test Linux dependency retry handling
         run: python3 -m unittest launcher/test_ci_linux_sdk_setup.py
       - id: cache
