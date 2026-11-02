@@ -310,6 +310,30 @@ int main() {
         // and Tick reacquires and shifts the new live rows once. Repeat the
         // actual open/hide/back/layout lifecycle rather than manually restoring.
         if (extras == 2) {
+          // Rows listed before their scene nodes exist (+0x2C is 0) are waited for, not read
+          // through: that read is guest address 4. Plant a row-like object there, which
+          // a read through the missing node would shift the title by.
+          {
+            RestoreTitle(memory.data());
+            const auto saved = memory;
+            const uint32_t first_row = Read(memory.data(), 0x4A00),
+                           second_row = Read(memory.data(), 0x4A04);
+            Write(memory.data(), 4, 0x7100);
+            Position(0x7100 + 0xB0, 50);
+            title_layout_pending = true;
+            for (auto row : {first_row, second_row}) {
+              const auto node = Read(memory.data(), row + 0x2C);
+              Write(memory.data(), row + 0x2C, 0);
+              Tick(ctx, memory.data());
+              Check(title_layout_pending && title_offsets.empty(),
+                    "Tick waits for a row without a scene node");
+              Write(memory.data(), row + 0x2C, node);
+            }
+            Write(memory.data(), 4, 0);
+            Write(memory.data(), 0x7100 + 0xB0, 0);
+            Check(memory == saved, "waiting for a row's node moves nothing");
+            title_layout_pending = false;
+          }
           for (unsigned repeat = 0; repeat < 10; ++repeat) {
             showing_rows = true;
             PauseRows(ui, memory.data(), true);

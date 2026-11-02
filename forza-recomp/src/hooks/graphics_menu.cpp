@@ -1119,8 +1119,12 @@ void Tick(PPCContext& ctx, uint8_t* base) {
         // instance transform moves text, tape and hit geometry together.
         // Use rendered row spacing, not a pixel constant, so the offset also
         // scales with native HUD output.
-        const auto first_object = Read(base, Read(base, first + 0x2C) + 4);
-        const auto second_object = Read(base, Read(base, second + 0x2C) + 4);
+        // A row listed before its scene node exists has none (+0x2C is 0): reading
+        // through it would read guest address 4. Tick runs every frame; wait for it.
+        const auto first_node = Read(base, first + 0x2C);
+        const auto second_node = Read(base, second + 0x2C);
+        const auto first_object = first_node ? Read(base, first_node + 4) : 0;
+        const auto second_object = second_node ? Read(base, second_node + 4) : 0;
         const float spacing = first_object && second_object
             ? std::bit_cast<float>(Read(base, first_object + 0xB0)) -
               std::bit_cast<float>(Read(base, second_object + 0xB0)) : 0;
