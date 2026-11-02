@@ -70,6 +70,22 @@ Why this trigger:
 - The server logs every decision (`match #id 'name' playlist 3: 1 open session(s), first
   <session> from #host (1/8)` or `no open session, it hosts`), and its status page lists
   each player's published session (`match`: playlist, players, slots).
+- Car clubs (#145, `server/forza_club_world.py`): the server cannot move a game that is
+  already in a world; it only orders the answer to a search. For a player in a car club the
+  open worlds with one of its online clubmates come first (the one with the most clubmates,
+  then the fullest as above); the line then ends `, N clubmate(s) in it`. A full world is
+  not offered whoever is in it, and a player without a club, or without a clubmate in an
+  open world, is placed as before. `/club join [gamertag]` (a chat command in any channel)
+  puts one clubmate's world first for 10 minutes. This was chosen over a "join my club's
+  world" button because the game's own Join Game (friends screen) needs a presence-joinable
+  session and a Find Game world is not one (`social_presence.h`), and over a forced move
+  because there is none: the player opens Find Game > Horizon World again. Only the
+  Horizon World playlist is ordered; the Co-op Festival keeps its friends-only placement.
+  Tested with one TU4 game and three scripted players on a local server: the game (in club
+  TST) searched with a 5/8 world of a player outside the club and a 2/8 world of a clubmate
+  open, and was offered the clubmate's first; `/club` listed the clubmates and where they
+  were, and the Club channel carried messages both ways between the game and the club's
+  members only.
 
 ### Joining a world in progress: drop-in (`src/hooks/world_drop_in.cpp`)
 

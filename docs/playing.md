@@ -126,14 +126,23 @@ tools/run_forza.sh 120        # a two-minute test run; logs in ${XDG_RUNTIME_DIR
   **Text chat (#92):** `F9` (`live_chat_key`) opens the friends screen on its **Chat** tab
   (with a controller: hold the left stick press, then LB to Chat; a friend's "Send a
   message" goes there too). Up/Down picks where the message goes: **Session** (the players
-  in your party or game session), **Horizon World** (the players in your world), or a
-  friend online (a direct message; only friends). Type and press Enter; with a controller,
+  in your party or game session), **Horizon World** (the players in your world), **Club**
+  (shown when you are in a car club, #145: the members of your club who are online, wherever
+  they are), or a friend online (a direct message; only friends). Type and press Enter; with a controller,
   A or Y opens the on-screen keyboard and Start sends. A message that arrives while the tab
   isn't open pops up for 6 s. "Mute in chat" in a player's menu hides their messages (also
   players who are not your friends: find them on Add friend); blocking hides them both ways.
   At most 200 characters a message and 5 messages in 10 s. Messages are not stored: the
   server passes them on to the players online and keeps only the last 200 in memory for its
-  admin. A player in free roam restarts the game to join,
+  admin. Lines that start with `/` are commands for the server, whichever channel you type
+  them in; its answers appear in the chat log. **Car clubs in the Horizon World (#145):**
+  `/club` lists the members of your club who are online and where they are (a Horizon
+  World with its players, a Co-op Festival world, or just online). In Multiplayer, Find
+  Game, Horizon World the server places you in a world with one of them first, when one has
+  room, and in the fullest world as before otherwise. `/club join Gamertag` (or `/club join`
+  for the world with most of them) puts that clubmate's world first for 10 minutes: if you
+  are in a world, leave it, then pick Horizon World again. Your clubmates see that you are
+  online and in which kind of world; blocking a player removes them from both. A player in free roam restarts the game to join,
   as on the console, which takes a few seconds. `live_accept_invites = false` ignores all
   invites. Games up to v0.1.12 invited everyone online and joined every invite at once
   (#90). The party leader then picks Create Custom Game, sets the game

@@ -2,7 +2,7 @@
 
 This policy covers Forza Horizon 1: ReImagined: the Windows installer, the Linux packages, the launcher, the game the launcher builds on your PC, and the project's public Forza Live server. It says what is sent over the network, when, where it goes, what is stored and for how long, what is public, and how to turn each thing off.
 
-Last updated: 2026-11-01. Every change to this policy is a change to this file, so its history on GitHub lists them: https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/commits/main/PRIVACY.md
+Last updated: 2026-11-02. Every change to this policy is a change to this file, so its history on GitHub lists them: https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/commits/main/PRIVACY.md
 
 ## In short
 
@@ -101,7 +101,7 @@ While "Sign in to Xbox LIVE" is on (the default), the game also:
 - publishes your presence: your online status, your current car and the session you host;
 - sends your matchmaking searches and the sessions you host, and Xbox LIVE skill stats around online races;
 - syncs your friends list every 10 seconds, and sends the friend requests, blocks and gamertag searches you make;
-- sends the chat messages you write, and the list of sessions you are in;
+- sends the chat messages you write, and the list of sessions you are in, and asks the server every 10 seconds which car club you are in;
 - in Horizon World free roam, sends your car's in-game position, heading and speed four times a second, for head-to-head challenges (Settings > Online > "Head-to-head challenges" turns this off);
 - sends an invite only when you send one ("Show game invites" controls whether invites from others are shown to you);
 - uses the server's title services over plain HTTP: sign-in (gamertag and career level), profile progress (XP, credits, race history), race scores and lap times, Rivals ghost replays, photos you upload or share (image, preview, title, description), photo mode Big Shots you upload (a 3840x2160 picture and its file name), paint jobs and vinyl groups you share on the storefront (the design, its preview, title, description and keywords, and the car it is for), car clubs and the cars shared in them, auctions and gifts, and Message Center checks. Each of these requests carries your XUID and a signature made with your signing key (not the key itself).
@@ -165,12 +165,12 @@ Records are kept by XUID.
 - Photos you upload: image, preview, title, description and time, up to 100 per player. You can remove shared photos in the game, and the oldest can be replaced. No time limit.
 - Community photos (Big Shots), only from games that sign their requests: a 1920x1080 copy of the picture, with your gamertag at the time, the upload time and your XUID (kept private, to apply limits and bans). The 3840x2160 original is not kept. Up to 10 a day and 200 in total per player. The copy is kept until the maintainer removes it; to have a photo removed, see "Contact". New photos may be checked automatically for nudity, violence or hate symbols before they are published; that check runs on the server and sends the picture nowhere else.
 - Shared designs (paint jobs and vinyl groups): the design, its preview, title, description, keywords, car, share code, your XUID (private) and gamertag, the time, its downloads and ratings, and which players reported it. Up to 25 of each kind per player. The design itself contains your XUID, so it is only given to players who download it in the game, never published elsewhere. You can remove a design in the game (REMOVE in MY SHARED DESIGNS); a design reported by three players is hidden. No time limit.
-- Car clubs, auctions and gifts: club memberships, roles and history, shared cars, auction listings and bids, and gifts with their messages. No time limit.
+- Car clubs, auctions and gifts: club memberships, roles and history, shared cars, auction listings and bids, and gifts with their messages. No time limit. The server uses your club membership to deliver your Club chat messages, to show your clubmates (by gamertag, with `/club`) that you are online and, in the same room, whether you are in a Horizon World or Co-op Festival world and how many players it has, and to offer you a Horizon World with a clubmate first when you search. Players who have blocked each other don't see each other this way.
 - Message Center notifications: removed when you clear them. After 30 days they are no longer shown, but they are not deleted.
 - Co-op campaign results: removed once they are handled, or after 30 days.
 - Shader lists: see "Shader-list sharing" above.
 - Community events, only if an organizer enrolled you: your XUID, your public key (or a hash of your friends key), attendance times and rewards. No time limit.
-- Chat: the last 200 messages are held in memory, where only the server's administrator can read them. They are lost when the server restarts and are not written to disk. Mutes and bans set by the administrator are stored until they expire.
+- Chat: the last 200 messages are held in memory, where only the server's administrator can read them. A message to your car club (the Club channel) goes to every member of your club who is online, wherever they are, and is held the same way, with the club's tag. They are lost when the server restarts and are not written to disk. Mutes and bans set by the administrator are stored until they expire.
 - Connection state: for the players online at that moment, the server writes their addresses and ports, session token, XUID, gamertag, room and presence to a file every 30 seconds, so that a restart does not drop them. The file is overwritten, not deleted.
 - Backups: the server may keep one previous copy of each of its data files.
 - Server log: the log records sign-ins (gamertag, XUID, room and the address and ports the player connected from), web requests with the address they came from, profile and race updates, scores, friend and block actions, and gift messages. Chat text is not logged. For players who come through the playit.gg tunnel, the log records the address the tunnel reports for them, which is their own. The log is not published. There is no fixed period after which it is deleted yet.
