@@ -963,6 +963,7 @@ class Session:
         # Never inherit another launcher's telemetry destination or session token.
         env.pop('FORZA_TELEMETRY_PORT', None)
         env.pop('FORZA_TELEMETRY_TOKEN', None)
+        env.pop('FORZA_TELEMETRY_PHYSICS', None)
         from .haptics.service import HapticsService, supported, supports_xbox
         wanted = plan.haptics_settings.get('enabled') or plan.haptics_settings.get('xbox_enabled')
         if not wanted and self.haptics:
