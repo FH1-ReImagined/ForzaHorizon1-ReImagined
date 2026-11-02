@@ -1000,3 +1000,65 @@ and the database's `Tracks` has 0 and 10 for the world's track 1101.
   (an old client with the new server was not tested).
 - `server/test_forza_round_options.py`: the world's round says -1 in the three places, the
   Races rounds 255.
+
+## A car the other game lacks (#567, checked 2026-11-02)
+
+Report (0.2.3, public server, Title Update 4 and DLC, a public custom King game with six
+players): the king and the others stayed ghosted for the reporter for the whole round (they
+could not be seen or hit; one player was seen only when he hit the crown), and it was gone in the
+next game. The reporter had the FM4 pack, UDLC v1.2, the UDLC Traffic Car Unlocker and the FH1 Rally
+Freeroam Unlocker; one player lacked the Traffic Car Unlocker and tried to pick the bus ("i cannot
+select it"), another ran custom wheels. The reporter's log (`forza.log`, the last session, 20:36
+to 20:54 on 1 November) shows a player hosting 6 of 8 slots, one player leaving 70 s after the
+round started, and nothing about cars: the game said nothing about what it did with a car.
+
+**What UDLC and the unlocker are.** Community DLC packages from ModDB (UDLC v1.2: the Forza
+Horizon 2 and Fast & Furious cars of the Xbox 360 releases; the Traffic Car Unlocker needs UDLC and
+makes the traffic cars selectable in the Autoshow; FM4 Imported / "FM4 Reimagined": 446 FM4
+cars). The reporter's log lists 18 DLC packages, 13 with the offers of `docs/dlc.md` and five (729,
+732, 737, 3060, 3061, all `_pri_99`) that are not Microsoft's. None of them is a game-folder
+mod; the `Mods:` lines list only the launcher's radio mod. Their files were not read (not
+downloadable here, and not run).
+
+**The traffic cars are in everyone's game.** Data_Car has them (`BUS_TOUR_12`, `FOR_TaurusSHO_10`,
+`VW_Beetle_04`, ... 33 rows with `IsSelectable=0`, the Tour Bus among them) and their folders are
+in `media/cars` (without the files of a player car: `CarAttribs.xml`, `ColorShaderSettings*.xml`,
+`car_skeleton_LOD05.gr2`, the interior, for the bus and others). An unlocker only has to make them
+selectable.
+
+**What the game does with a car it cannot build** (traced; TU4 addresses in brackets). A car's
+description is built from its id by `sub_82570358` [`sub_825E61B8`]: it queries
+`SELECT * FROM Data_Car WHERE Id=%d` and, with no row, calls `sub_824C3C98` [`sub_82531BE0`], which
+makes it `NUL_Car_00` (Data_Car id 1215, 0x4BF): the car id is replaced, the original kept at +0x2C8
+and the flag +0x2C5 set (a vehicle of the car list keeps the description at +0x2E50, the flag at
++0x3115). The stand-in is a plain black model without paint. The lobby names such a car "DLC Car"
+(`IDS_DLCCar`).
+
+Two games on a local server (`FORZA_SERVER`, a King game, golden save copies, the second game
+with a mod that replaces its `gamedb.slt`; tools in the scratch notes, not in the repository):
+
+| The second game | What it showed of the first game's car (Nissan GT-R R34, id 445) |
+| --- | --- |
+| no row for car 445 | the lobby: "DLC Car"; the race: the black stand-in, solid and driven (car list: id 1215, flag 1); its own car (a rental, picked by the game) normal |
+| the row, but its `MediaName` has no folder | the stand-in for both its own and the remote car (ids 1215, flag 1); the race ran |
+| the Tour Bus selectable on the first game only (a mod flips `IsSelectable`/`IsRentable`) | the bus, normal, in the lobby and the race (the second game did not have the unlock) |
+| the remote car's stock wheel row missing (the second game's own car another one) | the remote car normal |
+| its own car's stock wheel row missing | grey world with the HUD only, its car's position NaN (the same picture as the first screenshot of #567); not seen as a remote car |
+
+So a missing or unknown car is handled by the game and is **not** what ghosts a player here, and a
+traffic car is not special to a game without the unlocker. A ghosted remote car was not
+reproduced: it needs a failure these cases do not make (the reporter's packs were not at hand). What
+the log lacked is now logged: `Cars: car N is not in this game's database or its files are missing:
+the placeholder car ... is used` (`src/hooks/car_placeholder.cpp`, once per car id), so a
+report says which cars a game could not show.
+
+**First step of mod sync (#152).** The game tells the server what it has that changes which cars
+exist: the offers of the installed DLC packages and the names of the loaded mods that have files
+under `media/db`, `media/cars` or `media/wheels` (a radio or text mod is not listed), as text
+(`dlc=729,732;mods=A,B`, `src/kernel/content_manifest.h`) in chat op 4 at sign-in and every 30 s.
+The server (`forza_chat.py`, `test_forza_content.py`) compares the manifests of the players of
+one session (a Horizon World excepted) and tells each side once what they do not share: "X has
+Traffic unlocker that you do not: their car may look like a plain placeholder to you" and "Y does not
+have Traffic unlocker: your car may look like a plain placeholder to them". Nothing is stored; a
+server without op 4 ignores it. Tests: `tests/content_manifest_test.cpp`, the server's tests and two
+games with different mods (below).

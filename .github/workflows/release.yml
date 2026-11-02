@@ -112,6 +112,11 @@ jobs:
           g++ -std=c++20 -O2 -I forza-recomp/src/kernel forza-recomp/tests/gamertag_text_test.cpp -o "$RUNNER_TEMP/gamertag-test"
           "$RUNNER_TEMP/gamertag-test"
       - if: runner.os == 'Linux'
+        name: Content manifest text
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src/kernel forza-recomp/tests/content_manifest_test.cpp -o "$RUNNER_TEMP/content-manifest-test"
+          "$RUNNER_TEMP/content-manifest-test"
+      - if: runner.os == 'Linux'
         name: On-screen keyboard
         run: |
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src/kernel forza-recomp/tests/osk_test.cpp -o "$RUNNER_TEMP/osk-test"

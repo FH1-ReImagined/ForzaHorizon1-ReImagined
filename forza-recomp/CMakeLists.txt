@@ -179,11 +179,13 @@ set(FORZA_SOURCES
     src/hooks/custom_race.cpp
     src/hooks/smashables_lookup.cpp
     src/hooks/challenge_hud.cpp
+    src/hooks/car_placeholder.cpp
     src/hooks/lobby_buckets.cpp
     src/hooks/world_drop_in.cpp
     src/hooks/world_events.cpp
     src/hooks/telemetry.cpp
     src/hooks/discord_details.cpp
+    src/kernel/content_manifest.cpp
     src/kernel/critical_section.cpp
     src/kernel/file_delete_on_close.cpp
     src/kernel/file_size_refresh.cpp

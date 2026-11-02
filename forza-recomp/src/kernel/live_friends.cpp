@@ -78,7 +78,7 @@ constexpr int64_t kSearchDelayMs = 300; // typing pauses this long before a serv
 constexpr size_t kRows = 8;
 constexpr size_t kMaxSearch = 15 * 3;
 // Chat (server/forza_chat.py).
-constexpr uint8_t kChatSessions = 1, kChatSay = 2, kChatMute = 3, kChatClub = 4;
+constexpr uint8_t kChatSessions = 1, kChatSay = 2, kChatMute = 3, kChatClub = 4, kChatContent = 5;
 constexpr uint8_t kChatRMessage = 16, kChatRNotice = 17, kChatRMuted = 18, kChatRClubTag = 19;
 // Where a message goes (the server's channel numbers); 0 in the log: a line from the server.
 constexpr uint8_t kToSession = 1, kToWorld = 2, kToDirect = 3, kToClub = 4;
@@ -162,6 +162,7 @@ std::vector<uint64_t> sessions_sent;
 int64_t next_sessions = 0;
 std::string club_tag;  // the car club the server says we are in (CLUBTAG), empty: none
 int64_t next_club = 0;
+int64_t next_content = 0;  // the content manifest (op 5, #567): at sign-in and every 30 s
 
 // --- the screen (game thread) ---
 enum Tab { kFriends, kRequests, kAdd, kBlocked, kChat, kTabs };
@@ -784,6 +785,17 @@ void LiveFriendsTick() {
      // Club channel, and says when the tag changes)
     std::lock_guard<std::mutex> lock(mutex);
     if (now >= next_club && LiveSendChat({kChatClub})) next_club = now + kClubSyncMs;
+  }
+  {
+    // The content manifest, so the server can tell the players of a session what they do not
+    // share (server/forza_chat.py op 5; a server without it ignores the message, #567).
+    std::lock_guard<std::mutex> lock(mutex);
+    if (next_sessions != 0 && now >= next_content) {
+      const std::string text = CurrentContentManifest();
+      std::vector<uint8_t> body{kChatContent, uint8_t(text.size() >> 8), uint8_t(text.size())};
+      body.insert(body.end(), text.begin(), text.end());
+      if (LiveSendChat(body)) next_content = now + 30000;
+    }
   }
   if (now < next_list) return;
   uint32_t v;

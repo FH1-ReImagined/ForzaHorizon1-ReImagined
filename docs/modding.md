@@ -208,7 +208,12 @@ archives of the game or a full copy of `gamedb.slt` that you did not change.
   starts. Do not edit a mod while the game runs: a file that changes size reads as zeros past its
   new end (and `forza.log` says so).
 - **Online play does not check mods.** In a session, players with different mods may see
-  different things.
+  different things. A car one game lacks (a car pack, a car unlocker or a database mod the
+  other player does not have) shows as a plain black placeholder car there, and its lobby entry
+  says "DLC Car". Your game tells the server which DLC packs and which car or database mods it
+  has (not your other mods), and the server tells the players of a session what they do not share
+  in a chat notice; `forza.log` has a `Cars:` line for each car it showed as the placeholder
+  (#567; [`docs/online_vision.md`](online_vision.md), "A car the other game lacks").
 - **Your own work only.** Never share the game's original files or whole archives.
 - The archive holds at most 4 GB and 65,534 files in all; at most 64 mod files are open at once,
   the others are opened again when the game reads them.
