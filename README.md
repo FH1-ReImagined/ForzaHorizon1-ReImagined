@@ -5,13 +5,13 @@
 <h1 align="center">Forza Horizon 1: ReImagined</h1>
 
 <p align="center">
-  <b>The original 2012 Forza Horizon, native on Windows and Linux, and online again.</b>
+  <b>The original 2012 Forza Horizon, recompiled to run natively on Windows and Linux, and online again.</b>
 </p>
 
 <p align="center">
   The official online services closed on 22 August 2023
   (<a href="https://forza.net/news/forza-horizon-online-services-closure">Turn 10's notice</a>).
-  ReImagined runs the Xbox 360 game natively on your PC and brings online play back through a public server,
+  ReImagined is a static recompilation (recomp) of the Xbox 360 game: it runs natively on your PC and brings online play back through a public server,
   or one you host yourself. You bring your own copy; no game code or data is included.
 </p>
 
