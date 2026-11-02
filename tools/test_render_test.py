@@ -2,7 +2,10 @@
 
 Run: python3 -m unittest discover -s tools -p test_render_test.py
 """
+import os
 import random
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -94,6 +97,23 @@ class HelperTests(unittest.TestCase):
         m = rt.mask_image((640, 360), [[0, 0, 640, 360]])
         self.assertEqual(m.getpixel((319, 179)), 0)
         self.assertEqual(m.getpixel((320, 180)), 255)
+
+    def test_default_folders_work_when_home_is_a_symlink(self):
+        # /home is a symlink to var/home on some systems; plain_path refuses paths through one.
+        with tempfile.TemporaryDirectory() as t:
+            real = Path(t).resolve() / "real"
+            real.mkdir()
+            (Path(t).resolve() / "link").symlink_to(real)
+            code = ("import render_test as rt; "
+                    "print(rt.plain_path(rt.DEFAULT_BASELINES)); print(rt.plain_path(rt.DEFAULT_WORK)); "
+                    "print(rt.plain_path(rt.default_sdk()))")
+            env = {**os.environ, "HOME": str(Path(t).resolve() / "link"), "XDG_CACHE_HOME": "",
+                   "FORZA_RENDER_BASELINES": "", "FORZA_RENDER_WORK": "",
+                   "PYTHONPATH": str(Path(rt.__file__).resolve().parent)}
+            r = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            for line in r.stdout.split():
+                self.assertTrue(Path(line).is_relative_to(real), line)
 
     def test_scenes_file(self):
         cfg = rt.load_cfg()
