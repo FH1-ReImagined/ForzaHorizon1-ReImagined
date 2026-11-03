@@ -65,6 +65,13 @@ it never changes clock settings. Opening the setup guide opens GitHub in your br
 - What: after each session on "Public server" or "My own server", the launcher asks the server for your pending co-op campaign results, then confirms the ones it handled. It does this only when you have a save and a Forza Live identity on this PC. These requests carry your XUID and a signature made with your signing key (not the key itself) over plain HTTP. The answer can include the gamertag of the player who hosted the event.
 - Turn off: Settings > Online > "Co-op campaign results". "Offline" and "This PC" also stop it.
 
+### Servers page (only when you open it)
+
+- What: an HTTP request to each server on the page for its status page (`/status`: whether it is up and how many players are online), to show the server's ping, and a request to the public server for its signed list of community servers (`/servers.json`). They contain nothing about you; each server sees your IP address, and the User-Agent header names the launcher.
+- When: when you open the launcher's Servers page, then every 30 seconds while the page stays open. Nothing is sent when the page is closed.
+- Where: the public server, the servers on its list, and the addresses you added on the page. Community servers are run by their owners, not by this project.
+- Turn off: do not open the page. With "Online features" off, the page sends nothing until you click "Check servers".
+
 ### Downloads
 
 Each of these downloads shows the site it comes from your IP address, and its User-Agent header names the launcher. Nothing else about you is sent. Unless noted, the launcher checks each file against a SHA-256 checksum kept in its own code. None of them is part of the "Online features" choice: they run only when you start the action named, or, for DLSS, when you press Play.

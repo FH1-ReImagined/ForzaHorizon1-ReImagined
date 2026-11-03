@@ -751,7 +751,14 @@ and keeps `--present_effect=fsr` as the presenter filter and fallback (`fsr3.py`
 when it is on). See [Rendering issues](rendering.md#temporal-upscaling-with-amd-fsr-3-51-2026-10-16).
 Online: public (`forza-reimagined.playit.plus:56677`, written as `live_server` and `FORZA_SERVER`),
 local (the launcher starts the Forza Live server inside its own executable, or reuses one
-on port 21201, like `play.sh`), your own, or offline. The Xenia save logic is `play.sh --xenia`
+on port 21201, like `play.sh`), your own, or offline. The **Servers** page (#587,
+`server_list.py`, `ui/servers_page.py`) picks among them: the main server first, then the servers of
+the main server's signed list (`/servers.json`, taken only when the list key the launcher ships
+signed it and it has not expired), This PC, and addresses added by hand. It pings each server's
+`/status` (players online, round trip, up or down) in a background thread when the page opens and
+every 30 s while it stays open; a server that does not answer shows as down and stays listed. Using a
+server sets the same Online mode and "My own server" address as Settings > Online. With "Online
+features" off, only the page's "Check servers" button checks them. The Xenia save logic is `play.sh --xenia`
 ported (copy once, `--user_data_root/--cache_root/--profile_xuid`, DLC folder shared).
 The DLC is shared into the Xenia copy (`xenia-<XUID>/0000000000000000`) with a link, a junction
 on Windows, checked at every Play (issues #65, #70): a link to another folder is relinked, a real
