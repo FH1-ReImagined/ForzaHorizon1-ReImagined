@@ -1,0 +1,104 @@
+Draw log for the carbin runtime checks (docs/modding/carbin-format.md, "How the runtime checks
+were made"). A change to ReIGlue, the project's SDK fork (the GPU plugin), against the revision
+tools/build_rexglue_sdk.sh pins (REIGLUE_COMMIT 949141169ddae6bd2a3f41c7230dae08567c4c39).
+Apply it to a ReIGlue checkout (git apply), rebuild the plugin, run with the variables below.
+Off unless set:
+
+  FORZA_DRAW_TEXTURES=<file>      one line per new (pixel shader, bound textures) combination:
+                                  ps <hash> vs <hash> t<slot>=<fingerprint>:<w>x<h>:f<format>:d<dim>
+                                  (the fingerprint is the texture pack's: also pass --texture_dump=true)
+  FORZA_DRAW_VS_CONSTS=<hash>     adds that vertex shader's float constants, first 16 draws
+
+diff --git a/include/rex/graphics/pipeline/texture/cache.h b/include/rex/graphics/pipeline/texture/cache.h
+index 6b253ab..7f816d4 100644
+--- a/include/rex/graphics/pipeline/texture/cache.h
++++ b/include/rex/graphics/pipeline/texture/cache.h
+@@ -134,6 +134,20 @@ class TextureCache {
+       else fh1_full_raster_pages_[page >> 6] &= ~(UINT64_C(1) << (page & 63));
+     }
+   }
++  // FH1 (carbin runtime check): the texture bound to a fetch constant as of the latest
++  // RequestTextures, for FORZA_DRAW_TEXTURES: false if none; the pack fingerprint is 0 when the
++  // texture was not fingerprinted (texture_dump or texture_replace off, GPU-written, ...).
++  bool Fh1BoundTextureInfo(uint32_t index, uint64_t& fingerprint, uint32_t& width, uint32_t& height,
++                           uint32_t& format, uint32_t& dimension) const {
++    const auto* binding = GetValidTextureBinding(index);
++    if (!binding || !binding->texture) return false;
++    fingerprint = binding->texture->pack_state().fingerprint;
++    width = binding->key.GetWidth();
++    height = binding->key.GetHeight();
++    format = uint32_t(binding->key.format);
++    dimension = uint32_t(binding->key.dimension);
++    return true;
++  }
+   bool IsActiveFh1FullRasterTexture(uint32_t index) const {
+     if (!IsActiveFh1ScreenTexture(index)) return false;
+     const uint32_t page = GetValidTextureBinding(index)->texture->key().base_page;
+diff --git a/src/graphics/vulkan/command_processor.cpp b/src/graphics/vulkan/command_processor.cpp
+index 52a3be4..c4690b1 100644
+--- a/src/graphics/vulkan/command_processor.cpp
++++ b/src/graphics/vulkan/command_processor.cpp
+@@ -26,6 +26,7 @@
+ #include <unordered_map>
+ #include <mutex>
+ #include <string>
++#include <unordered_set>
+ #include <string_view>
+ #include <thread>
+ #include <tuple>
+@@ -7025,6 +7026,55 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t
+       (pixel_shader != nullptr ? pixel_shader->GetUsedTextureMaskAfterTranslation() : 0);
+   texture_cache_->RequestTextures(used_texture_mask);
+ 
++  // FH1 (carbin runtime check): FORZA_DRAW_TEXTURES=<file> writes one line for each new
++  // (pixel shader, bound textures) combination: the pixel shader's microcode hash and, for each
++  // texture fetch slot it uses, the bound texture's pack fingerprint (set with texture_dump or
++  // texture_replace). Off unless the variable is set.
++  {
++    static const char* draw_textures_path = std::getenv("FORZA_DRAW_TEXTURES");
++    if (draw_textures_path && *draw_textures_path && pixel_shader) {
++      static FILE* draw_textures_file = std::fopen(draw_textures_path, "a");
++      static std::unordered_set<std::string> draw_textures_seen;
++      if (draw_textures_file) {
++        std::string line = fmt::format("ps {:016X} vs {:016X}", pixel_shader->ucode_data_hash(),
++                                       vertex_shader->ucode_data_hash());
++        for (const auto& tb : pixel_shader->GetTextureBindingsAfterTranslation()) {
++          uint64_t fp = 0;
++          uint32_t w = 0, h = 0, f = 0, d = 0;
++          if (texture_cache_->Fh1BoundTextureInfo(tb.fetch_constant, fp, w, h, f, d)) {
++            line += fmt::format(" t{}={:016X}:{}x{}:f{}:d{}", tb.fetch_constant, fp, w, h, f, d);
++          } else {
++            line += fmt::format(" t{}=none", tb.fetch_constant);
++          }
++        }
++        if (draw_textures_seen.insert(line).second) {
++          std::fprintf(draw_textures_file, "%s\n", line.c_str());
++          std::fflush(draw_textures_file);
++        }
++      }
++    }
++    // FORZA_DRAW_VS_CONSTS=<vertex shader hash, 16 hex digits> adds the float constants the
++    // shader reads (the registers in its constant map) for its first 16 draws, after the line
++    // above: the car shaders' damage scales and transforms.
++    static const char* vs_hash_text = std::getenv("FORZA_DRAW_VS_CONSTS");
++    static const uint64_t vs_wanted = vs_hash_text ? std::strtoull(vs_hash_text, nullptr, 16) : 0;
++    static uint32_t vs_logged = 0;
++    if (vs_wanted && vs_logged < 16 && vertex_shader->ucode_data_hash() == vs_wanted &&
++        draw_textures_path && *draw_textures_path) {
++      if (FILE* f = std::fopen(draw_textures_path, "a")) {
++        std::fprintf(f, "consts vs %016llX draw %u\n", (unsigned long long)vs_wanted, vs_logged++);
++        const auto& map = vertex_shader->constant_register_map();
++        for (uint32_t i = 0; i < 256; ++i) {
++          if (!((map.float_bitmap[i >> 6] >> (i & 63)) & 1)) continue;
++          float v[4];
++          std::memcpy(v, &regs[XE_GPU_REG_SHADER_CONSTANT_000_X + i * 4], sizeof(v));
++          std::fprintf(f, "  c%u = %.9g %.9g %.9g %.9g\n", i, v[0], v[1], v[2], v[3]);
++        }
++        std::fclose(f);
++      }
++    }
++  }
++
+ 
+   if (fh1_dlss_ && pixel_shader && pixel_shader->ucode_data_hash() == 0xE68FE55ECD482EC5ull) {
+     std::array<float, 136 * 4> constants;
