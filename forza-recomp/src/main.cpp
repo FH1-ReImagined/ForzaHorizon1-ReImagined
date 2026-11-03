@@ -116,6 +116,17 @@ void ApplyForzaGpuCvarDefaults() {
   // need and costs nothing in a race; "fast" copies every resolve every frame and cost
   // 16-21% of the frame rate at 144 (docs/perf.md).
   SetSdkCvarDefault("readback_resolve", "some");
+#if !defined(__APPLE__)
+  // Vulkan: the swap no longer waits for the submission thread to replay the frame; the
+  // presenter's step after the swap runs on that thread behind the frame (ReIGlue 0414, #476).
+  // The command processor, the thread the frame waits for, sat idle about 1 ms a frame there
+  // (docs/perf.md, #607). Not with a VR headset: in the emulated headset the game's part of the
+  // latency grew by about 5 ms at the same frame rate. Not tested on macOS (MoltenVK). forza.toml
+  // or the command line can still set it either way.
+  if (rex::cvar::GetFlagByName("vr_mode") == "off") {
+    SetSdkCvarDefault("vulkan_present_on_submission_thread", "true");
+  }
+#endif
 }
 
 void LogForzaPerformanceSettings() {
