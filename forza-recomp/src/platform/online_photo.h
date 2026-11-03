@@ -9,9 +9,10 @@
 // src/hooks/online_photo.cpp has the details; docs/playing.md the player's side.
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
-#include <rex/ppc/context.h>
+struct PPCContext;  // rex/ppc/context.h; a declaration, so SDK-free test builds include this
 
 namespace forza::online_photo {
 
