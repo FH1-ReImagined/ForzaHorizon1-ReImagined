@@ -830,7 +830,8 @@ class SettingsPage(QWidget):
                                           "rivals. You forward no ports."),
             ("local", "This PC", "Starts a Forza Live server just for this session (127.0.0.1:21200). "
                                   "Online features work, but only you are in it."),
-            ("custom", "My own server", "A server you or a friend host (forza-live's docs/hosting.md on GitHub)."),
+            ("custom", "My own server", "A server you or a friend host (forza-live's docs/hosting.md on GitHub). "
+                                      "The Servers page lists community servers and checks which are up."),
             ("offline", "Offline", "No Xbox LIVE and no server."),
         ]
         self.radios = {}
@@ -854,6 +855,15 @@ class SettingsPage(QWidget):
                         keywords="public local offline Xbox LIVE Forza Live")
         self.search.add("Custom server address", "Online", "Server", self.custom,
                         keywords="host port custom_server")
+
+    def sync_server(self):
+        """Show the server the Servers page picked (#587)."""
+        mode = self.cfg.online["mode"]
+        if self.custom.text().strip() != self.cfg.online.get("custom_server", ""):
+            self.custom.setText(self.cfg.online.get("custom_server", ""))
+        if mode in self.radios and not self.radios[mode].isChecked():
+            self.radios[mode].setChecked(True)
+        self.custom.setEnabled(mode == "custom")
 
     def _set_mode(self, mode):
         self.cfg.online["mode"] = mode

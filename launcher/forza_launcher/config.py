@@ -34,7 +34,8 @@ def _default():
         "dlc_dir": "",            # folder of DLC packages (4D5309C9/00000002)
         "game_root": "",          # an already extracted folder to use instead of data/game
         "dlc_installed": 0,
-        "online": {"mode": "public", "custom_server": ""},
+        # The server Play uses, and the addresses added by hand on the Servers page (#587).
+        "online": {"mode": "public", "custom_server": "", "added_servers": []},
         "profile": {"mode": "own", "xenia_content": "", "xenia_xuid": ""},
         "advanced": {"game_dir": "", "data_root": "", "extra_args": "", "extra_env": "",
                      "extras_toml": "", "pad_per_user": False,

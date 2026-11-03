@@ -148,6 +148,12 @@ class NavigationTests(unittest.TestCase):
             p = patch(name)
             p.start()
             self.addCleanup(p.stop)
+        # The Servers page checks the servers when it opens: never the real ones from a test.
+        for name, value in (("forza_launcher.server_list.fetch_list", []),
+                            ("forza_launcher.server_list.ping_all", {})):
+            p = patch(name, return_value=value)
+            p.start()
+            self.addCleanup(p.stop)
         p = patch("forza_launcher.paths.config_dir", return_value=Path(self.temp.name))
         p.start()
         self.addCleanup(p.stop)
