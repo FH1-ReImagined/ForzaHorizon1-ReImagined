@@ -2,6 +2,7 @@
 // page geometry and controller. No second game's assets or translated code.
 // tu_address_map: TU4 addresses
 #include "../platform/native_pause_scene.h"
+#include "../platform/online_photo.h"
 #include "../platform/native_quit.h"
 #include "../platform/guest_addr.h"
 #if FORZA_TU4 && defined(FORZA_NATIVE_PAUSE)
@@ -329,7 +330,8 @@ std::string Description(std::string_view id, bool enabled) {
   if (id == "garage") return "Fast travel for car upgrades";
   if (id == "autoshow") return "Fast travel to buy cars";
   if (id == "settings") return "Audio, graphics, controls and difficulty";
-  if (id == "photo_mode") return "Capture your Horizon";
+  if (id == "photo_mode") return forza::online_photo::Active() ?
+      "Online photo: one frame,\nthe session keeps running" : "Capture your Horizon";
   if (id == "car_tuning") return "Adjust your current car setup";
   if (id == "my_profile") return "Your Horizon career";
   if (id == "difficulty") return "Driving assists and difficulty";

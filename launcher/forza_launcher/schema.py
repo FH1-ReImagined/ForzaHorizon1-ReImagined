@@ -588,6 +588,11 @@ add("world_events", "Horizon World events", "Online", "bool", True,
     "The world's host takes the events the server starts.", "Horizon World")
 add("world_challenges", "Head-to-head challenges", "Online", "bool", True,
     "Challenge another player's car in the world.", "Horizon World")
+add("forza_online_photo", "Online photo", "Online", "bool", False,
+    "ONLINE PHOTO in the pause menu of Horizon World free roam and online lobbies: the game's "
+    "photo camera while the session keeps running. Other cars keep moving; yours takes no input "
+    "until you leave. A photo is the frame on screen when you take it (no depth of field, no "
+    "Big Shot) and is saved like any other photo. Title Update 4.", "Horizon World")
 add("world_event_wait_seconds", "Event lobby wait (s)", "Online", "int", 30,
     "How long the wait lobby before an event lasts.", "Horizon World", lo=0, hi=600)
 add("world_event_cpu_with_peers", "AI drivers in multi-player world events", "Online", "bool",

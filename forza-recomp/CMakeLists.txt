@@ -172,6 +172,7 @@ set(FORZA_SOURCES
     src/hooks/resource_cache_eviction.cpp
     src/hooks/resource_stream_trace.cpp
     src/hooks/bigshot_readback.cpp
+    src/hooks/online_photo.cpp
     src/hooks/thumbnail_sync.cpp
     src/hooks/world_challenge.cpp
     src/hooks/ambient_leaderboard.cpp
