@@ -21,7 +21,9 @@ work gets in. The details live in `docs/` (start with `docs/PROJECT.md`).
 1. **Pick or open an issue.** Issues are the backlog. Labels: `priority: 1` (highest) to
    `priority: 5`, `WIP` + a `[WIP] ` title prefix + an assignee while someone works on it,
    and `nvidia` / `amd` for GPU-specific problems. Comment on an issue before you start so
-   work isn't done twice.
+   work isn't done twice. **Bugs come before features**: before starting a feature, take the
+   open `priority: 1` and `priority: 2` bugs assigned to you, and answer players waiting on a
+   reply on your issues ([AGENTS.md](AGENTS.md) has the order).
 2. **Branch from `main`** (`fix/...`, `feature/...`) and open a pull request to `main`.
    Direct pushes, force pushes and deleting `main` are blocked.
 3. **A PR needs:** one approving review from the code owner, resolved review threads,
