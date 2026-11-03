@@ -43,7 +43,8 @@ elseif(REGPU_GUEST_ABI STREQUAL "rexglue")
 else()
     message(FATAL_ERROR "REGPU_GUEST_ABI must be xenonrecomp or rexglue")
 endif()
-if(NOT EXISTS "${REGPU_FFX}/upscalers/fsr3/include/gpu/fsr1/ffx_fsr1.h")
+set(REGPU_FSR1_CS "" CACHE FILEPATH "A pre-built fsr1_cs.h (tools/embed_hlsl.py's output): no fxc, py or FidelityFX headers at build time")
+if(NOT REGPU_FSR1_CS AND NOT EXISTS "${REGPU_FFX}/upscalers/fsr3/include/gpu/fsr1/ffx_fsr1.h")
     message(FATAL_ERROR "Set REGPU_FFX to the FidelityFX SDK's Kits/FidelityFX folder (FSR1 shaders)")
 endif()
 
@@ -58,10 +59,16 @@ endif()
 # The FSR1, depth copy, gamma and enhance compute shaders, compiled into a header at build time.
 set(REGPU_GENERATED "${CMAKE_CURRENT_BINARY_DIR}/generated")
 file(MAKE_DIRECTORY "${REGPU_GENERATED}")
+if(REGPU_FSR1_CS)
+    add_custom_command(OUTPUT "${REGPU_GENERATED}/fsr1_cs.h"
+        COMMAND ${CMAKE_COMMAND} -E copy "${REGPU_FSR1_CS}" "${REGPU_GENERATED}/fsr1_cs.h"
+        DEPENDS "${REGPU_FSR1_CS}")
+else()
 add_custom_command(OUTPUT "${REGPU_GENERATED}/fsr1_cs.h"
     COMMAND py -3 -I "${CMAKE_CURRENT_SOURCE_DIR}/tools/embed_hlsl.py" "${CMAKE_CURRENT_SOURCE_DIR}/src/gpu/fsr1.hlsl" "${REGPU_GENERATED}/fsr1_cs.h"
             EasuMain,RcasMain,DepthCopyMain,GammaMain,EnhanceMain "${REGPU_FFX}/api/internal/gpu" "${REGPU_FFX}/upscalers/fsr3/include/gpu/fsr1"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/gpu/fsr1.hlsl" "${CMAKE_CURRENT_SOURCE_DIR}/tools/embed_hlsl.py")
+endif()
 list(APPEND REGPU_SOURCES "${REGPU_GENERATED}/fsr1_cs.h")
 
 add_library(regpu STATIC ${REGPU_SOURCES})

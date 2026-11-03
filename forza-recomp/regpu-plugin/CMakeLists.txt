@@ -26,6 +26,14 @@ endif()
 set(REGPU_GUEST_ABI rexglue CACHE STRING "" FORCE)
 set(REGPU_REXGLUE_DIR "${_regpu_sdk}" CACHE PATH "" FORCE)
 set(REGPU_FFX "${CMAKE_CURRENT_SOURCE_DIR}/../thirdparty/fidelityfx-fsr1" CACHE PATH "" FORCE) # FSR 1 shader headers
+# FSR 1 and ReGPU's other compute shaders as bytecode, pre-built (embed_hlsl.py, fxc 10.0.26100), so the
+# build needs no fxc or py. FORZA_REGPU_FSR1_FROM_SOURCE=ON compiles them again from fidelityfx-fsr1.
+option(FORZA_REGPU_FSR1_FROM_SOURCE "Compile ReGPU's FSR 1 shaders with fxc instead of the shipped bytecode" OFF)
+if(FORZA_REGPU_FSR1_FROM_SOURCE)
+    set(REGPU_FSR1_CS "" CACHE FILEPATH "" FORCE)
+else()
+    set(REGPU_FSR1_CS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fsr1_cs.h" CACHE FILEPATH "" FORCE)
+endif()
 add_subdirectory("${_regpu_src}" regpu)
 target_compile_options(regpu PRIVATE ${_regpu_pgo_compile})
 

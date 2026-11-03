@@ -269,9 +269,10 @@ endif()
 rexglue_setup_target(forza GPU_PLUGINS xenos)
 
 # ReGPU's Direct3D 12 renderer as a GPU plugin beside forza.exe (--gpu_plugin=regpu), Windows only.
-# Off by default: it needs py -3 and fxc (Windows SDK) at build time, which cross builds lack.
+# Off by default until it is built and tested in the release builds. Its shaders ship pre-built, so it needs
+# no fxc or py (FORZA_REGPU_FSR1_FROM_SOURCE=ON compiles them again).
 if(WIN32)
-    option(FORZA_REGPU_PLUGIN "Build the ReGPU GPU plugin (rexgpu-regpu.dll; needs py -3 and fxc)" OFF)
+    option(FORZA_REGPU_PLUGIN "Build the ReGPU GPU plugin (rexgpu-regpu.dll)" OFF)
     if(FORZA_REGPU_PLUGIN)
         add_subdirectory(regpu-plugin)
     endif()

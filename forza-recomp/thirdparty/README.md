@@ -12,7 +12,7 @@ local copies without downloading dependencies.
 
 `ReGPU` (Direct3D 12 Xbox 360 GPU, MIT, `ReGPU/LICENSE`) is the `rexglue-driver` branch of
 [zer0ducksgiven/ReGPU](https://github.com/zer0ducksgiven/ReGPU) at `f1edab4`, as tracked files
-(`git archive`), unchanged. It is built only into the Windows GPU plugin `rexgpu-regpu.dll`
+(`git archive`), with one build option added (`REGPU_FSR1_CS`: a pre-built FSR 1 shader header, so no fxc or py at build time). It is built only into the Windows GPU plugin `rexgpu-regpu.dll`
 (`regpu-plugin/`, `--gpu_plugin=regpu`); its license is copied to `licenses/ReGPU.txt`.
 `fidelityfx-fsr1` holds only the FSR 1 shader headers ReGPU compiles into its upscaler (fxc at build
 time), unchanged, from [GPUOpen-LibrariesAndSDKs/FidelityFX-SDK v2.0.0](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/tree/v2.0.0)
