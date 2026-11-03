@@ -10,6 +10,23 @@ local copies without downloading dependencies.
 | `bc7enc_rdo` | `forza-texcompress` (texture packs, #413) | [richgel999/bc7enc_rdo@b9438627eef73a1157e84201b6fa6eb2ffd6d9f0](https://github.com/richgel999/bc7enc_rdo/tree/b9438627eef73a1157e84201b6fa6eb2ffd6d9f0) | `bbb33d1dbb6178a3a2c044956c3cc0b8ea9fc2f2903824379dd86f87d53b64c6` |
 | `openxr` (`include/openxr/openxr.h`, `openxr_platform.h`, `openxr_platform_defines.h`) | VR setting (`src/platform/xr.cpp`; the loader is opened at run time, not linked) | [KhronosGroup/OpenXR-SDK release-1.1.62](https://github.com/KhronosGroup/OpenXR-SDK/tree/release-1.1.62) | `dcc7c89b6af5d0364447debfe1b0437713bcedd0e8c0c2819c75ec6f546b393d` |
 
+`ReGPU` is not vendored: it is a git submodule (`git submodule update --init forza-recomp/thirdparty/ReGPU`),
+pinned to the `fh1` branch of the project's fork of Scott's (zer0ducksgiven) ReGPU:
+
+| Directory | Used by | Pinned revision | License |
+| --- | --- | --- | --- |
+| `ReGPU` | the optional Windows GPU plugin `rexgpu-regpu.dll` (`regpu-plugin/`, `FORZA_REGPU_PLUGIN`, `--gpu_plugin=regpu`) | [FH1-ReImagined/ReGPU@f4a685bf2dc45fbbb22f5eaebdb37963781627bc](https://github.com/FH1-ReImagined/ReGPU/tree/f4a685bf2dc45fbbb22f5eaebdb37963781627bc) (`fh1`: upstream [zer0ducksgiven/ReGPU](https://github.com/zer0ducksgiven/ReGPU)@561d0ae plus FH1's changes) | MIT (`ReGPU/LICENSE`, copied to `licenses/ReGPU.txt`) |
+
+It is built only into the plugin. The launcher's source bundle carries it on Windows only, and only the
+files its CMake needs (`builder.source_files`), not its notes or developer tools.
+
+`fidelityfx-fsr1` holds only the FSR 1 shader headers ReGPU compiles into its upscaler (with fxc, when
+`FORZA_REGPU_FSR1_FROM_SOURCE` is on; otherwise `regpu-plugin/shaders/fsr1_cs.h` is used), unchanged, from [GPUOpen-LibrariesAndSDKs/FidelityFX-SDK v2.0.0](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/tree/v2.0.0)
+(`f4c1da8e`): `api/internal/gpu/ffx_*.h` without `ffx_core_cpu.h`, and
+`upscalers/fsr3/include/gpu/fsr1/ffx_fsr1.h`. MIT; `LICENSE.txt` is the notice from their headers.
+Source archive SHA-256 (`codeload.github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/tar.gz/f4c1da8e92f3fe563b5c28c44e6267ce6b6b8eb2`):
+`021313c076baf922982db0166de94024e82f9daf9eb578b4a34c75c8ec650a5f`.
+
 Not vendored: `src/kernel/ed25519.h` (Ed25519 signing and SHA-512 for signed requests to the
 Forza Live server, #515) is this project's code in the formulation of TweetNaCl (Bernstein et
 al., public domain), checked against the RFC 8032 vectors by `tools/test_live_signing.cpp`. The

@@ -421,6 +421,11 @@ void Snapshot() {
                                {"fsr3_balanced", "FSR 3 Balanced"},
                                {"fsr3_performance", "FSR 3 Performance"}});
   }
+  // The ReGPU plugin's own upscaler (Glue2GPU).
+  if (rex::cvar::GetFlagByName("gpu_plugin") == "regpu")
+    modes.insert(modes.end(), {{"fsr1_quality", "FSR 1 Quality"},
+                               {"fsr1_balanced", "FSR 1 Balanced"},
+                               {"fsr1_performance", "FSR 1 Performance"}});
   for (auto &setting : settings) {
     if (setting.key == "preset" || setting.key == "anti_aliasing") continue;
     setting.value = rex::cvar::GetFlagByName(setting.cvar);
@@ -749,8 +754,9 @@ bool Relevant(size_t i) {
 #endif
   if (i == 2) return BackendMode() == "off";
   if (i == kAntiAliasing) return settings[1].value == "off";
-  // The occlusion is a pass of the Vulkan renderer (SDK patch 0350).
-  if (i == kAmbientOcclusion) return rex::cvar::GetFlagByName("gpu_backend") != "d3d12";
+  // The occlusion is a pass of the Vulkan renderer (SDK patch 0350) and of the ReGPU plugin.
+  if (i == kAmbientOcclusion) return rex::cvar::GetFlagByName("gpu_backend") != "d3d12" ||
+                                     rex::cvar::GetFlagByName("gpu_plugin") == "regpu";
   if (i == 6) return rex::cvar::GetFlagByName("forza_ultrawide") == "true" ||
                      rex::cvar::GetFlagByName("forza_hud_layout") == "true";
   return true;
@@ -1219,8 +1225,11 @@ void Tick(PPCContext& ctx, uint8_t* base) {
       success = CommitSettings();
       completed = true;
       message = success ? "Settings saved." : "Applied, but could not save settings.";
-    } else if (rex::cvar::GetFlagByName("gpu_backend") != "vulkan" ||
+    } else if ((rex::cvar::GetFlagByName("gpu_backend") != "vulkan" &&
+                rex::cvar::GetFlagByName("gpu_plugin") != "regpu") ||
                !rex::cvar::GetFlagInfo("fh1_graphics_request")) {
+      // Only Vulkan and the ReGPU plugin answer it: rexgpu-xenos.dll registers the flag on
+      // Direct3D 12 too, where nothing would answer.
       completed = true;
       message = "Live graphics requires the updated Vulkan renderer.";
     } else {

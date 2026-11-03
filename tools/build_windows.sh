@@ -92,6 +92,10 @@ fi
 [ "$STEP" = --sdk-only ] && exit 0
 
 # 2. The game.
+# ReGPU (the optional plugin, FORZA_REGPU_PLUGIN) is a git submodule (FH1-ReImagined/ReGPU).
+if [ ! -f "$ROOT/forza-recomp/thirdparty/ReGPU/CMakeLists.txt" ] && [ -e "$ROOT/.git" ]; then
+    git -C "$ROOT" submodule update --init forza-recomp/thirdparty/ReGPU
+fi
 BUILD="$ROOT/forza-recomp/out/build/windows"
 cmake -S "$ROOT/forza-recomp" -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_TOOLCHAIN_FILE="$ROOT/tools/cmake/windows-clang-cl.cmake" \
@@ -105,6 +109,12 @@ rm -rf "$DIST"
 mkdir -p "$DIST/licenses"
 cp "$BUILD"/forza.exe "$BUILD"/forza_*.dll "$DIST/"
 cp "$BUILD/forza-telemetry.json" "$DIST/"
+if [ -f "$BUILD/rexgpu-regpu.dll" ]; then  # ReGPU plugin (--gpu_plugin=regpu)
+    cp "$BUILD/rexgpu-regpu.dll" "$DIST/"
+    [ -f "$BUILD/d3dcompiler_47.dll" ] && cp "$BUILD/d3dcompiler_47.dll" "$DIST/"  # Wine and Proton lack it
+    cp "$ROOT/forza-recomp/thirdparty/ReGPU/LICENSE" "$DIST/licenses/ReGPU.txt"
+    cp "$ROOT/forza-recomp/thirdparty/fidelityfx-fsr1/LICENSE.txt" "$DIST/licenses/AMD-FidelityFX-FSR1.txt"
+fi
 for dll in "$PREFIX"/bin/*.dll; do
     case "$(basename "$dll")" in
         *d.dll | *rd.dll) ;;  # debug and RelWithDebInfo variants

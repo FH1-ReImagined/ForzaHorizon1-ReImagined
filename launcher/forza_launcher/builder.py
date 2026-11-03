@@ -106,7 +106,7 @@ def runtime_dir(root: Path) -> Path:
     return root / "runtime"
 
 
-EXCLUDE_DIRS = {"out", "__pycache__"}
+EXCLUDE_DIRS = {"out", "__pycache__", ".git"}
 # Original preparation source only; no generated tuning assets are distributed.
 NATIVE_TUNING_FILES = ("native_tuning_assets.py",)
 
@@ -118,15 +118,33 @@ NATIVE_MENU_FILES = ("native_menu_scene.py", "offline_cars_flow.py", "lzx_delta.
                        ("change_car", "tune_car", "garage", "autoshow", "social_friends", "social_world", "social_game", "social_requests", "social_chat", "social_connection")))
 
 
-def source_files(proj: Path):
+# ReGPU (the thirdparty/ReGPU submodule, FH1-ReImagined/ReGPU) is built only into the Windows GPU plugin
+# (FORZA_REGPU_PLUGIN): other platforms get none of it, and Windows only what its CMakeLists.txt reads
+# (its two EXCLUDE_FROM_ALL check programs' sources included), not its notes or developer tools.
+REGPU_DIR = Path("thirdparty") / "ReGPU"
+REGPU_FILES = ("CMakeLists.txt", "LICENSE", "README.md", "tests/linkcheck.cpp", "tools/embed_hlsl.py",
+               "tools/xenos_dis.cpp")
+REGPU_DIRS = ("include", "src")
+
+
+def _regpu_file(rel: Path) -> bool:
+    inner = rel.relative_to(REGPU_DIR)
+    return inner.as_posix() in REGPU_FILES or inner.parts[0] in REGPU_DIRS
+
+
+def source_files(proj: Path, windows: bool = IS_WIN):
     """The project files the build uses: forza-recomp minus generated code and output."""
     base = proj / "forza-recomp"
     for dirpath, dirs, files in os.walk(base):
         rel = Path(dirpath).relative_to(base)
         dirs[:] = sorted(d for d in dirs if d not in EXCLUDE_DIRS and
-                         not (rel == Path(".") and d.startswith("generated")))
+                         not (rel == Path(".") and d.startswith("generated")) and
+                         not (not windows and rel / d == REGPU_DIR))
+        in_regpu = rel == REGPU_DIR or REGPU_DIR in rel.parents
         for f in sorted(files):
-            if f.endswith((".pyc", ".log")):
+            if f.endswith((".pyc", ".log")) or f == ".git":  # (.git: a submodule's link to its repository)
+                continue
+            if in_regpu and not _regpu_file(rel / f):
                 continue
             yield rel / f
     if (base / "generated" / "rexglue.cmake").is_file():
@@ -1185,7 +1203,10 @@ def stage_runtime(opts: Options, rep: Reporter, bdir: Path, sdk: Path) -> Path:
         shutil.copy2(tool, tmp)
         os.replace(tmp, rt / tool.name)
     if IS_WIN:
-        for f in [bdir / "forza.exe"] + sorted(bdir.glob("forza_*.dll")):
+        # rexgpu-regpu.dll and its d3dcompiler_47.dll: the optional ReGPU plugin (FORZA_REGPU_PLUGIN);
+        # its licenses come with licenses/ above.
+        plugin = [bdir / n for n in ("rexgpu-regpu.dll", "d3dcompiler_47.dll") if (bdir / n).is_file()]
+        for f in [bdir / "forza.exe"] + sorted(bdir.glob("forza_*.dll")) + plugin:
             shutil.copy2(f, rt / f.name)
         for dll in sorted((sdk / "bin").glob("*.dll")):
             if not dll.name.endswith(("d.dll", "rd.dll")):
