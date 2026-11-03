@@ -567,6 +567,7 @@ class SettingsPage(QWidget):
             self._vr_status_block(lay)
         if g == "Online":
             self._online_block(lay)
+            self._web_account_block(lay)
         if g == "Profile":
             self._profile_block(lay)
         self._rows(lay, g)
@@ -856,6 +857,18 @@ class SettingsPage(QWidget):
         self.search.add("Custom server address", "Online", "Server", self.custom,
                         keywords="host port custom_server")
 
+    def _web_account_block(self, lay):
+        """Settings > Online > Website account (ui/web_account.py), for the public server only:
+        the website's accounts check keys the public server knows."""
+        from .web_account import WebAccountCard
+        content = section_card(lay, "Website account")
+        self.web_account_frame = content.parentWidget()
+        self.web_account = WebAccountCard(self.cfg, self)
+        content.addWidget(self.web_account)
+        self._show_web_account(self.cfg.online["mode"])
+        self.search.add("Link to website account", "Online", "Website account", self.web_account.link_button,
+                        keywords="forza.dyotson.dev website account Discord GitHub link unlink sign out")
+
     def sync_server(self):
         """Show the server the Servers page picked (#587)."""
         mode = self.cfg.online["mode"]
@@ -864,10 +877,17 @@ class SettingsPage(QWidget):
         if mode in self.radios and not self.radios[mode].isChecked():
             self.radios[mode].setChecked(True)
         self.custom.setEnabled(mode == "custom")
+        self._show_web_account(mode)
+
+    def _show_web_account(self, mode):
+        frame = getattr(self, "web_account_frame", None)  # built after the server radios
+        if frame is not None:
+            frame.setVisible(mode == "public")
 
     def _set_mode(self, mode):
         self.cfg.online["mode"] = mode
         self.custom.setEnabled(mode == "custom")
+        self._show_web_account(mode)
         self.touched()
 
     def _custom_changed(self):

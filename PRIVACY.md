@@ -18,7 +18,7 @@ Last updated: 2026-11-03. Every change to this policy is a change to this file, 
 - When you play online, the server receives your gamertag, a random player ID (your XUID) and your IP addresses. Other players see your gamertag and XUID, and the server gives the players in your room your IP addresses so that their games can connect to yours.
 - Traffic to the game server is not encrypted. That includes chat messages. Your keys are not sent: the game and the launcher sign their requests with your signing key, and the server keeps only its public key. The one exception is your friends key from older versions, which the game sends once to the public server to move your account to the signing key.
 - The public server keeps most records with no time limit. Its status page and leaderboards are public.
-- Website accounts are optional, and you don't need one to play. If you make one (with Discord, GitHub or an email address), the website stores an account id, a number from Discord or GitHub or a one-way hash of your email address, and your sign-ins. It uses one sign-in cookie and one security cookie, and has no analytics, tracking or advertising. You can delete the account at any time. See "The website and website accounts".
+- Website accounts are optional, and you don't need one to play. If you make one (with Discord, GitHub or an email address), the website stores an account id, a number from Discord or GitHub or a one-way hash of your email address, and your sign-ins. It uses one sign-in cookie and one security cookie, and has no analytics, tracking or advertising. You can link the account to your game from the launcher, and unlink it or delete the account at any time. See "The website and website accounts".
 - What you choose to share is public: a photo mode **Big Shot** you upload is published on the project website with your gamertag, and paint jobs and vinyl groups you share on the storefront can be found, downloaded and rated by other players in the game, with their previews shown on the project website. Your XUID is not published with them.
 
 ## Who is involved
@@ -67,6 +67,13 @@ it never changes clock settings. Opening the setup guide opens GitHub in your br
 
 - What: after each session on "Public server" or "My own server", the launcher asks the server for your pending co-op campaign results, then confirms the ones it handled. It does this only when you have a save and a Forza Live identity on this PC. These requests carry your XUID and a signature made with your signing key (not the key itself) over plain HTTP. The answer can include the gamertag of the player who hosted the event.
 - Turn off: Settings > Online > "Co-op campaign results". "Offline" and "This PC" also stop it.
+
+### Website account link (only when you click Link)
+
+- What: when you click Settings > Online > Website account > "Link to website account", the launcher asks the website's accounts service for a link, opens the website in your browser, then asks every 3 seconds whether a website account claimed it, and confirms the account you approve (or declines it, with "Not me"). "Unlink" and "Sign out everywhere" send one request each. These requests carry your XUID and a signature made with your signing key (not the key itself), over HTTPS. The answers contain the website account's id, its sign-in method and the day it was made, never another player's XUID.
+- When: only when you click one of those buttons. After a link is made, the launcher also asks for the link's state once a session, when the Website account card is shown.
+- Where: forza.dyotson.dev (the project website's accounts service), whichever game server you use.
+- Turn off: don't link. "Unlink" ends the link; after that the launcher sends nothing until you link again.
 
 ### Servers page (only when you open it)
 
@@ -208,7 +215,7 @@ The project website, forza.dyotson.dev, is static pages, plus an accounts servic
 
 ### Website accounts (optional)
 
-A website account is optional. For now it can only browse; you don't need one to play, online or offline. You must be 13 or older to make one. You make one by signing in for the first time on the account page (forza.dyotson.dev/account.html), in one of three ways:
+A website account is optional, and you don't need one to play, online or offline. Until you link it to your game (see "Linking your game") it can only browse. You must be 13 or older to make one. You make one by signing in for the first time on the account page (forza.dyotson.dev/account.html), in one of three ways:
 - **Discord or GitHub.** The browser goes to Discord or GitHub, which asks you to allow the sign-in, then comes back. The website asks Discord only for the "identify" permission and asks GitHub for no permission. It keeps only your account's numeric id at that service. It does not keep your username, display name, avatar, email address or the access token.
 - **An email address.** The website mails you an 8-digit code, which works for 10 minutes and only in the browser where you asked for it. The email relay receives your address and the mail, and keeps them under its own policy. The website never stores your address: it keeps only a one-way hash of it (HMAC-SHA256 with a secret key), which can't be turned back into the address. It is used to find your account the next time you sign in with the same address.
 
@@ -217,7 +224,7 @@ What the website stores about an account:
 - the numeric Discord or GitHub id, or the hash of the email address;
 - your sign-in sessions. A session ends 30 days after you last used it, 90 days after the sign-in, or when you sign out. An account keeps at most 20;
 - while you sign in: the emailed code or the Discord or GitHub sign-in in progress, in your browser's session, for at most 10 minutes;
-- recent activity: sign-ins, sign-outs and when the account was made, without IP addresses. It is shown on your account page and kept for 90 days;
+- recent activity: sign-ins, sign-outs, when the account was made, and when a game was linked, moved or unlinked (with that game's gamertag), without IP addresses. It is shown on your account page and kept for 90 days;
 - to slow down abuse, the accounts service counts sign-in attempts and code requests for each IP address and each email hash. Those counts are kept for an hour or a day.
 
 Cookies, set only when you use the account page:
@@ -226,13 +233,28 @@ Cookies, set only when you use the account page:
 
 Neither is used for tracking or shared with anyone.
 
+### Linking your game
+
+Linking makes your game key the account's second factor: the website's features for players (later: likes and uploads) need a linked game. You start a link in the launcher (Settings > Online > Website account), sign in on the website page it opens and click Link there, then confirm the website account's id in the launcher. Both sides have to approve, so nobody can link your game to their account, or their game to yours, without you.
+
+What a link stores:
+- your XUID, the public half of your signing key (never the key itself), your gamertag (shown on your account page), and when the link was made and moved;
+- while a link is in progress, for 10 minutes (deleted within an hour): your XUID, public key and gamertag, one-way hashes of the link's secret token and code, and the website account that claimed it;
+- the random number of each signed launcher request, for 4 minutes, so that no request works twice.
+
+To check the requests, the accounts service reads, without changing anything, what the public game server already keeps about you: the public key your XUID is bound to, your gamertag, when your game first signed in with its key, and whether your XUID is banned. It needs one sign-in to the public server signed by your game's key before you can link.
+
+Rules: a game links to one account and an account to one game. If you link your game to another account, the link moves, and the old account's page says so. A game or an account can change its link once a day. The launcher's "Unlink" and "Sign out everywhere" work even if someone else got into your website account. If your XUID is later bound to a different key, the link stops working until the maintainer checks it with you.
+
+Unlinking, on the account page (after a sign-in in the last 10 minutes) or in the launcher, deletes the link at once.
+
 What is not stored: passwords (there are none), your email address, your Discord or GitHub username, avatar or token, and your IP address with your account.
 
-Who can see it: an account is not public. No page shows your account id, sign-in method, Discord or GitHub id, or anything about your email address. Your account page shows your own account only to you.
+Who can see it: an account is not public. No page shows your account id, sign-in method, Discord or GitHub id, anything about your email address, or which game is linked to which account. Your account page shows your own account, and the gamertag of your linked game, only to you. The website never shows your XUID. The launcher of the linked game sees the account's id, sign-in method and creation day.
 
 Deleting:
-- On the account page, "Delete my account" deletes the account, its sign-in methods, sessions and activity at once (it asks you to have signed in within the last 10 minutes).
-- Accounts unused for 30 days are deleted automatically, and so is an email account whose first code was never used, after a day.
+- On the account page, "Delete my account" deletes the account, its sign-in methods, sessions, activity and game link at once (it asks you to have signed in within the last 10 minutes).
+- Accounts unused for 30 days that are not linked to a game are deleted automatically, and so is an email account whose first code was never used, after a day.
 - The server's backups of the accounts database are kept for 7 days, so a deleted account is gone from them a week later.
 
 ## What is public
@@ -267,6 +289,7 @@ Deleting:
 - Your computer's login name as gamertag: set Settings > Profile > Gamertag.
 - The DLSS download: Settings > Display > "Graphics API" set to Direct3D 12, with "NVIDIA DLSS" and "NVIDIA DLAA" off.
 - Website accounts: don't make one. To end one: "Sign out" or "Sign out everywhere" on the account page, or "Delete my account" there.
+- The website account link: don't link. To end it: "Unlink" in Settings > Online > Website account, or on the account page.
 
 ## Contact
 
