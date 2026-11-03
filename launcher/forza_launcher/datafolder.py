@@ -388,8 +388,8 @@ def carry_dlc(old: Path, new: Path, log=None) -> int:
     todo = sorted(dlc_packages(old) - have)
     n = 0
     for name in todo:
-        src = old / DLC_DIR / "00000002" / name
-        dst = new / DLC_DIR / "00000002" / name
+        src = paths.long_path(old / DLC_DIR / "00000002" / name)  # deep car packs (#586)
+        dst = paths.long_path(new / DLC_DIR / "00000002" / name)
         part = dst.with_name(name + ".part")
         try:
             shutil.rmtree(part, ignore_errors=True)
