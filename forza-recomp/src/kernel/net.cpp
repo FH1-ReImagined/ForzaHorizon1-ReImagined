@@ -28,7 +28,8 @@
 // punching opened a path (FORZA_SERVER_RELAY=1 disables that), through the server
 // until then. Where hole punching failed, the server may offer a volunteer relay nearer
 // both players (server/forza_live/network/relay_broker.py, #516): the datagrams for those
-// players go through it, with a ticket the server signed, and back through the server when
+// players go through it, with a ticket the server signed (we echo the relay's cookie from
+// our address first, which proves it is ours), and back through the server when
 // the offer is withdrawn or the ticket runs out. The XNADDR of a Live player carries the id the server gave it
 // (0xF0000000 | id) instead of a host address. FORZA_NET_PORT fixes the host UDP port,
 // for a port forward.
@@ -237,6 +238,7 @@ enum LiveType : uint8_t {
   kRelayBound,      // relay -> client: session u64, our id u32, seconds the ticket has left u32
   kRelayPing,       // client -> relay
   kRelayPong,       // relay -> client: the ping's bytes
+  kRelayChallenge,  // relay -> client: a cookie; we bind again with it, which proves our address
 };
 // XNADDR.ina of a player on a Forza Live server: 0xF0000000 | the id the server gave
 // it. 240.0.0.0/8 is reserved, so it never collides with a LAN address.
@@ -988,7 +990,9 @@ class VNet {
         // A bind every 3 s keeps the slot (unused slots expire after 60 s at the relay) and
         // shows the relay still answers; while unbound, every second.
         vrelay_.next_bind = now + std::chrono::seconds(vrelay_.bound ? 3 : 1);
-        out.push_back({vrelay_.ep, vrelay_.ticket});
+        std::vector<uint8_t> bind = vrelay_.ticket;  // and the relay's last cookie, if any
+        bind.insert(bind.end(), vrelay_.cookie.begin(), vrelay_.cookie.end());
+        out.push_back({vrelay_.ep, std::move(bind)});
       }
       for (RelayProbe& probe : probes_) {
         if (probe.sent_count < 2 && now >= probe.sent + std::chrono::milliseconds(500) &&
@@ -1240,6 +1244,21 @@ class VNet {
       case kRelayInfo:
         if (from_server) OnRelayInfo(p, n);
         return;
+      case kRelayChallenge: {
+        // The relay proves our address before it sends us anything (a forged bind cannot aim
+        // the session's traffic elsewhere): the same ticket back with its cookie, from here.
+        if (!from_relay || n != 16) return;
+        std::vector<uint8_t> bind;
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          if (vrelay_.ticket.empty()) return;
+          vrelay_.cookie.assign(p, p + n);
+          bind = vrelay_.ticket;
+          bind.insert(bind.end(), p, p + n);
+        }
+        SendLive(from, kRelayBind, bind);
+        return;
+      }
       case kRelayBound: {
         if (!from_relay || n < 16) return;
         std::lock_guard<std::mutex> lock(mutex_);
@@ -1575,6 +1594,7 @@ class VNet {
   struct VolunteerRelay {
     Endpoint ep;
     std::vector<uint8_t> ticket;
+    std::vector<uint8_t> cookie;  // the relay's last challenge (sent with each bind)
     std::vector<uint32_t> peers;
     bool bound = false;  // the relay took the ticket
     Clock::time_point next_bind{}, expires{}, last_bound{};
