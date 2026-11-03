@@ -282,7 +282,8 @@ Proposed fix:
    and D24FS8 variants, or let the import remap them. **Done on Linux AMD** (no remap
    needed: the key holds the guest's format). **Open**: Windows NVIDIA and the Steam Deck
    captures (merge them with `pipeline_list.py merge`; the fields mean the same on every
-   compiler), and places only "Fast Travel Anywhere" reaches offline.
+   compiler). #276 added the rest of the map, more cars, the races, the paint shop and the
+   Horizon World ([below](#wider-coverage-276)).
 3. Launcher: the "Prebuild shaders" step in Setup, offered again after a driver,
    launcher or graphics-setting change. Progress and cancel, using the existing warm-up
    progress lines. **Done.**
@@ -350,9 +351,9 @@ Store fixes (#167, #247), as of PR #253:
 
 ### The shipped list
 
-`launcher/forza_launcher/data/pipelines-4D5309C9.json`: 1197 pipelines and 973 shader
-recipes, storage version `fbo:20260228/20261018`. 430 KB of text, one pipeline or shader
-per line (43 KB gzip): small enough for git, and a new capture changes only the lines of
+`launcher/forza_launcher/data/pipelines-4D5309C9.json`: 1522 pipelines and 1088 shader
+recipes, storage version `fbo:20260228/20261018`. 527 KB of text, one pipeline or shader
+per line (49 KB gzip): small enough for git, and a new capture changes only the lines of
 new pipelines. `check` passes: hashes, decoded render state, vertex layout and export
 fields, and image offsets.
 
@@ -369,15 +370,17 @@ scratch copies of a free-roam save, offline), each into its own cache root:
 | SMAA at 1440p: the first run above, and the race | ui, scene | 415 + 643, 316 + 473 |
 | SMAA at 1080p, the race: the HUD raster is scaled (FH1 fractional raster, modification bit 63) | ui, scene | 315 + 480 |
 | #614: the race (60 s with autodrive following the AI) and a free-roam drive (70 s on the County Route 203 loop), each from an empty cache and after a prebuild; 7 pipelines not listed before | main | 444 |
+| #276, one cache root over four sessions (below): 27 places in every region but the two held out, by day (12:00) and night (23:00); photo mode; an outpost's Change Car, Paint Shop (paint, a vinyl group, decals) and Garage upgrades; the Autoshow (the first cars of its first manufacturers, Abarth to Aston Martin, from two views, and a purchase); 12 festival races and two Showcases with the first eligible car (D to S: MINI, Nissan, Mitsubishi, Lotus, Toyota, Plymouth, Ferrari, Ford and others); the main menu's Benchmark; 325 pipelines not listed before | main | 1208 |
+| #276, a Horizon World on a local server: two games, a co-op challenge, both cars driving together | main | 513 |
 
-Partitions in the merged list: 445 pipelines in all three, 247 main and scene, 154 main
-only, 289 ui only (281 of them the fractional raster variant), 25 scene and ui, 22 main and
-ui, 8 scene only. A pipeline seen only without split rendering is also imported by both
+Partitions in the merged list: 469 pipelines in all three, 255 main and scene, 486 main
+only, 288 ui only (most of them the fractional raster variant), 23 main and ui, 1 scene and
+ui. A pipeline seen only without split rendering is also imported by both
 split caches (`split_partitions`): which of the two would draw it is unknown. With SMAA at 1440p
 the HUD cache imports 634 pipelines and the scene cache 850 (the 269 fractional variants
 are dropped there, the raster is not scaled).
 
-Shaders: 525 `file`, 444 `bound`, 2 `image`, 2 `missing`; 1194 of the 1197 pipelines (99.7%)
+Shaders: 600 `file`, 484 `bound`, 2 `image`, 2 `missing`; 1519 of the 1522 pipelines (99.8%)
 can be rebuilt from the player's files. The rest compile in play, as before. Before #614 the two
 `image` shaders were `missing` (1148 of 1190): a vertex shader of 96 bytes and a pixel shader of
 36 that the D3D library keeps in the executable without a blob header (Title Update 4 image
@@ -390,10 +393,54 @@ render state without the modification bits): 759 of the 940 pipelines of the lon
 main cache (80.7%), 903 of the 1612 of all 347 stores (56%, many of them other split
 settings and older SDK versions).
 
-Not reachable offline: "Fast Travel Anywhere" is a Marketplace unlock (the map offers it,
-then says Xbox LIVE is needed), so the runs reach the spawn area, the festival (fast travel
-to Dak's garage and the Autoshow is free) and the race track. Other places compile in play
-until a longer capture (or player lists, plan item 5) covers them.
+Not reachable offline by the menus: "Fast Travel Anywhere" is a Marketplace unlock (the map
+offers it, then says Xbox LIVE is needed). The #276 captures move the car instead: a test
+script writes the position of the player car's physics state (the `car - 0xA20` vector that
+`tools/autodrive.py` reads) onto a road node of the sat-nav graph (`colorado.nav`, which has
+the heights) and zeroes its velocity for 2 s; the world streams in around it as after a fast
+travel. The same works on an event's or an outpost's own position, where X then signs up or
+enters as usual.
+
+### Wider coverage (#276)
+
+TU4 game of #614's branch (no game or SDK change from main 77a7c33), the standard SDK overlay,
+RX 9060 XT (RADV), Ryzen 7 7800X3D, Linux; the golden TU4 save in a scratch `--user_data_root`,
+scratch XDG dirs, 60 fps, FSR 1, 1920x1080 window, audio muted. Scripted input through the
+autopress FIFO, `tools/autodrive.py` on `tools/nav_route.py` loops in free roam and following
+the AI in races.
+
+The capture (one cache root, so one store): a map tour that moves the car to the 10 outposts,
+the towns and a 2 km grid of road nodes (27 places; every region except Red Rock Heights and
+the area east of x = 5400, Finley Dam and the canyon, held out for the measurement) and
+drives 25 s from each, by day with the camera changed at every third place, then again
+backwards at 23:00 (the clock held as `tools/render_test.py` does); then the rest listed in the
+table above. FH1 has no weather, so there is no rain to capture. 1208 pipelines were stored,
+325 of them not in the list before: 92 from the tour, 53 more from photo mode and the outpost,
+94 from the Autoshow, 77 from the races, 9 from the Horizon World, none from the Benchmark. Merged
+with `pipeline_list.py merge`: 1197 to 1522 pipelines, 973 to 1088 shaders, 432 to 527 KB
+(43 to 49 KB gzip).
+
+The measurement, places and events the capture did not visit: an empty cache root and Mesa
+cache; the launcher's prebuild with the list alone (offline); then from the boot: free roam
+at Red Rock Heights at 12:00 (45 s of driving), Goodyear Mountain Blast (sign-up, the first
+eligible car, 60 s of the race from the start), free roam at the Finley Dam outpost at 23:00
+(45 s), Rockstar Cliff Run (as the first race). Benchmark lock held, no other game, two runs
+per list, alternating. "Built in play" is the session's own store at the end: the pipelines
+it met that the prebuild had not imported (it never stores imported ones).
+
+| | #614's list (2 runs) | This list (2 runs) |
+| --- | --- | --- |
+| Pipelines built in play, whole session (boot, menus, sign-ups, loads included) | 57 / 57 | **6 / 6** |
+| Pipelines the command processor created in the four scenes (`--fh1_frame_cost_csv`) | 12 / 12 | **1 / 1** |
+| Frames over 25 ms in the four scenes (4 min 1 s) | 3 / 1, worst 32 ms | 0 / 5, worst 48 ms |
+| Prebuild: shaders from the game files, then the game (`--shader_prebuild_only`) | 1.8 s + 2.7-2.9 s, 876 pipelines in a 1.7-1.8 s warm-up | 1.8 s + 3.3-3.4 s, 1230 pipelines in a 2.4 s warm-up |
+| Warm-up at the first start after the prebuild | 395 / 391 ms | 479 ms |
+
+53 of the 57 pipelines #614's list missed are in this one; of the 6 left, 3 use shaders the
+list has no recipe for and 2 are listed but were not imported. None of the frames over 25 ms
+in either column was a pipeline: the command processor waited for the game's commands or
+uploaded data (one 9.5 ms pipeline wait in a 26 ms frame in the first column). The 25-28
+frames over 25 ms during each load, sign-up and quit are the game's own, as in #614.
 
 ### Launcher: Prebuild shaders
 
