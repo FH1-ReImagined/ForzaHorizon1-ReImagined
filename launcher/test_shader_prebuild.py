@@ -122,6 +122,43 @@ class WritePrebuildTests(unittest.TestCase):
             self.assertEqual(struct.unpack_from("<I", xpl, 24)[0], 1)
             self.assertEqual(len(xpl), 40 + 96)
 
+    def test_image_recipes_find_headerless_shaders_in_the_executable(self):
+        # #614: the D3D library's own shaders sit in the executable without a blob header. An
+        # "image" recipe gives their size and an offset per known executable, never the code.
+        vs, ps = bytes(range(4, 100)), bytes(range(200, 236))
+        tu4 = b"\0" * 64 + vs + ps + b"\0" * 8
+        disc = b"\1" * 16 + vs + ps
+        p = dict(SAMPLE, vs=f"{xxh3_64(vs):016X}", ps=f"{xxh3_64(ps):016X}")
+        with tempfile.TemporaryDirectory() as tmp:
+            xsh = Path(tmp) / "own.xsh"
+            xsh.write_bytes(pipeline_list.xsh_bytes({xxh3_64(vs): (0, vs), xxh3_64(ps): (1, ps)}))
+            hashes = {xxh3_64(vs): 0, xxh3_64(ps): 1}
+            # Player uploads keep the older recipe kinds.
+            plain = pipeline_list.make_shader_recipes(hashes, [str(xsh)], [("default.xex", tu4)])
+            self.assertEqual({r["from"] for r in plain.values()}, {"missing"})
+            recipes = pipeline_list.make_shader_recipes(
+                hashes, [str(xsh)], [("default.xex", tu4), ("default.xex", disc)], images=True)
+            self.assertEqual(recipes[p["vs"]], {"type": "vs", "from": "image", "size": 96, "offsets": [64, 16]})
+            self.assertEqual(recipes[p["ps"]], {"type": "ps", "from": "image", "size": 36, "offsets": [160, 112]})
+            lst = {"format": 2, "title": "4D5309C9", "storage_versions": ["fbo:20260228/20261018"],
+                   "pipelines": [p], "shaders": recipes}
+            self.assertEqual(pipeline_list.check_list(lst), [])
+            for image in (tu4, disc):
+                out = Path(tmp) / "prebuild"
+                stats = pipeline_list.write_prebuild(lst, [("default.xex", image)], str(out))
+                self.assertEqual((stats["shaders"], stats["pipelines"]), (2, 1))
+                built = fxobj_shaders.read_xsh(str(out / "4D5309C9.xsh"))
+                self.assertEqual(built[int(p["vs"], 16)], (0, vs))
+                self.assertEqual(built[int(p["ps"], 16)], (1, ps))
+            # Another executable: the hash does not match at any listed offset.
+            stats = pipeline_list.write_prebuild(lst, [("default.xex", b"\0" * 256)], str(out))
+            self.assertEqual((stats["shaders"], stats["pipelines"], stats["shaders_missing"]), (0, 0, 2))
+        for bad_recipe in ({"offsets": [64, 16, 8, 4, 0]}, {"offsets": [65]}, {"offsets": []},
+                           {"size": 3}, {"size": 1 << 20}, {"type": None}, {"ucode": "00" * 32}):
+            bad = json.loads(json.dumps(lst))
+            bad["shaders"][p["vs"]].update(bad_recipe)
+            self.assertTrue(pipeline_list.check_list(bad), bad_recipe)
+
     def test_image_sources_in_memory(self):
         ps = bytes(range(32))
         found, _ = fxobj_shaders.collect([("default.xex", b"\0" * 5 + blob(0x102A1100, ps))])

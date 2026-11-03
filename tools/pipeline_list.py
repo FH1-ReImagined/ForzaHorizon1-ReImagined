@@ -13,6 +13,9 @@ files: the list only says how to find each shader there (tools/fxobj_shaders.py)
            the bound fields: vertex fetch layout (fetch slot, format, stride, offset,
            swizzle; FETCH_LAYOUT_MASK), export destination (EXPORT_MASK), or "nop"
            for an export the pixel shader does not read (replaced by ALU_NOP);
+  "image"  microcode with no blob header in the executable image (the D3D library's own
+           shaders, #614): `size` bytes at one of `offsets` (one per known executable image:
+           Title Update 4, the disc), the one whose XXH3 is the hash;
   "missing" not found in the game files (engine/runtime shaders): built in-game as now.
 
 Usage:
@@ -205,7 +208,34 @@ def partition_of(path):
     return parent if parent in ("ui", "scene") else "main"
 
 
-def make_shader_recipes(hashes_types, xsh_paths, sources):
+def image_sources(sources):
+    """The executable images among `sources`: (name, bytes) pairs, and files that are neither
+    effects (.fxobj) nor zips, nor directories."""
+    out = []
+    for src in sources:
+        if isinstance(src, tuple):
+            out.append(src[1])
+        elif not os.path.isdir(src) and not src.lower().endswith((".fxobj", ".zip")):
+            with open(src, "rb") as f:
+                out.append(f.read())
+    return out
+
+
+def image_offsets(ucode, images):
+    """The first 4-byte aligned offset of `ucode` in each image that holds it, in order."""
+    offsets = []
+    for img in images:
+        i = img.find(ucode)
+        while i >= 0 and i % 4:
+            i = img.find(ucode, i + 1)
+        if i >= 0 and i not in offsets:
+            offsets.append(i)
+    return offsets
+
+
+def make_shader_recipes(hashes_types, xsh_paths, sources, images=False):
+    """images=True: a shader found in no blob but verbatim in an executable image among the
+    sources gets an "image" recipe (the shipped list; player uploads keep the older kinds)."""
     import fxobj_shaders as F
     stored = {}
     for p in xsh_paths:
@@ -235,6 +265,11 @@ def make_shader_recipes(hashes_types, xsh_paths, sources):
             recipes[key] = dict({"type": "vs", "from": "bound", "base": f"{best[0].hash:016X}"},
                                 **best[1])
             assert xxh3_64(apply_binding(best[0].ucode, best[1])) == h
+            continue
+        offsets = image_offsets(bytes(u), image_sources(sources)) if images else []
+        if offsets:
+            recipes[key] = {"type": F.TYPE_NAMES[t], "from": "image", "size": len(u),
+                            "offsets": offsets}
             continue
         recipes[key] = {"type": F.TYPE_NAMES[t], "from": "missing",
                         "why": "not in the game files"}
@@ -272,7 +307,7 @@ def cmd_make(a):
         "pipelines": sorted(pipelines.values(), key=pipeline_key),
     }
     if a.xsh:
-        out["shaders"] = make_shader_recipes(hashes, a.xsh, a.sources or [])
+        out["shaders"] = make_shader_recipes(hashes, a.xsh, a.sources or [], images=True)
     write_list(a.output, out)
     print(f"{len(out['pipelines'])} pipelines from {len(a.xpso)} files -> {a.output}")
     if "shaders" in out:
@@ -400,9 +435,20 @@ def check_list(lst):
                     problems.append(f"{w}: export entry {e} has bits outside the export fields")
             if not all(isinstance(k, int) for k in r.get("nop", ())):
                 problems.append(f"{w}: nop entries must be instruction indices")
+        elif r.get("from") == "image":
+            # Where the shader is, never what it is: a size and up to 4 offsets.
+            size, offsets = r.get("size"), r.get("offsets")
+            if r.get("type") not in ("vs", "ps"):
+                problems.append(f"{w}: image shader without its type")
+            if not isinstance(size, int) or isinstance(size, bool) or not 4 <= size <= 65536 or size % 4:
+                problems.append(f"{w}: image size {size!r}")
+            if (not isinstance(offsets, list) or not 1 <= len(offsets) <= 4 or
+                    any(not isinstance(o, int) or isinstance(o, bool) or o < 0 or o % 4 or o >= 1 << 28
+                        for o in offsets)):
+                problems.append(f"{w}: image offsets {offsets!r}")
         elif r.get("from") not in ("file", "missing"):
             problems.append(f"{w}: unknown source {r.get('from')}")
-        extra = set(r) - {"type", "from", "base", "fetch", "export", "nop", "why"}
+        extra = set(r) - {"type", "from", "base", "fetch", "export", "nop", "why", "size", "offsets"}
         if extra:
             problems.append(f"{w}: unexpected keys {sorted(extra)}")
         if isinstance(r.get("why"), str) and len(r["why"]) > 80:
@@ -421,7 +467,7 @@ def cmd_check(a):
         for p in problems[:50]:
             print("PROBLEM:", p)
         raise SystemExit(1)
-    print("ok: only hashes, render state, vertex layout and export fields")
+    print("ok: only hashes, render state, vertex layout and export fields, and image offsets")
 
 
 def fnv1a64(data):
@@ -465,9 +511,10 @@ def split_partitions(p):
     return p
 
 
-def build_shaders(lst, shaders):
+def build_shaders(lst, shaders, images=()):
     """{hash: (type, ucode)} of the listed shaders that `shaders` (fxobj_shaders.collect of the
-    player's files) provides, and a Counter of the others by reason."""
+    player's files) and `images` (their executable images) provide, and a Counter of the others
+    by reason."""
     import fxobj_shaders as F
     built, lost = {}, Counter()
     for key, r in lst.get("shaders", {}).items():
@@ -480,6 +527,13 @@ def build_shaders(lst, shaders):
                 built[h] = (F.TYPE_VS, u)
             else:
                 lost["bound shader did not match its hash"] += 1
+        elif r["from"] == "image" and images:
+            u = next((img[o:o + r["size"]] for img in images for o in r["offsets"]
+                      if xxh3_64(img[o:o + r["size"]]) == h), None)
+            if u is not None:
+                built[h] = (F.TYPE_VS if r["type"] == "vs" else F.TYPE_PS, u)
+            else:
+                lost["image shader not in this executable"] += 1
         else:
             lost[f"{r['from']} shader not available"] += 1
     return built, lost
@@ -515,7 +569,7 @@ def write_prebuild(lst, sources, out_dir, status=None, cancelled=None):
         found, _ = F.collect([src])
         for h, s in found.items():
             shaders.setdefault(h, s)
-    built, lost = build_shaders(lst, shaders)
+    built, lost = build_shaders(lst, shaders, image_sources(sources))
     pipelines = [split_partitions(p) for p in lst["pipelines"]
                  if int(p["vs"], 16) in built and (not int(p["ps"], 16) or int(p["ps"], 16) in built)]
     title = lst.get("title", "4D5309C9")
@@ -542,7 +596,7 @@ def cmd_write_storage(a):
     import fxobj_shaders as F
     lst = load_list(a.list)
     shaders, _ = F.collect(a.sources)
-    built, lost = build_shaders(lst, shaders)
+    built, lost = build_shaders(lst, shaders, image_sources(a.sources))
     os.makedirs(a.out, exist_ok=True)
     title = lst.get("title", "4D5309C9")
     with open(os.path.join(a.out, f"{title}.xsh"), "wb") as f:
