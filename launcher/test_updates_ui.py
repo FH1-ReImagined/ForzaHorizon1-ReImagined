@@ -200,7 +200,11 @@ class UpdateUITests(unittest.TestCase):
 
     def test_flatpak_download_failure_never_offers_installation(self):
         from forza_launcher import paths, updater
+        from forza_launcher import game
+        # game_version asks git for the build when a game is built in this checkout (a developer's PC,
+        # not CI): keep that call out of the subprocess.run this test watches.
         with patch.object(paths, "IN_FLATPAK", True), \
+                patch.object(game, "game_version", return_value="unknown build"), \
                 patch.object(updater, "download", side_effect=updater.UpdateError("Integrity check failed")), \
                 patch("subprocess.run") as run:
             self.card._checked(self.release)

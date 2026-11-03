@@ -6,7 +6,7 @@ from . import display, power, schema
 FILENAME = "graphics-settings.json"
 KEYS = {"output", "upscaler", "resolution_scale", "frame_rate", "vsync",
         "anisotropic_override", "forza_hud_edges", "forza_performance_overlay", "anti_aliasing",
-        "world_shadow_filter", "world_ambient_occlusion", "forza_minimap_camera", *schema.CAMERA_FOV_KEYS}
+        "world_shadow_filter", "world_ambient_occlusion", "motion_blur", "forza_minimap_camera", *schema.CAMERA_FOV_KEYS}
 NVIDIA = {"quality", "balanced", "dlss", "dlaa"}
 FSR3 = {"fsr3_quality", "fsr3_balanced", "fsr3_performance", "fsr3_native"}
 
@@ -64,7 +64,7 @@ def translate(document, current, pc=None):
             if value not in {"off", "low", "high"}:
                 raise ValueError("unsupported ambient occlusion")
             changes[key] = value
-        elif key in {"vsync", "forza_hud_edges", "forza_minimap_camera"}:
+        elif key in {"vsync", "forza_hud_edges", "motion_blur", "forza_minimap_camera"}:
             if value not in ("true", "false"):
                 raise ValueError(f"invalid {key}")
             changes[key] = value == "true"
