@@ -242,6 +242,9 @@ tools/run_forza.sh 120        # a two-minute test run; logs in ${XDG_RUNTIME_DIR
   720p, the HUD and menus stay sharp at 720p. It only saves GPU time; a PC limited by its CPU gains
   nothing. Not with FSR 3, DLSS, SMAA or ultrawide. Measurements in
   [perf.md](perf.md#scene-resolution-below-720p-scene_resolution-347-2026-10-24).
+- **Motion blur** (`motion_blur = false` in `forza.toml` or Display > Picture, or the in-game
+  Graphics screen): turns off high-speed blur while leaving tone mapping, bloom and vignette
+  untouched (#588). Useful for high refresh rates or players sensitive to motion blur.
 
 ## Steam Deck
 
