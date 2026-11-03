@@ -21,11 +21,13 @@ from .saves_page import SavesPage
 from .mods_page import ModsPage
 from .texture_packs_page import TexturePacksPage
 from .radio_page import RadioPage
+from .servers_page import ServersPage
 from .widgets import label
 
 MODS_PAGE_ID = 8
 TEXTURE_PACKS_PAGE_ID = 9
 RADIO_PAGE_ID = 10
+SERVERS_PAGE_ID = 11
 
 
 class VrChecklist(QDialog):
@@ -147,19 +149,22 @@ class MainWindow(QMainWindow):
         self.mods = ModsPage(cfg, self)
         self.texture_packs = TexturePacksPage(cfg, self)
         self.radio = RadioPage(cfg, self)
+        self.servers = ServersPage(cfg, self)
+        self.servers.changed.connect(self._server_chosen)
         self._close_after_radio = False
         self.radio.idle.connect(lambda: QTimer.singleShot(0, self.close) if self._close_after_radio else None)
         self.navs = QButtonGroup(self)
         self._pages = {0: self.play, 1: self.setup, 2: self.settings, 3: self.about,
                        4: self.gallery, 5: self.controls, 6: self.saves,
                        CATALOG_PAGE_ID: self.catalogs, MODS_PAGE_ID: self.mods,
-                       TEXTURE_PACKS_PAGE_ID: self.texture_packs, RADIO_PAGE_ID: self.radio}
+                       TEXTURE_PACKS_PAGE_ID: self.texture_packs, RADIO_PAGE_ID: self.radio,
+                       SERVERS_PAGE_ID: self.servers}
         # In id order, so a page's stack index is its id.
         for page in self._pages.values():
             self.stack.addWidget(page)
         for i, name in ((0, "Play"), (4, "Photo gallery"),
                         (CATALOG_PAGE_ID, "Designs && vinyls"), (1, "Setup"),
-                        (5, "Controls"), (2, "Settings"), (6, "Saves"), (MODS_PAGE_ID, "Mods"),
+                        (5, "Controls"), (SERVERS_PAGE_ID, "Servers"), (2, "Settings"), (6, "Saves"), (MODS_PAGE_ID, "Mods"),
                         (TEXTURE_PACKS_PAGE_ID, "Texture packs"), (RADIO_PAGE_ID, "Radio"), (3, "About")):
             btn = QPushButton(name)
             btn.setObjectName("nav")
@@ -263,7 +268,17 @@ class MainWindow(QMainWindow):
             self.texture_packs.refresh()
         elif self._pages[i] is self.radio:
             self.radio.refresh()
+        elif self._pages[i] is self.servers:
+            self.servers.refresh()
+        if self._pages[i] is not self.servers:
+            self.servers.leave()
         self.status("")
+
+    def _server_chosen(self):
+        """The Servers page changed the server Play uses (or its list): Settings > Online shows it,
+        and launcher.json and forza.toml are saved now."""
+        self.settings.sync_server()
+        self.settings.flush()
 
     def refresh_all(self):
         self.play.refresh()
