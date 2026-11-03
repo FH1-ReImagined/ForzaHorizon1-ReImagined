@@ -302,7 +302,15 @@ void ReleasePreviewNative(const PPCContext& context, uint8_t* base, NativePrevie
   Native native(context, base);
   native.Call(0x82658570, {model});
   native.Call(0x8242D1A0, {model});
-  REXLOG_INFO("Native car tuning: released standalone preview model {:08X}", model);
+  // One for each preview (every slider step in the tuning menu): thousands in a session's log
+  // (#609). The first ones stay at info, the rest are debug.
+  static uint32_t released = 0;
+  if (++released <= 8) {
+    REXLOG_INFO("Native car tuning: released standalone preview model {:08X}{}", model,
+                released == 8 ? " (later ones at debug level)" : "");
+  } else {
+    REXLOG_DEBUG("Native car tuning: released standalone preview model {:08X}", model);
+  }
 }
 
 namespace {
