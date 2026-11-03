@@ -17,7 +17,8 @@
 // user 0 even if no physical controller is connected.
 //
 // FORZA_AUTOPRESS_FIFO=<path> also reads "INPUT[:hold]" lines from that FIFO
-// (create it with mkfifo) while the game runs and presses each one as it
+// (create it with mkfifo; on Windows a plain file the script appends to, which the game tails:
+// the Windows build under Wine, tools/run_regpu_wine.sh) while the game runs and presses each one as it
 // arrives ("PADn:INPUT" presses it on the pad in SDK slot n, before routing), so menus can be stepped through while watching frame dumps
 // (FORZA_FRAMEDUMP_TRIGGER). In either mode the game sees a connected, centred
 // controller between presses instead of a disconnected one. "SCENE:<name>" lines label
@@ -44,7 +45,9 @@
 #include <rex/ppc/context.h>
 #include <rex/ppc/func.h>
 
-#ifndef _WIN32
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <fcntl.h>
 #include <unistd.h>
 #endif
@@ -157,11 +160,22 @@ std::mutex schedule_mutex;
 void ReadFifo(std::string path, std::vector<Press>* schedule,
               std::chrono::steady_clock::time_point start) {
 #ifdef _WIN32
-  // A POSIX FIFO; scripted test sessions (tools/live_session.sh) run on Linux.
-  (void)schedule;
-  (void)start;
-  REXLOG_WARN("FORZA_AUTOPRESS_FIFO is not supported on Windows ({})", path);
-  return;
+  // No POSIX FIFO on Windows: the file is tailed instead (lines appended to a plain file, e.g. by
+  // a script driving the Windows build under Wine). ReadFile, not stdio: the CRT's FILE never
+  // sees data appended after it once reached the end.
+  HANDLE file = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                            nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) {
+    REXLOG_WARN("FORZA_AUTOPRESS_FIFO: cannot open {}", path);
+    return;
+  }
+  auto read_char = [file](char& c) {
+    for (;;) {
+      DWORD n = 0;
+      if (ReadFile(file, &c, 1, &n, nullptr) && n == 1) return true;
+      Sleep(20);
+    }
+  };
 #else
   // O_RDWR keeps the FIFO open (no EOF) when the writer goes away.
   int fd = open(path.c_str(), O_RDWR);
@@ -169,9 +183,11 @@ void ReadFifo(std::string path, std::vector<Press>* schedule,
     REXLOG_WARN("FORZA_AUTOPRESS_FIFO: cannot open {}", path);
     return;
   }
+  auto read_char = [fd](char& c) { return read(fd, &c, 1) == 1; };
+#endif
   std::string line;
   char c;
-  while (read(fd, &c, 1) == 1) {
+  while (read_char(c)) {
     if (c != '\n') {
       line += c;
       continue;
@@ -219,7 +235,6 @@ void ReadFifo(std::string path, std::vector<Press>* schedule,
     REXLOG_INFO("FORZA_AUTOPRESS_FIFO: t={:.2f}s {}", now, line);
     line.clear();
   }
-#endif
 }
 
 GuestFunc Sdk(const char* name) { return forza::SdkImport(name); }
