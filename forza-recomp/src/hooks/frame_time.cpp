@@ -172,8 +172,6 @@ void ReadVblank(uint64_t& count, uint64_t& actual, uint64_t& nominal) {
 // average high and the waits going: about 18 fps until a restart (#187).
 // FORZA_RENDER_SYNC=0 turns it off.
 constexpr uint32_t kRenderFrameCount = 0x948;  // render object: main frames it has taken
-constexpr uint32_t kRenderTaken = 0x94C;       // render object: the last main frame it took
-constexpr uint32_t kRenderQueueCount = 0x9D8 + 0x78;  // its main frame queue: frames counted
 
 struct RenderState {
   std::mutex mutex;
@@ -183,10 +181,6 @@ struct RenderState {
   std::atomic<uint64_t> waiting{0};  // the main loop's wait in progress (0: none)
   uint64_t idle = 0;                 // the wait in which the render loop found nothing to draw
 } render;
-std::atomic<bool> queue_synced{false};  // WaitForRender waits on the render queue (SmoothDt)
-// The render object (sub_8259F3E8's r3) and guest memory, seen by the render loop's passes.
-std::atomic<uint32_t> render_object{0};
-std::atomic<uint8_t*> render_base{nullptr};
 
 // Present pacing (20 and 40 fps, PresentDelayNs). Where in its frame a guest frame reaches the
 // host present varies: the emulated GPU's swap ends on a guest vblank (SDK patch 0030), the
@@ -225,31 +219,6 @@ bool RenderSyncEnabled() {
   return on;
 }
 
-// How the main loop waits while the render thread is behind. By default it waits on the queue: until
-// the render thread has taken all but one of the main frames counted (the queue's count, +0x9D8
-// +0x78, against the last frame it took, +0x94C). The count includes the frame starting now, and the
-// frame before it only becomes ready to draw later in this one, so at this point the queue normally
-// stands two ahead of the render thread: the main loop goes on, and the render thread takes the
-// finished frame when it is done with its own. FORZA_RENDER_SYNC_LEAD=0: a wait for a swap since
-// the previous main frame, as before. That made the threads take turns: the main loop waited for
-// the swap of the frame being drawn, and only then made the next frame ready, while the render
-// thread waited for it (free roam at 240 fps: the main thread waited 59% of the time, the render
-// thread 41%, 88 fps).
-uint64_t RenderSyncLead() {
-  static const uint64_t lead = uint64_t(std::max(0, EnvInt("FORZA_RENDER_SYNC_LEAD", 1)));
-  return lead;
-}
-
-// Main frames counted in the render queue that the render thread has not taken; -1 before its
-// first pass.
-int64_t FramesAhead() {
-  const uint32_t r = render_object.load(std::memory_order_relaxed);
-  uint8_t* b = render_base.load(std::memory_order_relaxed);
-  if (!r || !b) return -1;
-  return int64_t(Load32(forza::GuestPtr(b, r + kRenderQueueCount))) -
-         int64_t(Load32(forza::GuestPtr(b, r + kRenderTaken)));
-}
-
 void WaitForRender() {
   static uint64_t seen = 0;
   const uint64_t freq = rex::chrono::Clock::guest_tick_frequency();
@@ -258,20 +227,13 @@ void WaitForRender() {
   std::unique_lock<std::mutex> lock(render.mutex);
   const bool behind = render.interval_ema > 1.15 * target_ticks &&
                       start < render.last_tick + freq / 10;  // swaps are coming (100 ms)
-  const int64_t lead = int64_t(RenderSyncLead());
-  const bool queue = lead > 0 && FramesAhead() >= 0;
-  // (The queue's count may wrap, or restart with a new render object: a gap out of range never waits.)
-  auto ready = [&] {
-    if (!queue) return render.swaps != seen;
-    const int64_t ahead = FramesAhead();
-    return ahead < 0 || ahead <= lead + 1 || ahead > 64;
-  };
-  if (behind && !ready()) {
+  if (behind && render.swaps == seen) {
     static uint64_t waits = 0;
     const uint64_t id = ++waits;
     render.waiting.store(id, std::memory_order_release);
     const bool progressed = render.swapped.wait_for(
-        lock, std::chrono::milliseconds(50), [&] { return ready() || render.idle == id; });
+        lock, std::chrono::milliseconds(50),
+        [&] { return render.swaps != seen || render.idle == id; });
     render.waiting.store(0, std::memory_order_relaxed);
     sync_stats.waits += 1;
     sync_stats.timeouts += !progressed;
@@ -279,27 +241,6 @@ void WaitForRender() {
         double(rex::chrono::Clock::QueryGuestTickCount() - start) * 1000.0 / double(freq);
   }
   seen = render.swaps;
-  queue_synced.store(queue && behind, std::memory_order_relaxed);
-}
-
-// On the queue the main loop can start two frames back to back and then wait for two draws (dt 2.4
-// then 16 ms at 107 fps), so each drawn frame would move the world by a different step. While it is
-// synced that way the game gets an even dt instead: the average frame time, nudged so the frames
-// still add up to real time. (Pacing the frames' starts to the render thread's interval fed back on
-// itself: the render thread waited for the main loop, its interval grew, and at 100% the game fell
-// to 38 fps.) FORZA_SMOOTH_DT=0: the measured dt.
-double SmoothDt(double dt) {
-  static const bool on = EnvInt("FORZA_SMOOTH_DT", 1) != 0;
-  static double average = 0, real = 0, given = 0;
-  if (!on || !queue_synced.load(std::memory_order_relaxed) || dt > 0.1) {
-    average = real = given = 0;
-    return dt;
-  }
-  average = average ? average + (dt - average) / 16 : dt;
-  real += dt;
-  const double out = std::clamp(average + (real - given) * 0.1, average * 0.5, average * 2);
-  given += out;
-  return out;
 }
 
 struct Stats {
@@ -382,7 +323,7 @@ bool FrameTime(uint8_t* base, uint32_t game_ms, double& dt_out) {
   }
   const uint64_t min_step = freq / 10000;  // 0.1 ms, the game's minimum dt
   if (stamp < prev + min_step) stamp = prev + min_step;
-  const double dt = SmoothDt(double(stamp - prev) / double(freq));
+  const double dt = double(stamp - prev) / double(freq);
   prev = stamp;
   if (FrameTimeLog()) {
     const double ms = dt * 1000.0;
@@ -496,18 +437,10 @@ extern "C" REX_FUNC(sub_8247C678) {
 extern "C" REX_FUNC(__imp__sub_8259F3E8);
 extern "C" REX_FUNC(sub_8259F3E8) {
   const uint64_t wait = render.waiting.load(std::memory_order_acquire);
-  render_object.store(ctx.r3.u32, std::memory_order_relaxed);
-  render_base.store(base, std::memory_order_relaxed);
   const uint32_t frames = ctx.r3.u32 + kRenderFrameCount;
   const uint32_t before = wait ? Load32(forza::GuestPtr(base, frames)) : 0;
   __imp__sub_8259F3E8(ctx, base);
-  if (!wait) return;
-  if (Load32(forza::GuestPtr(base, frames)) != before) {
-    // It took a frame: the main loop's wait on the queue may end.
-    { std::lock_guard<std::mutex> lock(render.mutex); }
-    render.swapped.notify_all();
-    return;
-  }
+  if (!wait || Load32(forza::GuestPtr(base, frames)) != before) return;
   {
     std::lock_guard<std::mutex> lock(render.mutex);
     render.idle = wait;

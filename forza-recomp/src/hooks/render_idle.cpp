@@ -131,9 +131,6 @@ bool WorkQueued(uint8_t* base, uint32_t render) {
 struct Stats {
   Clock::time_point window_start;
   uint64_t idle = 0, empty = 0, busy = 0, waits = 0, timeouts = 0, gamma = 0;
-  // Idle passes by why the pass found no frame: no main frame counted past the one it took, or one
-  // counted but neither held nor ready (mode 2).
-  uint64_t no_frame = 0, not_ready = 0;
   Clock::duration waited{};
 };
 
@@ -183,20 +180,16 @@ void SleepStep(IdleState& s) {
 void LogStats(IdleState& s, uint8_t* base, uint32_t render, Pass pass, Clock::time_point now) {
   Stats& st = s.stats;
   (pass == Pass::kIdle ? st.idle : st.empty)++;
-  if (pass == Pass::kIdle) {
-    const uint32_t q = render + kQueue;
-    (Load32(base, q + kQueueCount) <= Load32(base, render + kTaken) ? st.no_frame : st.not_ready)++;
-  }
   const uint32_t hi = Load32(base, render + kGammaStart);
   if ((hi & 0x7FFFFFFF) != 0 && !(hi & 0x80000000)) st.gamma++;  // a positive double
   if (st.window_start == Clock::time_point{}) st.window_start = now;
   if (now - st.window_start < std::chrono::seconds(10)) return;
   using us = std::chrono::microseconds;
   REXLOG_INFO("RENDERIDLE: idle_passes={} empty_passes={} work_queued={} waits={} timeouts={} "
-              "wait_ms={:.1f} gamma_passes={} mode={} idle: no_frame={} not_ready={}",
+              "wait_ms={:.1f} gamma_passes={} mode={}",
               st.idle, st.empty, st.busy, st.waits, st.timeouts,
               std::chrono::duration_cast<us>(st.waited).count() / 1000.0, st.gamma,
-              Spin() ? "spin" : "wait", st.no_frame, st.not_ready);
+              Spin() ? "spin" : "wait");
   st = Stats{};
   st.window_start = now;
 }
