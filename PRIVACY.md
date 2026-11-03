@@ -1,8 +1,8 @@
 # Privacy policy
 
-This policy covers Forza Horizon 1: ReImagined: the Windows installer, the Linux packages, the launcher, the game the launcher builds on your PC, and the project's public Forza Live server. It says what is sent over the network, when, where it goes, what is stored and for how long, what is public, and how to turn each thing off.
+This policy covers Forza Horizon 1: ReImagined: the Windows installer, the Linux packages, the launcher, the game the launcher builds on your PC, the project's public Forza Live server, and the project website, forza.dyotson.dev, with its optional website accounts. It says what is sent over the network, when, where it goes, what is stored and for how long, what is public, and how to turn each thing off.
 
-Last updated: 2026-11-02. Every change to this policy is a change to this file, so its history on GitHub lists them: https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/commits/main/PRIVACY.md
+Last updated: 2026-11-03. Every change to this policy is a change to this file, so its history on GitHub lists them: https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/commits/main/PRIVACY.md
 
 ## In short
 
@@ -18,6 +18,7 @@ Last updated: 2026-11-02. Every change to this policy is a change to this file, 
 - When you play online, the server receives your gamertag, a random player ID (your XUID) and your IP addresses. Other players see your gamertag and XUID, and the server gives the players in your room your IP addresses so that their games can connect to yours.
 - Traffic to the game server is not encrypted. That includes chat messages. Your keys are not sent: the game and the launcher sign their requests with your signing key, and the server keeps only its public key. The one exception is your friends key from older versions, which the game sends once to the public server to move your account to the signing key.
 - The public server keeps most records with no time limit. Its status page and leaderboards are public.
+- Website accounts are optional, and you don't need one to play. If you make one (with Discord, GitHub or an email address), the website stores an account id, a number from Discord or GitHub or a one-way hash of your email address, and your sign-ins. It uses one sign-in cookie and one security cookie, and has no analytics, tracking or advertising. You can delete the account at any time. See "The website and website accounts".
 - What you choose to share is public: a photo mode **Big Shot** you upload is published on the project website with your gamertag, and paint jobs and vinyl groups you share on the storefront can be found, downloaded and rated by other players in the game, with their previews shown on the project website. Your XUID is not published with them.
 
 ## Who is involved
@@ -25,6 +26,8 @@ Last updated: 2026-11-02. Every change to this policy is a change to this file, 
 - Your PC runs the launcher and the game.
 - The project maintainer runs the public Forza Live server, forza-reimagined.playit.plus. You reach it through a tunnel run by playit.gg. playit.gg therefore sees your IP address and carries your game traffic, which is not encrypted, so playit.gg can read it.
 - GitHub hosts the releases, the update check, most downloads and the issue tracker. GitHub sees your IP address whenever the launcher or your browser contacts it.
+- The project maintainer also runs the server that serves the project website, forza.dyotson.dev, and its website accounts.
+- If you sign in to the website with Discord or GitHub, that service handles the sign-in. If you sign in with an email address, a transactional email service (an email relay) delivers the sign-in code to you.
 - Microsoft, Discord and Flathub are involved only in the cases described below.
 - If you play on a server that you or a friend host ("My own server"), that server's operator receives what this policy says goes to "the server". This policy does not cover what that operator does with it.
 
@@ -193,6 +196,45 @@ Records are kept by XUID.
 
 To have your records on the public server removed, see "Contact".
 
+## The website and website accounts
+
+The project website, forza.dyotson.dev, is static pages, plus an accounts service at forza.dyotson.dev/api/. Both run on a server the project maintainer runs.
+
+### Visiting the website
+
+- The website's web server logs each request: your IP address, the time, the page or file (without anything after a "?"), the result and your browser's User-Agent. These logs are kept for 14 days.
+- The pages load nothing from other sites, and there are no analytics, tracking or ads.
+- Only the account page talks to the accounts service. The other pages remember in your browser (localStorage, key fh-signed-in) whether you signed in, so that the menu can say "Account". That value never leaves your browser.
+
+### Website accounts (optional)
+
+A website account is optional. For now it can only browse; you don't need one to play, online or offline. You must be 13 or older to make one. You make one by signing in for the first time on the account page (forza.dyotson.dev/account.html), in one of three ways:
+- **Discord or GitHub.** The browser goes to Discord or GitHub, which asks you to allow the sign-in, then comes back. The website asks Discord only for the "identify" permission and asks GitHub for no permission. It keeps only your account's numeric id at that service. It does not keep your username, display name, avatar, email address or the access token.
+- **An email address.** The website mails you an 8-digit code, which works for 10 minutes and only in the browser where you asked for it. The email relay receives your address and the mail, and keeps them under its own policy. The website never stores your address: it keeps only a one-way hash of it (HMAC-SHA256 with a secret key), which can't be turned back into the address. It is used to find your account the next time you sign in with the same address.
+
+What the website stores about an account:
+- the account id (for example K7Q2-XM4P), when the account was made and when it last signed in;
+- the numeric Discord or GitHub id, or the hash of the email address;
+- your sign-in sessions. A session ends 30 days after you last used it, 90 days after the sign-in, or when you sign out. An account keeps at most 20;
+- while you sign in: the emailed code or the Discord or GitHub sign-in in progress, in your browser's session, for at most 10 minutes;
+- recent activity: sign-ins, sign-outs and when the account was made, without IP addresses. It is shown on your account page and kept for 90 days;
+- to slow down abuse, the accounts service counts sign-in attempts and code requests for each IP address and each email hash. Those counts are kept for an hour or a day.
+
+Cookies, set only when you use the account page:
+- `__Host-fh_session` holds your sign-in session.
+- `__Host-fh_csrf` protects your account from requests made by other websites.
+
+Neither is used for tracking or shared with anyone.
+
+What is not stored: passwords (there are none), your email address, your Discord or GitHub username, avatar or token, and your IP address with your account.
+
+Who can see it: an account is not public. No page shows your account id, sign-in method, Discord or GitHub id, or anything about your email address. Your account page shows your own account only to you.
+
+Deleting:
+- On the account page, "Delete my account" deletes the account, its sign-in methods, sessions and activity at once (it asks you to have signed in within the last 10 minutes).
+- Accounts unused for 30 days are deleted automatically, and so is an email account whose first code was never used, after a day.
+- The server's backups of the accounts database are kept for 7 days, so a deleted account is gone from them a week later.
+
 ## What is public
 
 - The server's status page (http://forza-reimagined.playit.plus:56678/ and /status), for everyone on the internet. For every player online at that moment it shows the gamertag, XUID, room, time online, data relayed, presence status and session, and matchmaking sessions. It also shows the open Horizon Worlds with the host's gamertag and the gamertag and XUID of whoever asked for an event, the head-to-head challenges with both players' gamertags, and the in-game position, heading and speed of each player who sends one in Horizon World free roam. It shows no IP addresses.
@@ -209,6 +251,7 @@ To have your records on the public server removed, see "Contact".
 - The published shader list, which contains no player IDs.
 - Your Discord activity, for your Discord contacts.
 - Anything you post in a GitHub issue.
+- Nothing about website accounts is public.
 
 ## How to turn each thing off
 
@@ -223,7 +266,8 @@ To have your records on the public server removed, see "Contact".
 - Discord activity: Settings > Online > "Share activity on Discord". Only the car, event and area in it: Settings > Online > "Share car, event and area".
 - Your computer's login name as gamertag: set Settings > Profile > Gamertag.
 - The DLSS download: Settings > Display > "Graphics API" set to Direct3D 12, with "NVIDIA DLSS" and "NVIDIA DLAA" off.
+- Website accounts: don't make one. To end one: "Sign out" or "Sign out everywhere" on the account page, or "Delete my account" there.
 
 ## Contact
 
-For questions or corrections, or to ask for your records on the public server to be removed, open an issue at https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/issues. Issues are public. Include your gamertag, but never post your friends key, your signing key or the contents of live_identity.txt.
+You can delete your website account yourself on the account page (forza.dyotson.dev/account.html). For questions or corrections, or to ask for your records on the public server to be removed, open an issue at https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/issues. Issues are public. Include your gamertag, but never post your friends key, your signing key or the contents of live_identity.txt.
