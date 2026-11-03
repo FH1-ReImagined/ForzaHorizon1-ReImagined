@@ -18,6 +18,9 @@ unsigned world_calls = 0, substep_calls = 0, physics_calls = 0;
 namespace forza::xr {
 bool SessionRunning() { return xr_running; }
 }
+namespace forza::discord {
+void WorldFrame(const PPCContext&, uint8_t*) {}
+}
 namespace forza::telemetry {
 void Physics(uint8_t*) { ++physics_calls; }
 }
