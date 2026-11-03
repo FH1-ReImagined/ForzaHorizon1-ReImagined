@@ -10,6 +10,7 @@
 #include "platform/achievement_toast.h"
 #include "platform/discord_presence.h"
 #include "platform/cursor_idle.h"
+#include "platform/auto_pause.h"
 #include "platform/hud_overlay.h"
 #include "platform/resume.h"
 #include "platform/native_quit.h"
@@ -116,6 +117,7 @@ class ForzaApp : public rex::ReXApp {
     });
     forza::InstallFriendsKey();
     cursor_idle_ = std::make_unique<forza::CursorIdle>(window(), drawer);
+    auto_pause_ = std::make_unique<forza::auto_pause::WindowObserver>(window());
   }
 
   void OnPostSetup() override { forza::InstallVulkanHooks(runtime()->graphics_system()); }
@@ -133,6 +135,7 @@ class ForzaApp : public rex::ReXApp {
       override { return {}; }
 
   void OnShutdown() override {
+    auto_pause_.reset();
     forza::xr::Shutdown();
     if(quit_lifetime_)quit_lifetime_->store(false);
     forza::native_quit::InstallHost({});
@@ -150,6 +153,7 @@ class ForzaApp : public rex::ReXApp {
   // frame statistics summary is written here, and where each guest thread is (a game that
   // loads forever is closed this way, #76).
   bool OnWindowCloseRequested() override {
+    auto_pause_.reset();
     forza::native_quit::Cancel();
     // The SDK terminates guest threads immediately after accepting this request.
     // A retained XThread handle does not keep its guest stack alive.
@@ -265,6 +269,7 @@ class ForzaApp : public rex::ReXApp {
  private:
   std::shared_ptr<std::atomic_bool> quit_lifetime_;
   std::unique_ptr<forza::CursorIdle> cursor_idle_;
+  std::unique_ptr<forza::auto_pause::WindowObserver> auto_pause_;
   forza::stall::Watchdog stall_watchdog_;
   forza::resume::Watcher resume_watcher_;
   uint64_t achievement_listener_ = 0;

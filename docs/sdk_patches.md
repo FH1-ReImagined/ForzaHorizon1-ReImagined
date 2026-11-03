@@ -565,3 +565,7 @@ Xbox 360 pad (uinput, 045e:028e) bound in the launcher with A on Accelerate and 
 (`<guid>:a=none,rt=a`). The game's SDL 3 reported the same GUID as the launcher's SDL 2 and used the profile.
 In free roam the pad's own RT held for 6 s left the car standing; A held for 8 s drove it off (75 on the
 speedometer). Not tested with a real pad yet.
+
+## ReIGlue dependency for auto-pause
+
+Change 0399 was merged in [ReIGlue PR #3](https://github.com/FH1-ReImagined/ReIGlue/pull/3) and is included in the current pin `ff1db6f6ff64f237ec2dbd28f06680205a6b8b1a`. Its optional `ForzaInputDisconnectSequence(user_mask)` bridge counts loss of the last active physical device. Synthetic keyboard/NOP devices, idle spares and reconnecting alone do not count. It replaces the obsolete local 0148 patch. Client tests require the current export and separately inject its absence to preserve older-runtime focus support. No immutable tag is changed; physical disconnect and headset acceptance remain outstanding.

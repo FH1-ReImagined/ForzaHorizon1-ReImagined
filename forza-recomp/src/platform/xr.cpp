@@ -381,7 +381,7 @@ struct State {
   XrSpace local = XR_NULL_HANDLE;
   XrSpace view = XR_NULL_HANDLE;
   XrSessionState state = XR_SESSION_STATE_UNKNOWN;
-  bool running = false;  // between xrBeginSession and xrEndSession
+  std::atomic<bool> running{false};  // between xrBeginSession and xrEndSession; read by input polling
   int frame_failures = 0;  // xrWaitFrame/xrBeginFrame/xrEndFrame failures in a row
   XrEnvironmentBlendMode blend = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
   int64_t swapchain_format = 0;
@@ -2147,6 +2147,7 @@ void Shutdown() {
 }
 
 bool CockpitActive() { return g.cockpit_active.load(std::memory_order_relaxed); }
+bool SessionRunning() { return g.running.load(std::memory_order_relaxed); }
 
 bool CockpitView(vr::HeadTransform& head, float& vertical_fov, float& aspect, uint32_t& tag) {
   if (!CockpitActive()) return false;
