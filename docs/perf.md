@@ -2855,3 +2855,66 @@ Not worth it first: the guest memory watches (6-10%, rounds 2-3 above already to
 yields (0.2-0.35 ms a frame, not on the chain), the GPU and readback waits (zero here; on players' PCs a GPU limit is
 a setting, render scale or MSAA). The audio mixer is a fixed 11-13% of a core here, 2-2.5 times that on a Deck, where it
 competes for the four cores; worth a look after the three above.
+
+## Stutter in the first part of a drive (#614, 2026-11-03)
+
+**The report.** A side-by-side video of the same replayed drive on one Windows PC: our Vulkan path showed tall
+frame-time spikes over the first ~30 s of a race and a flat graph afterwards (about 108 fps on average), ReGPU (#611)
+far fewer (93 fps), after building its recorded pipeline seed at boot. Players with NVIDIA cards report hitches early
+in a session even after Prebuild shaders (#400, #550).
+
+**Method.** TU4 game of main 77a7c33, ReIGlue 0422 with 0423 (the frame cost CSV also gives the pipelines built on any
+thread and their driver time, the frames held back for pipelines, skipped draws and CPU writes to watched memory),
+Ryzen 7 7800X3D, RX 9060 XT (RADV), Linux; the golden TU4 save in a scratch `--user_data_root`, scratch XDG dirs,
+offline, audio muted, 60 fps, FSR 1, render scale 1, 1920x1080 window. Two drives, each a fresh session from the boot:
+**race**, the GoPro Millennia Masters sign-up at the spawn and 60 s of the race from the start with `tools/autodrive.py`
+following the AI; **free roam**, 70 s on the County Route 203 loop (`tools/nav_route.py`, the #45 loop) from the spawn.
+**Empty**: an empty `--cache_root` and an empty `MESA_SHADER_CACHE_DIR`. **Prebuild**: the launcher's step on an
+empty cache root and Mesa cache (the shipped list merged with the server's, which added nothing, rebuilt from the game
+files, then `--shader_prebuild_only`), then the drive on that cache. Spikes are presented frames over 25 ms: from
+`--fh1_frame_cost_csv`, a held frame adds its time to the next shown one (the same counts as `RECOMP_PERF_CSV`'s
+presents within one or two frames); each is put down to what took its time (held for pipelines, else the largest of
+the command processor's costs, else the game: the command processor waited for its commands). `BENCH_LOCK` held from
+the load; another agent's game ran during the second prebuild batch (load 2-4).
+
+| Drive | Cache | Spikes > 25 ms (> 50 ms), worst | Their cause | Pipelines built in the drive / in the session after the warm-up |
+| --- | --- | --- | --- | --- |
+| race, 60 s | empty | 14 (3), 58 ms | all held for pipelines (9-22 ms each on RADV) | 25 / 433 |
+| race, 60 s | prebuild, list of main | 2 (0), 34 ms; 2 (0), 34 ms | held for pipelines | 2 / 27; 2 / 27 |
+| race, 60 s | prebuild, new list | 0; 0 | - | 0 / 1; 0 / 0 |
+| free roam, 70 s | empty | 42 (3), 83 ms | all held for pipelines | 76 / 367 |
+| free roam, 70 s | prebuild, list of main | 2 (0), 34 ms; 2 (0), 34 ms | held for pipelines | 2 / 26; 2 / 26 |
+| free roam, 70 s | prebuild, new list | 14 (0), 31 ms (load 7.5 at its end); 1 (0), 25 ms | the game | 0 / 0; 0 / 0 |
+
+Ranked, on the first drive:
+1. **Pipelines not built yet** (frames held back until a creation thread has built them): every spike of both drives
+   on an empty cache, about 400 pipelines a session. The prebuild removes nearly all of them.
+2. After the prebuild, still **25-27 pipelines a session** built in play, most of them in the loading and the first
+   seconds of free roam: 18-20 were **in the shipped list but never imported**, because they use two shaders the
+   prebuild could not rebuild from the game files (`missing` recipes, below); the other 5-7 were not listed (two
+   pixel shaders with early depth test, a strip variant, a render target format, one new vertex shader).
+3. **The game's own long frames while loading** (the command processor waiting for its commands): 20-35 a session
+   over 25 ms during the load into free roam and the race sign-up, the same with or without the prebuild. Not
+   something the GPU side waits for.
+4. The rest is small: one resolve readback (4 ms) in a cold run; texture loads, uploads, render targets and GPU waits
+   never reached 4 ms in a spike; 15-20 CPU writes to watched memory a frame, under 0.1 ms in all.
+
+On RADV a pipeline takes 5-30 ms, so even the empty cache stays under 100 ms. NVIDIA's driver takes 40-65 ms for one:
+in the #550 log (RTX 4090, 0.2.1, a fresh install after Prebuild shaders) the warm-up created the same 838 of 1148
+listed pipelines, the session built about 60 more, and every slow frame it reports after the load is `pipelines 1.0
+(40-65 ms)` on the command processor: a draw without a pixel shader has no placeholder, so its pipeline is built there,
+and 11 of the 27 unimported ones above are such draws. Each of them is a 40-65 ms stall on that card in a first session.
+
+**Why the 27 were not imported.** The list's `missing` recipes were a 96-byte vertex shader (`B6C9863F710683EC`) and a
+36-byte pixel shader (`A4A965C189287B99`) that are not blobs: the D3D library keeps them in the executable image without
+a blob header (Title Update 4 image offsets 882440 and 882536, the disc's 810200 and 810296), so `fxobj_shaders.py`,
+which finds blobs by their header, never saw them. 39 of the 42 listed pipelines that could not be built use them, 27
+in the `main` partition. The new `image` recipe (docs/shader_prebuild.md) says where they are, size and offsets, no
+code; the build checks the hash. The other two `missing` shaders are not in the executable verbatim and stay missing.
+The list also gains the 7 pipelines these drives met that it did not have.
+
+**After** (the game PR): the prebuild imports 876 pipelines for this partition (838 before; 1194 of the 1197 listed can
+be built, 1148 of 1190 before), the game's part of the prebuild takes 3.0-3.4 s (3.0-3.1 s before), and the drives build 0-1 pipelines in a session
+instead of 26-27; the race minute and the free-roam drive have no spike from pipelines left. What remains on this PC
+is the game's own frames while it loads. Not changed: on NVIDIA every start still compiles what its driver cache does
+not keep (#406), at the warm-up, before the title screen, not in play.
