@@ -92,6 +92,10 @@ fi
 [ "$STEP" = --sdk-only ] && exit 0
 
 # 2. The game.
+# ReGPU (the optional plugin, FORZA_REGPU_PLUGIN) is a git submodule (FH1-ReImagined/ReGPU).
+if [ ! -f "$ROOT/forza-recomp/thirdparty/ReGPU/CMakeLists.txt" ] && [ -e "$ROOT/.git" ]; then
+    git -C "$ROOT" submodule update --init forza-recomp/thirdparty/ReGPU
+fi
 BUILD="$ROOT/forza-recomp/out/build/windows"
 cmake -S "$ROOT/forza-recomp" -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_TOOLCHAIN_FILE="$ROOT/tools/cmake/windows-clang-cl.cmake" \

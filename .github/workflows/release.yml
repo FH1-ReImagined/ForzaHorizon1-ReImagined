@@ -40,7 +40,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: true   # server/: the Forza Live server (FH1-ReImagined/forza-live)
+          submodules: true   # server/: the Forza Live server (FH1-ReImagined/forza-live); forza-recomp/thirdparty/ReGPU (FH1-ReImagined/ReGPU)
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -508,7 +508,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: true   # server/: the Forza Live server (FH1-ReImagined/forza-live)
+          submodules: true   # server/: the Forza Live server (FH1-ReImagined/forza-live); forza-recomp/thirdparty/ReGPU (FH1-ReImagined/ReGPU)
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -551,7 +551,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: true   # server/: the Forza Live server (FH1-ReImagined/forza-live)
+          submodules: true   # server/: the Forza Live server (FH1-ReImagined/forza-live); forza-recomp/thirdparty/ReGPU (FH1-ReImagined/ReGPU)
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -680,7 +680,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: true   # server/: the Forza Live server (FH1-ReImagined/forza-live)
+          submodules: true   # server/: the Forza Live server (FH1-ReImagined/forza-live); forza-recomp/thirdparty/ReGPU (FH1-ReImagined/ReGPU)
       - uses: actions/download-artifact@v4
         with:
           name: sdk-overlay-linux

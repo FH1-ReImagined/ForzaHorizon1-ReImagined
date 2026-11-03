@@ -58,7 +58,7 @@ def main():
         copy(REPO / "tools" / n, out / "tools" / n)
     for resource in builder.NATIVE_TUNING_FILES:
         copy(REPO / "tools" / resource, out / "project" / "tools" / resource)
-    for rel in builder.source_files(REPO):
+    for rel in builder.source_files(REPO, windows=False):  # (no ReGPU: the Windows plugin only)
         copy(REPO / "forza-recomp" / rel, out / "project" / "forza-recomp" / rel)
     for f in sorted((REPO / "tools" / "cmake").glob("*.cmake")):
         copy(f, out / "project" / "tools" / "cmake" / f.name)

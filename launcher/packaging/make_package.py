@@ -64,7 +64,11 @@ def main():
     shutil.rmtree(stage, ignore_errors=True)
     shutil.copytree(a.pyinstaller_dist, stage, symlinks=True)
 
-    for rel in builder.source_files(REPO):
+    if a.platform == "windows" and not (REPO / "forza-recomp" / "thirdparty" / "ReGPU" / "CMakeLists.txt").is_file():
+        # (The optional ReGPU plugin, FORZA_REGPU_PLUGIN, is off by default: the package still builds the game.)
+        print("warning: forza-recomp/thirdparty/ReGPU is empty, so this package cannot build the ReGPU plugin "
+              "(git submodule update --init forza-recomp/thirdparty/ReGPU)", file=sys.stderr)
+    for rel in builder.source_files(REPO, windows=a.platform == "windows"):
         copy(REPO / "forza-recomp" / rel, stage / "project" / "forza-recomp" / rel)
     for f in sorted((REPO / "tools" / "cmake").glob("*.cmake")):
         copy(f, stage / "project" / "tools" / "cmake" / f.name)
