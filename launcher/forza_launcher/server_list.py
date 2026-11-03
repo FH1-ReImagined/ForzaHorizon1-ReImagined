@@ -29,7 +29,7 @@ from .shader_share import http_base
 
 # The public half of the main server's list key (its data folder's server_list_key.txt). Empty: no
 # list is fetched, and the page shows the main server, This PC and the added addresses.
-LIST_KEY = ""
+LIST_KEY = "876e24c0835accbccaad988934dca7ea64a2869818dd14565bad4ff1934f91f7"
 LIST_PATH = "/servers.json"
 FORMAT = "forza-live-servers-1"
 TAG = b"FORZA-SERVERS-V1\n"
