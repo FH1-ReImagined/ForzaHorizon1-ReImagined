@@ -107,6 +107,12 @@ In **Settings > Online**, pick one:
 - **My own server.** [Hosting guide](https://github.com/FH1-ReImagined/forza-live/blob/main/docs/hosting.md) in [forza-live](https://github.com/FH1-ReImagined/forza-live), the server's repository. Python 3 from the standard library, or Docker.
 - **Offline.** No Xbox LIVE.
 
+Community servers are run by volunteers in other regions, for a lower ping. Pick one on the launcher's **Servers** page, or type its address in **My own server**. Each keeps its own friends list and leaderboards: only the public server's are the official ones on the website.
+
+| Region | Address |
+| --- | --- |
+| US East | `reimagined-us-east.playit.plus:1819` |
+
 Horizon World is the first playlist under Multiplayer, Find Game. The server places you in the fullest open world, up to 8 players (a world with one of your car club's members first, when one has room), or you open one and drive. Someone who joins later gets JUMP IN. When the host leaves, the others keep driving. Each world is its own session. A local test has run with four players. [`docs/online_vision.md`](docs/online_vision.md)
 
 Friends (F8, or hold the left stick on a controller) and chat (F9) use the server's list. Leaderboards cover speed traps, speed zones, events and Rivals (times, ghosts and bounties), and the public server's are on the [website](https://forza.dyotson.dev/leaderboards.html). Car clubs and the Message Center work. The club garage can share a car, and chat has a Club channel for the members online (`/club` lists them). [Title services](https://github.com/FH1-ReImagined/forza-live/blob/main/docs/title_services.md) · [`docs/playing.md`](docs/playing.md)
