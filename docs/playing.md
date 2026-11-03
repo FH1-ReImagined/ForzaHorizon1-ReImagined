@@ -218,6 +218,17 @@ tools/run_forza.sh 120        # a two-minute test run; logs in ${XDG_RUNTIME_DIR
   a garbled picture (#54); photos saved by them stay garbled, take them again.
   The launcher's **Photo gallery** browses local saved pictures and exports PNG/JPEG
   copies. Press Refresh after saving a new picture ([gallery details](launcher.md#photo-gallery)).
+- **Online photo (#576):** the game leaves Photo Mode out of the pause menu online, because it
+  cannot pause a shared session. With **Online photo** on (launcher: Online > Horizon World;
+  `forza_online_photo = true` in `forza.toml`; off by default), the pause menu of Horizon World
+  free roam and online lobbies has **ONLINE PHOTO**: the game's photo camera, without the HUD,
+  while the session keeps running. Other cars keep moving; your car rolls to a stop and takes
+  no input until you leave (B back to the pause menu, then Resume), and the others see it
+  parked. TAKE PHOTO keeps the frame on screen at that moment: one render, so no depth of field
+  or photo anti-aliasing, and no Big Shot (the RB size switch is gone). SAVE stores it like any
+  other photo (1280x720 in `photo/<name>/`, listed in the launcher's gallery), and the game then
+  offers its storefront upload as usual. The website's community photos still come only from a
+  Big Shot, which needs single player.
 - **Hitches:** a frame that takes over 200 ms logs `FORZA_STALL` lines in `forza.log` with
   what the game was doing, and a game database query of 50 ms or more a `FORZA_SQL` line; attach
   them to an issue ([details](perf.md#long-frames-forza_stall)). Title Update 4 builds up to

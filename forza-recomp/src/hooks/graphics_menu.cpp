@@ -3,6 +3,7 @@
 // The scene/model layouts below are validated for Title Update 4 only.
 #include "../platform/graphics_menu.h"
 #include "../platform/native_pause_scene.h"
+#include "../platform/online_photo.h"
 #include "../platform/native_quit.h"
 #include "../platform/native_car_tuning_menu.h"
 #include "../platform/custom_race.h"
@@ -571,10 +572,47 @@ bool CommitSettings() {
 } // namespace
 } // namespace forza::graphics_menu
 
+namespace forza::graphics_menu {
+namespace {
+// Online photo (#576, src/hooks/online_photo.cpp): the builder's Photo Mode row (action 11)
+// in an online session, in the place the builder gives it offline. The stock list and the
+// native pause both read the row; selecting it runs the game's own action 11.
+void AddOnlinePhoto(PPCContext &ctx, uint8_t *base, uint32_t menu) {
+  if (!forza::online_photo::WantsPauseRow(ctx, base, menu)) return;
+  const uint32_t rows = menu + 0x174 + 0x28;
+  auto ids = [&] {
+    std::vector<uint32_t> found;
+    const uint32_t begin = Read(base, rows), end = Read(base, rows + 4);
+    if (!begin || end < begin || end - begin > 1024 || (end - begin) % 4) return found;
+    for (uint32_t address = begin; address < end; address += 4) {
+      const uint32_t row = Read(base, address);
+      found.push_back(row ? Read(base, row + 8) : 0);
+    }
+    return found;
+  };
+  const auto before = ids();
+  if (std::find(before.begin(), before.end(), 11u) != before.end()) return;
+  Native ui(ctx, base);
+  if (!ui) return;
+  ui.Add(menu, 11, "ONLINE PHOTO");
+  const auto after = ids();
+  if (after.size() != before.size() + 1 || after.back() != 11) return;
+  const uint32_t begin = Read(base, rows);
+  const size_t at = forza::online_photo::RowPosition(before);
+  const uint32_t added = Read(base, begin + uint32_t(before.size()) * 4);
+  for (size_t i = before.size(); i > at; --i)
+    Write(base, begin + uint32_t(i) * 4, Read(base, begin + uint32_t(i - 1) * 4));
+  Write(base, begin + uint32_t(at) * 4, added);
+  REXLOG_INFO("Online photo: pause menu entry added (row {} of {})", at + 1, after.size());
+}
+} // namespace
+} // namespace forza::graphics_menu
+
 extern "C" REX_FUNC(MenuBind) {
   using namespace forza::graphics_menu;
   active_menu = ctx.r3.u32;
   from_main_menu = false;
+  AddOnlinePhoto(ctx, base, active_menu);
   if(forza::native_pause_scene::Owns(active_menu))return;
   Native ui(ctx, base);
   if (ui) {
