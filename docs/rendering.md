@@ -238,12 +238,26 @@ driver; it needs a capture from an affected machine first to see which draw.
   magenta on screen is render target memory the game reads without writing, which is zero on
   some drivers and old data on others. `=1` fills with zero. Each fill is logged
   ("filled new render target", first 64).
+- **D3D12 fence completion ([SDK #13](https://github.com/FH1-ReImagined/ReIGlue/issues/13)):**
+  the SDK pin includes [SDK PR #14](https://github.com/FH1-ReImagined/ReIGlue/pull/14),
+  which checks both the queue signal and event-registration HRESULT before waiting for
+  out-of-submission operations. The original boolean check could skip registration and
+  wait indefinitely. The actual production branch passes 32 CPU mock cases; the full
+  translation unit passes a syntax check. No D3D12 device or Rt.25 map traversal was tested,
+  so this correction does not establish the cause of the reported location-specific hitch.
 - **NaN / Inf / out of range per draw:** capture a frame (`renderdoccmd capture -w -c DIR/cap
   ./forza ...` with `VK_ADD_IMPLICIT_LAYER_PATH=~/renderdoc/layer`, so the RenderDoc layer is
   found, and `FORZA_RDCAPTURE_TRIGGER`), then
   `RDC_CAP=cap.rdc RDC_OUT=DIR qrenderdoc --python tools/rdc_float_scan.py`: the first draw that
   leaves NaN, Inf or more than 31.875 in each float target, with texel positions. For a blown-out
   object, take RenderDoc's pixel history on it from there.
+- **RenderDoc startup (#511):** the SDK connects only to a RenderDoc library that is already
+  loaded into the process. Installing RenderDoc alone does not activate it; launch through
+  RenderDoc when a capture is intended. ReIGlue 0407 uses a counted `RTLD_NOLOAD` probe on
+  Linux and `GetModuleHandleExW` on Windows; macOS capture remains unsupported. The small
+  real-library fixture passes on Linux and Windows, including reference lifetime and final
+  unload. This is loader validation, not a new interactive capture qualification. The approach
+  follows Pinyon Shift and retains its BSD notice in ReIGlue.
 - **A colour on screen:** a short script over the screenshots (Pillow) that counts saturated
   pixels of the reported colour (cyan: G and B above 215, R 70 below G) finds the frames to look at;
   check the hits, the radio HUD's logo is cyan too.
@@ -394,6 +408,23 @@ dimension is raised to at least 1280x720 (and kept within the output), logged on
 input 960x540 is below the native 1280x720; using 1280x720`. At a 1080p output FSR 3 Performance
 and Balanced therefore run a 1280x720 input (Quality 1280x720 as before); 1440p and 4K are
 unchanged. DLSS 1080p Performance asked NGX for 960x540 and had the same hole.
+
+**Startup movies at a 1080p output (#539).** With the scene/HUD split at a 1080p output (FSR 3
+in every mode and SMAA 1x; DLSS and DLAA take the same path, not tested) the movies showed only their
+top-left 75%, enlarged, and the legal screen before them filled only the top-left 1280x720.
+1440p and 4K were not affected. The HUD target's raster at 1080p is 1920x1080 of the 2560x1440
+that render scale 2 gives, and the HUD's shaders scale the coordinates of every scaled screen
+texture to that part. A movie frame is decoded into a target in the scene, whose raster fills
+the whole surface, and a HUD draw then puts it on screen. ReIGlue 0409 records for each resolve
+whether it came from the scene and leaves those textures' coordinates unscaled. It also presents
+a frame without the HUD layer (the legal screen, unscaled; a frame between two movies) at its own
+size, letterboxed, instead of the output size. Such a size change replaces the presenter's output
+images; the log lists the first 16 (`FH1 split: frame N presents WxH ...`). A boot to free roam
+at 1080p has 8 or 9, at the legal screen, between movies and at loading, never one a frame. Checked
+with the startup movies on (TU4, RADV, in a 1280x720 window): FSR 3 Native AA, FSR 3 Quality and
+SMAA 1x now frame the movies and the legal screen as game default does. FSR 3 Native AA at
+1440p and game default are unchanged. The menus, the HUD in free roam and the pause menu still
+present at the output size.
 
 Quality, from the race screenshots (FSR 3 output at 1440p against the 720p FSR 1 input
 enlarged with Lanczos as a stand-in for EASU, so the FSR 1 side is if anything kinder than
@@ -574,6 +605,18 @@ hook off. The red line in the report (a red VW Corrado, not in the test save) wa
 reproduced on the cars at hand (Zonda R, M3 GTR at scale 2, AF 16x, FXAA extreme); a livery
 layer missing in the same way is a likely cause.
 
+Photo mode (#167, 2026-10-28): since ReIGlue 0364 the pipelines a frame meets are built in the
+background across frames, and draws whose pipelines are not ready are skipped in every frame
+until they are, not only in the first. A photo taken soon after entering photo mode on a slow
+driver (AMD's on Windows, 0.2-0.3 s a pipeline) could then miss them, as the photo is composed,
+resolved and read back on the CPU at SAVE. `src/hooks/thumbnail_sync.cpp` holds
+`sync_pipeline_creation` while photo mode renders (it draws the first shadow cascade with the
+high-quality filter, technique 8 of `ApplyShadows`, which play never uses; renewed at most once a
+second, 8 s after the last such frame), so its frames wait for their pipelines as before 0364.
+`FORZA_PHOTO_SYNC=0` switches it off. Any other render the game reads back while draws were
+skipped logs `Pipelines: a render the game reads back ... missed draws` and is counted in the
+`Pipelines:` line.
+
 
 ## Reused car thumbnail readbacks (Vulkan)
 
@@ -644,6 +687,50 @@ memory reaches 90 % of the driver's budget, or after an allocation failed
 before and after trimming. A picture already broken stays until the car's design is saved
 again.
 
+## Photo mode's Big Shot was the loading screen (#552)
+
+BIG SHOT : 8.3 MEGAPIXEL (RB in photo mode's camera, then "create a large photo and upload it to
+ForzaMotorsport.net") sends a 3840x2160 BMP (`LargeFileUpload.Create(..., "ForzaBigshot.bmp")`,
+then `Content.UploadContent`). With the default `readback_resolve = some` all nine 1280x720 tiles
+of it were the first loading screen; with `full` it was right.
+
+How the game makes it (TU4 addresses; the disc build's are in `src/hooks/bigshot_readback.cpp`):
+YES posts the request (`sub_828006B8` calls `sub_826103D0` with 3840x2160), and the render thread
+starts it in `sub_82614850`. The tile state (the object of `sub_8248B278` + 148) gets the 3840x2160
+buffer and the flag that sends the tiles there. Each tile is accumulated over 96 frames. On the
+last one `sub_825F4418` calls `sub_825F3CE8`, which locks that frame's front buffer (one of the
+renderer's two D3D textures at 0x833D5150 and 0x833D5184: 1280x720 2_10_10_10 at physical
+0x1BDB1000 and 0x1C149000) and untiles it into the buffer. After the ninth tile `sub_82CF45C8`
+resets the state, and the BMP is uploaded. Hardware watchpoints on the front buffers (gdb `awatch`
+on their 0xC0000000 view) caught nine reads during a Big Shot, all from `sub_825F3CE8` (through
+`sub_82B010E0`, the untiling).
+
+The game resolves both front buffers twice every frame. `some` copies a resolve back to guest
+memory only when its key (range, source, format) is new or its readback buffer was dropped after
+60 unused frames. The front buffers are never unused, so they were copied back once, at the first
+loading screen, and the CPU read that picture for every tile. A trace of every resolve during a
+Big Shot showed no resolve of its own for the tiles. The only new key is the 1280x720 float
+accumulation target at 0x1E759000, which the CPU does not read.
+
+Fix: ReIGlue 0411 adds `readback_resolve_wait_range`, a guest physical range whose resolves wait
+for the GPU and are copied back as with `full` (Vulkan and D3D12; 0 for none).
+`src/hooks/bigshot_readback.cpp` sets it to the two front buffers (from their fetch constants)
+once `sub_82614850` has started a capture to the CPU buffer, and clears it in `sub_82CF45C8` (or
+after 10 minutes if the end never comes). Only the front buffers' resolves during a Big Shot pay:
+1,728 copies (2 a frame for 864 frames), about 2.5 ms of GPU waits a frame while it runs. At a
+60 fps cap the capture took 15.1 s, against 14.5 s before. Other frames do not change.
+`FORZA_BIGSHOT_READBACK=0` switches it off. `readback_resolve = none` still turns readback off,
+and the Big Shot with it.
+
+Checked (TU4, RADV on an RX 9060 XT, render scale 1, `some`): a Big Shot taken in free roam is the
+photographed scene, nine different tiles that join without seams, and the local server publishes it
+(forza-live #17). A photo saved with SAVE loads correctly from VIEW PHOTO and its thumbnail is
+right. An Auto Upgrade at the Montano Plains outpost wrote a correct car thumbnail. FSR 3 Native AA at
+render scale 2 (1080p output) gives a correct Big Shot too; its capture takes 21 s. The built-in
+benchmark at render scale 1 (1280x720, 240 fps cap, four runs each, alternating) stays within its
+run-to-run spread: median 141.2 fps (120.2 to 148.1) against 143.3 (136.6 to 146.7) on main, 1% low
+93.9 against 92.8, p99 9.71 against 9.60 ms. The D3D12 path was not run.
+
 ## Festival video flashes purple (#91, open)
 
 Report: RX 9070 XT, Windows 11, Vulkan, v0.1.12, `frame_rate` 240, render scale 2, AF 16x,
@@ -680,7 +767,15 @@ Cold pipeline cache ruled out as the cause (2026-10-17): the boot videos on TU4 
 12 screenshots from the first video to the title. With async compilation a draw whose pipeline
 is not ready is skipped, but the SDK then does not present that frame at all
 (`vulkan_async_skip_incomplete_frames`, on by default), so a cold cache gives held frames at
-worst, never stale render-target contents on screen. Purple/white frames with the right luma
+worst, never stale render-target contents on screen. Since ReIGlue 0364 (#167) a frame that
+only lacks object draws is shown after `vulkan_async_skip_incomplete_frames_ms` (100 ms) of
+holding, without those objects; a frame that lacks a screen-space pass (a movie frame, a
+composite, a full-screen effect: 6 vertices or fewer), a depth or stencil only draw, a draw
+into the 1280-wide front buffer or UI target or the native HUD, or a draw of the VR stereo
+segment is still held until the pipeline is built, so stale contents still never reach the
+screen. With `vulkan_async_skip_incomplete_frames=false` they can (objects or passes missing
+for as long as their pipelines build); the `Pipelines:` line counts frames shown without
+draws. Purple/white frames with the right luma
 and wrong colour planes do not fit that either, so no movie sync window was added. Not tested
 on AMD Windows (#108: the same cutscene was fine on the player's next run, so check whether
 that run had a warm cache and the same settings, and whether `vulkan_async_skip_incomplete_frames`

@@ -1,0 +1,222 @@
+diff --git a/include/rex/graphics/pipeline/texture/pack_format.h b/include/rex/graphics/pipeline/texture/pack_format.h
+index 10d9fa3..ddf7598 100644
+--- a/include/rex/graphics/pipeline/texture/pack_format.h
++++ b/include/rex/graphics/pipeline/texture/pack_format.h
+@@ -1,6 +1,6 @@
+ #pragma once
+-// FH1 (#384): the texture pack file formats: DDS reading and writing. Nothing else of the SDK, so
+-// tools/test_texture_pack_dds.cpp builds it alone.
++// FH1 (#384): the texture pack file formats: DDS reading and writing, and the pack order. Nothing
++// else of the SDK, so tools/test_texture_pack_dds.cpp builds it alone.
+ #include <cstddef>
+ #include <cstdint>
+ #include <string>
+@@ -58,4 +58,11 @@ std::vector<uint8_t> EncodeDds(Format format, uint32_t width, uint32_t height,
+ // header's pitch says (see the code). false and a reason in error when it cannot be used.
+ bool DecodeDds(const uint8_t* data, size_t size, Decoded& out, std::string& error);
+ 
++// texture_packs: the pack folders, in order ('|'-separated; a later one wins for the same
++// fingerprint). "." is the files directly in the pack root (not its folders: the loose files
++// of milestone 1's layout). A name that is not a plain folder name in the pack root ("..", a
++// path, "dump" in any case) is left out and counted in refused; a name given twice keeps its
++// first place; empty names are skipped ("|" alone: no packs).
++std::vector<std::string> ParsePackOrder(const std::string& value, size_t& refused);
++
+ }  // namespace rex::graphics::texture_pack
+diff --git a/src/graphics/pipeline/texture/pack.cpp b/src/graphics/pipeline/texture/pack.cpp
+index d48e1a7..37f01a8 100644
+--- a/src/graphics/pipeline/texture/pack.cpp
++++ b/src/graphics/pipeline/texture/pack.cpp
+@@ -20,6 +20,7 @@
+ 
+ #include <rex/chrono/clock.h>
+ #include <rex/cvar.h>
++#include <rex/filesystem.h>
+ #include <rex/graphics/pipeline/texture/info.h>
+ #include <rex/logging.h>
+ 
+@@ -57,6 +58,11 @@ REXCVAR_DEFINE_BOOL(texture_replace_preload, false, "GPU",
+ REXCVAR_DEFINE_STRING(texture_pack_root, "", "GPU",
+                       "Texture pack folder (default: textures in the user data folder)")
+     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++REXCVAR_DEFINE_STRING(texture_packs, "", "GPU",
++                      "The texture packs to use, in order: folders in texture_pack_root separated "
++                      "by |, a later one winning for the same texture (| alone: none). Empty: "
++                      "every file in texture_pack_root and its folders except dump")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+ 
+ namespace rex::graphics::texture_pack {
+ 
+@@ -100,6 +106,7 @@ std::string Lower(std::string text) {
+   return text;
+ }
+ 
++
+ void SwapEndian(uint8_t* data, size_t size, xenos::Endian endian) {
+   switch (endian) {
+     case xenos::Endian::k8in16:
+@@ -686,38 +693,93 @@ Packs::Packs() {
+   std::filesystem::create_directories(dump_ ? dump_dir_ : root_, error);
+ 
+   const auto scan_start = std::chrono::steady_clock::now();
+-  size_t duplicates = 0;
++  size_t duplicates = 0;   // a fingerprint twice in one pack
++  size_t overridden = 0;   // a fingerprint an earlier pack has too (the later one is used)
++  std::string packs_text;  // for the log
+   if (replace_) {
+-    // Every <fingerprint>.dds/.png under the folder, except in dump/; a .dds wins over a .png.
+-    std::vector<std::pair<uint64_t, std::filesystem::path>> files;
+-    for (auto it = std::filesystem::recursive_directory_iterator(
+-             root_, std::filesystem::directory_options::skip_permission_denied, error);
+-         !error && it != std::filesystem::recursive_directory_iterator(); it.increment(error)) {
+-      if (it->is_directory(error)) {
+-        if (it.depth() == 0 && it->path().filename() == "dump") it.disable_recursion_pending();
+-        continue;
+-      }
+-      const std::string extension = Lower(it->path().extension().string());
++    // Every <fingerprint>.dds/.png in the packs: with texture_packs, in those folders of the
++    // root; else anywhere under it except dump/. For a fingerprint in several files: the
++    // latest pack's, then a .dds before a .png, then the first path, the same every run.
++    struct File {
+       uint64_t fingerprint;
+-      if ((extension == ".dds" || extension == ".png") &&
+-          ParseHex(it->path().stem().string(), fingerprint)) {
+-        files.emplace_back(fingerprint, it->path());
++      uint32_t pack;
++      bool dds;
++      std::filesystem::path path;
++    };
++    std::vector<File> files;
++    // top_only: the files in `folder` itself, not in its folders (the loose files, ".").
++    auto scan = [&files](const std::filesystem::path& folder, uint32_t pack, bool skip_dump,
++                         bool top_only) {
++      std::error_code scan_error;
++      for (auto it = std::filesystem::recursive_directory_iterator(
++               folder, std::filesystem::directory_options::skip_permission_denied, scan_error);
++           !scan_error && it != std::filesystem::recursive_directory_iterator();
++           it.increment(scan_error)) {
++        if (it->is_directory(scan_error)) {
++          if (top_only || (skip_dump && it.depth() == 0 && it->path().filename() == "dump")) {
++            it.disable_recursion_pending();
++          }
++          continue;
++        }
++        const std::string extension = Lower(it->path().extension().string());
++        uint64_t fingerprint;
++        if ((extension == ".dds" || extension == ".png") &&
++            ParseHex(it->path().stem().string(), fingerprint)) {
++          files.push_back({fingerprint, pack, extension == ".dds", it->path()});
++        }
++      }
++    };
++    const std::string order = REXCVAR_GET(texture_packs);
++    if (order.empty()) {
++      scan(root_, 0, true, false);
++      packs_text = "every folder";
++    } else {
++      size_t refused = 0;
++      const std::vector<std::string> names = ParsePackOrder(order, refused);
++      std::string missing;
++      size_t found = 0;
++      for (uint32_t i = 0; i < names.size(); ++i) {
++        if (names[i] == ".") {  // the loose files directly in the folder
++          ++found;
++          scan(root_, i, false, true);
++          packs_text += (packs_text.empty() ? "" : ", ") + std::string("loose files");
++          continue;
++        }
++        const std::filesystem::path folder = root_ / rex::to_path(names[i]);
++        std::error_code folder_error;
++        if (!std::filesystem::is_directory(folder, folder_error)) {
++          missing += (missing.empty() ? "" : ", ") + names[i];
++          continue;
++        }
++        ++found;
++        scan(folder, i, false, false);
++        packs_text += (packs_text.empty() ? "" : ", ") + names[i];
++      }
++      if (packs_text.empty()) packs_text = "none";
++      packs_text = "packs " + packs_text;
++      if (!missing.empty()) {
++        REXGPU_WARN("Texture packs: not in {}: {} (texture_packs)", root_.string(), missing);
++        packs_text += "; " + std::to_string(names.size() - found) + " not found";
++      }
++      if (refused) {
++        REXGPU_WARN("Texture packs: {} name(s) in texture_packs are not a folder name: left out",
++                    refused);
+       }
+     }
+-    std::sort(files.begin(), files.end(), [](const auto& a, const auto& b) {
+-      if (a.first != b.first) return a.first < b.first;
+-      // .dds before .png, then by path, so the choice is the same every run.
+-      const bool a_dds = Lower(a.second.extension().string()) == ".dds";
+-      const bool b_dds = Lower(b.second.extension().string()) == ".dds";
+-      if (a_dds != b_dds) return a_dds;
+-      return a.second < b.second;
++    std::sort(files.begin(), files.end(), [](const File& a, const File& b) {
++      if (a.fingerprint != b.fingerprint) return a.fingerprint < b.fingerprint;
++      if (a.pack != b.pack) return a.pack > b.pack;  // the later pack wins
++      if (a.dds != b.dds) return a.dds;
++      return a.path < b.path;
+     });
++    uint32_t last_pack = 0;
+     for (auto& file : files) {
+-      if (!index_.empty() && index_.back().first == file.first) {
+-        ++duplicates;
++      if (!index_.empty() && index_.back().first == file.fingerprint) {
++        ++(file.pack == last_pack ? duplicates : overridden);
+         continue;
+       }
+-      index_.push_back(std::move(file));
++      last_pack = file.pack;
++      index_.emplace_back(file.fingerprint, std::move(file.path));
+     }
+   }
+   if (dump_) {
+@@ -735,12 +797,14 @@ Packs::Packs() {
+                              std::chrono::steady_clock::now() - scan_start)
+                              .count();
+   REXGPU_INFO(
+-      "Texture packs: folder {}; dump {}{}; replace {} ({} files{}{}){} (listed in {:.1f} ms)",
++      "Texture packs: folder {}; dump {}{}; replace {} ({}{} files{}{}){} (listed in {:.1f} ms)",
+       root_.string(), dump_ ? "on" : "off",
+       dump_ ? " (" + std::to_string(dumped_.size()) + " already dumped)" : std::string(),
+-      replace_ ? "on" : "off", index_.size(),
++      replace_ ? "on" : "off", replace_ ? packs_text + ": " : std::string(), index_.size(),
+       duplicates ? ", " + std::to_string(duplicates) + " duplicate names ignored" : std::string(),
+-      "", preload_ ? ", preloading" : "", scan_ms);
++      overridden ? ", " + std::to_string(overridden) + " also in an earlier pack (the later one used)"
++                 : std::string(),
++      preload_ ? ", preloading" : "", scan_ms);
+   if (dump_) std::thread(&Packs::DumpWorker, this).detach();
+   if (replace_) std::thread(&Packs::DecodeWorker, this).detach();
+ }
+diff --git a/src/graphics/pipeline/texture/pack_format.cpp b/src/graphics/pipeline/texture/pack_format.cpp
+index 8b41e58..90357da 100644
+--- a/src/graphics/pipeline/texture/pack_format.cpp
++++ b/src/graphics/pipeline/texture/pack_format.cpp
+@@ -370,4 +370,24 @@ bool DecodeDds(const uint8_t* data, size_t size, Decoded& out, std::string& erro
+   return true;
+ }
+ 
++std::vector<std::string> ParsePackOrder(const std::string& value, size_t& refused) {
++  std::vector<std::string> names;
++  size_t start = 0;
++  while (start <= value.size()) {
++    size_t end = value.find('|', start);
++    if (end == std::string::npos) end = value.size();
++    std::string name = value.substr(start, end - start);
++    start = end + 1;
++    if (name.empty()) continue;
++    std::string lower = name;
++    for (char& c : lower) c = char(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
++    if (name == ".." || name.find_first_of("/\\:") != std::string::npos || lower == "dump") {
++      ++refused;
++      continue;
++    }
++    if (std::find(names.begin(), names.end(), name) == names.end()) names.push_back(name);
++  }
++  return names;
++}
++
+ }  // namespace rex::graphics::texture_pack

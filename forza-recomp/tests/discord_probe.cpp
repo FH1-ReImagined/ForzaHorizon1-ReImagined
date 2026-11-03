@@ -33,6 +33,57 @@ int main(int argc, char** argv) {
     model.Context(0x8001, mode);
     assert(!model.Format().details.empty());
   }
+  // Details (#527): the game's names for the car, class/PI, event and zone.
+  {
+    Model d;
+    d.game = {"1962 Ferrari 250 GTO", "S", 701, "Oakley Blitz", "Red Rock"};
+    d.Context(0x8001, 1);
+    assert(d.Format().details == "Exploring Colorado");  // discord_presence_details off
+    assert(d.Format().state == "Free roam");
+    d.show_details = true;
+    assert(d.Format().details == "Exploring Colorado \xC2\xB7 Red Rock");
+    assert(d.Format().state == "1962 Ferrari 250 GTO \xC2\xB7 S 701");
+    d.Context(0x15, 1);  // Horizon Rally's free roam: no zone
+    assert(d.Format().details == "Preparing for Horizon Rally");
+    d.Context(0x15, 0);
+    d.Context(0x8001, 2);
+    assert(d.Format().details == "Racing in a festival event \xC2\xB7 Oakley Blitz");
+    d.Context(0x8001, 6);
+    assert(d.Format().details == "Challenging a rival \xC2\xB7 Oakley Blitz");
+    d.Context(0x8001, 5);  // a PR stunt is no event
+    assert(d.Format().details == "Taking on a PR stunt");
+    assert(d.Format().state == "1962 Ferrari 250 GTO \xC2\xB7 S 701");
+    for (uint32_t menu : {0u, 8u, 9u, 10u, 11u, 12u, 13u}) {  // menus keep their wording
+      Model plain;
+      plain.Context(0x8001, menu);
+      d.Context(0x8001, menu);
+      assert(d.Format() == plain.Format());
+    }
+    d.Context(0x8001, 14); d.count = 3; d.capacity = 8;  // the lobby: no car
+    assert(d.Format().state == "Multiplayer | 3/8 players");
+    d.Context(0x8001, 15); d.Context(0x12, 4);
+    assert(d.Format().details == "Exploring Colorado online \xC2\xB7 Red Rock");
+    assert(d.Format().state == "1962 Ferrari 250 GTO \xC2\xB7 S 701 | 3/8 players");
+    d.Context(0x12, 0);
+    assert(d.Format().details == "Racing online");
+    d.game.pi = 0;  // class without a PI: the car only
+    assert(d.Format().state == "1962 Ferrari 250 GTO | 3/8 players");
+    d.game.car.clear();  // unknown car: the old state, never a placeholder
+    assert(d.Format().state == "Multiplayer | 3/8 players");
+    // Discord's 128-character limit, cut between UTF-8 sequences; the count stays.
+    std::string long_name;
+    for (int i = 0; i < 100; ++i) long_name += "\xC3\xA9";  // e-acute, 2 bytes
+    d.game.car = long_name;
+    const auto fitted = d.Format().state;
+    assert(fitted.size() <= 128);
+    assert(fitted.ends_with("... | 3/8 players"));
+    for (size_t i = 0; i + 17 < fitted.size(); i += 2)
+      assert(static_cast<unsigned char>(fitted[i]) == 0xC3);
+    d.game.event = std::string(300, 'x');
+    d.Context(0x8001, 2);
+    assert(d.Format().details.size() == 128 && d.Format().details.ends_with("..."));
+    assert(Fit("short") == "short");
+  }
   if (argc == 1) { std::puts("Discord model PASS"); return 0; }
   // A local Discord-compatible IPC fixture exercises the actual pinned client.
   DiscordEventHandlers handlers{};

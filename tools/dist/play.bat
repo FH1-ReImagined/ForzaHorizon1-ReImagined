@@ -52,7 +52,7 @@ rem Local server: reuse one already listening on 21201, else start one for this 
 powershell -NoProfile -Command "try{(New-Object Net.Sockets.TcpClient('127.0.0.1',21201)).Close();exit 0}catch{exit 1}"
 if errorlevel 1 (
   if not exist "%DOCS%\live_server" mkdir "%DOCS%\live_server"
-  start "Forza Live server" /min python server\forza_live_server.py --host 127.0.0.1 --port 21200 --http-port 21201 --data-dir "%DOCS%\live_server"
+  start "Forza Live server" /min python server\forza_live_server.py --host 127.0.0.1 --port 21200 --http-port 21201 --data-dir "%DOCS%\live_server" --game-db "%DATA%\media\db\gamedb.slt"
   timeout /t 1 /nobreak >nul
 )
 set "FORZA_SERVER=127.0.0.1:21200"

@@ -35,12 +35,14 @@
 //   (0xFC/0x58023) hands the game the invite they accepted, which then joins our session.
 // - XNetLogonGetTitleID / XNetLogonGetMachineID: the SDK stubs return garbage.
 // - XUserReadStats / XSessionWriteStats (0xFB/0xB0021, 0xB0025): Xbox LIVE stats rows
-//   (Forza's only view is TrueSkill) kept and rated by the server (server/forza_stats.py);
+//   (Forza's only view is TrueSkill) kept and rated by the server (server/forza_live/competition/stats.py);
 //   the SDK left the results empty and Forza crashed creating its party session.
 //
 // Everything else goes to the SDK. FORZA_NETTRACE=1 logs every XMsg call (as net.cpp
 // did before) and what we answered. Message layouts follow the Xenia netplay fork
 // (AdrianCassar/xenia-canary, BSD), see RecompiledHaloReach's docs/online_plan.md.
+// Parts that follow Xenia: Copyright (c) 2022, Ben Vanik and Xenia project contributors,
+// BSD 3-Clause License (https://github.com/xenia-project/xenia/blob/master/LICENSE).
 
 #include "../platform/guest_memory.h"
 #include "../platform/sdk_import.h"
@@ -91,14 +93,10 @@ constexpr uint32_t kIoPending = 0x3E5;
 // X_ONLINE_FRIENDSTATE flags.
 constexpr uint32_t kFriendOnline = 0x1;
 constexpr uint32_t kFriendPlaying = 0x2;
-constexpr uint32_t kFriendJoinable = 0x10;
-constexpr uint32_t kFriendJoinableFriendsOnly = 0x100;
 
 // XSESSION_CREATE flags.
 constexpr uint32_t kSessionHost = 0x1;
 constexpr uint32_t kSessionUsesPresence = 0x2;
-constexpr uint32_t kSessionJoinViaPresenceDisabled = 0x200;
-constexpr uint32_t kSessionJoinViaPresenceFriendsOnly = 0x800;
 
 constexpr size_t kSessionInfoSize = 0x3C;  // XSESSION_INFO
 constexpr size_t kFriendSize = 0xC4;       // X_ONLINE_FRIEND
@@ -144,8 +142,9 @@ uint32_t ArgPointer(const uint8_t* base, uint32_t args, int index) {
 }
 
 // The presence our player shows when not hosting a joinable session.
+std::vector<uint8_t> IdlePresenceExtra();
 void SetIdlePresence() {
-  forza::LiveSetPresence(kFriendOnline | kFriendPlaying, nullptr, "Forza Horizon");
+  forza::LiveSetPresence(kFriendOnline | kFriendPlaying, nullptr, "Forza Horizon", IdlePresenceExtra());
 }
 
 // --- XLiveBase -------------------------------------------------------------------
@@ -283,11 +282,14 @@ struct HostedSession {
                                         // then the game type the game sets)
   std::vector<uint8_t> qos;             // a joined session's QoS data (from the search, or our
                                         // game's own once it made us the host)
+  std::vector<uint64_t> members;
 };
 std::mutex sessions_mutex;
 std::unordered_map<uint32_t, HostedSession> hosted_sessions;  // by session object
 std::unordered_map<uint64_t, std::vector<uint8_t>> qos_data;  // XNetQosListen data by key id
 uint64_t session_order = 0;
+forza::social_presence::Car local_car_details;
+uint64_t local_car_session = 0;
 uint8_t joined_session[kSessionInfoSize] = {};  // the last session we joined as a guest
 // Sessions we joined as a guest, by session object: their standby record (Matchmaking,
 // below) and, if a host migration makes us the host (XSessionMigrateHost), the session we
@@ -296,6 +298,12 @@ std::unordered_map<uint32_t, HostedSession> guest_sessions;
 
 uint64_t SessionId(const uint8_t* info) {
   return uint64_t(Load32(info)) << 32 | Load32(info + 4);
+}
+uint64_t CurrentInteractiveSessionIdLocked() {
+  const HostedSession* best=nullptr;
+  for(const auto* sessions:{&hosted_sessions,&guest_sessions})for(const auto& [object,s]:*sessions)
+    if(forza::social_presence::InteractiveSession(s.flags,SessionId(s.info))&&(!best||s.order>best->order))best=&s;
+  return best?SessionId(best->info):0;
 }
 
 void PublishMatchLocked();    // Matchmaking, below
@@ -316,6 +324,12 @@ std::vector<uint8_t> PresenceExtra(const HostedSession& s) {
   extra.push_back(uint8_t(size >> 8));
   extra.push_back(uint8_t(size));
   if (size) extra.insert(extra.end(), it->second.begin(), it->second.begin() + size);
+  if(local_car_session==SessionId(s.info))forza::social_presence::Append(extra, local_car_details);
+  return extra;
+}
+std::vector<uint8_t> IdlePresenceExtra() {
+  std::vector<uint8_t> extra(6);
+  if(local_car_session==CurrentInteractiveSessionIdLocked())forza::social_presence::Append(extra, local_car_details);
   return extra;
 }
 
@@ -332,22 +346,20 @@ void UpdateDiscordPartyLocked() {
                         best ? best->max_public + best->max_private : 0);
 }
 
-// Publishes the newest joinable presence session we host, or idle presence. Needs
+// Publishes the newest joinable party/gameplay session we host, or idle presence. Needs
 // sessions_mutex.
 void PublishPresenceLocked() {
   UpdateDiscordPartyLocked();
   const HostedSession* best = nullptr;
   for (const auto& [object, s] : hosted_sessions) {
-    const bool joinable = (s.flags & kSessionUsesPresence) &&
-                          !(s.flags & kSessionJoinViaPresenceDisabled);
+    const bool joinable = forza::social_presence::JoinState(s.flags) != 0;
     if (joinable && (!best || s.order > best->order)) best = &s;
   }
   if (!best) {
     SetIdlePresence();
     return;
   }
-  uint32_t state = kFriendOnline | kFriendPlaying | kFriendJoinable;
-  if (best->flags & kSessionJoinViaPresenceFriendsOnly) state |= kFriendJoinableFriendsOnly;
+  const uint32_t state = forza::social_presence::JoinState(best->flags);
   forza::LiveSetPresence(state, best->info, "Forza Horizon", PresenceExtra(*best));
 }
 
@@ -373,6 +385,7 @@ void XSessionCreate(uint8_t* base, uint32_t buffer) {
     g.playlist = SearchedPlaylistLocked();
     guest_sessions[object] = g;
     PublishStandbyLocked();
+    PublishPresenceLocked();
     return;
   }
   HostedSession s{};
@@ -402,6 +415,7 @@ void XSessionDelete(uint8_t* base, uint32_t buffer) {
     qos_data.erase(SessionId(g->second.info));  // what we described it with as its game host
     guest_sessions.erase(g);
     PublishStandbyLocked();
+    PublishPresenceLocked();
   }
   auto it = hosted_sessions.find(Load32(GuestPtr(base, buffer)));
   if (it == hosted_sessions.end()) return;
@@ -439,7 +453,14 @@ void XSessionMembers(uint8_t* base, uint32_t buffer, bool join) {
   auto guest = guest_sessions.find(object);
   if (!hosted && guest == guest_sessions.end()) return;
   HostedSession& s = hosted ? it->second : guest->second;
+  const auto xuids = Load32(GuestPtr(base, buffer + 8));
   for (uint32_t i = 0; i < count && i < 16; ++i) {
+    const uint64_t xuid = xuids ? SessionId(GuestPtr(base, xuids + 8 * i)) : forza::IdentityXuid();
+    if (xuid) {
+      const auto member = std::find(s.members.begin(), s.members.end(), xuid);
+      if (join && member == s.members.end()) s.members.push_back(xuid);
+      if (!join && member != s.members.end()) s.members.erase(member);
+    }
     const bool is_private = join && privates && Load32(GuestPtr(base, privates + 4 * i)) != 0;
     uint32_t& filled = is_private ? s.filled_private : s.filled_public;
     if (join) {
@@ -567,6 +588,40 @@ std::vector<uint64_t> forza::LiveSessionIds() {
     }
   }
   return ids;
+}
+
+std::optional<forza::LiveSessionView> forza::LiveCurrentSession() {
+  std::lock_guard<std::mutex> lock(sessions_mutex);
+  const HostedSession* best = nullptr;
+  bool host = false;
+  for (const auto* map : {&hosted_sessions, &guest_sessions}) {
+    for (const auto& [object, s] : *map) {
+      if (!social_presence::InteractiveSession(s.flags, SessionId(s.info)) ||
+          (best && s.order <= best->order)) continue;
+      best = &s;
+      host = map == &hosted_sessions;
+    }
+  }
+  if (!best) return std::nullopt;
+  LiveSessionView view;
+  view.id = SessionId(best->info);
+  view.flags = best->flags;
+  view.hosted = host;
+  view.players = best->members.empty() ? best->filled_public + best->filled_private
+                                      : uint32_t(best->members.size());
+  view.capacity = best->max_public + best->max_private;
+  std::copy_n(best->info, view.info.size(), view.info.begin());
+  view.members = best->members;
+  if(local_car_session==view.id)view.local_car = local_car_details;
+  return view;
+}
+void forza::LiveSetCarDetails(const social_presence::Car& car) {
+  std::lock_guard lock(sessions_mutex);
+  const auto session=CurrentInteractiveSessionIdLocked();
+  if (local_car_details == car && local_car_session==session) return;
+  local_car_details = car;
+  local_car_session = session;
+  PublishPresenceLocked();
 }
 
 namespace {
@@ -964,13 +1019,13 @@ uint32_t XSessionSearchPlain(uint8_t* base, uint32_t buffer) {
                         Load32(b + 24), Load32(b + 28));
 }
 
-// --- Xbox LIVE stats (server/forza_stats.py) ----------------------------------------
+// --- Xbox LIVE stats (server/forza_live/competition/stats.py) ----------------------------------------
 //
 // Forza's SPA defines one stats view, the TrueSkill view 0xFFFF0000 (columns 61 skill, 62
 // games played, 63 mu, 64 sigma). The game writes it at the end of an online game
 // (XSessionWriteStats: each player's relative score and team) and reads it for its party
 // (XUserReadStats). Both go to the Forza Live server, which rates the games and keeps a row
-// per player; its leaderboards proper are title services (Scoreboard, forza_scores.py).
+// per player; its leaderboards proper are title services (Scoreboard, forza_live/competition/scores.py).
 
 struct StatsColumn {
   uint16_t id = 0;
@@ -1441,7 +1496,7 @@ void LiveMatchResults(const uint8_t* p, size_t n) {
   match_answered.notify_all();
 }
 
-// The server's rows for a stats read (server/forza_stats.py): request u32, view count u8,
+// The server's rows for a stats read (server/forza_live/competition/stats.py): request u32, view count u8,
 // per view: id u32, total rows u32, row count u8, per row: XUID u64, rank u32, rating i64,
 // gamertag (u8 length + bytes), column count u8, per column: id u16, type u8, value (8).
 void LiveStatsRows(const uint8_t* p, size_t n) {

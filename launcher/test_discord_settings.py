@@ -21,6 +21,20 @@ class DiscordSettingsTests(unittest.TestCase):
             self.assertEqual(cfg.settings["discord_application_id"], "1563015276583460934")  # the project's application
             self.assertNotIn("discord_", render_toml(cfg))
 
+    def test_details_on_by_default_and_only_off_is_written(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "launcher.json"
+            cfg = Config(path)
+            self.assertTrue(cfg.settings["discord_presence_details"])
+            self.assertNotIn("discord_presence_details", render_toml(cfg))
+            cfg.settings["discord_presence_details"] = False  # the old, activity-only status
+            cfg.save()
+            text = render_toml(Config(path))
+            self.assertIn("discord_presence_details = false", text)
+            imported = Config(Path(root) / "another.json")
+            import_toml(imported, text)
+            self.assertFalse(imported.settings["discord_presence_details"])
+
     def test_first_run_clear_is_kept(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / "launcher.json"
@@ -112,6 +126,9 @@ class DiscordUITests(unittest.TestCase):
                 self.assertFalse(warning.isHidden())
                 page.set_value("discord_presence", False)
                 self.assertTrue(warning.isHidden())
+                self.assertFalse(page.rows["discord_presence_details"].control.isEnabled())
+                page.set_value("discord_presence", True)
+                self.assertTrue(page.rows["discord_presence_details"].control.isEnabled())
             finally:
                 page._save_timer.stop()
                 page.close()

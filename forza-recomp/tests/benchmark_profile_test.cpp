@@ -4,7 +4,7 @@
 #include <fstream>
 #include <iostream>
 using forza::benchmark::CopyProfiles;
-int main() {
+int main() try {
   namespace fs = std::filesystem;
   auto root =
       fs::temp_directory_path() /
@@ -69,4 +69,7 @@ int main() {
 #endif
   fs::remove_all(forza::benchmark::BenchmarkFilePath(root));
   std::cout << "Benchmark save isolation passed\n";
+} catch (const std::exception &error) {
+  std::cerr << "Benchmark profile test failed: " << error.what() << '\n';
+  return 1;
 }

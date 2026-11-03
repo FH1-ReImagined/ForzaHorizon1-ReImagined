@@ -1,0 +1,116 @@
+# Scenes of tools/render_test.py (docs/render-tests.md).
+#
+# One session plays the steps below in one game run; each "capture" step saves a scene.
+# Steps: first_frame S (the first frame, then S seconds), wait S, press INPUT[:hold]... (FIFO
+# input, 0.1 s presses 0.8 s apart), world [timeout] (free roam has loaded and its clock has
+# started), at S (S seconds after "world"), clock HH:MM|off (hold the time of day), capture
+# NAME [shots=N] [interval=S], trace on|off (log the clock to clock_trace.txt), log TEXT.
+#
+# Scene keys: description, shots and interval (captures; each shot saves "burst" consecutive
+# frames), max_dssim and max_bad (tolerances: 1 - mean block SSIM, and the share of blocks that
+# changed), masks ([x, y, width, height] rectangles at 1280x720 left out of the comparison),
+# scale (compare at 1/scale resolution, default 2).
+
+[game]
+# Fixed settings: the player's own configuration is never read (scratch XDG folders).
+args = ["--skip_startup_movies=true", "--audio_mute", "--frame_rate=60", "--resolution_scale=1",
+        "--fh1_upscaler=off", "--present_effect=bilinear", "--fullscreen=false",
+        "--window_width=1280", "--window_height=720", "--sync_pipeline_creation=true"]
+burst = 1
+
+[defaults]
+shots = 6
+interval = 0.3
+max_dssim = 0.005
+max_bad = 0.005
+
+[[session]]
+name = "festival"
+steps = [
+  "first_frame 0",
+  "capture title",
+  "press START",
+  "wait 5",
+  "press A",          # the save's MISSING CONTENT (DLC) notice
+  "wait 3",
+  "press A",          # SINGLE PLAYER
+  "world 120",
+  "at 1",             # let free roam settle in before the light changes
+  "clock 12:00",
+  "at 8",
+  "capture freeroam_midday",
+  "clock 07:47",      # the online options' Dawn
+  "at 20",
+  "capture freeroam_dawn",
+  "clock 12:00",
+  "at 26",
+  "press RB",         # chase camera to the cockpit
+  "at 32",
+  "capture cockpit",
+  "press RB RB RB RB",
+  "at 42",
+  "press START DOWN DOWN DOWN A A",   # pause, PHOTO MODE, TAKE PHOTO
+  "at 54",
+  "capture photo_mode",
+  "press B",
+  "wait 2",
+  "press B",
+  "wait 2",
+  "press B",
+  "wait 4",
+  "press X",          # GoPro Millennia Masters at the spawn point: sign up,
+  "wait 3",
+  "press A",          # this car,
+  "wait 3",
+  "press A",          # (upgrade prompt)
+  "wait 3",
+  "press X",          # race anyway
+  "wait 24",
+  "press A",          # START RACE
+  "wait 4",
+  "press A",          # skip the rival's introduction
+  "wait 24",
+  "capture race_start",
+]
+
+[scenes.title]
+description = "PRESS START over the first shot of the attract sequence, right after the boot."
+# The attract camera moves from the first frame and the boot's length varies by a frame or two,
+# so this is compared at 1/8 size (64x64-pixel blocks): logo, colours, exposure, bloom.
+shots = 10
+interval = 0.1
+scale = 8
+max_dssim = 0.015
+max_bad = 0.01
+
+[scenes.freeroam_midday]
+description = "Free roam at the spawn point (GoPro Millennia Masters), chase camera, held at 12:00."
+masks = [[0, 270, 1280, 110], [40, 380, 240, 240]]   # the far road (traffic), the minimap
+
+[scenes.freeroam_dawn]
+description = "The same view held at 07:47 (dawn), 12 s after the change so exposure has settled."
+# Traffic's name tags reach a little further than at noon, and its headlights light the trees.
+masks = [[0, 250, 1280, 130], [40, 380, 240, 240]]
+max_dssim = 0.01
+max_bad = 0.01
+
+[scenes.cockpit]
+description = "The cockpit camera at the spawn point, 12:00."
+masks = [[0, 320, 1280, 90], [930, 245, 295, 70], [80, 440, 190, 150]]   # road, mirror, minimap
+max_dssim = 0.003
+
+[scenes.photo_mode]
+description = "Photo mode's default camera (TAKE PHOTO) at the spawn point, 12:00; the world is paused."
+# Edges move by a fraction of a pixel between runs (shadow edges on the road and the rail), so
+# the world, paused here, is still not identical.
+max_dssim = 0.016
+max_bad = 0.025
+
+[scenes.race_start]
+description = "GoPro Millennia Masters, about 15 s after the start with the player's car standing on the grid, 12:00."
+# Race clock, standings, minimap, and the crowds and the inflatable, which move differently
+# every run.
+masks = [[60, 105, 170, 35], [1010, 105, 210, 120], [90, 380, 140, 90],
+         [0, 95, 340, 215], [830, 230, 450, 230], [860, 135, 90, 165]]
+max_dssim = 0.008
+max_bad = 0.012

@@ -10,12 +10,12 @@
 #   --ci          also dispatch the release workflow (artifacts only, no release) and wait for it
 #
 # Checks (in this order):
-#   sdk       SDK overlay matches patches/rexglue-sdk (tools/build_rexglue_sdk.sh runs only when the
-#             patch series or that script changed since the last install: a stamp in
+#   sdk       SDK overlay matches the ReIGlue tag tools/build_rexglue_sdk.sh pins (the script runs
+#             only when it changed since the last install: a stamp in
 #             ~/.cache/forza-prerelease/sdk.stamp). Reinstalling affects every running game.
 #   build     ninja -j4 (nice) of forza-recomp/out/build/linux-tu4 and linux, then restores
 #             forza-recomp/generated/rexglue.cmake (codegen rewrites it)
-#   unit      unit tests: server/test_*.py, launcher/test_*.py
+#   unit      unit tests: server/tests/, launcher/test_*.py
 #   boot      the TU4 build to the main menu on a scratch profile (a copy of the Xenia save,
 #             $FORZA_XENIA_CONTENT, never ~/.local/share/forza) once per present_effect bilinear,
 #             cas, fsr, fsr3 (temporal, Performance at 1440p), smaa (SMAA 1x at 1440p, #132); the base build once. "Main menu
@@ -34,6 +34,8 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+# The Forza Live server is the server/ submodule (FH1-ReImagined/forza-live).
+[ -f server/forza_live_server.py ] || git submodule update --init server || { echo "server/ is empty: git submodule update --init server"; exit 1; }
 STATE="$HOME/.cache/forza-prerelease"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 LOG="$STATE/$STAMP"
@@ -88,8 +90,7 @@ run_check() {  # run_check NAME FUNCTION: FUNCTION's output goes to $LOG/NAME.lo
 # ---------------------------------------------------------------- sdk
 check_sdk() {
     local want have
-    want="$(cat patches/rexglue-sdk/*.patch patches/rexglue-sdk/sdl3/*.patch tools/build_rexglue_sdk.sh |
-        sha256sum | cut -d' ' -f1)"
+    want="$(sha256sum < tools/build_rexglue_sdk.sh | cut -d' ' -f1)"
     have="$(cat "$STATE/sdk.stamp" 2>/dev/null || true)"
     if [ "$want" = "$have" ] && [ -d "$HOME/rexglue-sdk-patched-forza/0.10.0.24/linux-amd64/lib" ]; then
         echo "RESULT: overlay up to date (stamp)"
@@ -120,7 +121,7 @@ check_unit() {
         [ "${PIPESTATUS[0]}" = 0 ] || rc=1
         n=$((n + 1))
     done
-    (cd server && python3 -m unittest discover -p 'test_*.py' 2>&1 | tail -n 3; exit "${PIPESTATUS[0]}") || rc=1
+    (cd server && python3 -m unittest discover -s tests -t . 2>&1 | tail -n 3; exit "${PIPESTATUS[0]}") || rc=1
     [ $rc = 0 ] && echo "RESULT: $n launcher test files and the server tests"
     return $rc
 }
@@ -163,12 +164,12 @@ game_run() {
     d="$LOG/$name"; ud="$d/ud"
     mkdir -p "$ud/B13EBABEBABEBABE" "$d"
     cp -r "$CONTENT/$xuid/$TITLE" "$ud/B13EBABEBABEBABE/" || return 1
-    local args=(--user_data_root="$ud" --present_effect="$effect")
+    local args=(--user_data_root="$ud" --present_effect="$effect" --audio_mute)
     # fsr3: the launcher's AMD FSR 3 (temporal) arguments, Performance at 1440p (FSR 1 presents)
-    [ "$effect" = fsr3 ] && args=(--user_data_root="$ud" --present_effect=fsr --resolution=1440p
+    [ "$effect" = fsr3 ] && args=(--user_data_root="$ud" --audio_mute --present_effect=fsr --resolution=1440p
         --resolution_scale=2 --fh1_output_width=2560 --fh1_output_height=1440
         --fh1_upscaler=fsr3_performance)
-    [ "$effect" = smaa ] && args=(--user_data_root="$ud" --present_effect=fsr --resolution=1440p
+    [ "$effect" = smaa ] && args=(--user_data_root="$ud" --audio_mute --present_effect=fsr --resolution=1440p
         --swap_post_effect=none --fh1_upscaler=smaa --fh1_scene_720p_native_hud=true
         --fh1_native_scene_scale=2 --resolution_scale=2 --fh1_output_width=2560 --fh1_output_height=1440)
     [[ "$build" == *tu4* ]] && args+=(--update_data_root="${FORZA_UPDATE:-$ROOT/extracted/tu4}")
@@ -263,7 +264,7 @@ check_server() {
         grep -a "XUserReadStats" "$g" | tail -2 | cut -c1-200
         grep -aq "XUserReadStats.*from the server" "$g" || { echo "stats read not answered by the server"; rc=1; }
     else
-        echo "(no XUserReadStats call before the main menu; the stats protocol is covered by server/test_forza_stats.py)"
+        echo "(no XUserReadStats call before the main menu; the stats protocol is covered by server/tests/competition/test_stats.py)"
     fi
     cleanup_game
     kill $spid 2>/dev/null; wait $spid 2>/dev/null

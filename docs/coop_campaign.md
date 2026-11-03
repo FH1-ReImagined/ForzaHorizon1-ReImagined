@@ -164,7 +164,7 @@ everything the event needs: `TrackId`, `MaxAIPlayers`, `AIFieldId`, `AIDifficult
 
 ### What the world event sends today, and what is missing
 
-`server/forza_world.py` picks from the 70 style-1 events (tracks with `VisibleInMP = 1` and
+`server/forza_live/world/world.py` picks from the 70 style-1 events (tracks with `VisibleInMP = 1` and
 ribbon 0 or 2) and answers the host's `GetGameOptions` with one bucket.
 
 | Event setting | Campaign | World event today | Carried by the XML |
@@ -207,8 +207,8 @@ So the first scope is the 70 festival races.
 - **The world.** The Horizon World places everyone into the fullest world, so strangers would
   be taken to the event too. A co-op world needs a placement the server controls: a separate
   playlist ("Co-op Festival", hopper 20 as built) whose search only finds sessions hosted by a friend
-  (`forza_friends.py`), or a flag on the world. This is a server change only.
-- **The pick.** The host has to choose the event. A WORLD chat command (`forza_chat.py`
+  (`forza_live/social/friends.py`), or a flag on the world. This is a server change only.
+- **The pick.** The host has to choose the event. A WORLD chat command (`forza_live/social/chat.py`
   already relays the world channel), such as `/event FR05` or a short list from `/events`,
   is a server-only first version. It sends the existing `WORLD_EVENT` path with
   `&event=<id>`. The in-world version, a prompt at the event's start marker like the
@@ -358,7 +358,7 @@ the event as done is the first thing to run (open questions).
     launch);
   - accept each place once;
   - cross-check a player's own report with the host's `XSessionWriteStats` ranking of the
-    humans (already received, `forza_stats.py`);
+    humans (already received, `forza_live/competition/stats.py`);
   - cap one grant per event and session.
   A modified client can still lie. On a private server among friends that is acceptable; on
   the public server the credit should be limited to what a single-player run of that event
@@ -541,21 +541,21 @@ placement, 30/31 cylinders, 32/33 aspiration, 35/36 family special; 37/38 `BaseC
 (u32); bits 34 `AllowUpgrades` and 39 `RallyOnly` are flags without a value. A mask of 0 leaves
 the defaults (no restriction, upgrades allowed). The game's decoder stores bit 4 (PowerMin) in
 PowerMax's place; no event uses either. The masks in use set years, make, model family, body
-family, region, country, drive type and base cost (`server/forza_campaign.py`
+family, region, country, drive type and base cost (`server/forza_live/world/campaign.py`
 `decode_restrictions`, tested on them). The lobby matched the tickets: FR05 "Oakley Blitz",
 ticket "AWD ONLY", gave a lobby of B class AWD cars only (the players' S-class cars became
 GT-R R34s; CPU Delta S4, Impreza 22B, ML 63, Lancer Evo VI) and a garage of "3 available"; FR50
 "MUST BE 1960 - 1969" gave Shelby Daytonas and GT40s; FR24 "CAR VALUE < 15,000 Cr" decodes to
 `BaseCostMax="15000"`, FR38 "MUST BE ASTON" to `MakeId="2"`.
 
-**The Co-op Festival** (`server/forza_campaign.py`, `forza_live_server.py`, `forza_world.py`):
+**The Co-op Festival** (`server/forza_live/world/campaign.py`, `forza_live_server.py`, `forza_live/world/world.py`):
 
 - A playlist (hopper 20, after Playground Games) with the Horizon World's code: the same search
   settings, drop-in, standby hosts and world events. The client runs it as a world
   (`LiveIsWorldPlaylist`), and the server lists it only to games whose HELLO has feature 0x08,
   so an older build never sees a playlist it would run as a plain free roam.
 - **Placement: friends only.** A search for it gets only the worlds whose host (or, after the
-  host left, its standby lead) is on the searcher's friends list (`forza_friends.py`, accepted
+  host left, its standby lead) is on the searcher's friends list (`forza_live/social/friends.py`, accepted
   both ways); without one the searcher's game opens a world of its own, and its friends are
   placed into that. The server knows nothing of parties; the friends list is the one
   relationship it keeps, both players chose it, and a block already removes it.
@@ -593,7 +593,7 @@ GT-R R34s; CPU Delta S4, Impreza 22B, ML 63, Lancer Evo VI) and a garage of "3 a
   all six at `00000038 00000006` (FR05's 56/6, instead of Easy's 20/8) at the round start and in
   game. The career adds each named driver's `AIPlayers` modifiers (nearly all 0); the online
   fill's drivers get the event's rows as they are.
-- Tests: `server/test_forza_campaign.py` (the masks of the game's database, comparators, the
+- Tests: `server/tests/world/test_campaign.py` (the masks of the game's database, comparators, the
   PowerMin quirk, the time of day, the round's XML, the listing, the playlist only for games
   that have it, friends-only placement also after the host left, `/event` from the host and its
   refusals, the CPU skill to every member, results named with the round, no scheduled events in
@@ -612,7 +612,7 @@ point, the 1960s, dawn) and the street race followed in the same world.
 
 ### Phase B (2026-10-23): the ledger and the launcher's grant
 
-**Server: the ledger** (`server/forza_coop_ledger.py`). A campaign round opens when the event
+**Server: the ledger** (`server/forza_live/world/coop_ledger.py`). A campaign round opens when the event
 round starts (its own prefetch, `forza_world.Worlds.next_round`, asked by the host's game with
 its own friends key) and closes when the world's next round starts: the world session, the
 event, its grid (the `MaxPlayers` it was served with), the player who asked for it (the
@@ -627,7 +627,7 @@ and only the first after the start counts: the game writes again for the session
 world's next free roam ends, which the first two-game run showed). A result goes to the career
 when the player is the round's requester (milestone 1: the host's own career), finished, on the
 grid, and its game's write (if any) agrees. The launcher asks for its player's results and
-confirms what it settled, signed like the shader list upload (X-Xuid and X-Friends-Key):
+confirms what it settled, signed like the shader list upload (X-Forza-Auth, #515):
 `GET /coop/results`, `POST /coop/results/applied {"ids": [...]}`. Kept in
 `DATA_DIR/coop_ledger.json`, written from the server's tick at most every 2 s (not per report):
 30 days, a round dropped once settled or when it closed without a result, at most 20 rounds a
@@ -683,7 +683,7 @@ Tests: `launcher/test_coop_grant.py` (synthetic saves and database: payout and r
 a new result, a better place paying the difference once, a worse or equal place changing
 nothing and making no backup, events it does not take, the wristband and XP unlocks left alone,
 a save changing during the backup, fetch-apply-confirm, locked events and results of other
-saves' sessions waiting) and `server/test_forza_coop_ledger.py` (forged and late reports,
+saves' sessions waiting) and `server/tests/world/test_coop_ledger.py` (forged and late reports,
 other games' writes, the round's grid, unverified calls, refusals, limits, the batched file).
 
 **Acceptance, checked with two games** (local server, FR69 "Advan Asphalt Attack", level 6, R3,
@@ -705,7 +705,7 @@ both), the exact time of day, the named CPU field and traffic.
 ## Milestone 2: the guests' careers (2026-10-24)
 
 **Every player's own result goes to that player's career.** The ledger
-(`server/forza_coop_ledger.py`) now offers each human of a round its own result, not only the
+(`server/forza_live/world/coop_ledger.py`) now offers each human of a round its own result, not only the
 host's. The milestone 1 rules stay:
 
 - only a player's own calls count (its friends key);
@@ -832,7 +832,7 @@ Seen along the way:
 - The log line `co-op: world ... campaign event ...` named an earlier world's round while that
   round was within its 20-minute window. It now uses the world the result was reported in.
 
-Tests: `server/test_forza_coop_ledger.py`:
+Tests: `server/tests/world/test_coop_ledger.py`:
 
 - each player's result goes to that player's launcher only, and once;
 - a guest's place needs the host's agreeing write; the host's own place doesn't;
@@ -846,7 +846,7 @@ Tests: `server/test_forza_coop_ledger.py`:
 - a milestone 1 ledger file still loads;
 - the online winnings around a round: its report and the player's next race, with its time.
 
-`server/test_forza_campaign.py`: the reported world's round names a result, and a world without
+`server/tests/world/test_campaign.py`: the reported world's round names a result, and a world without
 a campaign round names none. In `launcher/test_coop_grant.py`:
 
 - a guest's locked result waits unconfirmed and applies at a later session once unlocked;
@@ -919,8 +919,8 @@ ended at once with no results. The game's database explains it (the queries were
   it (A class, FWD): only players whose own upgraded car fits can race it". The server can't see
   garages, so this is as far as it can tell in advance.
 
-Tests: `server/test_forza_campaign.py` (the round's `ForceOnlyRentalCars="0"`, the restriction
-text, the warning for an event no stock car fits) and `server/test_forza_coop_ledger.py` (a
+Tests: `server/tests/world/test_campaign.py` (the round's `ForceOnlyRentalCars="0"`, the restriction
+text, the warning for an event no stock car fits) and `server/tests/world/test_coop_ledger.py` (a
 round nobody raced is told to the world and a raced one is not, and the multiplier knob gives a
 campaign round's players its values in turn and everyone else 1.0).
 

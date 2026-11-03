@@ -82,6 +82,29 @@ class GarageTests(unittest.TestCase):
             doc = garage.decode(self.profile,raw,(KEYS,))
             self.assertEqual(garage.encode(doc,doc.database),raw)
 
+    def test_editor_without_optional_sqlite_extension_api(self):
+        class NoExtensionAPI(sqlite3.Connection):
+            @property
+            def enable_load_extension(self):
+                raise AttributeError('SQLite extension API was not compiled in')
+
+        connect = sqlite3.connect
+        def without_extension_api(*args, **kwargs):
+            return connect(*args, **kwargs, factory=NoExtensionAPI)
+
+        with patch.object(garage.sqlite3, 'connect', side_effect=without_extension_api):
+            document = garage.decode(self.profile, self.original, (KEYS,))
+            self.assertEqual(garage.encode(document, document.database), self.original)
+            with closing(garage._open(document.database)) as db:
+                with self.assertRaisesRegex(sqlite3.OperationalError, 'not authorized|no such function'):
+                    db.execute("SELECT load_extension('garage-test-must-not-load')")
+            result = garage.add_missing(self.cfg, self.profile)
+            self.assertEqual(len(result.added), 7)
+            with closing(garage._open(garage.decode(self.profile, self.path.read_bytes(), (KEYS,)).database)) as db:
+                self.assertEqual(db.execute('SELECT count(*) FROM Career_Garage').fetchone()[0], 8)
+            saves.restore(self.profile, result.backup)
+            self.assertEqual(self.path.read_bytes(), self.original)
+
     def test_multiple_compression_blocks_and_bounded_bad_data(self):
         data = b'SQLite format 3\0'+bytes(100000)
         self.assertEqual(garage._inflate(garage._deflate(data)),data)
@@ -149,6 +172,44 @@ class GarageTests(unittest.TestCase):
         result = garage.add_missing(self.cfg,self.profile)
         self.assertEqual(result.already_owned,(320,326))
         self.assertEqual(len(result.added),5)
+
+    def test_capacity_counts_rows_and_rejects_entire_batch_without_writing(self):
+        for count in (549, 550, 551, 993, 994, 999, 1000, 1001):
+            with self.subTest(count=count):
+                # Duplicated models still occupy separate garage slots.
+                original = envelope(database((309,) * count))
+                self.path.write_bytes(original)
+                backups = len(saves.snapshots(self.profile)[0])
+                if count + 7 > 1000:
+                    with self.assertRaisesRegex(saves.SaveError, '1,000 cars'):
+                        garage.add_missing(self.cfg, self.profile)
+                    self.assertEqual(self.path.read_bytes(), original)
+                    self.assertEqual(len(saves.snapshots(self.profile)[0]), backups)
+                else:
+                    result = garage.add_missing(self.cfg, self.profile)
+                    with garage._open(garage.decode(self.profile, self.path.read_bytes(), (KEYS,)).database) as db:
+                        self.assertEqual(db.execute('SELECT count(*) FROM Career_Garage').fetchone()[0], count + 7)
+                        self.assertEqual(db.execute('SELECT count(*) FROM Career_Garage WHERE CarId=309').fetchone()[0], count)
+                    self.assertEqual(len(self.path.read_bytes()), len(original))
+                    saves.restore(self.profile, result.backup)
+                    self.assertEqual(self.path.read_bytes(), original)
+
+    def test_capacity_allows_last_slot_and_preserves_full_garage_noop(self):
+        owned = tuple(cid for cid, _, _ in unicorns.CARS)
+        self.path.write_bytes(envelope(database((309,) * 993 + owned[:-1])))
+        result = garage.add_missing(self.cfg, self.profile)
+        self.assertEqual(result.added, owned[-1:])
+        original = self.path.read_bytes()
+        with garage._open(garage.decode(self.profile, original, (KEYS,)).database) as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM Career_Garage').fetchone()[0], 1000)
+        noop = garage.add_missing(self.cfg, self.profile)
+        self.assertEqual(noop.added, ())
+        self.assertIsNone(noop.backup)
+        self.assertEqual(self.path.read_bytes(), original)
+
+    def test_native_and_launcher_capacity_agree(self):
+        header = Path(__file__).resolve().parents[1]/'forza-recomp/src/platform/garage_capacity.h'
+        self.assertIn(f'kCapacity = {garage.GARAGE_CAPACITY};', header.read_text())
 
     def test_bad_mac_unknown_schema_and_backup_failure_never_replace(self):
         broken = bytearray(self.original);broken[8]^=1;self.path.write_bytes(broken)

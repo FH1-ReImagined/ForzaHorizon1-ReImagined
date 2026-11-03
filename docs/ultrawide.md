@@ -76,6 +76,39 @@ squashed. Native-mode output dumps now have the active 3440x1440 dimensions.
 
 ## Validation and current limits
 
+The SDK revision pinned by the source build includes the cockpit instrument
+texture correction from [ReIGlue PR #2](https://github.com/FH1-ReImagined/ReIGlue/pull/2).
+The instrument image and its downsample passes retain their own texture coordinates,
+so their contents stay aligned with the dashboard material as the gameplay view
+widens. This correction does not change camera FOV. Installed launcher packages
+need an SDK overlay built from the updated pin to receive the correction.
+
+Windows/Vulkan qualification on 2026-10-28 used public game main `52d5784` and
+ReIGlue `7d17ea51`, with all 313 generated guest objects, PCHs and authored code
+compiled fresh. The native 3440x1440 Viper (model 1544) cockpit capture at
+283.99 seconds was checked against the earlier before/after images for ReIGlue
+PR #2. The instrument numerals and digital text lie inside the physical cluster;
+the original leftward shift is absent. No obvious new HUD or cockpit geometry
+distortion is visible in that stationary frame. The PNG is pixel-identical to
+the preserved SDK PPM, and the logs confirm 3440x1440 drawing with 3840x1440
+padded storage. The separate cyan roof artifact remains visible.
+
+A 2560x1440 16:9 control reached the same Viper, HUD and cockpit, with correct
+instrument alignment observed through the Windows UI capture. No complete
+native cockpit image was preserved for that control. Both runs used Stock FOV,
+normal startup movies and copied profiles. Their 300-second owned watchdogs
+closed them at 300.55 and 300.53 seconds (exit 1); these are not normal-exit
+tests. Each closure recorded an empty owned job, no remaining game process,
+and all nine source-profile files and three source-cache files unchanged.
+
+Earlier negative attempts remain preserved: one used stale generated hints,
+a fully regenerated run still stalled before the HUD with startup movies
+skipped, and another harness run ended because its visible-frame acknowledgement
+was missing. Reaching gameplay with normal movies does not establish the cause
+of those loading stalls. This qualification covers the reported Viper at 16:9
+and 3440x1440; it does not establish 32:9, another car, AMD hardware, or macOS/Linux
+gameplay behavior.
+
 1080-line support and menu validation (2026-10-21): a full TU4 Windows host build
 from main `425dfa2` plus these host/launcher changes ran on an RTX 5060 Ti,
 driver 617.14, with the existing public SDK stack. Offline runs used copied

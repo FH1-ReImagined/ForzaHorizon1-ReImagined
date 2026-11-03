@@ -7,14 +7,12 @@ on:
     paths:
       - .github/workflows/macos.yml
       - forza-recomp/**
-      - patches/rexglue-sdk/**
       - tools/**
   push:
     branches: [main]
     paths:
       - .github/workflows/macos.yml
       - forza-recomp/**
-      - patches/rexglue-sdk/**
       - tools/**
   workflow_dispatch:
 
@@ -86,9 +84,9 @@ jobs:
         with:
           path: forza-recomp/out/macos-sdk
           # No partial restore: headers, codegen, runtime and plugin must be from one SDK build.
-          key: macos-sdk-v1-${{ runner.arch }}-${{ steps.toolchain.outputs.fingerprint }}-${{ hashFiles('patches/rexglue-sdk/**', 'tools/build_rexglue_sdk.sh', 'tools/build_macos.sh', '.github/workflows/macos.yml') }}
+          key: macos-sdk-v1-${{ runner.arch }}-${{ steps.toolchain.outputs.fingerprint }}-${{ hashFiles('tools/build_rexglue_sdk.sh', 'tools/build_macos.sh', '.github/workflows/macos.yml') }}
 
-      - name: Build and install pinned SDK with all patches
+      - name: Build and install the pinned SDK (ReIGlue)
         if: steps.sdk-cache.outputs.cache-hit != 'true'
         run: tools/build_macos.sh --sdk-only 2>&1 | tee "$RUNNER_TEMP/macos-ci-logs/sdk-build.log"
 
@@ -106,7 +104,7 @@ jobs:
       - name: Compile base host sources
         run: tools/build_macos.sh --host-check 2>&1 | tee "$RUNNER_TEMP/macos-ci-logs/host-base.log"
 
-      - name: Compile TU4 host sources
+      - name: Compile TU4 host sources with native pause enabled
         run: tools/build_macos.sh --host-check --tu4 2>&1 | tee "$RUNNER_TEMP/macos-ci-logs/host-tu4.log"
 
       - name: Link native GPU probe

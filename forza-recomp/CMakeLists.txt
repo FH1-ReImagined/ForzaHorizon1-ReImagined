@@ -23,6 +23,9 @@ else()
     message(FATAL_ERROR "FORZA_TITLE_UPDATE must be 0 or 4")
 endif()
 
+include(cmake/NativePause.cmake)
+forza_validate_native_pause()
+
 # Builds handed a finished generated/ (CI building from the private copy of the codegen
 # output) have no default.xex to run codegen on.
 option(FORZA_SKIP_CODEGEN "Compile generated/ as it is, never run codegen" OFF)
@@ -31,7 +34,7 @@ if(FORZA_SKIP_CODEGEN AND NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${FORZA_GENERA
 endif()
 
 # Codegen runs the patched SDK overlay's rexglue when there is one: tools/build_rexglue_sdk.sh
-# builds it from patches/rexglue-sdk/, and some patches change the generated code (0025:
+# builds it from ReIGlue (the SDK fork), and some of its changes alter the generated code (0025:
 # Xenon's dot products give QNaN on overflow, which the collision GJK depends on).
 if(APPLE)
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
@@ -115,6 +118,8 @@ endif()
 set(FORZA_SOURCES
     src/main.cpp
     src/debug/audio_level.cpp
+    src/hooks/radio_station.cpp
+    src/hooks/radio_events.cpp
     src/debug/cpu_profile.cpp
     src/debug/codriver_log.cpp
     src/debug/dlc_log.cpp
@@ -126,19 +131,32 @@ set(FORZA_SOURCES
     src/debug/thread_trace.cpp
     src/debug/frame_dump.cpp
     src/hooks/compressed_stream_stall.cpp
+    src/hooks/ffcb_wake.cpp
     src/hooks/database_query.cpp
     src/hooks/crowd_anim.cpp
     src/hooks/movie_texture.cpp
     src/hooks/movie_memory.cpp
     src/hooks/map_alpha.cpp
     src/hooks/minimap_icons.cpp
+    src/hooks/minimap_camera.cpp
     src/hooks/map_entity_time.cpp
     src/hooks/cockpit_gauges.cpp
     src/hooks/garage_camera.cpp
+    src/hooks/garage_capacity.cpp
     src/hooks/ultrawide_projection.cpp
+    src/hooks/vr_culling.cpp
     src/hooks/vr_head_pose.cpp
+    src/hooks/camera_fov.cpp
+    src/hooks/vr_cockpit_space.cpp
     src/hooks/frame_time.cpp
     src/hooks/graphics_menu.cpp
+    src/hooks/pause_menu.cpp
+    src/hooks/native_pause_scene.cpp
+    src/hooks/native_pause_edges.cpp
+    src/hooks/fh1_map_preview.cpp
+    src/hooks/offline_cars.cpp
+    src/hooks/festival_travel.cpp
+    src/hooks/car_recovery.cpp
     src/hooks/native_car_tuning.cpp
     src/hooks/native_car_tuning_menu.cpp
     src/hooks/gpu_wait.cpp
@@ -147,19 +165,27 @@ set(FORZA_SOURCES
     src/hooks/scene_resolution.cpp
     src/hooks/scene_tiling.cpp
     src/hooks/world_detail.cpp
+    src/hooks/shadow_filter.cpp
+    src/hooks/ai_catchup.cpp
     src/hooks/physics_loader_check.cpp
     src/hooks/resource_data_release.cpp
     src/hooks/resource_cache_eviction.cpp
     src/hooks/resource_stream_trace.cpp
+    src/hooks/bigshot_readback.cpp
     src/hooks/thumbnail_sync.cpp
     src/hooks/world_challenge.cpp
     src/hooks/ambient_leaderboard.cpp
     src/hooks/teleport_velocity.cpp
+    src/hooks/custom_race.cpp
+    src/hooks/smashables_lookup.cpp
     src/hooks/challenge_hud.cpp
+    src/hooks/car_placeholder.cpp
     src/hooks/lobby_buckets.cpp
     src/hooks/world_drop_in.cpp
     src/hooks/world_events.cpp
     src/hooks/telemetry.cpp
+    src/hooks/discord_details.cpp
+    src/kernel/content_manifest.cpp
     src/kernel/critical_section.cpp
     src/kernel/file_delete_on_close.cpp
     src/kernel/file_size_refresh.cpp
@@ -167,6 +193,7 @@ set(FORZA_SOURCES
     src/kernel/identity.cpp
     src/kernel/live_lsp.cpp
     src/kernel/live_tcp.cpp
+    src/kernel/live_auth.cpp
     src/kernel/live_friends.cpp
     src/kernel/live_invites.cpp
     src/kernel/live_xmsg.cpp
@@ -182,20 +209,25 @@ set(FORZA_SOURCES
     src/kernel/xecrypt_rsa.cpp
     src/kernel/xekeys.cpp
     src/platform/achievement_toast.cpp
+    src/platform/guest_cpu.cpp
     src/platform/discord_presence.cpp
     src/platform/cursor_idle.cpp
+    src/platform/auto_pause.cpp
     src/platform/cpu_target.cpp
     src/platform/ultrawide.cpp
     src/platform/benchmark.cpp
     src/platform/benchmark_session.cpp
     src/platform/hud_overlay.cpp
     src/platform/motion_blur_fix.cpp
+    src/platform/world_ao.cpp
+    src/platform/native_quit.cpp
     src/platform/resume.cpp
     src/platform/sdk_import.cpp
     src/platform/socket.cpp
     src/platform/telemetry.cpp
     src/platform/vulkan_hooks.cpp
     src/platform/wheel_bridge.cpp
+    src/platform/xr.cpp
 )
 
 # fiber_trace.cpp interposes the SDK's rexcrt_SwitchToFiber with dlsym(RTLD_NEXT): Linux only.
@@ -213,13 +245,22 @@ if(WIN32)
         set(FORZA_ICON_RC "${CMAKE_CURRENT_BINARY_DIR}/forza-icon.rc")
         configure_file(resources/app.rc.in "${FORZA_ICON_RC}" @ONLY)
         set_source_files_properties("${FORZA_ICON_RC}" PROPERTIES
-            OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/resources/forza.ico")
+            OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/resources/forza.ico;${CMAKE_CURRENT_SOURCE_DIR}/resources/forza.manifest")
     else()
         message(STATUS "No resource compiler found: forza.exe is built without its icon")
     endif()
     add_executable(forza WIN32 ${FORZA_SOURCES} ${FORZA_ICON_RC})
     target_compile_definitions(forza PRIVATE _CRT_SECURE_NO_WARNINGS)
     target_link_libraries(forza PRIVATE ws2_32)
+    # Per-monitor-v2 DPI awareness from the first instruction (#418), from resources/forza.manifest.
+    # With a resource compiler it is the exe's RT_MANIFEST resource (app.rc.in) and the linker's own
+    # default manifest is off (it would collide); without one the linker merges the file itself.
+    if(FORZA_ICON_RC)
+        target_link_options(forza PRIVATE "/MANIFEST:NO")
+    else()
+        target_link_options(forza PRIVATE "/MANIFEST:EMBED"
+            "/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/resources/forza.manifest")
+    endif()
 else()
     add_executable(forza ${FORZA_SOURCES})
 endif()
@@ -227,9 +268,41 @@ endif()
 rexglue_setup_target(forza GPU_PLUGINS xenos)
 include(cmake/discord.cmake)
 
+# forza-texcompress: texture packs to BC7/BC1 DDS files, run by the launcher's Make HD pack and
+# Compress PNGs (#413, docs/texture_packs.md). Its own executable next to forza.
+add_subdirectory(texcompress)
+
 add_custom_command(TARGET forza POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/forza-telemetry.json" "$<TARGET_FILE_DIR:forza>/forza-telemetry.json")
 target_compile_definitions(forza PRIVATE FORZA_TITLE_UPDATE=${FORZA_TITLE_UPDATE})
+
+# The build the game names to the Forza Live server on its title service calls (X-Forza-Build,
+# src/kernel/live_auth.cpp RequestLines), which the server keeps with each leaderboard row (#517). The
+# launcher passes its version; a source build takes the commit it was configured at.
+set(FORZA_BUILD_ID "" CACHE STRING "Build name sent to the Forza Live server (empty: git-<commit>, or dev)")
+set(_forza_build_id "${FORZA_BUILD_ID}")
+if(_forza_build_id STREQUAL "")
+    set(_forza_build_id dev)
+    find_package(Git QUIET)
+    if(GIT_FOUND)
+        execute_process(COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_CURRENT_SOURCE_DIR}" rev-parse --short=10 HEAD
+                        OUTPUT_VARIABLE _forza_commit OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET
+                        RESULT_VARIABLE _forza_git)
+        if(_forza_git EQUAL 0 AND _forza_commit MATCHES "^[0-9a-f]+$")
+            set(_forza_build_id "git-${_forza_commit}")
+        endif()
+    endif()
+endif()
+string(REGEX REPLACE "[^A-Za-z0-9._+-]" "_" _forza_build_id "${_forza_build_id}")
+string(SUBSTRING "${_forza_build_id}" 0 40 _forza_build_id)
+set_source_files_properties(src/kernel/live_auth.cpp PROPERTIES
+    COMPILE_DEFINITIONS "FORZA_BUILD_ID=\"${_forza_build_id}\"")
+forza_apply_native_pause(forza)
+
+# Experimental CPU optimization, independent of the GPU/driver. Keep the host
+# bootstrap at the SDK baseline so it can reject an incompatible CPU safely.
+include(cmake/GuestFma.cmake)
+forza_configure_guest_fma(forza)
 
 # The CPU the generated code is compiled for (baseline or x86-64-v3, chosen by the launcher).
 include(cmake/CpuTarget.cmake)
@@ -242,10 +315,22 @@ forza_configure_cpu_target(forza)
 if(TARGET rex::renderdoc)
     target_link_libraries(forza PRIVATE rex::renderdoc)
 endif()
+# VR (src/platform/xr.cpp) also includes them, and the vendored OpenXR headers; the OpenXR
+# loader is opened at run time only when vr_mode is on, so the game neither links it nor needs
+# it to start.
+set(_forza_xr_includes "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/openxr/include")
 if(UNIX AND NOT APPLE)
     set_source_files_properties(src/platform/vulkan_hooks.cpp PROPERTIES
         INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/wsi_stubs")
+    list(APPEND _forza_xr_includes "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/wsi_stubs")
 endif()
+set_source_files_properties(src/platform/xr.cpp PROPERTIES INCLUDE_DIRECTORIES "${_forza_xr_includes}")
+add_custom_command(TARGET forza POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:forza>/licenses"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/openxr/LICENSE-Apache-2.0.txt"
+        "$<TARGET_FILE_DIR:forza>/licenses/openxr-sdk.txt"
+    VERBATIM)
 
 # The stock SDK Xenos plugin has rendering bugs (e.g. it reads the texture-fetch
 # exponent bias from the wrong fetch-constant word, which darkens textures 256x).

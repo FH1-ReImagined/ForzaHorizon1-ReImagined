@@ -1,0 +1,145 @@
+{
+  "schema": 1,
+  "scenes": [
+    {
+      "source": "ui/scenes/ui4/925_pause_menu",
+      "alias": "ui/scenes/ui4/native_menu_pause"
+    },
+    {
+      "source": "ui/scenes/ui4/108_c_buy_carselect",
+      "alias": "ui/scenes/ui4/native_menu_header"
+    },
+    {
+      "source": "ui/scenes/ui4/h_map",
+      "alias": "ui/scenes/ui4/native_menu_map"
+    },
+    {
+      "source": "ui/scenes/ui4/108_c_buy_carselect",
+      "alias": "ui/scenes/ui4/native_menu_tile_0"
+    },
+    {
+      "source": "ui/scenes/ui4/108_c_buy_carselect",
+      "alias": "ui/scenes/ui4/native_menu_tile_1"
+    },
+    {
+      "source": "ui/scenes/ui4/108_c_buy_carselect",
+      "alias": "ui/scenes/ui4/native_menu_tile_2"
+    },
+    {
+      "source": "ui/scenes/ui4/108_c_buy_carselect",
+      "alias": "ui/scenes/ui4/native_menu_tile_3"
+    },
+    {
+      "source": "ui/scenes/ui4/108_c_buy_carselect",
+      "alias": "ui/scenes/ui4/native_menu_tile_4"
+    },
+    {
+      "source": "ui/scenes/ui4/108_c_buy_carselect",
+      "alias": "ui/scenes/ui4/native_menu_tile_5"
+    },
+    {
+      "source": "ui/scenes/ui4/108_c_buy_carselect",
+      "alias": "ui/scenes/ui4/native_menu_tab_0"
+    },
+    {
+      "source": "ui/scenes/ui4/108_c_buy_carselect",
+      "alias": "ui/scenes/ui4/native_menu_tab_1"
+    },
+    {
+      "source": "ui/scenes/ui4/108_c_buy_carselect",
+      "alias": "ui/scenes/ui4/native_menu_tab_2"
+    },
+    {
+      "source": "ui/scenes/ui4/108_c_buy_carselect",
+      "alias": "ui/scenes/ui4/native_menu_tab_3"
+    },
+    {
+      "source": "ui/scenes/ui4/108_c_buy_carselect",
+      "alias": "ui/scenes/ui4/native_menu_tuning_0"
+    },
+    {
+      "source": "ui/scenes/ui4/108_c_buy_carselect",
+      "alias": "ui/scenes/ui4/native_menu_tuning_1"
+    },
+    {
+      "source": "ui/scenes/ui4/108_c_buy_carselect",
+      "alias": "ui/scenes/ui4/native_menu_tuning_2"
+    },
+    {
+      "source": "ui/scenes/ui4/108_c_buy_carselect",
+      "alias": "ui/scenes/ui4/native_menu_tuning_3"
+    },
+    {
+      "source": "ui/scenes/ui4/108_c_buy_carselect",
+      "alias": "ui/scenes/ui4/native_menu_tuning_4"
+    },
+    {
+      "source": "ui/scenes/ui4/108_c_buy_carselect",
+      "alias": "ui/scenes/ui4/native_menu_tuning_5"
+    },
+    {
+      "source": "ui/scenes/ui4/108_c_buy_carselect",
+      "alias": "ui/scenes/ui4/native_menu_tuning_6"
+    },
+    {
+      "source": "ui/scenes/ui4/108_c_buy_carselect",
+      "alias": "ui/scenes/ui4/native_menu_tuning_7"
+    },
+    {
+      "source": "ui/scenes/ui4/108_c_buy_carselect",
+      "alias": "ui/scenes/ui4/native_menu_tuning_8"
+    },
+    {
+      "source": "ui/scenes/ui4/108_c_buy_carselect",
+      "alias": "ui/scenes/ui4/native_menu_tuning_9"
+    },
+    {
+      "source": "ui/scenes/ui4/108_c_buy_carselect",
+      "alias": "ui/scenes/ui4/native_menu_tuning_10"
+    },
+    {
+      "source": "ui/scenes/ui4/108_c_buy_carselect",
+      "alias": "ui/scenes/ui4/native_menu_tuning_11"
+    },
+    {
+      "source": "ui/scenes/ui4/108_c_buy_carselect",
+      "alias": "ui/scenes/ui4/native_menu_tuning_12"
+    },
+    {
+      "source": "ui/scenes/ui4/108_c_buy_carselect",
+      "alias": "ui/scenes/ui4/native_menu_tuning_13"
+    },
+    {
+      "source": "ui/scenes/ui4/108_c_buy_carselect",
+      "alias": "ui/scenes/ui4/native_menu_tuning_14"
+    },
+    {
+      "source": "ui/scenes/ui4/108_c_buy_carselect",
+      "alias": "ui/scenes/ui4/native_menu_tuning_15"
+    },
+    {
+      "source": "ui/scenes/ui4/108_c_buy_carselect",
+      "alias": "ui/scenes/ui4/native_menu_tuning_16"
+    },
+    {
+      "source": "ui/scenes/ui4/108_c_buy_carselect",
+      "alias": "ui/scenes/ui4/native_menu_tuning_17"
+    },
+    {
+      "source": "ui/scenes/ui4/108_c_buy_carselect",
+      "alias": "ui/scenes/ui4/native_menu_tuning_18"
+    },
+    {
+      "source": "ui/scenes/ui4/108_c_buy_carselect",
+      "alias": "ui/scenes/ui4/native_menu_tuning_19"
+    },
+    {
+      "source": "ui/scenes/ui4/108_c_buy_carselect",
+      "alias": "ui/scenes/ui4/native_menu_tuning_20"
+    },
+    {
+      "source": "ui/scenes/ui4/108_c_buy_carselect",
+      "alias": "ui/scenes/ui4/native_menu_tuning_21"
+    }
+  ]
+}

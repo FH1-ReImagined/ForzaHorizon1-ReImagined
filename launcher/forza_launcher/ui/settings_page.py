@@ -8,11 +8,11 @@ from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFileDialog,
                                QMessageBox, QPushButton, QRadioButton, QScrollArea, QSlider, QStackedWidget,
                                QToolTip, QVBoxLayout, QWidget)
 
-from .. import PUBLIC_SERVER, display, dlss, fsr3, game, gamertag, gpu, power, schema, specs
+from .. import PUBLIC_SERVER, display, dlss, fsr3, game, gamertag, gpu, power, schema, specs, vr
 from ..config import Config, render_toml, validate_extras
 from . import theme
 from .settings_search import SettingsSearch
-from .widgets import DoubleSpinBox, SpinBox, Switch, card, label
+from .widgets import Disclosure, DoubleSpinBox, SpinBox, Switch, card, label
 
 NO_WHEEL = Qt.StrongFocus
 
@@ -45,6 +45,7 @@ class DSpin(_Wheelless, DoubleSpinBox):
 DEPENDS = {  # key -> the bool setting that must be on for it to matter
     "mnk_mouse": "mnk_mode", "mnk_sensitivity": "mnk_mode", "mnk_passthrough": "mnk_mode",
     "mnk_stick_ramp": "mnk_mode",
+    "discord_presence_details": "discord_presence",
 }
 
 
@@ -164,6 +165,8 @@ def make_control(s: schema.Setting, value, on_change, note=None, monitor=0):
         w.lineEdit().editingFinished.connect(changed)
         return w
     w = QLineEdit(str(value))  # str, keys
+    if s.max_length is not None:
+        w.setMaxLength(s.max_length)
     w.setMinimumWidth(240)
     if s.key == "gamertag":
         # Limits while typing too: 15 characters, and anything but ASCII letters, digits and
@@ -187,7 +190,7 @@ def make_control(s: schema.Setting, value, on_change, note=None, monitor=0):
             on_change(cleaned)
         w.editingFinished.connect(gamertag_done)
         return w
-    w.editingFinished.connect(lambda w=w: on_change(w.text().strip()))
+    w.editingFinished.connect(lambda w=w: on_change(schema.coerce(s, w.text().strip())))
     return w
 
 
@@ -548,7 +551,10 @@ class SettingsPage(QWidget):
     def _build_group(self, g):
         leads = {
             "Display": "Window, frame rate and picture.",
+            "VR": "Experimental: playable, but expect rough edges. Play with a VR headset: "
+                  "press Play in VR on the Play page.",
             "Controls": "Use a controller, or enable keyboard and mouse and customize your bindings below.",
+            "Gameplay": "How the game plays in single player. Online games always play as shipped.",
             "Audio": "",
             "Online": "Xbox LIVE is gone, so the game signs in to a Forza Live server instead.",
             "Profile": "Your saves live in the game's data folder. You can also continue a Xenia Canary save.",
@@ -557,11 +563,15 @@ class SettingsPage(QWidget):
         scroll, lay = self._page(g, leads[g])
         if g == "Display":
             self._gpu_block(lay)
+        if g == "VR":
+            self._vr_status_block(lay)
         if g == "Online":
             self._online_block(lay)
         if g == "Profile":
             self._profile_block(lay)
         self._rows(lay, g)
+        if g == "VR":
+            self._vr_extras_block(lay)
         if g == "Display":
             self._texture_pack_block()
         if g == "Controls":
@@ -573,6 +583,38 @@ class SettingsPage(QWidget):
             self._advanced_block(lay)
         lay.addStretch(1)
         return scroll
+
+    # --- VR (vr.py) -----------------------------------------------------------------
+    def _vr_status_block(self, lay):
+        runtime = vr.detect()
+        self.vr_status = label("", "")
+        self.vr_status.setTextFormat(Qt.RichText)
+        self.vr_status.setOpenExternalLinks(True)
+        self.vr_status.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        if runtime is not None:
+            self.vr_status.setText(f"\u2713 {runtime.name} found")
+        else:
+            self.vr_status.setText(
+                "No VR app found: install "
+                f"<a href=\"{vr.WIVRN_URL}\">WiVRn</a> (Linux) or "
+                f"<a href=\"{vr.STEAMVR_URL}\">SteamVR</a> / Meta Quest Link (Windows).")
+        frame, content = card(margins=(24, 16, 24, 16), spacing=6)
+        content.addWidget(self.vr_status)
+        lay.addWidget(frame)
+
+    def _vr_extras_block(self, lay):
+        content = self.section_contents.get("VR (experimental)")
+        if content is None:
+            return
+        content.addWidget(hline())
+        content.addWidget(label("Recentre: Home key, or hold both sticks for a second.", "help"))
+        advanced = Disclosure("Advanced: what VR changes")
+        advanced.content.addWidget(label(
+            "Play in VR sets these for that session only; your normal settings are not changed.", "help"))
+        for name, value, _key in vr.SESSION_OVERRIDES:
+            advanced.content.addWidget(label(f"{name}: {value}", "help"))
+        self.vr_advanced = advanced
+        content.addWidget(advanced)
 
     # --- texture packs (#384) -------------------------------------------------------
     def _texture_pack_block(self):
@@ -587,8 +629,20 @@ class SettingsPage(QWidget):
         self.texture_folder_button.setToolTip(str(folder))
         self.texture_folder_button.clicked.connect(self._open_texture_folder)
         row.addWidget(self.texture_folder_button)
+        self.texture_page_button = QPushButton("Texture packs page…")
+        self.texture_page_button.setToolTip("Add, order and turn packs on or off, and make an HD pack "
+                                            "from your dump.")
+        self.texture_page_button.clicked.connect(self._show_texture_packs)
+        row.addWidget(self.texture_page_button)
         row.addStretch(1)
         content.addLayout(row)
+
+    def _show_texture_packs(self):
+        from .window import TEXTURE_PACKS_PAGE_ID
+        show = getattr(self.window, "show_page", None)
+        if show is not None:
+            self.flush()
+            show(TEXTURE_PACKS_PAGE_ID)
 
     def _open_texture_folder(self):
         folder = game.texture_pack_folder(self.cfg)
@@ -660,10 +714,11 @@ class SettingsPage(QWidget):
         p = gpu.preset(vendor)
         apply_ = force_apply
         if not force_apply and p is not None:
+            names = [schema.BY_KEY[k].label for k in gpu.settings_for(vendor)
+                     if k in schema.BY_KEY and schema.BY_KEY[k].applies()]
             apply_ = QMessageBox.question(
                 self, "Graphics card", f"Use the recommended settings for {p.label} now?\n\n{p.summary}\n\n"
-                "This changes the backend, render scale, upscaling filter and frame rate; every other "
-                "setting stays as it is.") == QMessageBox.Yes
+                f"This changes {', '.join(names)}; every other setting stays as it is.") == QMessageBox.Yes
         self.cfg.set_gpu_vendor(vendor, apply_)
         if self.cfg.settings.get("fh1_upscaler", "off") != "off":
             self.set_value("fh1_upscaler", self.cfg.settings["fh1_upscaler"])
@@ -716,7 +771,10 @@ class SettingsPage(QWidget):
         root.addWidget(self.banner)
 
     def _refresh_banner(self):
-        self.banner.setVisible(self.cfg.specs_banner_due())
+        due = self.cfg.specs_banner_due()
+        if due:
+            self.banner_text.setText(self.cfg.specs_banner_text())
+        self.banner.setVisible(due)
 
     def _use_recommended(self):
         changed = self.cfg.use_recommended()
@@ -772,7 +830,7 @@ class SettingsPage(QWidget):
                                           "rivals. You forward no ports."),
             ("local", "This PC", "Starts a Forza Live server just for this session (127.0.0.1:21200). "
                                   "Online features work, but only you are in it."),
-            ("custom", "My own server", "A server you or a friend host (docs/hosting.md)."),
+            ("custom", "My own server", "A server you or a friend host (forza-live's docs/hosting.md on GitHub)."),
             ("offline", "Offline", "No Xbox LIVE and no server."),
         ]
         self.radios = {}

@@ -17,13 +17,48 @@ unavailable and marked Coming soon.
 
 ## Standalone integration
 
-This change is independent of the tabbed pause-menu work in #235. With
-`--forza_car_tuning=true`, the stock FH1 pause list offers **Car Tuning** above
+This feature is independent of the tabbed pause-menu work in #235. Enable
+**Settings > Gameplay > Native car tuning** in the launcher and restart the game.
+After updating the launcher, rebuild once with your own Title Update 4 selected
+to prepare the tuning resources automatically. The stock FH1 pause list offers **Car Tuning** above
 Graphics and Quit only for the paused, primary-user, offline Colorado free-roam
 context with an owned current car. The existing native availability checks run
 again on entry and Apply. Missing donor aliases keep the stock pause screen
 available. Discard/Back and teardown restore its native list and focus through
 the existing FH1 refresh callback.
+
+Set **Settings > Online > Sign in to Xbox LIVE: off** before launching. The current gate also
+excludes solo free roam while signed in to Forza Live: network-enabled mode is
+broader than active multiplayer participation. This conservative restriction
+remains in place because current presence and session records do not reliably
+distinguish solo play from joining or leaving a live session. Supporting signed-in
+solo play needs a reliable session lifecycle snapshot and transition tests;
+removing the network check alone would not preserve the live-session boundary.
+
+The build retains the unmodified title update in `runtime/update` and prepares
+only the tuning donor aliases in a separate `runtime/update-native`. Turning the
+switch off selects the stock update again, without rebuilding or changing its
+bytes. An explicit `--update_data_root` remains authoritative; tuning CLI and
+`REX_FORZA_CAR_TUNING` overrides follow the runtime's precedence. Failed or
+unsupported preparation falls back to the stock update and reports the reason
+in the build log. No new pause menu, Change Car overlay, or other game's files
+are required.
+
+If tuning is enabled but its prepared resources are unavailable,
+Play shows a warning and an **Open Setup → Build** action. Select Title Update 4
+and build again to prepare the resources. The warning does not block ordinary play.
+After a preparation failure, the warning shows the saved reason and its next step
+even after restarting the launcher. It distinguishes no TU4 selection, missing
+launcher tools, an unsupported original archive and file-access problems. Repeating
+Build alone does not repair a missing tool or unsupported input.
+
+The build log records the preparation error, a diagnostic code and the tool's
+bounded output. Archive mismatches include the expected and actual SHA-256 and
+the checked file path; a mismatch means unsupported input, not proof of corruption.
+The last result is stored in `runtime/native-tuning-status.json`. A successful
+preparation replaces the previous failure. Older installations without this file
+still show the generic warning and direct players who already rebuilt to the
+preparation error in their build log. Original game/update inputs remain unchanged.
 
 The isolation starts on current main and carries tuning from the combined
 `d877a127cc301c9bcc23e06f64d5427c9e0519de` checkpoint, including its native footer,
@@ -173,12 +208,16 @@ The underlying stock screen retains native dispatcher and datasource ownership;
 its presentation and the parent pause presentation are suppressed only after
 the dedicated component donors validate, then restored on teardown.
 
+The launcher's build runs `tools/native_tuning_assets.py` to prepare 22 independent
+aliases of the player's pristine FH1 garage triplet. For a development build,
 `tools/native_tuning_assets.py ORIGINAL_FH1_TU4 --output NEW_PRIVATE_DIRECTORY`
-prepares 22 independent aliases of the player's pristine FH1 garage triplet.
+remains available.
 It checks the original archive hash and TU4 executable identity, copies opaque
 compressed scene payloads without modification, and records provenance. It does
-not patch pause flow or embed game resources in source control. Pass the new
-directory as the runtime update data root. Before requesting any donor, native
+not patch pause flow or embed game resources in source control. The launcher
+selects `runtime/update-native` for standalone tuning. If the full native pause
+menu is enabled, it selects `runtime/update-menu`, which also contains the tuning
+aliases. With both options off, it selects the unmodified `runtime/update`. Before requesting any donor, native
 preflight requires all 66 alias members and rejects unsupported directory,
 encryption and compression layouts. Native binding validates required nodes
 and isolates original controllers. `fh1_menu_components.h` supplies reusable stable-ID tabs, independent focus and

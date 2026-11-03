@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -123,10 +124,15 @@ class EveryLaunchPath(unittest.TestCase):
         self.assertTrue(env["PATH"].startswith("/tools/bin"))
 
     def test_compiler_check_and_version_queries(self):
-        with frozen(frozen_env()), mock.patch.object(build_env.subprocess, "run") as run:
-            run.return_value = mock.Mock(returncode=0, stdout="cmake version 3.30.1", stderr="")
-            build_env._cxx_works("g++")
-            build_env._version_of(["cmake", "--version"], r"(\d+\.\d+)")
+        original_run = gpu.subprocess.run
+        run = mock.Mock(return_value=mock.Mock(returncode=0, stdout="cmake version 3.30.1", stderr=""))
+        # Other launcher workers share Python's subprocess module. Patch this
+        # module's dependency instead of counting their concurrent GPU probes.
+        process = SimpleNamespace(run=run, SubprocessError=build_env.subprocess.SubprocessError)
+        with frozen(frozen_env()), mock.patch.object(build_env, "subprocess", process):
+            self.assertIs(gpu.subprocess.run, original_run)
+            self.assertIsNone(build_env._cxx_works("g++"))
+            self.assertEqual(build_env._version_of(["cmake", "--version"], r"(\d+\.\d+)"), (3, 30))
             self.assertEqual(run.call_count, 2)
             for call in run.call_args_list:
                 self.assertClean(call.kwargs.get("env"))

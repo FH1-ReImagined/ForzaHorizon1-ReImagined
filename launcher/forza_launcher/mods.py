@@ -184,19 +184,21 @@ def scan(directory: Path, media_of_game: Path | None = None) -> list:
     return [read_mod(p, media_of_game) for p in folders]
 
 
-def state(cfg) -> dict:
-    s = cfg.d.get("mods")
+# The load order and the folders turned off, kept in launcher.json under `key`: "mods" here,
+# "texture_packs" for the texture packs (texture_packs.py), which list folders the same way.
+def state(cfg, key="mods") -> dict:
+    s = cfg.d.get(key)
     if not isinstance(s, dict):
         s = {}
-    def names(key):
-        value = s.get(key)  # a hand-edited launcher.json may hold anything here
+    def names(name):
+        value = s.get(name)  # a hand-edited launcher.json may hold anything here
         return [x for x in value if isinstance(x, str)] if isinstance(value, list) else []
     return {"order": names("order"), "disabled": names("disabled")}
 
 
-def ordered(cfg, found: list) -> list:
+def ordered(cfg, found: list, key="mods") -> list:
     """`found` in the saved load order, new mods last (by name), each on unless turned off."""
-    s = state(cfg)
+    s = state(cfg, key)
     by_folder = {m.folder: m for m in found}
     out = [by_folder.pop(f) for f in s["order"] if f in by_folder]
     out += [m for m in found if m.folder in by_folder]
@@ -205,14 +207,22 @@ def ordered(cfg, found: list) -> list:
     return out
 
 
-def remember(cfg, mods: list):
+def remember(cfg, mods: list, key="mods"):
     """Saves the load order and the mods turned off (mods no longer there are kept, so a mod
     moved out and back keeps its place)."""
-    s = state(cfg)
+    s = state(cfg, key)
     shown = {m.folder for m in mods}
     order = [m.folder for m in mods] + [f for f in s["order"] if f not in shown]
     disabled = [m.folder for m in mods if not m.enabled] + [f for f in s["disabled"] if f not in shown]
-    cfg.d["mods"] = {"order": order, "disabled": disabled}
+    cfg.d[key] = {"order": order, "disabled": disabled}
+    cfg.save()
+
+
+def forget(cfg, folder: str, key="mods"):
+    """Drops a removed folder from the load order and the folders turned off."""
+    s = state(cfg, key)
+    cfg.d[key] = {"order": [f for f in s["order"] if f != folder],
+                  "disabled": [f for f in s["disabled"] if f != folder]}
     cfg.save()
 
 
@@ -287,26 +297,30 @@ def _check_name(name: str):
                            'with a dot): rename it and add it again')
 
 
-def _safe_members(z: zipfile.ZipFile) -> list:
+def _safe_members(z: zipfile.ZipFile, what="mod", max_bytes=None, max_entries=None,
+                  size_text="8 GB") -> list:
     """The zip's members, refused when one would land outside the folder it is unpacked in
-    (an absolute path, "..", a link) or the whole is too big."""
+    (an absolute path, "..", a link) or the whole is too big (max_bytes, said as size_text;
+    default: a mod's limits). `what` names the thing in the messages (a mod, a texture pack)."""
+    max_bytes = MAX_INSTALL if max_bytes is None else max_bytes
+    max_entries = MAX_ENTRIES if max_entries is None else max_entries
     infos = z.infolist()
-    if len(infos) > MAX_ENTRIES:
-        raise InstallError(f"The zip holds {len(infos)} files, more than a mod can have.")
+    if len(infos) > max_entries:
+        raise InstallError(f"The zip holds {len(infos)} files, more than a {what} can have.")
     total = 0
     for info in infos:
         name = info.filename.replace("\\", "/")
         parts = PurePosixPath(name).parts
         if (name.startswith("/") or (len(name) > 1 and name[1] == ":") or ".." in parts):
             raise InstallError(f'The zip has a file outside its own folder ("{info.filename}"); it was '
-                               'not added. Get the mod from its author again.')
+                               f'not added. Get the {what} from its author again.')
         mode = info.external_attr >> 16
         if stat.S_ISLNK(mode):
-            raise InstallError(f'The zip has a link ("{info.filename}"), which mods cannot hold; it was '
+            raise InstallError(f'The zip has a link ("{info.filename}"), which {what}s cannot hold; it was '
                                'not added.')
         total += info.file_size
-        if total > MAX_INSTALL:
-            raise InstallError("The zip unpacks to more than 8 GB, more than a mod can be.")
+        if total > max_bytes:
+            raise InstallError(f"The zip unpacks to more than {size_text}, more than a {what} can be.")
     return infos
 
 
@@ -411,7 +425,4 @@ def remove(cfg, folder: str):
             shutil.rmtree(target)
     except OSError as e:
         raise InstallError(f"The mod could not be removed ({e}). Is a file of it open?") from None
-    s = state(cfg)
-    cfg.d["mods"] = {"order": [f for f in s["order"] if f != folder],
-                     "disabled": [f for f in s["disabled"] if f != folder]}
-    cfg.save()
+    forget(cfg, folder)

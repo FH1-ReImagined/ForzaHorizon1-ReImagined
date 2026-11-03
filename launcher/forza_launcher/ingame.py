@@ -5,7 +5,8 @@ from . import display, power, schema
 
 FILENAME = "graphics-settings.json"
 KEYS = {"output", "upscaler", "resolution_scale", "frame_rate", "vsync",
-        "anisotropic_override", "forza_hud_edges", "forza_performance_overlay", "anti_aliasing"}
+        "anisotropic_override", "forza_hud_edges", "forza_performance_overlay", "anti_aliasing",
+        "world_shadow_filter", "world_ambient_occlusion", "forza_minimap_camera", *schema.CAMERA_FOV_KEYS}
 NVIDIA = {"quality", "balanced", "dlss", "dlaa"}
 FSR3 = {"fsr3_quality", "fsr3_balanced", "fsr3_performance", "fsr3_native"}
 
@@ -55,7 +56,15 @@ def translate(document, current, pc=None):
             if value not in {"off", "fps", "graph"}:
                 raise ValueError("unsupported performance overlay")
             changes[key] = value
-        elif key in {"vsync", "forza_hud_edges"}:
+        elif key == "world_shadow_filter":
+            if value not in {"console", "soft", "softer"}:
+                raise ValueError("unsupported shadow softness")
+            changes[key] = value
+        elif key == "world_ambient_occlusion":
+            if value not in {"off", "low", "high"}:
+                raise ValueError("unsupported ambient occlusion")
+            changes[key] = value
+        elif key in {"vsync", "forza_hud_edges", "forza_minimap_camera"}:
             if value not in ("true", "false"):
                 raise ValueError(f"invalid {key}")
             changes[key] = value == "true"
@@ -65,7 +74,8 @@ def translate(document, current, pc=None):
             number = int(value)
             valid = ((key == "frame_rate" and (number in schema.LOW_FRAME_RATES or 60 <= number <= 240)) or
                      (key == "resolution_scale" and 1 <= number <= 8) or
-                     (key == "anisotropic_override" and -1 <= number <= 5))
+                     (key == "anisotropic_override" and -1 <= number <= 5) or
+                     (key in schema.CAMERA_FOV_KEYS and (number == 0 or 40 <= number <= 90)))
             if not valid:
                 raise ValueError(f"unsupported {key}")
             if key == "frame_rate" and current.get("frame_rate") == 0 and number == display.effective(

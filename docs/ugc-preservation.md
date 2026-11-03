@@ -88,11 +88,11 @@ requires a new output filename and reads dimensions from the texture descriptor.
 
 Related PRs inspected on 2026-10-18:
 
-- [#139, save manager and profile editor](https://github.com/Dyotson/ForzaHorizon1-ReImagined/pull/139):
+- [#139, save manager and profile editor](https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/pull/139):
   full backups, game-session locks and an authenticated career-profile codec. This is the
   foundation for any future importer that changes a save. Its profile codec does not
   directly decode the recovered livery's different encrypted wrapper.
-- [#130, photo gallery and launcher layout](https://github.com/Dyotson/ForzaHorizon1-ReImagined/pull/130):
+- [#130, photo gallery and launcher layout](https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/pull/130):
   worker-based discovery, preview/export and UI lifecycle patterns; now merged into main.
   Gallery keeps page ID 4, Controls 5 and Saves 6; Designs uses page ID 7.
   The Saves PR's original ID 4 will need reconciliation when it is integrated.

@@ -18,6 +18,29 @@ TITLE_ID=0x4D5309C9
 TU4_VERSION=0x0000040C
 ORIGINAL_ARCHIVE_SHA256="dfb31d11bf00153cfc5f3634681a41ea7e2a877d470230a148721ba3ccd5bab3"
 MAX_PAYLOAD_BYTES=64*1024*1024
+
+class PreparationError(ValueError):
+    def __init__(self, code, reason, action, detail=""):
+        super().__init__(reason)
+        self.diagnostic = dict(code=code, reason=reason, action=action, detail=detail)
+
+
+def error_diagnostic(error):
+    if isinstance(error, PreparationError):
+        return error.diagnostic
+    if isinstance(error, PermissionError):
+        code, reason, action = ("access_denied", "Tuning preparation could not read or write a file.",
+                                "Check the file access error in the build log and the selected data folder's permissions.")
+    elif isinstance(error, FileNotFoundError):
+        code, reason, action = ("missing_file", "A required Title Update 4 file is missing.",
+                                "Check the missing path in the build log and select your original TU4 package in Setup.")
+    elif isinstance(error, (KeyError, zipfile.BadZipFile)):
+        code, reason, action = ("invalid_archive", "The TU4 archive is unreadable or lacks a required tuning scene.",
+                                "Select your original supported TU4 package in Setup. Send the build log if it still fails.")
+    else:
+        code, reason, action = ("preparation_failed", "Tuning resource preparation failed.",
+                                "Send the build log, including the error below; another rebuild alone may not fix it.")
+    return dict(code=code, reason=reason, action=action, detail=str(error)[:4000])
 def digest(path):
     with Path(path).open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
@@ -49,7 +72,9 @@ def verify_executable(path):
         version = struct.unpack_from(">I", information, 4)[0]
         title = struct.unpack_from(">I", information, 12)[0]
         if title != TITLE_ID or version != TU4_VERSION:
-            raise ValueError("Expected original Forza Horizon 1 TU4 default.xex (title 4D5309C9, version 0x40C)")
+            raise PreparationError("wrong_title_update", "The selected executable is not FH1 Title Update 4.",
+                                   "Select your original FH1 Title Update 4 package in Setup, then Build.",
+                                   f"Expected title 4D5309C9/version 0000040C; found {title:08X}/{version:08X}.")
 
 def compressed_payload(archive, info):
     """Read a checked raw ZIP payload, including the game's opaque method 21."""
@@ -123,9 +148,20 @@ def stage(update,output):
     update,output=Path(update).resolve(),Path(output).resolve()
     if output.exists(): raise FileExistsError(output)
     if update==output or update in output.parents: raise ValueError("Output must be separate from original inputs")
-    verify_executable(update/"default.xex")
+    try:
+        verify_executable(update/"default.xex")
+    except PreparationError:
+        raise
+    except ValueError as error:
+        raise PreparationError("invalid_executable", "The TU4 executable header is unreadable or unsupported.",
+                               "Select your original supported FH1 Title Update 4 package in Setup. Send the build log if it still fails.",
+                               str(error)) from error
     source=update/"media.zip"
-    if digest(source)!=ORIGINAL_ARCHIVE_SHA256: raise ValueError("Expected pristine FH1 TU4 media.zip")
+    actual_digest = digest(source)
+    if actual_digest != ORIGINAL_ARCHIVE_SHA256:
+        raise PreparationError("unsupported_archive", "TU4 media.zip does not match the supported original archive.",
+                               "Check that Setup uses an unmodified supported TU4 package. Send the build log if yours is original.",
+                               f"File: {source}; expected SHA-256 {ORIGINAL_ARCHIVE_SHA256}; actual {actual_digest}.")
     stem="ui/scenes/ui4/108_c_buy_carselect"
     with zipfile.ZipFile(source) as archive:
         names={info.filename.lower().replace(chr(92),"/"):info for info in archive.infolist()}
@@ -153,5 +189,7 @@ if __name__=="__main__":
     parser.add_argument("update",type=Path);parser.add_argument("--output",required=True,type=Path)
     args=parser.parse_args()
     try: stage(args.update,args.output)
-    except (OSError,ValueError,KeyError,zipfile.BadZipFile) as error: parser.exit(1,f"{error}\n")
+    except (OSError,ValueError,KeyError,zipfile.BadZipFile) as error:
+        diagnostic = error_diagnostic(error)
+        parser.exit(1,"NATIVE_TUNING_ERROR "+json.dumps(diagnostic, ensure_ascii=True)+"\n")
     print(f"Prepared private native tuning donors in {args.output}")

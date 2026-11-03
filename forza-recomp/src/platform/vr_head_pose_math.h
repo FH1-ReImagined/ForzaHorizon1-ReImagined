@@ -42,15 +42,27 @@ inline void HeadRotation(const HeadPose& p, float r[3][3]) {
       r[i][j] = rp[i][0] * yaw[0][j] + rp[i][1] * yaw[1][j] + rp[i][2] * yaw[2][j];
 }
 
+// A head pose as a rotation (rows, x_camera = x_head * r) and an offset t in camera space: H.
+struct HeadTransform {
+  float r[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+  float t[3] = {0, 0, 0};
+};
+
+inline HeadTransform ToTransform(const HeadPose& p) {
+  HeadTransform h;
+  HeadRotation(p, h.r);
+  h.t[0] = p.x, h.t[1] = p.y, h.t[2] = p.z;
+  return h;
+}
+
 // view[16]: the row-major 4x4 view matrix, changed in place to view * inverse(H).
-inline void ApplyHeadPose(float view[16], const HeadPose& p) {
-  float r[3][3];
-  HeadRotation(p, r);
+inline void ApplyHeadTransform(float view[16], const HeadTransform& h) {
+  const auto& r = h.r;
   // inverse(H) = [R^T 0; -t R^T 1]
   float inv[4][4] = {};
   for (int i = 0; i < 3; ++i)
     for (int j = 0; j < 3; ++j) inv[i][j] = r[j][i];
-  const float t[3] = {p.x, p.y, p.z};
+  const float* t = h.t;
   for (int j = 0; j < 3; ++j)
     inv[3][j] = -(t[0] * r[j][0] + t[1] * r[j][1] + t[2] * r[j][2]);
   inv[3][3] = 1;
@@ -61,5 +73,7 @@ inline void ApplyHeadPose(float view[16], const HeadPose& p) {
                        view[i * 4 + 2] * inv[2][j] + view[i * 4 + 3] * inv[3][j];
   for (int k = 0; k < 16; ++k) view[k] = out[k];
 }
+
+inline void ApplyHeadPose(float view[16], const HeadPose& p) { ApplyHeadTransform(view, ToTransform(p)); }
 
 }  // namespace forza::vr

@@ -74,11 +74,21 @@ def header_bytes(name, display_name, title_id):
 
 
 def install(path, user_data):
+    """Extract one package. Returns [(file path, number of damaged 4 KB blocks)] of the files whose
+    blocks do not match the package's own hashes ([] for an intact package or one skipped)."""
     pkg = xcontent_extract.open_package(path)
+    try:
+        return _install(pkg, path, user_data)
+    finally:
+        for f in getattr(pkg, "files", []):
+            f.close()
+
+
+def _install(pkg, path, user_data):
     h = pkg.hdr
     if h.content_type != MARKETPLACE:
         print(f"skipping {path}: content type 0x{h.content_type:X} is not marketplace content")
-        return
+        return []
     name = os.path.basename(path)
     root = os.path.join(user_data, "0000000000000000", f"{h.title_id:08X}")
     dest = os.path.join(root, "00000002", name)
@@ -97,6 +107,7 @@ def install(path, user_data):
     for p, n in damaged:
         print(f"WARNING: {name}: {p} has {n} damaged 4 KB block(s): the package file does not match its "
               f"own hashes (a bad download or copy), so that content will not work. Get the package again.")
+    return damaged
 
 
 def _child(p, name):

@@ -11,12 +11,14 @@
 // at +0x40 had a vtable pointer of 0x0AF048AC (its memory reused), and the Release read
 // faulted.
 //
-// The hook (hints/resource_data_release.toml) replaces the take: the field is exchanged
+// The load and unload hooks (hints/resource_data_release.toml) replace every
+// matching take in these resource vtables: the field is exchanged
 // with 0 in one atomic step, so two threads cannot both take the same object, and an
 // object whose vtable is not in the executable's image is logged with the resource's class
 // and dropped instead of released (it is gone already; calling into it faulted).
 
 #include "../platform/guest_memory.h"
+#include "resource_data_take.h"
 
 #include <rex/image_info.h>
 #include <rex/logging.h>
@@ -80,18 +82,10 @@ std::string ClassName(uint8_t* base, uint32_t object) {
 
 std::atomic<int> reports{0};
 
-}  // namespace
-
-// At the take (lwz r11,64(r30); li r10,0; mr r31,r3; stw r10,64(r30)); the code goes on at
-// the null check of r11.
-void ForzaTakeResourceData_82C222F0(PPCRegister& r3) {
-  PPCContext& ctx = *reinterpret_cast<PPCContext*>(&r3);
+uint32_t TakeResourceData(uint32_t resource) {
   uint8_t* base = rex::system::kernel_state()->memory()->virtual_membase();
-  const uint32_t resource = ctx.r30.u32;
-  ctx.r31.u64 = ctx.r3.u64;
-  ctx.r10.u64 = 0;
-  auto* field = reinterpret_cast<std::atomic<uint32_t>*>(forza::GuestPtr(base, resource + 0x40));
-  uint32_t data = __builtin_bswap32(field->exchange(0));
+  auto* field = reinterpret_cast<uint32_t*>(forza::GuestPtr(base, resource + 0x40));
+  uint32_t data = forza::resource::TakeData(*field);
   if (data && !LiveObject(base, data)) {
     const int n = reports.fetch_add(1);
     if (n < 10) {
@@ -107,5 +101,33 @@ void ForzaTakeResourceData_82C222F0(PPCRegister& r3) {
     }
     data = 0;
   }
-  ctx.r11.u64 = data;
+  return data;
 }
+
+// Unload replaces lwz r3,64(r3); li rN,0; cmplwi cr6,r3,0; stw rN,64(rSaved).
+// The preceding mr already saved the resource in r11/r31. Keep that register,
+// reproduce the zero register and CR6, then resume at the original conditional
+// branch. Skipping the store matters too: it must not clear newly published data.
+template <PPCRegister PPCContext::* Zero>
+void UnloadResourceData(PPCRegister& r3) {
+  PPCContext& ctx = *reinterpret_cast<PPCContext*>(&r3);
+  ctx.r3.u64 = TakeResourceData(ctx.r3.u32);
+  (ctx.*Zero).u64 = 0;
+  ctx.cr6.compare<uint32_t>(ctx.r3.u32, 0, ctx.xer);
+}
+
+}  // namespace
+
+// Load's take also saves its return value in r31 and zeros r10. Resume at r11's
+// original null check; neither the virtual Release nor the load result changes.
+void ForzaTakeResourceData_82C222F0(PPCRegister& r3) {
+  PPCContext& ctx = *reinterpret_cast<PPCContext*>(&r3);
+  ctx.r31.u64 = ctx.r3.u64;
+  ctx.r10.u64 = 0;
+  ctx.r11.u64 = TakeResourceData(ctx.r30.u32);
+}
+
+void ForzaUnloadResourceDataR10(PPCRegister& r3) { UnloadResourceData<&PPCContext::r10>(r3); }
+void ForzaUnloadResourceDataR11(PPCRegister& r3) { UnloadResourceData<&PPCContext::r11>(r3); }
+void ForzaUnloadResourceDataR29(PPCRegister& r3) { UnloadResourceData<&PPCContext::r29>(r3); }
+void ForzaUnloadResourceDataR30(PPCRegister& r3) { UnloadResourceData<&PPCContext::r30>(r3); }

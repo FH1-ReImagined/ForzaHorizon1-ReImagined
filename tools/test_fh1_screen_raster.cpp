@@ -4,6 +4,17 @@
 #include <cstdio>
 #include <initializer_list>
 
+// The SDK pin must include #419: instrument images use texture coordinates,
+// while display and padded bloom passes continue using native-screen scaling.
+// Compile-time checks remain active even when this tool is built with NDEBUG.
+using rex::graphics::vulkan::fh1::IsNativeScreenViewport;
+static_assert(!IsNativeScreenViewport(1280, true, true, 256, -144, 512, 288));
+static_assert(!IsNativeScreenViewport(1280, true, true, 128, -72, 256, 144));
+static_assert(!IsNativeScreenViewport(1280, true, true, 64, -36, 128, 72));
+static_assert(!IsNativeScreenViewport(1280, true, true, 32, -18, 64, 36));
+static_assert(IsNativeScreenViewport(1280, true, true, 640, -360, 1280, 720));
+static_assert(IsNativeScreenViewport(1280, true, true, 160, -96, 320, 192));
+
 int main() {
   using rex::graphics::vulkan::fh1::IsDisplayViewport;
   // Display, post-processing and cinematic viewport scales, with either Y sign.

@@ -185,4 +185,4 @@ Allow UDP 21200 and TCP 21201 for other machines to reach it; use
 `127.0.0.1:21200` for an isolated local test. The launcher can start its local
 server automatically. Horizon World is **Multiplayer > Find Game > Horizon
 World**; all players need matching base/TU4 versions. HDR and online are
-independent. See [hosting](hosting.md) for routing and server configuration.
+independent. See [hosting](https://github.com/FH1-ReImagined/forza-live/blob/main/docs/hosting.md) for routing and server configuration.

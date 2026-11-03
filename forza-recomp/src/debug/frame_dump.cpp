@@ -36,6 +36,7 @@
 #include "stall_watch.h"
 #include "../hooks/frame_time.h"
 #include "../platform/ultrawide.h"
+#include "../platform/xr.h"
 
 #include <rex/logging.h>
 #include <rex/runtime.h>
@@ -275,6 +276,7 @@ void CaptureHostOutput(double now, const std::string& dir, bool precise = false)
 extern "C" REX_FUNC(__imp__VdSwap) {
   static GuestFunc sdk = forza::SdkImport("__imp__VdSwap");
   static const auto start = std::chrono::steady_clock::now();
+  const uint32_t packet_addr = ctx.r3.u32;
   const uint32_t fetch_addr = ctx.r4.u32;
 
   const double elapsed =
@@ -338,4 +340,6 @@ extern "C" REX_FUNC(__imp__VdSwap) {
     }
   }
   if (sdk) sdk(ctx, base);
+  // VR cockpit: the swap packet carries the tag of the head pose this frame was drawn with.
+  forza::xr::TagSwap(base, packet_addr);
 }

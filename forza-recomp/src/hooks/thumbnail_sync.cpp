@@ -1,5 +1,5 @@
-// forza - a car's picture and its livery are rendered with real pipelines (#74, #77,
-// docs/rendering.md).
+// forza - a car's picture, its livery and photo mode are rendered with real pipelines (#74, #77,
+// #167, docs/rendering.md).
 //
 // The game renders a car's picture once (the purchase, Car Select, the garage), reads the
 // resolve back on the CPU and saves it in the profile (ForzaProfile/Thumbnails). With
@@ -22,6 +22,17 @@
 // element render (render scenario "RenderLiveryElements" or "...Highlight"; called 10 times
 // within 1 ms at the festival load), and holds the same window. FORZA_LIVERY_SYNC=0 switches
 // that hook off.
+//
+// Photo mode (#167): the photo is composed, resolved and read back on the CPU at SAVE. Since
+// ReIGlue 0364 the pipelines a frame meets are built in the background across frames, and a
+// draw whose pipeline is not ready yet is skipped in every frame until it is: a photo taken
+// soon after entering photo mode on a slow driver could miss them. Photo mode draws the
+// first shadow cascade with the high-quality filter (ApplyShadows technique 8,
+// src/hooks/shadow_filter.cpp), which play never uses; while it does, the same window holds
+// (the frame end then waits for every pipeline in flight, as before 0364).
+// FORZA_PHOTO_SYNC=0 switches that off.
+
+#include "thumbnail_sync.h"
 
 #include "../platform/guest_addr.h"
 
@@ -32,8 +43,10 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <thread>
 
 namespace {
@@ -54,19 +67,46 @@ void SetSync(bool on) {
   }
 }
 
-std::atomic<uint64_t> g_generation{0};
+std::mutex g_sync_mutex;
+uint64_t g_generation = 0;  // Protected with the corresponding flag update.
 
 // Sets the SDK setting now and clears it kWindow after the last call.
 void HoldSync() {
-  const uint64_t generation = g_generation.fetch_add(1) + 1;
-  SetSync(true);
+  uint64_t generation;
+  {
+    std::lock_guard lock(g_sync_mutex);
+    generation = ++g_generation;
+    SetSync(true);
+  }
   std::thread([generation] {
     std::this_thread::sleep_for(kWindow);
-    if (g_generation.load() == generation) SetSync(false);
+    // An expired timer must not clear a hold renewed between its check and flag write.
+    std::lock_guard lock(g_sync_mutex);
+    if (g_generation == generation) SetSync(false);
   }).detach();
 }
 
 }  // namespace
+
+namespace forza::thumbnail_sync {
+
+void HoldForPhotoMode() {
+  static const bool on = EnvOn("FORZA_PHOTO_SYNC");
+  if (!on) return;
+  // Called for every photo mode frame: renew the window at most once a second.
+  static std::atomic<int64_t> last_ms{INT64_MIN / 2};
+  const int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::steady_clock::now().time_since_epoch())
+                             .count();
+  int64_t last = last_ms.load(std::memory_order_relaxed);
+  if (now_ms - last < 1000 || !last_ms.compare_exchange_strong(last, now_ms)) return;
+  if (now_ms - last > std::chrono::milliseconds(kWindow).count()) {
+    REXLOG_INFO("Pipeline sync: photo mode, the pipelines are built before its frames end");
+  }
+  HoldSync();
+}
+
+}  // namespace forza::thumbnail_sync
 
 extern "C" REX_FUNC(__imp__sub_82546460);
 extern "C" REX_FUNC(sub_82546460) {

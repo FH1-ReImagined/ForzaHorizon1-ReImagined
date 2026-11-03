@@ -11,8 +11,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import TITLE_ID, cleanenv, gpu, paths, dlss, fsr3, power
-from .config import Config, render_toml, write_toml
+from . import TITLE_ID, cleanenv, gpu, paths, dlss, fsr3, power, tuning_status
+from .config import Config, parse_toml, render_toml, write_toml
 
 EXE = "forza.exe" if paths.IS_WINDOWS else "forza"
 LOCAL_PROFILE = "B13EBABEBABEBABE"  # the runtime's own profile folder
@@ -121,9 +121,15 @@ def server_listening(port=LOCAL_HTTP_PORT) -> bool:
         return False
 
 
-def server_command(script: Path, data_dir: Path):
+def server_command(script: Path, data_dir: Path, game_files: Path | None = None):
     args = ["--host", "127.0.0.1", "--port", LOCAL_SERVER.split(":")[1],
             "--http-port", str(LOCAL_HTTP_PORT), "--data-dir", str(data_dir)]
+    # The festival events (the Co-op Festival's /event, the Horizon World's events) come from
+    # the game's database. The server only looks for it in a source checkout (extracted/game
+    # beside server/); without it the Co-op Festival is not offered at all (#67).
+    db = game_files / "media" / "db" / "gamedb.slt" if game_files else None
+    if db and db.is_file():
+        args += ["--game-db", str(db)]
     if paths.FROZEN:  # run the server inside this executable (no Python needed)
         return [sys.executable, "--live-server", str(script)] + args
     return [sys.executable, str(script)] + args
@@ -313,8 +319,9 @@ def content_warnings(cfg: Config, game: GameInstall, home: Path, root: Path, ext
     no update (the base game starts: no Horizon Rally, no 1000 Club), or DLC installed or chosen but
     none in the user data folder the game is started on (Horizon Rally then says "Xbox LIVE
     Marketplace error"; issues #65, #70), or DLC there without the Rally Expansion Pack (the same
-    error, #79)."""
-    from . import datafolder
+    error, #79), or a known DLC package there that is damaged or incomplete (dlccheck: the Rally pack's
+    bad copy crashes Kettle Hills stage 1, #422)."""
+    from . import datafolder, dlccheck
     out = []
     if cfg["tu_package"].strip() and not extra_update and not (game.dir / "update").is_dir():
         out.append(f"Title Update 4 is chosen in Setup, but this build has none ({game.dir / 'update'} is "
@@ -341,6 +348,11 @@ def content_warnings(cfg: Config, game: GameInstall, home: Path, root: Path, ext
                        f"{root / datafolder.DLC_DIR / '00000002'}: Horizon Rally says \"Xbox LIVE Marketplace "
                        "error\" (issue #79). Open Setup and install the DLC again (step 2) with the Rally "
                        "Expansion Pack.")
+        for name, problem, effect in dlccheck.installed_problems(root):
+            out.append(f"Your {dlccheck.display_name(name)} is damaged: {problem}"
+                       + (f" ({effect})" if effect else "") +
+                       ". Install it again from an intact copy of its package file (Setup, step 2), "
+                       "which checks every block.")
     return out
 
 
@@ -366,9 +378,9 @@ def gpu_vendor_arg(cfg: Config, extra_args=()) -> str:
 
 
 def build_plan(cfg: Config, game: GameInstall, write=True, refresh_xenia=False, log=print,
-               battery_saver=True) -> LaunchPlan:
+               battery_saver=True, vr=False) -> LaunchPlan:
     """battery_saver=False plans with the player's settings even when battery saver would apply
-    (the shader prebuild, which builds for them)."""
+    (the shader prebuild, which builds for them). vr=True is "Play in VR": the VR values as arguments."""
     from . import ingame
     if write:
         ingame.import_pending(cfg, log)
@@ -385,7 +397,7 @@ def build_plan(cfg: Config, game: GameInstall, write=True, refresh_xenia=False, 
     real = cfg.d["settings"]
     cfg.d["settings"] = {**real, **saver.settings}  # this start only; launcher.json keeps the player's
     try:
-        return _build_plan(cfg, game, write, refresh_xenia, log, saver)
+        return _build_plan(cfg, game, write, refresh_xenia, log, saver, vr)
     finally:
         cfg.d["settings"] = real
 
@@ -401,7 +413,112 @@ def texture_packs_used(cfg: Config) -> bool:
     return bool(settings.get("texture_dump")) or bool(settings.get("texture_replace"))
 
 
-def _build_plan(cfg: Config, game: GameInstall, write, refresh_xenia, log, saver) -> LaunchPlan:
+def native_update_requested(cfg: Config, toml_text: str, keys=("forza_car_tuning",)) -> bool:
+    """Use the same config/environment/CLI precedence as the runtime flags."""
+    values = parse_toml(toml_text)
+    environment = {**os.environ, **parse_env(cfg.advanced.get("extra_env", ""))}
+    for key in keys:
+        name = "REX_" + key.upper()
+        if name in environment:
+            # rex::string::from_string<bool> is case-sensitive (numeric.h).
+            values[key] = environment[name] in ("true", "1", "yes")
+    # CLI11 add_flag_function uses case-insensitive counts and sums repeated
+    # registered flags. The environment conversion is intentionally separate.
+    def flag_count(value):
+        value = value.lower()
+        if value in ("true", "yes", "on", "enable", "t", "y", "+"):
+            return 1
+        if value in ("false", "no", "off", "disable", "f", "n", "-", "0"):
+            return -1
+        if re.fullmatch(r"[+-]?(?:0[xX][0-9a-fA-F]+|0[0-7]*|[1-9][0-9]*)", value):
+            digits = value.lstrip("+-")
+            base = 16 if digits.startswith("0x") else 8 if digits.startswith("0") else 10
+            return int(value, base)
+        return None
+
+    def summed_count(value):
+        # CLI11's Sum policy tries numeric conversion before boolean words.
+        # In particular, a positive flag's explicit 0 contributes zero.
+        numeric = value.replace("_", "").replace("'", "")
+        try:
+            return float(numeric)
+        except ValueError:
+            try:
+                return float.fromhex(numeric) if "0x" in numeric.lower() else float(int(numeric, 0))
+            except ValueError:
+                return flag_count(value)
+
+    cli_counts = {}
+    invalid_counts = set()
+    extra = split_args(cfg.advanced.get("extra_args", ""))
+    for arg in extra:
+        if arg == "--":
+            break
+        if not arg.startswith("--"):
+            continue
+        key, equal, value = arg[2:].partition("=")
+        negated = key.startswith("no-")
+        if negated:
+            key = key[3:]
+        if key not in keys:
+            continue
+        if not equal or value in ("", "{}"):
+            value = "false" if negated else "true"
+        elif negated:
+            # get_flag_value inverts recognized integer/boolean overrides;
+            # other numeric spellings (such as 2.5) pass through unchanged.
+            count = flag_count(value)
+            if count is not None:
+                value = str(-count)
+        count = summed_count(value)
+        if count is None:
+            invalid_counts.add(key)
+        cli_counts[key] = cli_counts.get(key, 0) + (count or 0)
+    for key, count in cli_counts.items():
+        # CLI11 formats its floating-point sum before the int64 callback.
+        integer = re.match(r"[+-]?\d+", format(count, ".16g"))
+        values[key] = key not in invalid_counts and integer is not None and int(integer[0]) > 0
+    return any(values.get(key) is True for key in keys)
+
+
+def update_data_root(cfg: Config, game: GameInstall, toml_text: str) -> Path:
+    menu = game.dir / "update-menu"
+    if native_update_requested(cfg, toml_text, ("forza_native_pause",)):
+        return menu if menu.is_dir() else game.dir / "update"
+    prepared = game.dir / "update-native"
+    if native_update_requested(cfg, toml_text) and prepared.is_dir():
+        return prepared
+    return game.dir / "update"
+
+
+def native_tuning_needs_build(cfg: Config, install: GameInstall) -> bool:
+    """Warn about an enabled feature whose automatic resources have not been built."""
+    # The launch plan leaves explicit roots authoritative. Rebuilding the managed
+    # overlay cannot repair or replace the user's explicitly selected directory.
+    if any(a.startswith("--update_data_root") for a in split_args(cfg.advanced.get("extra_args", ""))):
+        return False
+    text = render_toml(cfg)
+    return (native_update_requested(cfg, text) and
+            update_data_root(cfg, install, text) == install.dir / "update")
+
+
+def native_tuning_warning(cfg: Config, install: GameInstall) -> str:
+    status = tuning_status.read(install.dir)
+    if status and status["code"] != "ready":
+        return tuning_status.summary(status)
+    if not cfg["tu_package"]:
+        return tuning_status.summary(tuning_status.failure(
+            "no_title_update", "This build needs FH1 Title Update 4 for tuning.",
+            "Select your Title Update 4 package in Setup, then Build."))
+    if status and status["code"] == "ready":
+        return ("Native car tuning resources were prepared, but are now missing or incomplete. "
+                "Open Setup and Build to restore them. Normal play is available.")
+    return ("Native car tuning is enabled, but its resources are missing. "
+            "Open Setup and Build with Title Update 4 selected. If you already rebuilt, "
+            "send the build log's 'Native car tuning unavailable' error. Normal play is available.")
+
+
+def _build_plan(cfg: Config, game: GameInstall, write, refresh_xenia, log, saver, vr=False) -> LaunchPlan:
     from . import ingame
     if cfg.gamertag_cleaned:
         log("The saved Gamertag %r is not plain ASCII (letters, digits, spaces, at most 15): "
@@ -470,15 +587,16 @@ def _build_plan(cfg: Config, game: GameInstall, write, refresh_xenia, log, saver
         else:
             env["FORZA_SERVER"] = LOCAL_SERVER
             if not server_listening():
-                server_argv = server_command(script, home / "live_server")
+                server_argv = server_command(script, home / "live_server", data)
     else:
         if mode == "custom":
             notes.append("No custom server address set: starting offline.")
         unset.append("FORZA_SERVER")
 
     extra_update = any(a.startswith("--update_data_root") for a in split_args(cfg.advanced.get("extra_args", "")))
-    if (game.dir / "update").is_dir() and not extra_update:
-        args.append(f"--update_data_root={game.dir / 'update'}")  # the title update's files
+    update = update_data_root(cfg, game, toml_text)
+    if update.is_dir() and not extra_update:
+        args.append(f"--update_data_root={update}")
     notes += content_warnings(cfg, game, home, root, extra_update, check_dlc=write or root.exists())
     if cfg.advanced.get("pad_per_user"):
         env["FORZA_PAD_PER_USER"] = "1"
@@ -492,6 +610,8 @@ def _build_plan(cfg: Config, game: GameInstall, write, refresh_xenia, log, saver
                          for a in split_args(cfg.advanced.get("extra_args", "")))
     if texture_packs_used(cfg) and not extra_textures:  # a flag given twice confuses the game
         args.append(f"--texture_pack_root={texture_pack_folder(cfg)}")
+    from . import vr as vr_module
+    vr_module.configure(cfg, env, args, notes, session=vr)
     from . import antialiasing
     antialiasing.configure_runtime(cfg, env, args, write=write)
 
@@ -507,9 +627,10 @@ def _build_plan(cfg: Config, game: GameInstall, write, refresh_xenia, log, saver
     # The mods turned on in the Mods page, in their load order (#149). An option the player
     # names in the extra flags ("--name=value" or "--name value") is left to them: the game
     # refuses one given twice.
-    from . import mods
+    from . import mods, texture_packs
     named = {a[2:].split("=", 1)[0] for a in extra if a.startswith("--")}
     args += mods.launch_args(cfg, named)
+    args += texture_packs.launch_args(cfg, named)  # the packs turned on, in order (#384)
     args += extra
     env.update(parse_env(cfg.advanced.get("extra_env", "")))
 
@@ -784,10 +905,14 @@ class Session:
                 data_dir.mkdir(parents=True, exist_ok=True)
                 # Popen gives the child its own handle. Close our copy immediately, including
                 # when starting the server fails; otherwise Windows keeps server.log locked.
+                # Its name for signed requests, and, as only this PC uses it, an XUID bound there
+                # by a game before them goes to this game's public key (#515).
+                server_env = {**cleanenv.clean_environment(), "FORZA_REBIND_LEGACY": "1",
+                              "FORZA_SERVER_NAMES": LOCAL_SERVER.split(":")[0]}
                 with open(data_dir / "server.log", "ab") as server_log:
                     self.server = subprocess.Popen(plan.server_argv, stdout=server_log,
                                                    stderr=subprocess.STDOUT, creationflags=flags,
-                                                   stdin=subprocess.DEVNULL, env=cleanenv.clean_environment())
+                                                   stdin=subprocess.DEVNULL, env=server_env)
                 self.log("Started a local Forza Live server")
             self._start_game({})
         except BaseException:
@@ -838,6 +963,7 @@ class Session:
         # Never inherit another launcher's telemetry destination or session token.
         env.pop('FORZA_TELEMETRY_PORT', None)
         env.pop('FORZA_TELEMETRY_TOKEN', None)
+        env.pop('FORZA_TELEMETRY_PHYSICS', None)
         from .haptics.service import HapticsService, supported, supports_xbox
         wanted = plan.haptics_settings.get('enabled') or plan.haptics_settings.get('xbox_enabled')
         if not wanted and self.haptics:

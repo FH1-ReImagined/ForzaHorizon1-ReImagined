@@ -1,7 +1,7 @@
 """Co-op campaign results (#309, docs/coop_campaign.md "Milestone 1 progress" and "Milestone 2").
 
 A festival event raced in a Co-op Festival world is an online race: the game writes no career
-state for it. The Forza Live server keeps every player's result (server/forza_coop_ledger.py:
+state for it. The Forza Live server keeps every player's result (server/forza_live/world/coop_ledger.py:
 the host's, and each guest's once the host's game agrees with it), and after the session each
 player's launcher applies that player's own result to its save the way the career's own race end
 would have:
@@ -55,10 +55,9 @@ import sqlite3
 import threading
 import time
 import urllib.error
-import urllib.request
 import uuid
 
-from . import garage, paths, save_editor, saves, shader_share
+from . import garage, live_auth, paths, save_editor, saves, shader_share
 
 FETCH_TIMEOUT = 6
 SESSIONS_NAME = 'coop_sessions.json'
@@ -289,9 +288,7 @@ def apply(cfg, profile, results, cancelled=lambda: False, progress=lambda *_: No
 # --- the server ----------------------------------------------------------------------------------
 
 def _request(base, identity, path, body=None, timeout=FETCH_TIMEOUT):
-    req = urllib.request.Request(base+path, data=body, method='POST' if body is not None else 'GET', headers={
-        'Content-Type': 'application/json', 'X-Xuid': identity[0], 'X-Friends-Key': identity[1]})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with live_auth.urlopen(base+path, identity, body, timeout=timeout) as r:
         return json.loads(r.read(1 << 20) or b'{}')
 
 
@@ -361,10 +358,17 @@ def locked_note(result):
             f'server keeps it{keep}.')
 
 
+def enabled(cfg) -> bool:
+    """Settings > Online > "Co-op campaign results" (the "Online features" choice turns it off)."""
+    return cfg.settings.get('coop_results', True) is True
+
+
 def after_session(cfg, profile, log=print, base=None, identity=None, request=None):
     """Fetches the player's pending co-op results and applies those earned in this save's
     sessions to it. Returns a short result (for the log); `log` gets the lines the player
     reads (the Play page shows them)."""
+    if not enabled(cfg):
+        return 'off'
     base = shader_share.server_base(cfg) if base is None else base
     if not base:
         return 'no server'
@@ -451,7 +455,7 @@ def after_session_quietly(cfg, profile, log=print):
 
 def after_session_in_background(cfg, profile, log=print):
     """After a session: the fetch and the save edit in a daemon thread (the game is closed)."""
-    if profile is None or not shader_share.server_base(cfg):
+    if profile is None or not enabled(cfg) or not shader_share.server_base(cfg):
         return None
     t = threading.Thread(target=after_session_quietly, args=(cfg, profile, log), name='coop-results', daemon=True)
     t.start()

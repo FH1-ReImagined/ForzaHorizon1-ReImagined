@@ -9,7 +9,7 @@ and a few landmarks (the festival, the outposts, the dam, the airport, towns and
 
 x and z are the game's world axes in metres: x grows to the east, z to the north (the "East
 Rt. 27" trap lies east of the "West Rt. 27" one, "South Beaumont" south of Beaumont). Board
-ids are the ones server/forza_leaderboards.py uses (speed-trap-<scoreboard_id>,
+ids are the ones server/forza_live/competition/leaderboards.py uses (speed-trap-<scoreboard_id>,
 speed-zone-<scoreboard_id>, event-<Events.Id>).
 
 With --names it also writes the leaderboard names file the server reads from its data folder
@@ -36,7 +36,7 @@ Where everything comes from (all read-only):
 
 Usage:
   tools/extract_map_points.py --game extracted/game [--update extracted/tu4] \\
-      [--dlc DLC_CONTENT_FOLDER ...] --out site/data/map_points.json [--names leaderboard_names.json]
+      [--dlc DLC_CONTENT_FOLDER ...] --out ../website/data/map_points.json [--names leaderboard_names.json]
 """
 import argparse
 import json
@@ -446,7 +446,7 @@ def main(argv=None):
     ap.add_argument("--update", help="the title update's folder (with media.zip), e.g. extracted/tu4")
     ap.add_argument("--dlc", action="append", default=[],
                     help="a folder with DLC packages (installed or extracted content), for their cars' names")
-    ap.add_argument("--out", required=True, help="the points JSON (site/data/map_points.json)")
+    ap.add_argument("--out", required=True, help="the points JSON (the website's data/map_points.json)")
     ap.add_argument("--names", help="also write the server's leaderboard_names.json here")
     a = ap.parse_args(argv)
     game = Game(a.game, a.update, a.dlc)

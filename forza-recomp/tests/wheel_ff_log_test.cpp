@@ -222,6 +222,24 @@ int main() {
                "1 restart, 1 failure, running (the wheel says it is not playing)"),
         "the summary counts the restart and the failure");
 
+  // The vibration (#467): the game's rumbles and the updates the wheel's vibration got, a second,
+  // with the highest level; nothing about it while the wheel got none.
+  tc = 20.0;
+  for (int frame = 0; frame < 2400; frame++) {  // 10 s at 240 fps
+    chk.Defined(Block(5, kFfConstant, 255, 10), 10.0 + frame / 240.0);
+    chk.Rumbled();
+  }
+  for (int update = 0; update < 300; update++) {  // paced: 30 a second
+    chk.Vibrated(update == 7 ? 0.25f : 0.1f);
+  }
+  const std::string v = chk.Summary(cs, 1u << 4, 0, 1.0f, tc);
+  std::printf("%s\n", v.c_str());
+  Check(Has(v, "device gain 255, 2400 rumbles, 300 vibration updates (30 a second, up to 25%), "
+               "forces at 100%"),
+        "the vibration a second");
+  tc = 30.0;
+  Check(!Has(chk.Summary(cs, 1u << 4, 0, 1.0f, tc), "vibration"), "a new window: no vibration");
+
   std::printf("wheel_ff_log_test: ok\n");
   return 0;
 }

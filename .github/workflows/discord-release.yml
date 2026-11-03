@@ -13,9 +13,13 @@ on:
       tag:
         description: Release tag to post (e.g. v0.1.3)
         required: true
+      message_id:
+        description: Edit this existing Discord message instead (Copy Message ID in Discord), e.g. to fix an older post
+        required: false
 
 permissions:
-  contents: read
+  # write: the post's message id is kept in the release notes, so publishing again edits it
+  contents: write
 
 jobs:
   post:
@@ -31,6 +35,7 @@ jobs:
           # The Discord role to ping ("Updates ping", opt-in), its numeric ID as a repository
           # variable. Unset: the post pings nobody.
           ROLE: ${{ vars.DISCORD_UPDATES_ROLE_ID }}
+          MESSAGE_ID: ${{ inputs.message_id }}
         run: |
           if [ -z "$WEBHOOK" ]; then
             echo "DISCORD_WEBHOOK_URL is not set; nothing to post."
@@ -39,11 +44,11 @@ jobs:
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json name,body,url,isPrerelease > release.json
           jq -n --slurpfile r release.json --arg repo "$GITHUB_REPOSITORY" --arg role "$ROLE" '
             $r[0] as $rel
-            | ($rel.body | if length > 3500 then .[0:3500] + "\n\n[...]" else . end) as $notes
+            | ($rel.body | gsub("\\s*<!-- discord-message: [0-9]+ -->\\s*"; "") | if length > 3500 then .[0:3500] + "\n\n[...]" else . end) as $notes
             | {
                 username: "Forza Horizon 1: ReImagined",
                 avatar_url: "https://raw.githubusercontent.com/\($repo)/main/docs/images/logo.png",
-                content: ((if ($role | test("^[0-9]+$")) then "<@&\($role)> " else "" end) + "New release: **\($rel.name)**"),
+                content: (if ($role | test("^[0-9]+$")) then "<@&\($role)>" else "" end),
                 embeds: [{
                   title: $rel.name,
                   url: $rel.url,
@@ -54,5 +59,29 @@ jobs:
                 }],
                 allowed_mentions: { parse: [], roles: (if ($role | test("^[0-9]+$")) then [$role] else [] end) }
               }' > payload.json
-          curl -fsS -H "Content-Type: application/json" --data @payload.json "$WEBHOOK"
-          echo "Posted $TAG to Discord."
+          # One post per release: a release published again (or a manual re-run) edits the message
+          # posted the first time, whose id is kept in an HTML comment at the end of the notes.
+          MSG=$(jq -r '.body' release.json | sed -n 's/.*<!-- discord-message: \([0-9][0-9]*\) -->.*/\1/p' | tail -n 1)
+          case "${MESSAGE_ID:-}" in
+            "") ;;
+            *[!0-9]*) echo "message_id must be digits"; exit 1 ;;
+            *) MSG="$MESSAGE_ID" ;;
+          esac
+          if [ -n "$MSG" ] && curl -fsS -X PATCH -H "Content-Type: application/json" --data @payload.json "$WEBHOOK/messages/$MSG" > /dev/null; then
+            echo "Updated the Discord post of $TAG (message $MSG)."
+            if [ -n "${MESSAGE_ID:-}" ]; then
+              jq -r '.body' release.json | sed 's/[[:space:]]*<!-- discord-message: [0-9]* -->[[:space:]]*$//' > notes.md
+              printf '\n\n<!-- discord-message: %s -->\n' "$MSG" >> notes.md
+              gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file notes.md > /dev/null
+            fi
+            exit 0
+          fi
+          if [ -n "${MESSAGE_ID:-}" ]; then
+            echo "Could not edit message $MESSAGE_ID (only messages this webhook posted can be edited)."
+            exit 1
+          fi
+          MSG=$(curl -fsS -H "Content-Type: application/json" --data @payload.json "$WEBHOOK?wait=true" | jq -r '.id')
+          echo "Posted $TAG to Discord (message $MSG)."
+          jq -r '.body' release.json | sed 's/[[:space:]]*<!-- discord-message: [0-9]* -->[[:space:]]*$//' > notes.md
+          printf '\n\n<!-- discord-message: %s -->\n' "$MSG" >> notes.md
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file notes.md > /dev/null

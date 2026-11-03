@@ -47,6 +47,11 @@ int main() {
   }
   CHECK(w::TextureLodBias(w::Level::kUltra) <= w::TextureLodBias(w::Level::kHigh));
   CHECK(w::TextureLodBias(w::Level::kHigh) <= w::TextureLodBias(w::Level::kConsole));
+  // The VR cockpit's slower eye adaptation: the track's rate times the factor; 0 or less keeps it.
+  CHECK(w::ExposureAdaptation(0.075f, 0.02f) > 0.0014f && w::ExposureAdaptation(0.075f, 0.02f) < 0.0016f);
+  CHECK(w::ExposureAdaptation(0.075f, 1.0f) == 0.075f);
+  CHECK(w::ExposureAdaptation(0.075f, 0.0f) == 0.075f);
+  CHECK(w::kToneMapDelay == 416);
   std::printf("world detail: ok\n");
   return 0;
 }

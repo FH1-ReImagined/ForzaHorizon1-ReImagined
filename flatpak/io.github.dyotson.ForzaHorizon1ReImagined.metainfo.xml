@@ -4,7 +4,7 @@
   <name>Forza Horizon 1: ReImagined</name>
   <summary>Build and play Forza Horizon (Xbox 360) natively, from your own game files</summary>
   <metadata_license>CC0-1.0</metadata_license>
-  <project_license>MIT AND BSD-3-Clause</project_license>
+  <project_license>GPL-3.0-or-later AND BSD-3-Clause</project_license>
   <developer id="io.github.dyotson">
     <name>Dyotson</name>
   </developer>
@@ -32,24 +32,24 @@
     </p>
   </description>
   <launchable type="desktop-id">io.github.dyotson.ForzaHorizon1ReImagined.desktop</launchable>
-  <url type="homepage">https://dyotson.github.io/ForzaHorizon1-ReImagined/</url>
-  <url type="bugtracker">https://github.com/Dyotson/ForzaHorizon1-ReImagined/issues</url>
-  <url type="vcs-browser">https://github.com/Dyotson/ForzaHorizon1-ReImagined</url>
+  <url type="homepage">https://forza.dyotson.dev/</url>
+  <url type="bugtracker">https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/issues</url>
+  <url type="vcs-browser">https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined</url>
   <screenshots>
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/Dyotson/ForzaHorizon1-ReImagined/main/docs/images/forza-free-roam.jpg</image>
+      <image>https://raw.githubusercontent.com/FH1-ReImagined/ForzaHorizon1-ReImagined/main/docs/images/forza-free-roam.jpg</image>
       <caption>Free roam</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/Dyotson/ForzaHorizon1-ReImagined/main/docs/images/forza-race.jpg</image>
+      <image>https://raw.githubusercontent.com/FH1-ReImagined/ForzaHorizon1-ReImagined/main/docs/images/forza-race.jpg</image>
       <caption>A race</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/Dyotson/ForzaHorizon1-ReImagined/main/docs/images/forza-prologue-drive.jpg</image>
+      <image>https://raw.githubusercontent.com/FH1-ReImagined/ForzaHorizon1-ReImagined/main/docs/images/forza-prologue-drive.jpg</image>
       <caption>The prologue drive</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/Dyotson/ForzaHorizon1-ReImagined/main/docs/images/forza-horizon-world-online.jpg</image>
+      <image>https://raw.githubusercontent.com/FH1-ReImagined/ForzaHorizon1-ReImagined/main/docs/images/forza-horizon-world-online.jpg</image>
       <caption>Horizon World online</caption>
     </screenshot>
   </screenshots>

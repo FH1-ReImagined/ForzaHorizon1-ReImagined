@@ -492,7 +492,7 @@ class EditorWithThreeDevices(unittest.TestCase):
         self.step()
         self.assertIsNone(ed.binding)
         self.assertEqual((st["wheel_pedal_device"], st["wheel_pedal_axes"]),
-                         ("SIMAGIC P1000", "throttle=1"))
+                         ("0483:0525", "throttle=1"))
         self.assertFalse(st["wheel_invert_throttle"])
         self.assertIn("on SIMAGIC P1000", ed.status.text())
         self.assertEqual(self.row("throttle").value.text(), "Axis 1 on SIMAGIC P1000")
@@ -503,7 +503,7 @@ class EditorWithThreeDevices(unittest.TestCase):
         self.step()
         self.shifter.button(3, False)
         self.assertEqual((st["wheel_shifter_device"], st["wheel_shifter_device_buttons"]),
-                         ("SIMAGIC DS-8X", "1=3"))
+                         ("0483:0531", "1=3"))
         self.assertEqual(self.row("gear1").value.text(), "Button 3 on SIMAGIC DS-8X")
         # The brake on the wheel's own axis stays on the wheel.
         ed.begin(self.row("brake"))
@@ -581,7 +581,7 @@ class EditorWithThreeDevices(unittest.TestCase):
         self.assertTrue(panel.cal.done)
         panel.go_apply()
         st = self.cfg.settings
-        self.assertEqual(st["wheel_pedal_device"], "SIMAGIC P1000")
+        self.assertEqual(st["wheel_pedal_device"], "0483:0525")
         self.assertEqual(st["wheel_pedal_axes"], "throttle=2,brake=1,clutch=0")
         self.assertEqual(st["wheel_axes"], "steer=0")
 
@@ -601,6 +601,161 @@ class EditorWithThreeDevices(unittest.TestCase):
         self.step()
         self.assertIsNone(self.ed.view.inputs)
         self.assertEqual(len(self.ed.view.snap.axes), 4)
+
+
+class DeviceIds(unittest.TestCase):
+    """#562: the launcher's SDL 2 and the game's SDL 3 read different names for the same Windows
+    device, so the device settings save the USB ids, which the driver matches exactly."""
+    # A Thrustmaster TX, T-LCM pedals and TH8 RS shifter as the launcher lists them (DirectInput's
+    # registered product names) and as the game's SDL 3 does (no name at all for the first two).
+    LAUNCHER = [dev("Thrustmaster TX Racing Wheel", 0x044F, 0xB669, 0, True, "0300aaaa4f04000069b6000000000000"),
+                dev("T-LCM Pedals", 0x044F, 0xB371, 1, False, "0300bbbb4f04000071b3000000000000"),
+                dev("Thustmaster T500 RS Gear Shift", 0x044F, 0xB660, 2, False,
+                    "030053514f04000060b6000000000000")]
+    GAME = [dev("44F B669", 0x044F, 0xB669, 0, True, "0300db814f04000069b6000000000000"),
+            dev("44F B371", 0x044F, 0xB371, 1, False, "0300cbd64f04000071b3000000000000"),
+            dev("Thustmaster T500 RS Gear Shift", 0x044F, 0xB660, 2, False,
+                "030053514f04000060b6000000000000")]
+    BY_NAME = dict(wheel_device="Thrustmaster TX Racing Wheel", wheel_pedal_device="T-LCM Pedals",
+                   wheel_shifter_device="Thustmaster T500 RS Gear Shift")
+
+    def test_parse(self):
+        self.assertEqual(b.usb_id("044f:B669"), (0x044F, 0xB669))
+        self.assertEqual(b.usb_id(" 0483:0525 "), (0x0483, 0x0525))
+        for text in ("", "none", "44f:b669", "0483:0525:1", "SIMAGIC P1000", "0x0483:0x0525",
+                     "03000000830400002505000000000000"):
+            self.assertIsNone(b.usb_id(text), text)
+
+    def test_what_is_saved(self):
+        # The ids when the device has them and no other listed device shares them; else the name.
+        self.assertEqual(b.device_ref(self.LAUNCHER[0], self.LAUNCHER), "044f:b669")
+        self.assertEqual(b.device_ref(self.LAUNCHER[1]), "044f:b371")
+        twin = dev("T-LCM Pedals", 0x044F, 0xB371, 7)
+        self.assertEqual(b.device_ref(self.LAUNCHER[1], [*self.LAUNCHER, twin]), "T-LCM Pedals")
+        self.assertEqual(b.device_ref(dev("Joystick 0", 0, 0)), "Joystick 0")
+        self.assertEqual(b.device_ref(dev("Pad", 0x1234, 0)), "1234:0000")
+
+    def test_the_game_finds_a_device_saved_by_its_ids_whatever_it_calls_it(self):
+        for d, game in zip(self.LAUNCHER, self.GAME):
+            ref = b.device_ref(d, self.LAUNCHER)
+            self.assertEqual(b.device_match(ref, d), 2)
+            self.assertEqual(b.device_match(ref, game), 2, game.name)
+            self.assertEqual(b.device_match(d.name, game), 0 if d.name != game.name else 2)
+
+    def test_pick_with_the_ids(self):
+        saved = {k: b.device_ref(self.LAUNCHER[i], self.LAUNCHER)
+                 for i, k in ((1, "wheel_pedal_device"), (2, "wheel_shifter_device"))}
+        pick = b.pick_aux(self.GAME, settings(**saved))
+        self.assertEqual((pick.pedals, pick.shifter), (1, 2))
+        # By name the pedals are missing in the game, as the player's log said.
+        pick = b.pick_aux(self.GAME, settings(**self.BY_NAME))
+        self.assertEqual((pick.pedals, pick.shifter), (None, 2))
+        # The wheel by ids too (wheel_device by name matches nothing in the game).
+        self.assertEqual(b.primary_wheel(self.GAME, settings(wheel_device="044f:b669")), 0)
+        self.assertEqual(b.wheel_device_match(settings(**self.BY_NAME), self.GAME[0]), 0)
+
+    def test_settings_saved_by_name_move_to_the_ids(self):
+        moved = b.migrate_device_settings(settings(**self.BY_NAME), self.LAUNCHER)
+        self.assertEqual(moved, {"wheel_device": "044f:b669", "wheel_pedal_device": "044f:b371",
+                                 "wheel_shifter_device": "044f:b660"})
+        # Done once: a setting already by ids is left alone.
+        self.assertEqual(b.migrate_device_settings(settings(**moved), self.LAUNCHER), {})
+        # The game then finds all three.
+        pick = b.pick_aux(self.GAME, settings(**moved))
+        self.assertEqual((pick.pedals, pick.shifter), (1, 2))
+        self.assertEqual(b.primary_wheel(self.GAME, settings(**moved)), 0)
+
+    def test_what_migration_leaves_alone(self):
+        keep = settings(wheel_device="", wheel_pedal_device="none", wheel_shifter_device="auto",
+                        wheel_handbrake_device="thrustmaster")  # a part of a name is a pattern
+        self.assertEqual(b.migrate_device_settings(keep, self.LAUNCHER), {})
+        guid = settings(wheel_pedal_device="0300bbbb4f04000071b3000000000000")
+        self.assertEqual(b.migrate_device_settings(guid, self.LAUNCHER), {})
+        gone = settings(wheel_pedal_device="Heusinkveld Sprint")  # not connected: nothing to read
+        self.assertEqual(b.migrate_device_settings(gone, self.LAUNCHER), {})
+        self.assertEqual(b.migrate_device_settings(settings(**self.BY_NAME), []), {})
+        # Two connected devices with the name and the ids: still one; with other ids: not guessed.
+        twin = [dev("T-LCM Pedals", 0x044F, 0xB371, 7), *self.LAUNCHER]
+        self.assertEqual(b.migrate_device_settings(settings(wheel_pedal_device="T-LCM Pedals"), twin), {})
+        two = [dev("Pedals", 1, 2, 0), dev("Pedals", 3, 4, 1)]
+        self.assertEqual(b.migrate_device_settings(settings(wheel_pedal_device="Pedals"), two), {})
+        # vJoy saved under SDL 2's name keeps its alias until the name is exact.
+        vjoy = dev("vJoy Device", 0x1234, 0xBEAD)
+        self.assertEqual(b.migrate_device_settings(settings(wheel_pedal_device="vJoy Device"), [vjoy]),
+                         {"wheel_pedal_device": "1234:bead"})
+
+    def test_a_device_that_is_not_connected_is_named(self):
+        self.assertEqual(b.device_label("044f:b371"), "Thrustmaster T-LCM")
+        self.assertEqual(b.device_label("0483:0525"), "Simagic P1000")
+        self.assertEqual(b.device_label("044f:b669"), "Thrustmaster TX")
+        self.assertEqual(b.device_label("046d:c24f"), "Logitech G29")
+        self.assertEqual(b.device_label("1234:5678"), "USB device 1234:5678")
+        self.assertEqual(b.device_label("T-LCM Pedals"), "T-LCM Pedals")
+        self.assertEqual(b.device_label("", "the pedal device"), "the pedal device")
+        s = settings(wheel_pedal_device="044f:b371", wheel_pedal_axes="throttle=0")
+        self.assertEqual(b.wheel_binding_text(ACT["throttle"], s, WHEEL), "Axis 0 on Thrustmaster T-LCM")
+
+    def test_binding_on_the_same_device_keeps_its_axes(self):
+        # Saved by name, bound again on that device (now saved by its ids): the same device.
+        s = settings(wheel_pedal_device="T-LCM Pedals", wheel_pedal_axes="throttle=0,brake=2")
+        ch = b.set_aux_binding(s, ACT["clutch"], "044f:b371", 1, "T-LCM Pedals")
+        self.assertEqual(ch, {"wheel_pedal_axes": "throttle=0,brake=2,clutch=1"})
+        s = settings(wheel_pedal_device="044f:b371", wheel_pedal_axes="throttle=0,brake=2")
+        ch = b.set_aux_binding(s, ACT["clutch"], "044f:b371", 1, "T-LCM Pedals")
+        self.assertEqual(ch, {"wheel_pedal_axes": "throttle=0,brake=2,clutch=1"})
+        # Another device: it becomes the pedal device, and the numbers were the other's.
+        ch = b.set_aux_binding(s, ACT["clutch"], "0483:0525", 1, "SIMAGIC P1000")
+        self.assertEqual(ch, {"wheel_pedal_device": "0483:0525", "wheel_pedal_axes": "clutch=1"})
+        # No setting yet.
+        ch = b.set_aux_binding(settings(), ACT["throttle"], "0483:0525", 2, "SIMAGIC P1000")
+        self.assertEqual(ch, {"wheel_pedal_device": "0483:0525", "wheel_pedal_axes": "throttle=2"})
+
+    def test_calibration_saves_the_pedal_device_by_its_ids(self):
+        parts = [b.Part(1, "Thrustmaster TX Racing Wheel", 4, 13, "044f:b669"),
+                 b.Part(2, "T-LCM Pedals", 3, 0, "044f:b371")]
+        cal = b.Calibration(False, parts)
+        cal.pedals = {"throttle": (4, -32768, 32767), "brake": (6, -32768, 32767)}
+        out = cal.changes(settings())
+        self.assertEqual((out["wheel_pedal_device"], out["wheel_pedal_axes"]),
+                         ("044f:b371", "throttle=0,brake=2"))
+        # The pedal device saved by name already is that device: kept, its other axes too.
+        out = cal.changes(settings(wheel_pedal_device="T-LCM Pedals", wheel_pedal_axes="clutch=1"))
+        self.assertNotIn("wheel_pedal_device", out)
+        self.assertEqual(out["wheel_pedal_axes"], "throttle=0,brake=2,clutch=1")
+
+
+@unittest.skipIf(QApplication is None, "PySide6 or PySDL2 is not installed")
+class EditorMovesNamesToIds(unittest.TestCase):
+    """Opening Controls with the three devices saved by name (an earlier launcher) saves them by
+    their ids; a device that is not connected keeps its name."""
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_scan_moves_the_names(self):
+        from forza_launcher.gamepad import Joysticks
+        from forza_launcher.ui.controls_page import ControlsPage
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        cfg = Config(Path(temp.name) / "launcher.json")
+        cfg.settings.update(wheel_device="SIMAGIC EVO PRO", wheel_pedal_device="SIMAGIC P1000",
+                            wheel_shifter_device="SIMAGIC DS-8X",
+                            wheel_handbrake_device="SIMAGIC TB-RS Handbrake")
+        wheel, pedals, shifter = three_devices(self)
+        page = ControlsPage(cfg)
+        page.bindings.start(Joysticks())
+        self.addCleanup(page.bindings.stop)
+        st = cfg.settings
+        self.assertEqual((st["wheel_device"], st["wheel_pedal_device"], st["wheel_shifter_device"]),
+                         ("3670:0502", "0483:0525", "0483:0531"))
+        self.assertEqual(st["wheel_handbrake_device"], "SIMAGIC TB-RS Handbrake")
+        # The picker still knows which device each is.
+        ed = page.bindings
+        kinds = {d.instance: ed.kind_of(d) for d in ed.devices}
+        self.assertEqual((kinds[wheel.instance], kinds[pedals.instance], kinds[shifter.instance]),
+                         ("wheel", "pedals", "shifter"))
+        self.assertEqual(ed.picker.itemText(ed.picker.findData(pedals.instance)),
+                         "SIMAGIC P1000 (pedals, read with the wheel)")
 
 
 if __name__ == "__main__":

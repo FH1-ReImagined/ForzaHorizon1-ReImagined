@@ -2,6 +2,7 @@
 // No tuning fields, guest addresses, serialized scenes or input polling here.
 #pragma once
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -35,6 +36,21 @@ struct Rect { float x=0,y=0,w=0,h=0; };
 inline constexpr float kMenuShear = .1227845609f;
 inline constexpr float kMenuScaleX = (1152.f - kMenuShear * (570.f - 32.f)) / 1152.f;
 inline constexpr float kMenuTranslateX = 576.f * (kMenuScaleX - 1.f) + 210.f * kMenuShear;
+inline Rect MenuQuad(Rect source) {
+  const float width=kMenuScaleX*source.w;
+  const float center=640+kMenuTranslateX+kMenuScaleX*(source.x+source.w/2-640)+
+      kMenuShear*(360-source.y-source.h/2);
+  return {center-width/2,source.y,width,source.h};
+}
+// Sample an upright image through a sheared quad. Texture V points upward,
+// so its U coordinate follows the quad's horizontal displacement about V=.5.
+inline std::array<float,16> UprightShearUV(std::array<float,16> matrix,float shear) {
+  for(unsigned row=0;row<4;++row){
+    matrix[4+row]+=shear*matrix[row];
+    matrix[12+row]-=.5f*shear*matrix[row];
+  }
+  return matrix;
+}
 inline Rect BackdropBounds(uint32_t width,uint32_t height) {
   if(!width||!height){width=1280;height=720;}
   const float scale=std::min(float(width)/1280,float(height)/720);

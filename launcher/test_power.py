@@ -94,9 +94,18 @@ class Decide(unittest.TestCase):
     def test_on_applies_anywhere(self):
         s = self.decide("on", lambda t: None, frame_rate=60, resolution_scale=2)
         self.assertTrue(s.active)
-        self.assertEqual(s.settings, {"frame_rate": 30, "resolution_scale": 1})
+        self.assertEqual(s.settings, {"frame_rate": 30, "resolution_scale": 1, "scene_msaa": "off"})
         self.assertIn("--gpu_wait_blocking=true", s.flags)
         self.assertIn("30 fps", s.note())
+
+    def test_a_rate_for_a_40_hz_screen_stays(self):
+        """20 and 40 divide a Deck's screen at 40 Hz, which 30 does not: battery saver keeps them."""
+        for rate in (20, 40):
+            s = self.decide("on", lambda t: None, frame_rate=rate, scene_msaa="off")
+            self.assertEqual(s.settings, {})
+            self.assertIn(f"{rate} fps", s.note())
+        s = self.decide("on", lambda t: None, frame_rate=30, scene_msaa="2x")
+        self.assertEqual((s.settings, s.frame_rate), ({"scene_msaa": "off"}, 30))
 
     def test_auto_applies_on_a_deck_on_battery_only(self):
         s = self.decide("auto", lambda t: deck(t, 0, "Discharging"), frame_rate=60)
@@ -117,7 +126,7 @@ class Decide(unittest.TestCase):
         s = self.decide("on", lambda t: None, present_effect="fsr3", forza_antialiasing="smaa")
         self.assertEqual(s.settings["present_effect"], "fsr")
         self.assertEqual(s.settings["forza_antialiasing"], "game")
-        s = self.decide("on", lambda t: None, present_effect="fsr", frame_rate=30)
+        s = self.decide("on", lambda t: None, present_effect="fsr", frame_rate=30, scene_msaa="off")
         self.assertEqual(s.settings, {})   # the Deck preset already is the lightest
         self.assertTrue(s.active)
 
@@ -171,7 +180,8 @@ class LaunchPlan(unittest.TestCase):
         self.assertEqual((self.cfg.settings["frame_rate"], self.cfg.settings["resolution_scale"]), (60, 2))
         saved = Config(self.cfg.path)
         self.assertEqual(saved.settings["frame_rate"], 60)
-        self.assertEqual(saved.d["power"]["applied"], {"frame_rate": 30, "resolution_scale": 1})
+        self.assertEqual(saved.d["power"]["applied"], {"frame_rate": 30, "resolution_scale": 1, "scene_msaa": "off"})
+        self.assertIn('scene_msaa = "off"', plan.toml_text)
 
     def test_extra_arguments_still_win(self):
         self.cfg.settings["battery_saver"] = "on"

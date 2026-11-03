@@ -8,6 +8,20 @@ ACK = struct.Struct('<4sHHQIi')
 def amplitudes(frame, settings):
     if frame is None or not frame.active or not settings['xbox_enabled']:
         return 0, 0
+    if frame.physics is not None:
+        rpm, redline, speed, brake, gas, handbrake, *tail = frame.physics
+        slips, abs_active = tail[:4], tail[4]
+        # ABS is the game's actual per-step state. Lock/spin require tire contact,
+        # checked by the native reader, and movement so a stationary launch is quiet.
+        moving = abs(speed) > 2
+        lock = min(1., max(0., -min(slips) - 1.)) if moving else 0.
+        spin = min(1., max(0., max(slips) - 1.)) if moving else 0.
+        pulse = 1. if (frame.sample_ms // 42) % 2 else .35  # about 12 Hz
+        left = brake * (pulse if abs_active and moving else lock)
+        right = gas * min(1., .12 + .25 * min(1., rpm / redline) + .63 * spin)
+        scale = 65535 * settings['xbox_intensity'] / 10000
+        return (round(scale * settings['xbox_brake'] * left),
+                round(scale * settings['xbox_throttle'] * right))
     scale = 65535 * settings['xbox_intensity'] / 100 / 100 / 255
     return (round(scale * settings['xbox_brake'] * frame.brake),
             round(scale * settings['xbox_throttle'] * frame.throttle))

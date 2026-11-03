@@ -77,6 +77,18 @@ class SettingsSearchTests(unittest.TestCase):
         self.assertFalse(row.control.isEnabled())
         self.window.write_toml.assert_not_called()
 
+    def test_native_tuning_search_opens_gameplay_beside_rubber_banding(self):
+        from forza_launcher import schema
+        before = copy.deepcopy(self.cfg.d)
+        target = self.query("Native car tuning")[0]
+        self.assertEqual(target.group, "Gameplay")
+        self.assertEqual(schema.BY_KEY["ai_rubber_banding"].group, target.group)
+        self.assertIs(target.widget, self.page.rows["forza_car_tuning"])
+        QTest.keyClick(self.search.edit, Qt.Key_Return)
+        self.assertEqual(self.page.tabs.tabText(self.page.tabs.currentIndex()), "Gameplay")
+        self.assertEqual(self.cfg.d, before)
+        self.window.write_toml.assert_not_called()
+
     def test_metadata_search_includes_help_choices_and_all_query_words(self):
         self.assertTrue(self.query("default physics"))
         self.assertIn("Frame rate", [t.label for t in self.query("FRAME_RATE")])

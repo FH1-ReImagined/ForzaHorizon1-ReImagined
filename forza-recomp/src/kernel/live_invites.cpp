@@ -124,6 +124,7 @@ uint16_t latched = 0;  // buttons hidden from the game until released
 
 // --- The accept prompt ---
 bool prompt = false;
+bool presence_join = false;
 LiveInvite prompt_invite;
 int64_t prompt_deadline = 0, both_since = 0, last_prompt_hud = 0;
 std::unordered_map<uint64_t, int64_t> muted;  // inviter XUID -> until
@@ -154,8 +155,9 @@ unsigned key_frames = 0;
 void ShowPrompt(int64_t now, bool log = false) {
   last_prompt_hud = now;
   const int64_t left = (prompt_deadline - now + 999) / 1000;
-  HudShow("Game invite",
-          prompt_invite.inviter + " invited you to their game\n" +
+  HudShow(presence_join ? "Join game" : "Game invite",
+          (presence_join ? "Join " + prompt_invite.inviter + "'s game?\n" :
+                           prompt_invite.inviter + " invited you to their game\n") +
               "Hold Back + A to join (keyboard: Tab + Space, or Enter)\n" +
               "Back + B or Escape: ignore   (" + std::to_string(left) + ")",
           1.5, log);
@@ -164,8 +166,8 @@ void ShowPrompt(int64_t now, bool log = false) {
 void ClosePrompt(uint16_t buttons, const char* why, const std::string& hud) {
   prompt = false;
   latched |= buttons & (kBack | kStart | kA | kB);
-  REXLOG_INFO("FORZA_LIVE: invite from {}: {}", prompt_invite.inviter, why);
-  HudShow("Game invite", hud, 3, false);
+  REXLOG_INFO("FORZA_LIVE: {} from {}: {}", presence_join ? "join request" : "invite", prompt_invite.inviter, why);
+  HudShow(presence_join ? "Join game" : "Game invite", hud, 3, false);
   HudWantKeys(false);
 }
 
@@ -427,6 +429,7 @@ void LiveInviteReceived(const LiveInvite& invite) {
   }
   REXLOG_INFO("FORZA_LIVE: {} invited you; asking", invite.inviter);
   const bool fresh = !prompt;
+  presence_join = false;
   prompt = true;
   prompt_invite = invite;
   prompt_deadline = now + kPromptMs;
@@ -436,6 +439,44 @@ void LiveInviteReceived(const LiveInvite& invite) {
     HudTakeKeys();
   }
   ShowPrompt(now, true);
+}
+
+static std::optional<LiveFriend> JoinTarget(uint64_t xuid) {
+  if (!LiveConnected() || !xuid || xuid == IdentityXuid() || LiveIsBlocked(xuid)) return {};
+  const bool is_friend = LiveIsFriend(xuid);
+  const auto ids = LiveSessionIds();
+  for (const auto& player : LiveRoster()) {
+    if (player.xuid != xuid) continue;
+    uint64_t id = 0;
+    for (unsigned i = 0; i < 8; ++i) id = (id << 8) | player.session[i];
+    if (!social_presence::Joinable(player.state,id,is_friend,false,
+          std::find(ids.begin(),ids.end(),id)!=ids.end())) return {};
+    if(player.extra.size()>=4){
+      const unsigned capacity=unsigned(player.extra[0])+player.extra[1];
+      if(capacity&&unsigned(player.extra[2])+player.extra[3]>=capacity)return {};
+    }
+    return player;
+  }
+  return {};
+}
+
+bool LiveRequestJoin(uint64_t xuid) {
+  const auto player = JoinTarget(xuid);
+  if (!player) return false;
+  std::lock_guard lock(mutex);
+  if (picker || prompt) return false;
+  prompt_invite = {};
+  prompt_invite.inviter_xuid = xuid;
+  prompt_invite.inviter = player->gamertag;
+  std::copy_n(player->session, sizeof(prompt_invite.session), prompt_invite.session);
+  presence_join = prompt = true;
+  both_since = 0;
+  prompt_deadline = NowMs() + kPromptMs;
+  HudWantKeys(true);
+  HudTakeKeys();
+  ShowPrompt(NowMs(), true);
+  REXLOG_INFO("FORZA_LIVE: explicit join request for {}", player->gamertag);
+  return true;
 }
 
 bool LiveInviteBusy() {
@@ -457,6 +498,10 @@ uint16_t LiveInvitePad(uint16_t buttons, int left_y, bool& block_all) {
   block_all = false;
   bool notify = false;
   uint16_t hide;
+  uint64_t joining = 0;
+  { std::lock_guard lock(mutex); if (prompt && presence_join) joining = prompt_invite.inviter_xuid; }
+  // No invite lock while consulting friends/roster; preserve the lock order.
+  const auto target = joining ? JoinTarget(joining) : std::optional<LiveFriend>{};
   {
     std::lock_guard<std::mutex> lock(mutex);
     latched &= buttons;
@@ -465,6 +510,11 @@ uint16_t LiveInvitePad(uint16_t buttons, int left_y, bool& block_all) {
       PickerInput(buttons, left_y, now);
       block_all = true;
       return 0xFFFF;
+    }
+    if (prompt && presence_join && joining == prompt_invite.inviter_xuid) {
+      if (!target || std::memcmp(target->session, prompt_invite.session, 8))
+        ClosePrompt(buttons, "no longer joinable", "That game is no longer joinable");
+      else std::copy_n(target->session, sizeof(prompt_invite.session), prompt_invite.session);
     }
     if (prompt) {
       const HudKeys keys = HudTakeKeys();
@@ -477,11 +527,11 @@ uint16_t LiveInvitePad(uint16_t buttons, int left_y, bool& block_all) {
         notify = true;
         ClosePrompt(buttons, "joining", "Joining " + prompt_invite.inviter + "'s game...");
       } else if (keys.escape || (buttons & (kBack | kB)) == (kBack | kB)) {
-        muted[prompt_invite.inviter_xuid] = now + kMuteMs;
-        ClosePrompt(buttons, "ignored", "Invite from " + prompt_invite.inviter + " ignored");
+        if (!presence_join) muted[prompt_invite.inviter_xuid] = now + kMuteMs;
+        ClosePrompt(buttons, "ignored", presence_join ? "Join cancelled" : "Invite from " + prompt_invite.inviter + " ignored");
       } else if (now >= prompt_deadline) {
         ClosePrompt(buttons, "ignored (no answer)",
-                    "Invite from " + prompt_invite.inviter + " ignored");
+                    presence_join ? "Join cancelled" : "Invite from " + prompt_invite.inviter + " ignored");
       } else if (now - last_prompt_hud >= 250) {
         ShowPrompt(now);
       }

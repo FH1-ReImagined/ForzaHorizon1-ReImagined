@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.20)
+project(garage_capacity_tests LANGUAGES CXX)
+enable_testing()
+add_executable(garage_capacity_test ../garage_capacity_test.cpp)
+target_compile_features(garage_capacity_test PRIVATE cxx_std_17)
+add_test(NAME garage_capacity COMMAND garage_capacity_test)

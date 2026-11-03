@@ -7,3 +7,140 @@ address = 0x82C222F0
 name = "ForzaTakeResourceData_82C222F0"
 registers = ["r3"]
 jump_address = 0x82C22300
+
+# All 19 unload implementations sharing the load step above must take +0x40
+# atomically too. Each hook replaces the load, zero, compare and clear, leaving
+# the original null branch, virtual Release and resource-specific cleanup intact.
+
+# sub_82C21720: saved resource r11, zero r10.
+[[midasm_hook]]
+address = 0x82C21730
+name = "ForzaUnloadResourceDataR10"
+registers = ["r3"]
+jump_address = 0x82C21740
+
+# sub_82C22710: saved resource r31, zero r11.
+[[midasm_hook]]
+address = 0x82C22724
+name = "ForzaUnloadResourceDataR11"
+registers = ["r3"]
+jump_address = 0x82C22734
+
+# sub_82C22EE8: saved resource r31, zero r11.
+[[midasm_hook]]
+address = 0x82C22EFC
+name = "ForzaUnloadResourceDataR11"
+registers = ["r3"]
+jump_address = 0x82C22F0C
+
+# sub_82C237E8: saved resource r31, zero r11.
+[[midasm_hook]]
+address = 0x82C237FC
+name = "ForzaUnloadResourceDataR11"
+registers = ["r3"]
+jump_address = 0x82C2380C
+
+# sub_82C24B38: saved resource r31, zero r11.
+[[midasm_hook]]
+address = 0x82C24B4C
+name = "ForzaUnloadResourceDataR11"
+registers = ["r3"]
+jump_address = 0x82C24B5C
+
+# sub_82C36780: saved resource r31, zero r29.
+[[midasm_hook]]
+address = 0x82C36790
+name = "ForzaUnloadResourceDataR29"
+registers = ["r3"]
+jump_address = 0x82C367A0
+
+# sub_82C46440: saved resource r31, zero r11.
+[[midasm_hook]]
+address = 0x82C46454
+name = "ForzaUnloadResourceDataR11"
+registers = ["r3"]
+jump_address = 0x82C46464
+
+# sub_82D58510: saved resource r31, zero r11.
+[[midasm_hook]]
+address = 0x82D58524
+name = "ForzaUnloadResourceDataR11"
+registers = ["r3"]
+jump_address = 0x82D58534
+
+# sub_82D585C0: saved resource r31, zero r11.
+[[midasm_hook]]
+address = 0x82D585D4
+name = "ForzaUnloadResourceDataR11"
+registers = ["r3"]
+jump_address = 0x82D585E4
+
+# sub_82D6DD70: saved resource r31, zero r11.
+[[midasm_hook]]
+address = 0x82D6DD84
+name = "ForzaUnloadResourceDataR11"
+registers = ["r3"]
+jump_address = 0x82D6DD94
+
+# sub_82D6E830: saved resource r31, zero r11.
+[[midasm_hook]]
+address = 0x82D6E844
+name = "ForzaUnloadResourceDataR11"
+registers = ["r3"]
+jump_address = 0x82D6E854
+
+# sub_82D74F30: saved resource r31, zero r11.
+[[midasm_hook]]
+address = 0x82D74F44
+name = "ForzaUnloadResourceDataR11"
+registers = ["r3"]
+jump_address = 0x82D74F54
+
+# sub_82D7B3D0: saved resource r31, zero r11.
+[[midasm_hook]]
+address = 0x82D7B3E4
+name = "ForzaUnloadResourceDataR11"
+registers = ["r3"]
+jump_address = 0x82D7B3F4
+
+# sub_82DF1068: saved resource r31, zero r11.
+[[midasm_hook]]
+address = 0x82DF107C
+name = "ForzaUnloadResourceDataR11"
+registers = ["r3"]
+jump_address = 0x82DF108C
+
+# sub_82DF1120: saved resource r31, zero r11.
+[[midasm_hook]]
+address = 0x82DF1134
+name = "ForzaUnloadResourceDataR11"
+registers = ["r3"]
+jump_address = 0x82DF1144
+
+# sub_82DF1180: saved resource r31, zero r11.
+[[midasm_hook]]
+address = 0x82DF1194
+name = "ForzaUnloadResourceDataR11"
+registers = ["r3"]
+jump_address = 0x82DF11A4
+
+# sub_82E45948: saved resource r31, zero r30.
+[[midasm_hook]]
+address = 0x82E45958
+name = "ForzaUnloadResourceDataR30"
+registers = ["r3"]
+jump_address = 0x82E45968
+
+# sub_82E4D640: saved resource r31, zero r30.
+[[midasm_hook]]
+address = 0x82E4D658
+name = "ForzaUnloadResourceDataR30"
+registers = ["r3"]
+jump_address = 0x82E4D668
+
+# sub_82E6EA10: saved resource r31, zero r29.
+[[midasm_hook]]
+address = 0x82E6EA20
+name = "ForzaUnloadResourceDataR29"
+registers = ["r3"]
+jump_address = 0x82E6EA30

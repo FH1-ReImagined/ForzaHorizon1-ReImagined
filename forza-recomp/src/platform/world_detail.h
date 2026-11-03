@@ -12,6 +12,7 @@ namespace forza::world_detail {
 constexpr uint32_t kMainSceneArea = 1260;   // <screenAreaDistances mainScene> (350 in Colorado)
 constexpr uint32_t kShadowDepthArea = 1272; // <screenAreaDistances depth> (60)
 constexpr uint32_t kMipLodBias = 1404;      // <MipMapLodBiasModifier value> (0)
+constexpr uint32_t kToneMapDelay = 416;     // <ToneMapeDelay val> (0.075): how fast the exposure adapts
 
 enum class Level { kConsole, kHigh, kUltra };
 
@@ -50,5 +51,20 @@ inline float ShadowCasterDistance(float track_value, Level level) {
 inline float MipLodBias(float track_value, Level level) {
   return track_value + TextureLodBias(level);
 }
+
+// The exposure's adaptation rate with a factor (the VR cockpit slows it: the eye adaptation
+// measures the whole picture, so with the headset's wide view a head turn toward a bright window
+// or the dark footwell re-exposed the whole cabin within a fraction of a second).
+inline float ExposureAdaptation(float track_value, float scale) {
+  return track_value * (scale > 0.0f ? scale : 1.0f);
+}
+
+// hooks/world_detail.cpp, any thread: the current track's exposure adaptation rate times
+// `scale` (1: the track's own). No-op before a track is loaded.
+void ScaleExposureAdaptation(uint8_t* base, float scale);
+// Whether `d` is the loaded track's <screenAreaDistances mainScene> or its shadow casters' depth
+// distance as set (the cull records of the main view and of the shadow view carry them, both with
+// the camera's field of view; hooks/vr_culling.cpp).
+bool IsCameraCullDistance(float d);
 
 }  // namespace forza::world_detail

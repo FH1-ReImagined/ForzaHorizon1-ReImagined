@@ -1,0 +1,117 @@
+diff --git a/include/rex/graphics/shared_memory.h b/include/rex/graphics/shared_memory.h
+index f2763bf2..93f62704 100644
+--- a/include/rex/graphics/shared_memory.h
++++ b/include/rex/graphics/shared_memory.h
+@@ -224,12 +224,20 @@ class SharedMemory {
+         // Links to nodes belonging to other watched ranges in the bucket.
+         WatchNode* bucket_node_previous;
+         WatchNode* bucket_node_next;
++        // FH1 (#45): the range's pages, so a write tests each node of a bucket without loading
++        // its range (one cache line per node instead of two).
++        uint32_t page_first;
++        uint32_t page_last;
+       };
+       WatchNode* next_free;
+     };
+   };
+-  static constexpr uint32_t kWatchBucketSizeLog2 = 22;
+-  static constexpr uint32_t kWatchBucketCount = 1 << (kBufferSizeLog2 - kWatchBucketSizeLog2);
++  // FH1 (#45): the bucket size is gpu_memory_watch_bucket_log2 (bytes, log2; 22, 4 MB, was the
++  // fixed size), the array sized for the smallest.
++  static constexpr uint32_t kWatchBucketSizeLog2Min = 18;
++  static constexpr uint32_t kWatchBucketSizeLog2Max = 22;
++  static constexpr uint32_t kWatchBucketCount = 1 << (kBufferSizeLog2 - kWatchBucketSizeLog2Min);
++  uint32_t watch_bucket_size_log2_ = kWatchBucketSizeLog2Max;
+   WatchNode* watch_buckets_[kWatchBucketCount] = {};
+   // Allocation from pools - taking new WatchRanges and WatchNodes from the free
+   // list, and if there are none, creating a pool if the current one is fully
+diff --git a/src/graphics/shared_memory.cpp b/src/graphics/shared_memory.cpp
+index cce72c79..4906393f 100644
+--- a/src/graphics/shared_memory.cpp
++++ b/src/graphics/shared_memory.cpp
+@@ -15,6 +15,7 @@
+ 
+ #include <rex/assert.h>
+ #include <rex/bit.h>
++#include <rex/cvar.h>
+ #include <rex/dbg.h>
+ #include <rex/graphics/shared_memory.h>
+ #include <rex/math.h>
+@@ -22,10 +23,22 @@
+ 
+ #include "fh1_frame_cost.h"
+ 
++REXCVAR_DEFINE_INT32(gpu_memory_watch_bucket_log2, 22, "GPU",
++                     "Size of the buckets of guest memory watches (textures and other GPU copies "
++                     "of guest memory), log2 of bytes: a write to guest memory tests every watch "
++                     "of its buckets. 22 (4 MB) was the fixed size; smaller buckets test fewer "
++                     "watches per write and link a few more nodes per watch")
++    .range(18, 22)
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++
+ namespace rex::graphics {
+ 
+ SharedMemory::SharedMemory(memory::Memory& memory) : memory_(memory) {
+   page_size_log2_ = rex::log2_ceil(uint32_t(rex::memory::page_size()));
++  watch_bucket_size_log2_ =
++      std::max(std::min(uint32_t(std::max(REXCVAR_GET(gpu_memory_watch_bucket_log2), 0)),
++                        kWatchBucketSizeLog2Max),
++               std::max(kWatchBucketSizeLog2Min, page_size_log2_));
+ }
+ 
+ SharedMemory::~SharedMemory() {
+@@ -165,8 +178,8 @@ SharedMemory::WatchHandle SharedMemory::WatchMemoryRange(uint32_t start, uint32_
+   length = std::min(length, kBufferSize - start);
+   uint32_t watch_page_first = start >> page_size_log2_;
+   uint32_t watch_page_last = (start + length - 1) >> page_size_log2_;
+-  uint32_t bucket_first = watch_page_first << page_size_log2_ >> kWatchBucketSizeLog2;
+-  uint32_t bucket_last = watch_page_last << page_size_log2_ >> kWatchBucketSizeLog2;
++  uint32_t bucket_first = watch_page_first << page_size_log2_ >> watch_bucket_size_log2_;
++  uint32_t bucket_last = watch_page_last << page_size_log2_ >> watch_bucket_size_log2_;
+ 
+   auto global_lock = global_critical_region_.Acquire();
+ 
+@@ -203,6 +216,8 @@ SharedMemory::WatchHandle SharedMemory::WatchMemoryRange(uint32_t start, uint32_
+     }
+     node->range = range;
+     node->range_node_next = nullptr;
++    node->page_first = watch_page_first;
++    node->page_last = watch_page_last;
+     if (node_previous != nullptr) {
+       node_previous->range_node_next = node;
+     } else {
+@@ -232,8 +247,8 @@ void SharedMemory::UnwatchMemoryRange(WatchHandle handle) {
+ void SharedMemory::FireWatches(uint32_t page_first, uint32_t page_last, bool invalidated_by_gpu) {
+   uint32_t address_first = page_first << page_size_log2_;
+   uint32_t address_last = (page_last << page_size_log2_) + ((1 << page_size_log2_) - 1);
+-  uint32_t bucket_first = address_first >> kWatchBucketSizeLog2;
+-  uint32_t bucket_last = address_last >> kWatchBucketSizeLog2;
++  uint32_t bucket_first = address_first >> watch_bucket_size_log2_;
++  uint32_t bucket_last = address_last >> watch_bucket_size_log2_;
+ 
+   auto global_lock = global_critical_region_.Acquire();
+ 
+@@ -249,11 +264,13 @@ void SharedMemory::FireWatches(uint32_t page_first, uint32_t page_last, bool inv
+     WatchNode* node = watch_buckets_[i];
+     while (node != nullptr) {
+       ++nodes_visited;
++      // The node's copy of the range's pages first: most nodes are of other ranges.
++      bool overlaps = page_first <= node->page_last && page_last >= node->page_first;
+       WatchRange* range = node->range;
+       // Store the next node now since when the callback is triggered, the links
+       // will be broken.
+       node = node->bucket_node_next;
+-      if (page_first <= range->page_last && page_last >= range->page_first) {
++      if (overlaps) {
+         range->callback(global_lock, range->callback_context, range->callback_data,
+                         range->callback_argument, invalidated_by_gpu);
+         UnlinkWatchRange(range);
+@@ -328,7 +345,7 @@ void SharedMemory::MakeRangeValid(uint32_t start, uint32_t length, bool written_
+ }
+ 
+ void SharedMemory::UnlinkWatchRange(WatchRange* range) {
+-  uint32_t bucket = range->page_first << page_size_log2_ >> kWatchBucketSizeLog2;
++  uint32_t bucket = range->page_first << page_size_log2_ >> watch_bucket_size_log2_;
+   WatchNode* node = range->node_first;
+   int64_t nodes = 0;
+   while (node != nullptr) {

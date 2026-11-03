@@ -1,18 +1,33 @@
 # Discord Rich Presence
 
 Status display for #146. **Settings > Online > Discord > Share activity on Discord**
-is off by default and applies at the next game launch. The Discord desktop client
+is on by default and applies at the next game launch. The Discord desktop client
 must be running as the same OS user; Discord in a browser cannot receive local RPC.
 Playing offline in Forza Live settings still supports Discord status display.
 
 The game publishes its activity (free roam, festival/street/showcase races, rivals,
 PR stunts, autoshow, paint shop, workshop, race central, car club, lobby and online
 game type), elapsed game-session time, and session-local player counts when known.
-It does not publish gamertags, profile IDs, save contents, server addresses, session
-keys, join secrets or precise locations. The connection runs on worker threads;
-game callbacks only copy small pieces of state. Updates are coalesced to at most
-one every five seconds. Reconnect sends the latest activity. Closing the game
-closes the connection and clears its activity; a crash closes the pipe as well.
+With **Settings > Online > Discord > Share car, event and area** (`discord_presence_details`,
+on by default) it also publishes the current car with its class and PI, the event and, in
+free roam, the zone of Colorado, all with the names the game shows:
+
+| Scene | Details | State |
+| --- | --- | --- |
+| Free roam | Exploring Colorado · Clear Springs | 2012 Lamborghini Aventador LP700-4 · R3 797 |
+| Festival race | Racing in a festival event · GoPro Millennia Masters | 2012 Lamborghini Aventador LP700-4 · R3 797 |
+| Rivals | Challenging a rival · GoPro Millennia Masters | 2012 Lamborghini Aventador LP700-4 · R3 797 |
+| Autoshow | Browsing cars | Autoshow |
+| Online free roam | Exploring Colorado online · Festival | 1984 Volkswagen Rabbit GTI · E 192 |
+
+Menus (Autoshow, Paint shop, Workshop, Race Central, ...) and the online lobby keep their
+own wording; a name the game does not give is left out, never replaced by a placeholder.
+Both lines stay within Discord's 128 characters. Off, the status is the activity alone, as
+before. It does not publish gamertags, profile IDs, save contents, server addresses, session
+keys, join secrets, anything the player typed or precise locations (the zone is one of eight).
+The connection runs on worker threads; game callbacks only copy small pieces of state.
+Updates are coalesced to at most one every five seconds. Reconnect sends the latest activity.
+Closing the game closes the connection and clears its activity; a crash closes the pipe as well.
 
 ## Setup
 
@@ -74,5 +89,30 @@ ping/pong, activity payloads, reconnect/resend and explicit clear. Windows and L
 the same tests in `discord-presence-tests.yml`.
 
 Joining friends through Discord is a later phase of #146. This implementation advertises
-no Join button or join secret. Current car names are also not part of the Xbox presence
-contexts observed here; this version displays the activity and session counts.
+no Join button or join secret.
+
+### Car, event and zone (#527)
+
+The Xbox presence contexts carry none of these, so `hooks/discord_details.cpp` (TU4 builds)
+samples them every 2 s on the main loop thread after the world update (the hook in
+`hooks/telemetry.cpp`), only while sharing and `discord_presence_details` are on, and hands
+`discord_presence.cpp` the names. Everything comes from the game:
+
+- **Car:** the loaded car of the player facade, as the pause menu's PlayerBar reads it
+  (`platform/fh1_current_car.h`): its `Data_Car` Id, class and 0-1 performance index; the PI
+  shown is the class badge's (`sub_82C9F6A0` with the game's `CarClasses` table, so R3 797
+  as in the PlayerBar). Year, make and model: `Data_Car` joined to `List_CarMake`, as the car
+  select screen shows them; the class letter: `CarClasses.DisplayName`.
+- **Event:** the current career event id (`0x833ED728`, see `docs/coop_campaign.md`) ->
+  `Events.Name`; also set for Rivals. Free roam's own `FREE_ROAM` event is left out.
+- **Zone:** the game files every race track under a zone (`Tracks.EnvironmentId` ->
+  `Environments.ShortDisplayName`, the event cards' zone and the map's area labels: Festival,
+  Clear Springs, Gladstone, Kettle Hills, The Rockies, Carson, Montano Plains, Red Rock). The
+  player's zone is that of the nearest track start (`start_location_00` of the track's
+  `media/tracks/colorado/Ribbon_00/TrackRouteNNN.xml`: 99 starts, read once in a few ms) to
+  the car's position (`platform/telemetry.cpp`).
+
+Text columns go through the game's own localized getter, so the names are those of the
+game's language, DLC cars included. `FORZA_DISCORD_TRACE=1` logs each sample (`DISCORD:
+sample: ...`): the car's Data_Car Id, class, raw performance index, event id, position and
+the names.

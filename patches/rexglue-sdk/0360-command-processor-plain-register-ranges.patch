@@ -1,0 +1,200 @@
+diff --git a/include/rex/graphics/command_processor.h b/include/rex/graphics/command_processor.h
+index 54967609..ac9a6c62 100644
+--- a/include/rex/graphics/command_processor.h
++++ b/include/rex/graphics/command_processor.h
+@@ -176,6 +176,8 @@ class CommandProcessor {
+   void ExecuteIndirectBuffer(uint32_t ptr, uint32_t length);
+   bool ExecutePacket(memory::RingBuffer* reader);
+   bool ExecutePacketType0(memory::RingBuffer* reader, uint32_t packet);
++  // FH1 (#45, patch 0360): see fh1_plain_registers_.
++  bool Fh1WritePlainRangeFromRing(memory::RingBuffer* ring, uint32_t base, uint32_t count);
+   bool ExecutePacketType1(memory::RingBuffer* reader, uint32_t packet);
+   bool ExecutePacketType2(memory::RingBuffer* reader, uint32_t packet);
+   bool ExecutePacketType3(memory::RingBuffer* reader, uint32_t packet);
+@@ -288,6 +290,14 @@ class CommandProcessor {
+   // name (for explicit-override compatibility).
+   const char* legacy_readback_memexport_cvar_name_ = nullptr;
+ 
++  // FH1 (#45, patch 0360): a bitmap (RegisterFile::kRegisterCount bits) of the registers outside
++  // the shader constant blocks whose write the backend only stores: its WriteRegistersFromMem
++  // and WriteRegister store them and do nothing else. While set, the packet loop writes a range
++  // (type-0 packet, SET_CONSTANT of registers, SET_CONSTANT2) made only of such registers from
++  // the ring itself, without the two virtual calls and the backend's sorting of the range (most
++  // of the render state writes, about 9 ranges a draw). Null: every write takes the backend.
++  const uint64_t* fh1_plain_registers_ = nullptr;
++
+  private:
+   reg::DC_LUT_30_COLOR gamma_ramp_256_entry_table_[256] = {};
+   reg::DC_LUT_PWL_DATA gamma_ramp_pwl_rgb_[128][3] = {};
+diff --git a/include/rex/memory/ring_buffer.h b/include/rex/memory/ring_buffer.h
+index 0a5b96ee..79ebff71 100644
+--- a/include/rex/memory/ring_buffer.h
++++ b/include/rex/memory/ring_buffer.h
+@@ -38,6 +38,12 @@ class RingBuffer {
+   void set_read_offset(size_t offset) {
+     read_offset_ = static_cast<ring_size_t>(offset) % capacity_;
+   }
++  // FH1 (#45, patch 0360): set_read_offset for an offset known to be inside the buffer, without
++  // its division (the command processor's register ranges: about 20 a draw).
++  void set_read_offset_within(size_t offset) {
++    assert_true(offset < capacity_);
++    read_offset_ = static_cast<ring_size_t>(offset);
++  }
+   ring_size_t read_count() const {
+     ring_size_t read_offs = read_offset_;
+     ring_size_t write_offs = write_offset_;
+diff --git a/src/graphics/command_processor.cpp b/src/graphics/command_processor.cpp
+index 69f91c25..d55b4fa1 100644
+--- a/src/graphics/command_processor.cpp
++++ b/src/graphics/command_processor.cpp
+@@ -606,7 +606,8 @@ void CommandProcessor::WriteRegisterRangeFromRing(memory::RingBuffer* ring, uint
+   if (read_offset + range_bytes < ring->capacity()) {
+     WriteRegistersFromMem(base, reinterpret_cast<uint32_t*>(ring->buffer() + read_offset),
+                           num_registers);
+-    ring->set_read_offset(read_offset + range_bytes);
++    // FH1 (#45, patch 0360): inside the buffer, so no division.
++    ring->set_read_offset_within(read_offset + range_bytes);
+     return;
+   }
+   memory::RingBuffer::ReadRange range = ring->BeginRead(size_t(num_registers) * sizeof(uint32_t));
+@@ -623,6 +624,36 @@ void CommandProcessor::WriteRegisterRangeFromRing(memory::RingBuffer* ring, uint
+   ring->EndRead(range);
+ }
+ 
++bool CommandProcessor::Fh1WritePlainRangeFromRing(memory::RingBuffer* ring, uint32_t base,
++                                                  uint32_t count) {
++  // Only a range that does not reach the end of the ring (as WriteRegisterRangeFromRing's
++  // direct path), and only if every register in it is in the backend's list: then the
++  // backend would only store the values (fh1_plain_registers_). Otherwise nothing is read.
++  const uint64_t* const plain = fh1_plain_registers_;
++  const uint32_t end = base + count;
++  if (!count || end > RegisterFile::kRegisterCount) {
++    return false;
++  }
++  const size_t range_bytes = size_t(count) * sizeof(uint32_t);
++  const size_t read_offset = ring->read_offset();
++  if (read_offset + range_bytes >= ring->capacity()) {
++    return false;
++  }
++  for (uint32_t i = base; i < end; ++i) {
++    if (!((plain[i >> 6] >> (i & 63)) & 1)) {
++      return false;
++    }
++  }
++  const uint32_t* source = reinterpret_cast<const uint32_t*>(ring->buffer() + read_offset);
++  uint32_t* values = register_file_->values;
++  for (uint32_t i = 0; i < count; ++i) {
++    // Volatile like CommandProcessor::WriteRegister's store (WAIT_REG_MEM polls).
++    const_cast<volatile uint32_t&>(values[base + i]) = memory::load_and_swap<uint32_t>(source + i);
++  }
++  ring->set_read_offset_within(read_offset + range_bytes);
++  return true;
++}
++
+ void CommandProcessor::WriteALURangeFromRing(memory::RingBuffer* ring, uint32_t base,
+                                              uint32_t num_registers) {
+   WriteRegisterRangeFromRing(ring, base + 0x4000, num_registers);
+@@ -832,12 +863,26 @@ bool CommandProcessor::ExecutePacketType0(memory::RingBuffer* reader, uint32_t p
+   uint32_t base_index = (packet & 0x7FFF);
+   uint32_t write_one_reg = (packet >> 15) & 0x1;
+   if (!write_one_reg) {
++    // FH1 (#45, patch 0360): render state the backend only stores, straight from the ring.
++    if (fh1_plain_registers_ && Fh1WritePlainRangeFromRing(reader, base_index, count)) {
++      return true;
++    }
+     // Consecutive registers: as a range, so the backend can take the constant
+     // blocks (most of these packets) in one go rather than one virtual
+     // WriteRegister call per register.
+     WriteRegisterRangeFromRing(reader, base_index, count);
+     return true;
+   }
++  // FH1 (#45, patch 0360): every word to one register the backend only stores (the last one
++  // stays), without a virtual call for each.
++  if (fh1_plain_registers_ && base_index < RegisterFile::kRegisterCount &&
++      ((fh1_plain_registers_[base_index >> 6] >> (base_index & 63)) & 1)) {
++    volatile uint32_t& value = const_cast<volatile uint32_t&>(register_file_->values[base_index]);
++    for (uint32_t m = 0; m < count; m++) {
++      value = reader->ReadAndSwap<uint32_t>();
++    }
++    return true;
++  }
+   for (uint32_t m = 0; m < count; m++) {
+     uint32_t reg_data = reader->ReadAndSwap<uint32_t>();
+     WriteRegister(base_index, reg_data);
+@@ -1607,6 +1652,11 @@ bool CommandProcessor::ExecutePacketType3_SET_CONSTANT(memory::RingBuffer* reade
+       WriteLoopRangeFromRing(reader, index, count_registers);
+       break;
+     case 4:  // REGISTERS
++      // FH1 (#45, patch 0360): as in ExecutePacketType0.
++      if (fh1_plain_registers_ &&
++          Fh1WritePlainRangeFromRing(reader, index + 0x2000, count_registers)) {
++        break;
++      }
+       WriteREGISTERSRangeFromRing(reader, index, count_registers);
+       break;
+     default:
+@@ -1621,6 +1671,10 @@ bool CommandProcessor::ExecutePacketType3_SET_CONSTANT2(memory::RingBuffer* read
+                                                         uint32_t count) {
+   uint32_t offset_type = reader->ReadAndSwap<uint32_t>();
+   uint32_t index = offset_type & 0xFFFF;
++  // FH1 (#45, patch 0360): as in ExecutePacketType0.
++  if (fh1_plain_registers_ && Fh1WritePlainRangeFromRing(reader, index, count - 1)) {
++    return true;
++  }
+   WriteRegisterRangeFromRing(reader, index, count - 1);
+   return true;
+ }
+diff --git a/src/graphics/vulkan/command_processor.cpp b/src/graphics/vulkan/command_processor.cpp
+index 0db84835..0070d733 100644
+--- a/src/graphics/vulkan/command_processor.cpp
++++ b/src/graphics/vulkan/command_processor.cpp
+@@ -164,6 +164,13 @@ REXCVAR_DEFINE_UINT32(vulkan_render_target_trim_percent, 90, "GPU/Vulkan",
+                       "keeps every render target for the session")
+     .lifecycle(rex::cvar::Lifecycle::kHotReload);
+ 
++REXCVAR_DEFINE_BOOL(gpu_plain_register_ranges, true, "GPU/Vulkan",
++                    "Write a range of render state registers that only store their value (no "
++                    "side effect, outside the shader constants) in the command processor's "
++                    "packet loop, without the backend's register write calls (read at each frame "
++                    "start)")
++    .lifecycle(rex::cvar::Lifecycle::kHotReload);
++
+ REXCVAR_DEFINE_BOOL(vulkan_dynamic_rendering, true, "GPU/Vulkan",
+                     "Use VK_KHR_dynamic_rendering for Vulkan GPU emulation when supported by the "
+                     "device (falls back to render passes otherwise)")
+@@ -3053,7 +3060,16 @@ class PlainRegisters {
+                          i == XE_GPU_REG_COHER_STATUS_HOST || i == XE_GPU_REG_DC_LUT_RW_INDEX ||
+                          i == XE_GPU_REG_DC_LUT_SEQ_COLOR || i == XE_GPU_REG_DC_LUT_PWL_DATA ||
+                          i == XE_GPU_REG_DC_LUT_30_COLOR;
+-      if (!side_effect && RegisterFile::GetRegisterInfo(i)) {
++      // FH1 (#45, patch 0360): not the shader constant blocks either (WriteRegistersFromMem
++      // takes those first and never asks for them; the packet loop's own writes,
++      // CommandProcessor::fh1_plain_registers_, must not skip their handling).
++      bool constant = (i >= XE_GPU_REG_SHADER_CONSTANT_000_X &&
++                       i <= XE_GPU_REG_SHADER_CONSTANT_511_W) ||
++                      (i >= XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 &&
++                       i <= XE_GPU_REG_SHADER_CONSTANT_FETCH_31_5) ||
++                      (i >= XE_GPU_REG_SHADER_CONSTANT_BOOL_000_031 &&
++                       i <= XE_GPU_REG_SHADER_CONSTANT_LOOP_31);
++      if (!side_effect && !constant && RegisterFile::GetRegisterInfo(i)) {
+         bits_[i >> 6] |= uint64_t(1) << (i & 63);
+       }
+     }
+@@ -3061,6 +3077,7 @@ class PlainRegisters {
+   bool IsPlain(uint32_t index) const {
+     return index < RegisterFile::kRegisterCount && ((bits_[index >> 6] >> (index & 63)) & 1);
+   }
++  const uint64_t* bits() const { return bits_; }
+ 
+  private:
+   uint64_t bits_[(RegisterFile::kRegisterCount + 63) / 64] = {};
+@@ -7213,6 +7230,9 @@ bool VulkanCommandProcessor::BeginSubmission(bool is_guest_command) {
+ 
+   if (is_opening_frame) {
+     frame_open_ = true;
++    // FH1 (#45, patch 0360): the packet loop stores the plain registers itself (the same
++    // stores WriteRegistersFromMem and WriteRegister do for them).
++    fh1_plain_registers_ = REXCVAR_GET(gpu_plain_register_ranges) ? plain_registers.bits() : nullptr;
+     if (fh1_other_render_targets_) Fh1SelectNativeHud(false);
+     if (fh1_dlss_) fh1_dlss_->BeginFrame(frame_current_);
+     fh1_scene_composited_ = false;

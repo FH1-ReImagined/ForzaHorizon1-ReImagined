@@ -1,0 +1,431 @@
+diff --git a/include/rex/graphics/pipeline/render_target/cache.h b/include/rex/graphics/pipeline/render_target/cache.h
+index d3138c9f..21af8a9d 100644
+--- a/include/rex/graphics/pipeline/render_target/cache.h
++++ b/include/rex/graphics/pipeline/render_target/cache.h
+@@ -10,8 +10,10 @@
+  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
+  */
+ 
++#include <array>
+ #include <cmath>
+ #include <cstdint>
++#include <cstring>
+ #include <functional>
+ #include <map>
+ #include <unordered_map>
+@@ -501,7 +503,47 @@ class RenderTargetCache {
+   // false).
+   virtual bool IsHostDepthEncodingDifferent(xenos::DepthRenderTargetFormat format) const = 0;
+ 
+-  void ResetAccumulatedRenderTargets() { are_accumulated_render_targets_valid_ = false; }
++  void ResetAccumulatedRenderTargets() {
++    are_accumulated_render_targets_valid_ = false;
++    ++update_state_generation_;
++  }
++
++  // FH1 (#45): what Update's result depends on besides the cache's own state: the registers it
++  // reads, its arguments and the height the draw may cover. Two Updates with equal inputs and
++  // no change to the cache between them (update_state_generation) bind, own and transfer the
++  // same, so an implementation may keep the first one's result (vulkan_render_target_update_reuse).
++  // Host render targets only.
++  struct UpdateInputs {
++    uint32_t values[11] = {};
++    bool operator==(const UpdateInputs& other) const {
++      return std::memcmp(values, other.values, sizeof(values)) == 0;
++    }
++  };
++  void GetUpdateInputs(bool is_rasterization_done, reg::RB_DEPTHCONTROL normalized_depth_control,
++                       uint32_t normalized_color_mask, const Shader& vertex_shader,
++                       UpdateInputs& inputs_out);
++  // Changed by everything that may change what Update does for the same inputs: ownership
++  // changes, render targets created or dropped, the accumulated bindings reset, cache clears.
++  uint64_t update_state_generation() const { return update_state_generation_; }
++  void BumpUpdateStateGeneration() { ++update_state_generation_; }
++  // A reused Update: no transfers (the ranges are owned already), as the full one would leave.
++  void ClearLastUpdateTransfers() {
++    for (std::vector<Transfer>& transfers : last_update_transfers_) {
++      transfers.clear();
++    }
++  }
++  // Verification of a reused Update (vulkan_render_target_update_reuse_verify): the common
++  // state it would change, before and after the full Update.
++  struct UpdateStateSnapshot {
++    // Start, end, owner and the two host depth owners (keys) of each range.
++    std::vector<std::array<uint32_t, 5>> ownership;
++    RenderTarget* used[1 + xenos::kMaxColorRenderTargets];
++    RenderTarget* accumulated[1 + xenos::kMaxColorRenderTargets];
++    bool accumulated_valid;
++  };
++  void SnapshotUpdateState(UpdateStateSnapshot& snapshot_out) const;
++  // Empty if the state is as in the snapshot and no transfers are pending, otherwise what differs.
++  const char* CompareUpdateState(const UpdateStateSnapshot& snapshot) const;
+   RenderTarget* const* last_update_accumulated_render_targets() const {
+     assert_true(GetPath() == Path::kHostRenderTargets);
+     return last_update_accumulated_render_targets_;
+@@ -698,6 +740,9 @@ class RenderTargetCache {
+   // render targets. They are reordered so for one source, all transfers are
+   // consecutive in the array.
+   std::vector<Transfer> last_update_transfers_[1 + xenos::kMaxColorRenderTargets];
++
++  // FH1 (#45): see update_state_generation().
++  uint64_t update_state_generation_ = 0;
+ };
+ 
+ }  // namespace rex::graphics
+diff --git a/include/rex/graphics/vulkan/command_processor.h b/include/rex/graphics/vulkan/command_processor.h
+index f26f7863..043dc328 100644
+--- a/include/rex/graphics/vulkan/command_processor.h
++++ b/include/rex/graphics/vulkan/command_processor.h
+@@ -157,6 +157,11 @@ class VulkanCommandProcessor : public CommandProcessor {
+     assert_true(submission_open_);
+     return deferred_command_buffer_;
+   }
++  // FH1 (#45): barriers pushed and not submitted yet (render target update reuse checks).
++  size_t GetPendingBarrierCount() const {
++    return pending_barriers_buffer_memory_barriers_.size() +
++           pending_barriers_image_memory_barriers_.size() + pending_barriers_.size();
++  }
+ 
+   bool submission_open() const { return submission_open_; }
+   Fh1Dlss* fh1_dlss() const { return fh1_dlss_.get(); }
+diff --git a/include/rex/graphics/vulkan/deferred_command_buffer.h b/include/rex/graphics/vulkan/deferred_command_buffer.h
+index 5231edf8..204ddbf6 100644
+--- a/include/rex/graphics/vulkan/deferred_command_buffer.h
++++ b/include/rex/graphics/vulkan/deferred_command_buffer.h
+@@ -86,6 +86,8 @@ class DeferredCommandBuffer {
+     write_stream_ = hoisted ? &hoisted_stream_ : &command_stream_;
+   }
+   size_t hoisted_stream_size() const { return hoisted_stream_.size(); }
++  // FH1 (#45): the size of the stream commands are written to now.
++  size_t write_stream_size() const { return write_stream_->size(); }
+   // Drops the hoisted commands from `size` on (only those of the latest hoist point).
+   void TruncateHoistedStream(size_t size) {
+     assert_true(size <= hoisted_stream_.size());
+diff --git a/include/rex/graphics/vulkan/render_target_cache.h b/include/rex/graphics/vulkan/render_target_cache.h
+index b6d09003..983e9c1e 100644
+--- a/include/rex/graphics/vulkan/render_target_cache.h
++++ b/include/rex/graphics/vulkan/render_target_cache.h
+@@ -149,6 +149,16 @@ class VulkanRenderTargetCache final : public RenderTargetCache {
+ 
+   bool Update(bool is_rasterization_done, reg::RB_DEPTHCONTROL normalized_depth_control,
+               uint32_t normalized_color_mask, const Shader& vertex_shader) override;
++  // FH1 (#45): draws whose Update was the previous one's (vulkan_render_target_update_reuse),
++  // and those verified against the full Update (..._verify) and found different, since the last
++  // call.
++  void TakeUpdateReuseStats(uint64_t& updates_out, uint64_t& reused_out,
++                            uint64_t& mismatches_out) {
++    updates_out = update_reuse_updates_;
++    reused_out = update_reuse_hits_;
++    mismatches_out = update_reuse_mismatches_;
++    update_reuse_updates_ = update_reuse_hits_ = update_reuse_mismatches_ = 0;
++  }
+   // FH1 (#378): the render pass key Update would use for a draw that has not run yet, from the
+   // current registers (RenderTargetCache::PredictUpdate), for building its pipeline ahead.
+   bool PredictRenderPassKey(BindingPrediction& prediction, bool is_rasterization_done,
+@@ -324,6 +334,17 @@ class VulkanRenderTargetCache final : public RenderTargetCache {
+       last_update_framebuffer_attachments_[1 + xenos::kMaxColorRenderTargets] = {};
+   const Framebuffer* last_update_framebuffer_ = VK_NULL_HANDLE;
+ 
++  // FH1 (#45): the inputs of the last full Update and the state generation after it.
++  bool UpdateFull(bool is_rasterization_done, reg::RB_DEPTHCONTROL normalized_depth_control,
++                  uint32_t normalized_color_mask, const Shader& vertex_shader);
++  bool AccumulatedRenderTargetsInDrawUsage() const;
++  UpdateInputs update_reuse_inputs_;
++  uint64_t update_reuse_generation_ = 0;
++  bool update_reuse_valid_ = false;
++  uint64_t update_reuse_updates_ = 0;
++  uint64_t update_reuse_hits_ = 0;
++  uint64_t update_reuse_mismatches_ = 0;
++
+   // For host render targets.
+ 
+   // Can only be destroyed when framebuffers referencing it are destroyed!
+diff --git a/src/graphics/pipeline/render_target/cache.cpp b/src/graphics/pipeline/render_target/cache.cpp
+index c24275c0..e477d0a6 100644
+--- a/src/graphics/pipeline/render_target/cache.cpp
++++ b/src/graphics/pipeline/render_target/cache.cpp
+@@ -335,12 +335,14 @@ RenderTargetCache::~RenderTargetCache() {
+ 
+ void RenderTargetCache::InitializeCommon() {
+   assert_true(ownership_ranges_.empty());
++  ++update_state_generation_;
+   ownership_ranges_.emplace(std::piecewise_construct, std::forward_as_tuple(uint32_t(0)),
+                             std::forward_as_tuple(xenos::kEdramTileCount, RenderTargetKey(),
+                                                   RenderTargetKey(), RenderTargetKey()));
+ }
+ 
+ void RenderTargetCache::DestroyAllRenderTargets(bool shutting_down) {
++  ++update_state_generation_;
+   ownership_ranges_.clear();
+   if (!shutting_down) {
+     ownership_ranges_.emplace(std::piecewise_construct, std::forward_as_tuple(uint32_t(0)),
+@@ -361,6 +363,7 @@ void RenderTargetCache::ShutdownCommon() {
+ }
+ 
+ void RenderTargetCache::ClearCache() {
++  ++update_state_generation_;
+   // Keep only render targets currently owning any EDRAM data.
+   if (!render_targets_.empty()) {
+     std::unordered_set<RenderTargetKey, RenderTargetKey::Hasher> used_render_targets;
+@@ -546,6 +549,76 @@ void RenderTargetCache::BeginFrame() {
+   ResetAccumulatedRenderTargets();
+ }
+ 
++void RenderTargetCache::GetUpdateInputs(bool is_rasterization_done,
++                                        reg::RB_DEPTHCONTROL normalized_depth_control,
++                                        uint32_t normalized_color_mask,
++                                        const Shader& vertex_shader, UpdateInputs& inputs_out) {
++  assert_true(GetPath() == Path::kHostRenderTargets);
++  const RegisterFile& regs = register_file();
++  auto rb_surface_info = regs.Get<reg::RB_SURFACE_INFO>();
++  bool depth_used = normalized_depth_control.z_enable || normalized_depth_control.stencil_enable;
++  uint32_t* values = inputs_out.values;
++  values[0] = uint32_t(is_rasterization_done) | (uint32_t(depth_used) << 1) |
++              (uint32_t(REXCVAR_GET(mrt_edram_used_range_clamp_to_min)) << 2);
++  values[1] = normalized_color_mask;
++  values[2] = regs[XE_GPU_REG_RB_SURFACE_INFO];
++  values[3] = regs[XE_GPU_REG_RB_DEPTH_INFO];
++  for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i) {
++    values[4 + i] = regs[reg::RB_COLOR_INFO::rt_register_indices[i]];
++  }
++  // The height Update estimates (the same calls), only where it uses it.
++  uint32_t height_used = 0;
++  xenos::MsaaSamples msaa_samples = rb_surface_info.msaa_samples;
++  uint32_t pitch_pixels = rb_surface_info.surface_pitch;
++  if (is_rasterization_done && pitch_pixels && (depth_used || normalized_color_mask) &&
++      msaa_samples <= xenos::MsaaSamples::k4X) {
++    uint32_t msaa_samples_x_log2 = uint32_t(msaa_samples >= xenos::MsaaSamples::k4X);
++    uint32_t pitch_tiles_at_32bpp =
++        ((pitch_pixels << msaa_samples_x_log2) + (xenos::kEdramTileWidthSamples - 1)) /
++        xenos::kEdramTileWidthSamples;
++    height_used = std::min(GetRenderTargetHeight(pitch_tiles_at_32bpp, msaa_samples),
++                           draw_extent_estimator_.EstimateMaxY(true, vertex_shader));
++  }
++  values[8] = height_used;
++  values[9] = 0;
++  values[10] = 0;
++}
++
++void RenderTargetCache::SnapshotUpdateState(UpdateStateSnapshot& snapshot_out) const {
++  snapshot_out.ownership.clear();
++  for (const auto& range : ownership_ranges_) {
++    snapshot_out.ownership.push_back({range.first, range.second.end_tiles,
++                                      range.second.render_target.key,
++                                      range.second.host_depth_render_target_unorm24.key,
++                                      range.second.host_depth_render_target_float24.key});
++  }
++  std::memcpy(snapshot_out.used, last_update_used_render_targets_, sizeof(snapshot_out.used));
++  std::memcpy(snapshot_out.accumulated, last_update_accumulated_render_targets_,
++              sizeof(snapshot_out.accumulated));
++  snapshot_out.accumulated_valid = are_accumulated_render_targets_valid_;
++}
++
++const char* RenderTargetCache::CompareUpdateState(const UpdateStateSnapshot& snapshot) const {
++  for (const std::vector<Transfer>& transfers : last_update_transfers_) {
++    if (!transfers.empty()) {
++      return "transfers";
++    }
++  }
++  UpdateStateSnapshot now;
++  SnapshotUpdateState(now);
++  if (now.ownership != snapshot.ownership) {
++    return "ownership";
++  }
++  if (std::memcmp(now.used, snapshot.used, sizeof(now.used))) {
++    return "used render targets";
++  }
++  if (std::memcmp(now.accumulated, snapshot.accumulated, sizeof(now.accumulated)) ||
++      now.accumulated_valid != snapshot.accumulated_valid) {
++    return "accumulated render targets";
++  }
++  return "";
++}
++
+ bool RenderTargetCache::Update(bool is_rasterization_done,
+                                reg::RB_DEPTHCONTROL normalized_depth_control,
+                                uint32_t normalized_color_mask, const Shader& vertex_shader) {
+@@ -1278,6 +1351,7 @@ void RenderTargetCache::PixelShaderInterlockFullEdramBarrierPlaced() {
+   // Clear ownership - any overlap of data written before the barrier is safe.
+   OwnershipRange empty_range(xenos::kEdramTileCount, RenderTargetKey(), RenderTargetKey(),
+                              RenderTargetKey());
++  ++update_state_generation_;
+   if (ownership_ranges_.size() == 1) {
+     // Do not reallocate map elements if not needed (either nothing drawn since
+     // the last barrier, or all of the EDRAM is owned by one render target).
+@@ -1320,6 +1394,7 @@ RenderTargetCache::RenderTarget* RenderTargetCache::GetOrCreateRenderTarget(Rend
+     }
+     // Insert even if failed to create, not to try to create again.
+     render_targets_.emplace(key, render_target);
++    ++update_state_generation_;
+   }
+   return render_target;
+ }
+@@ -1397,6 +1472,8 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
+   if (length_tiles == 0) {
+     return;
+   }
++  // FH1 (#45): any ownership change (most calls change nothing, but telling needs the walk).
++  ++update_state_generation_;
+   uint32_t dest_pitch_tiles = dest.GetPitchTiles();
+   bool dest_is_64bpp = dest.Is64bpp();
+   bool host_depth_encoding_different = dest.is_depth && GetPath() == Path::kHostRenderTargets &&
+diff --git a/src/graphics/vulkan/command_processor.cpp b/src/graphics/vulkan/command_processor.cpp
+index 805d3479..6f7ad607 100644
+--- a/src/graphics/vulkan/command_processor.cpp
++++ b/src/graphics/vulkan/command_processor.cpp
+@@ -51,6 +51,7 @@
+ #include <unistd.h>
+ #endif
+ #include "fh1_readback_history.h"
++REXCVAR_DECLARE(bool, vulkan_render_target_update_reuse_verify);
+ REXCVAR_DECLARE(int32_t, forza_native_width);
+ REXCVAR_DECLARE(int32_t, forza_native_height);
+ REXCVAR_DECLARE(bool, forza_present_16_9);
+@@ -7581,6 +7582,23 @@ bool VulkanCommandProcessor::EndSubmission(bool is_swap) {
+           const ui::vulkan::VulkanDevice::Properties& properties =
+               GetVulkanDevice()->properties();
+           ReadSensors(properties.vendorID, properties.deviceID, snapshot);
++          // FH1 (#45): how many draws kept the previous render target setup, once a minute.
++          for (VulkanRenderTargetCache* rt_cache :
++               {render_target_cache_.get(), fh1_other_render_targets_.get()}) {
++            if (!rt_cache) {
++              continue;
++            }
++            uint64_t updates, reused, mismatches;
++            rt_cache->TakeUpdateReuseStats(updates, reused, mismatches);
++            if (updates) {
++              REXGPU_INFO(
++                  "Render target update reuse: {} of {} draws ({:.1f}%){}", reused, updates,
++                  100.0 * double(reused) / double(updates),
++                  REXCVAR_GET(vulkan_render_target_update_reuse_verify)
++                      ? fmt::format(", verified, {} differed", mismatches)
++                      : std::string());
++            }
++          }
+         });
+     if (cache_clear_requested_ && AwaitAllQueueOperationsCompletion()) {
+       cache_clear_requested_ = false;
+diff --git a/src/graphics/vulkan/render_target_cache.cpp b/src/graphics/vulkan/render_target_cache.cpp
+index 4451bff9..4f64e6fa 100644
+--- a/src/graphics/vulkan/render_target_cache.cpp
++++ b/src/graphics/vulkan/render_target_cache.cpp
+@@ -47,6 +47,17 @@ REXCVAR_DEFINE_INT32(vulkan_render_target_initial_fill, 0, "GPU/Vulkan",
+     .range(0, 2)
+     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+ 
++REXCVAR_DEFINE_BOOL(vulkan_render_target_update_reuse, true, "GPU/Vulkan",
++                    "Keep the render target setup of the previous draw when this one has the same "
++                    "render target registers and nothing changed the render targets in between "
++                    "(no ownership change, resolve, clear or new render target): skips the "
++                    "lookups and the EDRAM ownership walk the command processor did per draw")
++    .lifecycle(rex::cvar::Lifecycle::kHotReload);
++REXCVAR_DEFINE_BOOL(vulkan_render_target_update_reuse_verify, false, "GPU/Vulkan",
++                    "With vulkan_render_target_update_reuse, still do the full render target "
++                    "setup for a reused draw and log where it differs (testing)")
++    .lifecycle(rex::cvar::Lifecycle::kHotReload);
++
+ REXCVAR_DEFINE_STRING(render_target_path_vulkan, "", "GPU/Vulkan",
+                       "Vulkan render target implementation path")
+     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+@@ -1411,9 +1422,101 @@ bool VulkanRenderTargetCache::Resolve(const memory::Memory& memory,
+   return copied && cleared;
+ }
+ 
++// FH1 (#45): nearly every draw (95% in a race) binds the render targets of the one before,
++// with the same registers, and nothing touched the render targets between the two. Update
++// then finds the same render targets, owns the same EDRAM ranges already (no transfers),
++// builds the same render pass key and framebuffer and needs no barrier: keep that result.
++bool VulkanRenderTargetCache::AccumulatedRenderTargetsInDrawUsage() const {
++  RenderTarget* const* render_targets = last_update_accumulated_render_targets();
++  for (uint32_t i = 0; i < 1 + xenos::kMaxColorRenderTargets; ++i) {
++    const RenderTarget* rt = render_targets[i];
++    if (!rt) {
++      continue;
++    }
++    const auto& vulkan_rt = *static_cast<const VulkanRenderTarget*>(rt);
++    VkPipelineStageFlags stage_mask;
++    VkAccessFlags access_mask;
++    VkImageLayout layout;
++    VulkanRenderTarget::GetDrawUsage(i == 0, &stage_mask, &access_mask, &layout);
++    if (vulkan_rt.current_stage_mask() != stage_mask ||
++        vulkan_rt.current_access_mask() != access_mask || vulkan_rt.current_layout() != layout) {
++      return false;
++    }
++  }
++  return true;
++}
++
+ bool VulkanRenderTargetCache::Update(bool is_rasterization_done,
+                                      reg::RB_DEPTHCONTROL normalized_depth_control,
+                                      uint32_t normalized_color_mask, const Shader& vertex_shader) {
++  if (GetPath() != Path::kHostRenderTargets || !REXCVAR_GET(vulkan_render_target_update_reuse)) {
++    update_reuse_valid_ = false;
++    return UpdateFull(is_rasterization_done, normalized_depth_control, normalized_color_mask,
++                      vertex_shader);
++  }
++  ++update_reuse_updates_;
++  UpdateInputs inputs;
++  GetUpdateInputs(is_rasterization_done, normalized_depth_control, normalized_color_mask,
++                  vertex_shader, inputs);
++  bool reuse = update_reuse_valid_ && update_reuse_generation_ == update_state_generation() &&
++               inputs == update_reuse_inputs_ && AccumulatedRenderTargetsInDrawUsage();
++  if (reuse) {
++    ++update_reuse_hits_;
++    if (!REXCVAR_GET(vulkan_render_target_update_reuse_verify)) {
++      ClearLastUpdateTransfers();
++      return true;
++    }
++  }
++  update_reuse_valid_ = false;
++  UpdateStateSnapshot snapshot;
++  RenderPassKey snapshot_render_pass_key;
++  VkRenderPass snapshot_render_pass = VK_NULL_HANDLE;
++  const Framebuffer* snapshot_framebuffer = nullptr;
++  size_t snapshot_commands = 0, snapshot_barriers = 0;
++  if (reuse) {
++    SnapshotUpdateState(snapshot);
++    snapshot_render_pass_key = last_update_render_pass_key_;
++    snapshot_render_pass = last_update_render_pass_;
++    snapshot_framebuffer = last_update_framebuffer_;
++    snapshot_commands = command_processor_.deferred_command_buffer().write_stream_size();
++    snapshot_barriers = command_processor_.GetPendingBarrierCount();
++  }
++  if (!UpdateFull(is_rasterization_done, normalized_depth_control, normalized_color_mask,
++                  vertex_shader)) {
++    return false;
++  }
++  if (reuse) {
++    const char* difference = CompareUpdateState(snapshot);
++    if (!*difference) {
++      if (!(last_update_render_pass_key_ == snapshot_render_pass_key) ||
++          last_update_render_pass_ != snapshot_render_pass) {
++        difference = "render pass";
++      } else if (last_update_framebuffer_ != snapshot_framebuffer) {
++        difference = "framebuffer";
++      } else if (command_processor_.deferred_command_buffer().write_stream_size() !=
++                 snapshot_commands) {
++        difference = "commands";
++      } else if (command_processor_.GetPendingBarrierCount() != snapshot_barriers) {
++        difference = "barriers";
++      }
++    }
++    if (*difference) {
++      if (++update_reuse_mismatches_ <= 16) {
++        REXGPU_WARN("Render target update reuse: a reused draw's full update differs ({})",
++                    difference);
++      }
++    }
++  }
++  update_reuse_inputs_ = inputs;
++  update_reuse_generation_ = update_state_generation();
++  update_reuse_valid_ = true;
++  return true;
++}
++
++bool VulkanRenderTargetCache::UpdateFull(bool is_rasterization_done,
++                                         reg::RB_DEPTHCONTROL normalized_depth_control,
++                                         uint32_t normalized_color_mask,
++                                         const Shader& vertex_shader) {
+   if (!RenderTargetCache::Update(is_rasterization_done, normalized_depth_control,
+                                  normalized_color_mask, vertex_shader)) {
+     return false;

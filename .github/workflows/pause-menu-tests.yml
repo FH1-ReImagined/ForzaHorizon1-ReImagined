@@ -1,0 +1,86 @@
+name: pause-menu-tests
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/pause-menu-tests.yml'
+      - 'forza-recomp/CMakeLists.txt'
+      - 'forza-recomp/cmake/NativePause.cmake'
+      - 'forza-recomp/src/hooks/*pause*'
+      - 'forza-recomp/src/hooks/fh1_map_preview.cpp'
+      - 'forza-recomp/src/hooks/graphics_menu.cpp'
+      - 'forza-recomp/src/hooks/offline_cars.cpp'
+      - 'forza-recomp/src/hooks/festival_travel.cpp'
+      - 'forza-recomp/src/hooks/car_recovery.cpp'
+      - 'forza-recomp/src/platform/fh1_*.h'
+      - 'forza-recomp/src/platform/offline_cars.h'
+      - 'forza-recomp/src/platform/pause_car_access.h'
+      - 'forza-recomp/src/platform/social_presence.h'
+      - 'forza-recomp/src/kernel/live_connection.h'
+      - 'forza-recomp/src/platform/native_pause*.h'
+      - 'forza-recomp/src/platform/native_quit*'
+      - 'forza-recomp/src/platform/menu_*.h'
+      - 'forza-recomp/tests/menu-model/**'
+      - 'forza-recomp/tests/menu_model_test.cpp'
+      - 'forza-recomp/tests/native_quit_flow_test.cpp'
+      - 'forza-recomp/tests/native_pause_assets_test.cpp'
+      - 'forza-recomp/tests/pause-stubs/**'
+      - 'forza-recomp/tests/pause_stubs_test.cpp'
+      - 'forza-recomp/tests/pause-cars/**'
+      - 'forza-recomp/tests/pause_cars_test.cpp'
+      - 'forza-recomp/tests/pause_actions_test.cpp'
+      - 'forza-recomp/tests/social_presence_test.cpp'
+      - 'forza-recomp/tests/live-connection/**'
+      - 'forza-recomp/tests/live_connection_test.cpp'
+      - 'launcher/test_native_menu*.py'
+      - 'launcher/forza_launcher/builder.py'
+      - 'launcher/forza_launcher/game.py'
+      - 'launcher/forza_launcher/schema.py'
+      - 'tools/*horizon2*'
+      - 'tools/*fh1*'
+      - 'tools/*fh2*'
+      - 'tools/*offline_cars*'
+      - 'tools/*native_menu*'
+      - 'tools/*native_pause*'
+      - 'tools/native_menu/**'
+      - 'tools/xcontent_extract.py'
+      - 'tools/lzx_delta.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  preparation-and-configuration:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Synthetic preparation and configure-only matrix
+        run: |
+          cmake --version
+          python -m unittest discover -s tools -p 'test_fh*.py' -v
+          python -m unittest discover -s tools -p 'test_horizon2*.py' -v
+          python -m unittest discover -s tools -p 'test_offline_cars_flow.py' -v
+          python -m unittest discover -s tools -p 'test_native*.py' -v
+          python -m unittest discover -s launcher -p 'test_native_menu*.py' -v
+      - name: Original menu behavior without SDK or game files
+        run: |
+          cmake -S forza-recomp/tests/menu-model -B build/menu-model
+          cmake --build build/menu-model --parallel 2
+          ctest --test-dir build/menu-model --output-on-failure
+      - name: Disabled pause API stubs without the SDK
+        run: |
+          cmake -S forza-recomp/tests/pause-stubs -B build/pause-stubs
+          cmake --build build/pause-stubs --parallel 2
+          ctest --test-dir build/pause-stubs --output-on-failure
+      - name: Native car access and reload lifecycle with mocked native calls
+        run: |
+          cmake -S forza-recomp/tests/pause-cars -B build/pause-cars
+          cmake --build build/pause-cars --parallel 2
+          ctest --test-dir build/pause-cars --output-on-failure
+      - name: Live connection state machine
+        run: |
+          cmake -S forza-recomp/tests/live-connection -B build/live-connection
+          cmake --build build/live-connection --parallel 2
+          ctest --test-dir build/live-connection --output-on-failure

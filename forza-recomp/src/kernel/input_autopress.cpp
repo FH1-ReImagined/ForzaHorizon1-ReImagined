@@ -23,16 +23,19 @@
 // controller between presses instead of a disconnected one. "SCENE:<name>" lines label
 // the frame statistics (RECOMP_PERF, src/debug/frame_stats.cpp); "PROF:START" and
 // "PROF:STOP" run the CPU sampler (src/debug/cpu_profile.cpp); "SAY:<text>" says <text> in
-// World chat (live_friends.cpp; the Co-op Festival's /event in scripted tests).
+// World chat and "SAYC:<text>" in Club chat (live_friends.cpp; the Co-op Festival's /event and
+// the /club commands in scripted tests).
 
 #include "input_caps.h"
 #include "live.h"
 
 #include "../platform/guest_memory.h"
 #include "../platform/benchmark.h"
+#include "../platform/auto_pause.h"
 
 #include "../platform/telemetry.h"
 #include "../platform/wheel_bridge.h"
+#include "../platform/xr.h"
 #include "../platform/sdk_import.h"
 #include "../debug/cpu_profile.h"
 #include "../debug/frame_stats.h"
@@ -64,6 +67,7 @@ uint16_t WorldChallengePad(uint16_t buttons);  // hooks/world_challenge.cpp
 uint16_t LiveInvitePad(uint16_t buttons, int left_y, bool& block_all);  // kernel/live_invites.cpp
 uint16_t LiveFriendsPad(uint16_t buttons, int left_x, int left_y, bool& block_all);  // live_friends.cpp
 uint16_t KeyboardUiPad(uint16_t buttons, int left_x, int left_y, bool& block_all);  // xam_keyboard.cpp
+uint16_t CustomRacePad(uint16_t buttons);  // hooks/custom_race.cpp
 }
 
 namespace {
@@ -189,6 +193,12 @@ void ReadFifo(std::string path, std::vector<Press>* schedule,
     }
     if (line.rfind("SAY:", 0) == 0) {  // a World chat line, as typed (live_friends.cpp)
       forza::LiveChatSay(2, line.substr(4));
+      REXLOG_INFO("FORZA_AUTOPRESS_FIFO: t={:.2f}s {}", now, line);
+      line.clear();
+      continue;
+    }
+    if (line.rfind("SAYC:", 0) == 0) {  // a Club chat line, as typed (live_friends.cpp)
+      forza::LiveChatSay(4, line.substr(5));
       REXLOG_INFO("FORZA_AUTOPRESS_FIFO: t={:.2f}s {}", now, line);
       line.clear();
       continue;
@@ -369,6 +379,9 @@ extern "C" REX_FUNC(__imp__XamInputGetState) {
     }
   }
   if (user == 0 && forza::benchmark::WantsPad()) connected = true;
+  const bool auto_pause = user == 0 && forza::auto_pause::Poll(
+      base, state.buttons, PadPerUser() ? 1u : 15u);
+  if (auto_pause) connected = true;
   if (!connected) {
     if (user == 0) forza::telemetry::Input(false, 0, 0, 0, 0);
     ctx.r3.u64 = kErrorDeviceNotConnected;
@@ -391,13 +404,25 @@ extern "C" REX_FUNC(__imp__XamInputGetState) {
     }
     if (block_all) state = PadState{};
     state.buttons &= uint16_t(~forza::WorldChallengePad(state.buttons));
+    // SELECT on a won event's title card, and Custom Race's A for the card; nothing of it
+    // while a prompt above holds the pad.
+    if (!block_all) state.buttons = forza::CustomRacePad(state.buttons);
     if (forza::benchmark::WantsPad()) {
       bool capture = false;
       const auto buttons = forza::benchmark::Pad(state.buttons, capture);
       if (capture) state = PadState{};
       state.buttons = buttons;
     }
+    if (auto_pause) {
+      if (!block_all && !forza::benchmark::WantsPad()) {
+        state = PadState{};
+        state.buttons = 0x10;  // START: let FH1 open its own pause menu.
+      } else {
+        forza::auto_pause::Cancel();
+      }
+    }
   }
+  if (user == 0) forza::xr::OnPad(state.buttons);  // VR: both sticks held recentre
   if (user == 0) forza::telemetry::Input(true, state.triggers[0], state.triggers[1], state.buttons, state.sticks[0]);
   if (buffer) {
     // The packet number changes whenever the state does.

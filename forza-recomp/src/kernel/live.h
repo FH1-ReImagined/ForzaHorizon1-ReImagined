@@ -3,13 +3,21 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
+#include <optional>
+#include <set>
 #include <string>
 #include <vector>
+#include "../platform/social_presence.h"
 
 namespace forza {
 
 // The virtual network is on (FORZA_NET or a Forza Live server).
 bool NetworkOn();
+
+// A validated server welcome arrived within the last 20 seconds. Unlike
+// NetworkOn/LiveSignin, this checks recent server contact, not configuration.
+bool LiveConnected();
 
 // The Forza Live server's IPv4 address (host order) and the TCP port of its title
 // servers (HTTP). False without FORZA_SERVER, or before the server welcomed us.
@@ -78,7 +86,7 @@ void LiveMatchResults(const uint8_t* body, size_t size);
 // The playlist our last matchmaking search was for (Find Game: the hopper id; 0 before the
 // first search). Hooks use it to tell the Horizon World from other playlists.
 uint32_t LiveMatchPlaylist();
-// The playlists that run as a Horizon World (server/forza_live_lsp.py WORLD_HOPPERS): the
+// The playlists that run as a Horizon World (server/forza_live/title_services/lsp.py WORLD_HOPPERS): the
 // Horizon World (3) and the Co-op Festival (20, #309: the same world among friends, whose
 // host starts festival events with /event in World chat).
 inline bool LiveIsWorldPlaylist(uint32_t playlist) { return playlist == 3 || playlist == 20; }
@@ -95,12 +103,12 @@ void LiveMatchTick();
 // (hooks/world_events.cpp takes it), or a campaign round's CPU skill for our world.
 void LiveWorldEvent(const uint8_t* body, size_t size);
 
-// Head-to-head challenges (hooks/world_challenge.cpp, server/forza_challenge.py): send a
+// Head-to-head challenges (hooks/world_challenge.cpp, server/forza_live/competition/challenge.py): send a
 // CHALLENGE message to the server; the network thread hands the server's to LiveChallenge.
 void LiveSendChallenge(const std::vector<uint8_t>& body);
 void LiveChallenge(const uint8_t* body, size_t size);
 
-// Xbox LIVE stats on the server (live_xmsg.cpp, server/forza_stats.py): send a STATS message
+// Xbox LIVE stats on the server (live_xmsg.cpp, server/forza_live/competition/stats.py): send a STATS message
 // (a write or a read); the network thread hands the server's rows to LiveStatsRows.
 void LiveSendStats(const std::vector<uint8_t>& body);
 void LiveStatsRows(const uint8_t* body, size_t size);
@@ -118,7 +126,7 @@ void LiveResumed(double seconds);
 // game its friends' presence changed, or that friends came or went.
 void LiveRosterChanged(bool membership_changed);
 
-// --- Friends (live_friends.cpp, server/forza_friends.py, #92) ---
+// --- Friends (live_friends.cpp, server/forza_live/social/friends.py, #92) ---
 // The server keeps each player's friends; a game that has its list shows only those
 // players as friends. Until the server sent one (an older server), every player in the
 // room counts as a friend, as before.
@@ -156,21 +164,56 @@ void LiveFriendsTick();
 // from the game; `block_all`: the game gets no input.
 uint16_t LiveFriendsPad(uint16_t buttons, int left_x, int left_y, bool& block_all);
 bool LiveFriendsScreenOpen();
+// Queue the existing friends editor/chat through its input-thread request path.
+void LiveOpenFriends(bool chat = false);
+enum class LiveFriendsPage { Friends, Requests, AddFriend, Blocked, Chat };
+void LiveOpenFriendsPage(LiveFriendsPage page);
+struct LiveChatPreview {
+  size_t unread = 0;
+  std::string latest;
+};
+// Read-only copy under the friends/chat lock. Does not mark messages read.
+LiveChatPreview LiveGetChatPreview();
 // ForzaApp::OnCreateDialogs: registers the keyboard bindings.
 void InstallFriendsKey();
 
 // The invite picker or an invite prompt shows (live_invites.cpp).
 bool LiveInviteBusy();
 
-// --- Text chat (live_friends.cpp's Chat tab, server/forza_chat.py, #92) ---
+// --- Text chat (live_friends.cpp's Chat tab, server/forza_live/social/chat.py, #92) ---
 // A CHAT message to the server, and the server's (network thread).
 bool LiveSendChat(const std::vector<uint8_t>& body);
-// Sends a chat line as the Chat tab would (channel 1 session, 2 world) and shows it in the
-// tab: scripted tests (FORZA_AUTOPRESS_FIFO "SAY:<text>" says it in World chat).
+// Sends a chat line as the Chat tab would (channel 1 session, 2 world, 4 club) and shows it in
+// the tab: scripted tests (FORZA_AUTOPRESS_FIFO "SAY:<text>" says it in World chat, "SAYC:" in
+// Club chat).
 void LiveChatSay(uint8_t channel, const std::string& text);
 void LiveChatMessage(const uint8_t* body, size_t size);
 // The ids of the sessions we host or joined (live_xmsg.cpp): the "session" chat channel
 // reaches the players in one of them.
 std::vector<uint64_t> LiveSessionIds();
+// The content this game has that changes which cars exist (kernel/content_manifest.h, #567):
+// the installed DLC offers (dlc_log.cpp) and the loaded mods that change cars or the database
+// (mod_overlay.cpp). The Chat message "content" (op 4) tells the server, which tells the
+// players of a session what they do not share.
+void SetInstalledDlcOffers(const std::set<uint32_t>& offers);
+void NoteLoadedMod(const std::string& name, bool changes_cars);
+std::string CurrentContentManifest();
+
+// Newest presence session, copied under the session lock. Members are XUIDs
+// observed through XSessionJoin/Leave, never the unrelated server-room roster.
+struct LiveSessionView {
+  uint64_t id = 0;
+  uint32_t flags = 0;
+  bool hosted = false;
+  uint32_t players = 0, capacity = 0;
+  std::array<uint8_t, 0x3C> info{};
+  std::vector<uint64_t> members;
+  social_presence::Car local_car;
+};
+std::optional<LiveSessionView> LiveCurrentSession();
+void LiveSetCarDetails(const social_presence::Car& car);
+// Explicit join confirmation through the existing native invite-accept path.
+// Revalidates presence, blocking and friends-only restrictions before showing.
+bool LiveRequestJoin(uint64_t xuid);
 
 }  // namespace forza

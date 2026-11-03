@@ -1,4 +1,4 @@
-Forza Horizon 1: ReImagined for Windows - https://github.com/Dyotson/ForzaHorizon1-ReImagined
+Forza Horizon 1: ReImagined for Windows - https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined
 Built from commit @COMMIT@.
 
 Needs the Microsoft Visual C++ 2015-2022 x64 redistributable, a Vulkan 1.3 GPU driver and

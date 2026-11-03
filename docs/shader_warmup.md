@@ -48,8 +48,15 @@ a word past 64 MiB (#247).
 
 The cache is saved after warm-up, and periodically when new pipelines have been
 created. Shutdown also attempts to save pending data. Disk writes use a temporary
-file and replace the previous file only after the write succeeds. A save larger
-than 512 MiB (or an entry over 16 MiB) is skipped, with a warning in the log.
+file and replace the previous file only after the write succeeds. Files stay within
+512 MiB. If all entries do not fit, whole entries are retained in description-key
+order, skipping those that exceed the remaining space. The log reports the saved
+count and warns once per session about omitted pipelines, which may compile again
+next time. Individual entries over 16 MiB remain unsupported.
+
+This bounded save avoids losing all persistence when NVIDIA driver data exceeds
+the limit (#406). It does not explain the driver's large entries or guarantee that
+all pipelines can be retained; live NVIDIA restart testing is still required.
 
 The **Keep compiled Vulkan pipelines** advanced setting is on by default and
 requires **Keep a shader cache** and the Vulkan backend. Changing it requires a
@@ -89,11 +96,19 @@ versions is kept and converted.
   partial lines, worker ordering, progress visibility and setting dependencies.
 - `tools/test_driver_pipeline_cache.cpp` tests identity rejection, every single
   byte corruption and truncation (only whole entries before the damage are
-  read), size limits (an oversized file is not read, a save over the limit
-  writes nothing), failed writes and concurrent atomic replacement. It also
+  read), size limits (an oversized file is not read, a bounded save reloads a
+  stable subset over repeated saves, with exact-fit and one-byte-short boundaries),
+  failed writes and concurrent atomic replacement. It also
   models a driver that finds a third of the pipelines under a new key at every
   start: one seeded cache grows from 13.8 to 36.8 MB over six starts, while the
   per-pipeline entries stay at 13.8 MB.
+- Windows RTX 5060 Ti, 1440p/2x scene, three prebuild-only starts on an isolated
+  private host fixture: the first compiled 330 scene pipelines and saved 252 in
+  535,444,993 bytes (510.6 MiB), omitting 78 at the 512 MiB cap. Both closed-process
+  restarts loaded and reused all 252 retained pipelines; the omitted 78 compiled
+  again. Cache identity and file bytes stayed identical across all three starts.
+  This validates bounded persistence for that fixture; gameplay performance and
+  the cause of large driver payloads were not assessed.
 - `tools/test_pipeline_store.cpp` writes stores with valid records and records
   the device rejects (the last ones among them), damaged and partial records,
   the original header and other versions. Every valid record survives, in

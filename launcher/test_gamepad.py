@@ -279,6 +279,31 @@ class NavigationTests(unittest.TestCase):
         self.press("accept")
         self.assertEqual(self.win.cfg.d["mods"]["disabled"], [])
 
+    def test_texture_packs_page_works_with_a_controller(self):
+        from forza_launcher import texture_packs
+        from forza_launcher.ui.window import TEXTURE_PACKS_PAGE_ID
+        folder = texture_packs.textures_dir(self.win.cfg) / "Pad"
+        folder.mkdir(parents=True)
+        (folder / "0123456789abcdef.png").write_bytes(
+            b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x08\0\0\0\x08\x08\x06\0\0\0" + b"\0" * 16)
+        self.win.show_page(TEXTURE_PACKS_PAGE_ID)
+        page = self.win.texture_packs
+        self.app.processEvents()
+        # Down walks the page's controls: the switches, Add pack..., the list, Make HD pack.
+        reached = set()
+        self.nav.focus(page.switches["texture_replace"])
+        for _ in range(16):
+            reached.add(self.app.focusWidget())
+            self.press("down")
+        self.assertTrue({page.switches["texture_dump"], page.add_button, page.table, page.scale} <= reached)
+        # A on the selected pack turns it off and on.
+        self.nav.focus(page.table)
+        page.table.selectRow(0)
+        self.press("accept")
+        self.assertEqual(self.win.cfg.d["texture_packs"]["disabled"], ["Pad"])
+        self.press("accept")
+        self.assertEqual(self.win.cfg.d["texture_packs"]["disabled"], [])
+
     def test_focus_skips_disabled_hidden_controls_and_scrolls(self):
         from PySide6.QtWidgets import QScrollArea, QPushButton
         self.win.show_page(2)

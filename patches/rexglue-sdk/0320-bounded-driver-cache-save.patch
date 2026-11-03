@@ -1,0 +1,89 @@
+diff --git a/include/rex/graphics/vulkan/driver_cache_file.h b/include/rex/graphics/vulkan/driver_cache_file.h
+--- a/include/rex/graphics/vulkan/driver_cache_file.h
++++ b/include/rex/graphics/vulkan/driver_cache_file.h
+@@ -32,9 +32,9 @@
+ constexpr uint32_t kFormatVersion = 2;
+ constexpr size_t kHeaderSize = 64;
+ constexpr size_t kEntryHeaderSize = 24;
+-// One pipeline's driver data; real ones take tens of KB.
++// One pipeline's opaque driver data; size varies substantially by driver.
+ constexpr size_t kMaxEntrySize = 16 * 1024 * 1024;
+-// The whole file: about 50 KB per pipeline on the largest drivers seen, so thousands fit.
++// Bound disk usage even when a driver produces megabytes per pipeline (#406).
+ constexpr uint64_t kMaxFileSize = uint64_t(512) * 1024 * 1024;
+
+ struct Identity {
+@@ -172,23 +172,30 @@
+
+ struct WriteResult {
+   bool written = false;
+-  // Over kMaxFileSize: nothing was written.
+-  bool too_large = false;
++  // Counts include only valid entries; skipped entries did not fit the file budget.
++  size_t entries = 0;
++  size_t skipped = 0;
+   uint64_t bytes = 0;
+ };
+ inline WriteResult Write(const std::filesystem::path& path, const std::vector<Entry>& entries,
+-                         const Identity& id) {
++                         const Identity& id, uint64_t budget = kMaxFileSize) {
+   WriteResult result;
++  budget = std::min(budget, kMaxFileSize);
++  if (budget < kHeaderSize) return result;
+   std::vector<const Entry*> valid;
+   valid.reserve(entries.size());
+   uint64_t bytes = kHeaderSize;
+   for (const auto& entry : entries) {
+     if (!entry.data || !ValidPayload(*entry.data, id)) continue;
++    const uint64_t entry_bytes = kEntryHeaderSize + entry.size();
++    // The caller sorts by description key, so the retained subset is stable across
++    // starts. Skip whole entries, then keep looking for smaller ones that fit.
++    if (entry_bytes > budget - bytes) { ++result.skipped; continue; }
+     valid.push_back(&entry);
+-    bytes += kEntryHeaderSize + entry.size();
++    bytes += entry_bytes;
+   }
+   result.bytes = bytes;
+-  if (bytes > kMaxFileSize) { result.too_large = true; return result; }
++  result.entries = valid.size();
+   std::error_code ec;
+   std::filesystem::create_directories(path.parent_path(), ec);
+   if (ec) return result;
+diff --git a/src/graphics/vulkan/pipeline_cache.cpp b/src/graphics/vulkan/pipeline_cache.cpp
+--- a/src/graphics/vulkan/pipeline_cache.cpp
++++ b/src/graphics/vulkan/pipeline_cache.cpp
+@@ -728,24 +728,25 @@
+   bool log_limit = false;
+   {
+     std::lock_guard lock(driver_cache_mutex_);
+-    // Over the limit: not retried until another pipeline is added.
+-    if ((result.written || result.too_large) && path == driver_cache_path_) {
++    // A bounded subset is a completed save; retry I/O failures on the next save.
++    if (result.written && path == driver_cache_path_) {
+       driver_cache_saved_generation_ = generation;
+     }
+-    if (result.too_large && !driver_cache_limit_logged_) {
++    if (result.written && result.skipped && !driver_cache_limit_logged_) {
+       driver_cache_limit_logged_ = true;
+       log_limit = true;
+     }
+   }
+   if (result.written) {
+     REXGPU_INFO("Vulkan driver pipeline cache: saved {} bytes for {} pipelines", result.bytes,
+-                entries.size());
+-  } else if (log_limit) {
+-    REXGPU_WARN("Vulkan driver pipeline cache: not saved, {} bytes is over the {} MiB limit; "
+-                "pipelines added from now on are compiled again next time",
+-                result.bytes, driver_cache_file::kMaxFileSize >> 20);
+-  } else if (!result.too_large) {
++                result.entries);
++  } else {
+     REXGPU_WARN("Could not save Vulkan driver pipeline cache; existing cache retained");
++  }
++  if (log_limit) {
++    REXGPU_WARN("Vulkan driver pipeline cache: retained {} pipelines within the {} MiB limit; "
++                "{} pipelines omitted and may compile again next time",
++                result.entries, driver_cache_file::kMaxFileSize >> 20, result.skipped);
+   }
+ }
+ void VulkanPipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_root,

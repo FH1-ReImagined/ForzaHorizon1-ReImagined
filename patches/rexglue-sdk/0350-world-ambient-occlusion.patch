@@ -1,0 +1,927 @@
+diff --git a/include/rex/graphics/vulkan/command_processor.h b/include/rex/graphics/vulkan/command_processor.h
+--- a/include/rex/graphics/vulkan/command_processor.h
++++ b/include/rex/graphics/vulkan/command_processor.h
+@@ -727,6 +727,17 @@
+   VkPipeline fh1_resolve_pipeline_ = VK_NULL_HANDLE;
+   VkPipelineLayout fh1_resolve_layout_ = VK_NULL_HANDLE;
+   bool Fh1SynchronizeResolve(uint32_t address, uint32_t length);
++  // FH1 (#380): ambient occlusion in the world's sun shadow mask (fh1_world_ao.cpp).
++  struct Fh1WorldAo;
++  Fh1WorldAo* fh1_world_ao_ = nullptr;
++  void Fh1WorldAoInitialize();
++  void Fh1WorldAoShutdown();
++  bool Fh1WorldAoBeforeDraw(const Shader* pixel_shader, uint32_t used_texture_mask);
++  void Fh1WorldAoAfterDraw(const Shader* pixel_shader);
++  bool Fh1WorldAoResources(uint32_t width, uint32_t height);
++  void Fh1WorldAoCompute(VkImageView depth_view, VkImageView packed_view);
++  VkPipeline Fh1WorldAoApplyPipeline(VulkanRenderTargetCache::RenderPassKey key);
++  bool Fh1WorldAoProjection(float* params);
+   void Fh1SelectNativeHud(bool native_hud);
+   bool Fh1CreateRenderCaches(uint32_t scale_x, uint32_t scale_y);
+   void Fh1ApplyGraphicsRequest();
+diff --git a/src/graphics/CMakeLists.txt b/src/graphics/CMakeLists.txt
+--- a/src/graphics/CMakeLists.txt
++++ b/src/graphics/CMakeLists.txt
+@@ -52,6 +52,7 @@
+     vulkan/fh1_dlss.cpp
+     vulkan/fh1_fsr3.cpp
+     vulkan/fh1_smaa.cpp
++    vulkan/fh1_world_ao.cpp
+     vulkan/command_processor.cpp
+     vulkan/pipeline_cache.cpp
+     vulkan/primitive_processor.cpp
+diff --git a/src/graphics/vulkan/command_processor.cpp b/src/graphics/vulkan/command_processor.cpp
+--- a/src/graphics/vulkan/command_processor.cpp
++++ b/src/graphics/vulkan/command_processor.cpp
+@@ -2612,6 +2612,7 @@
+     }
+   }
+
++  Fh1WorldAoInitialize();
+   return true;
+ }
+
+@@ -2752,6 +2753,7 @@
+
+ void VulkanCommandProcessor::ShutdownContext() {
+   AwaitAllQueueOperationsCompletion();
++  Fh1WorldAoShutdown();
+   ShutdownSubmissionThread();
+   InvalidateAllVertexBufferResidency();
+   ShutdownOcclusionQueryResources();
+@@ -5451,6 +5453,11 @@
+     }
+   }
+
++  // FH1 (#380): may record the world AO compute passes (outside the render pass).
++  if (!Fh1WorldAoBeforeDraw(pixel_shader, used_texture_mask)) {
++    return draw_fail("world_ao_submission");
++  }
++
+   const VulkanPipelineCache::PipelineLayoutProvider* pipeline_layout_provider;
+   // Set up the render targets - this may perform dispatches and draws.
+   if (!render_target_cache_->Update(is_rasterization_done, normalized_depth_control,
+@@ -5884,6 +5891,9 @@
+     deferred_command_buffer_.CmdVkDrawIndexed(primitive_processing_result.host_draw_vertex_count, 1,
+                                               0, 0, 0);
+   }
++
++  // FH1 (#380): after the shadow mask's blur, multiplies the world AO into it.
++  Fh1WorldAoAfterDraw(pixel_shader);
+
+   if (hdr_menu_background) {
+     // Include the decoded 1280x720 movie, but not the following logo, text or
+diff --git a/src/graphics/vulkan/fh1_world_ao.cpp b/src/graphics/vulkan/fh1_world_ao.cpp
+new file mode 100644
+--- /dev/null
++++ b/src/graphics/vulkan/fh1_world_ao.cpp
+@@ -0,0 +1,756 @@
++// FH1 (#380): screen-space ambient occlusion in the world's sun shadow mask.
++//
++// The game lights the world through a screen-space shadow mask: after a depth pre-pass, whose
++// depth and stencil are resolved to a texture, one full-screen pass per cascade
++// (ApplyShadows) rebuilds each pixel's view position from that depth and writes how much sun
++// reaches it to the mask's red channel; a blur follows, and the world materials read the mask.
++// With `world_ambient_occlusion` (the game's setting, read by name) at low or high, the first
++// of those passes in a frame also runs, on the same depth texture: a linear depth at half
++// resolution (render scale 2 and above), a depth-only occlusion estimate (scalable ambient
++// obscurance: 12 samples on a spiral turned per pixel, normals from the depth), a depth-aware
++// 9-tap blur each way, and a full-resolution upsample that leaves the sky, the far distance,
++// the cars and the alpha-tested trees at 1 (the pre-pass stencil tells them apart). Right after
++// the game's first blur of the mask, one full-screen draw multiplies that factor into the red
++// channel, on the pixels the shadow passes covered. Only sunlight is darkened, before the
++// materials add their fog. Off records nothing.
++#include <rex/graphics/vulkan/command_processor.h>
++
++#include "fh1_world_ao.h"
++
++#include <rex/cvar.h>
++#include <rex/graphics/flags.h>
++#include <rex/logging.h>
++#include <rex/ui/vulkan/util.h>
++
++#include <algorithm>
++#include <array>
++#include <atomic>
++#include <cmath>
++#include <cstring>
++#include <mutex>
++#include <string>
++#include <unordered_map>
++#include <vector>
++
++namespace rex::graphics::vulkan {
++
++namespace {
++constexpr VkImageSubresourceRange kColorRange{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
++constexpr uint32_t kSetRing = 8;
++// A fetch constant the game's shadow passes leave unused, borrowed for one texture request.
++constexpr uint32_t kScratchFetch = 31;
++
++namespace ao_policy = fh1_world_ao;
++// The game's cvar (0 off, 1 low, 2 high), which the in-game Graphics screen changes live.
++std::atomic<int> world_ao_level{0};
++
++constexpr char kComputeHeader[] = R"glsl(#version 450
++layout(local_size_x=8, local_size_y=8) in;
++layout(binding=0) uniform sampler2DArray depthTex;   // the pre-pass depth, 0 far .. 1 near
++layout(binding=1, r32f) uniform image2D zImage;      // linear depth, AO resolution
++// Occlusion and linear depth; formats every device can store without extended formats.
++layout(binding=2, rgba16f) uniform image2D aImage;
++layout(binding=3, rgba16f) uniform image2D bImage;
++layout(binding=4, rgba8) uniform image2D factorImage;  // full resolution, 4 pixels a texel
++layout(binding=5) uniform sampler2DArray packedTex;  // the same resolve as 8-bit channels
++layout(push_constant) uniform Params {
++  vec4 proj;   // A, B (view z = B / (1 - A - depth)), tan of half the field of view in x, y
++  vec4 ao;     // radius (m), intensity, fade start (m), fade end (m)
++  ivec4 size;  // AO width, height, full width, height
++  ivec4 misc;  // downsample, stencil available
++} pc;
++float depthAt(ivec2 p) { return texelFetch(depthTex, ivec3(p, 0), 0).r; }
++float viewZ(float d) {
++  float den = 1.0 - pc.proj.x - d;
++  float z = abs(pc.proj.y / (abs(den) > 1e-20 ? den : 1e-20));
++  return (d <= 0.0 || isinf(z) || isnan(z)) ? 0.0 : z;
++}
++// The pre-pass stencil (low byte of the depth word): 0 the static world, 3 x an object id for
++// the cars, 128 the ground around the player's car, 129 the alpha-tested trees.
++bool keepsItsShading(ivec2 p) {
++  if (pc.misc.y == 0) return false;
++  uint s = uint(round(texelFetch(packedTex, ivec3(p, 0), 0).x * 255.0));
++  return (s >= 1u && s < 128u) || s == 129u;
++}
++)glsl";
++
++// Linear depth at AO resolution: the nearest of each block, so thin rails and posts stay.
++constexpr char kPrepare[] = R"glsl(
++void main() {
++  ivec2 p = ivec2(gl_GlobalInvocationID.xy);
++  if (any(greaterThanEqual(p, pc.size.xy))) return;
++  int d = pc.misc.x;
++  float best = 0.0;
++  for (int j = 0; j < d; ++j)
++    for (int i = 0; i < d; ++i) {
++      float z = viewZ(depthAt(min(p * d + ivec2(i, j), pc.size.zw - 1)));
++      if (z > 0.0 && (best == 0.0 || z < best)) best = z;
++    }
++  imageStore(zImage, p, vec4(best));
++}
++)glsl";
++
++// Scalable ambient obscurance (McGuire et al. 2012) from depth alone.
++constexpr char kOcclusion[] = R"glsl(
++const int N = 12;
++const float TURNS = 5.0;
++float zAt(ivec2 p) {
++  if (any(lessThan(p, ivec2(0))) || any(greaterThanEqual(p, pc.size.xy))) return 0.0;
++  return imageLoad(zImage, p).r;
++}
++vec3 position(ivec2 p, float z) {
++  vec2 ndc = (vec2(p) + 0.5) / vec2(pc.size.xy) * 2.0 - 1.0;
++  return vec3(ndc * pc.proj.zw * z, z);
++}
++void main() {
++  ivec2 p = ivec2(gl_GlobalInvocationID.xy);
++  if (any(greaterThanEqual(p, pc.size.xy))) return;
++  float zc = zAt(p);
++  if (zc <= 0.0 || zc >= pc.ao.w) { imageStore(aImage, p, vec4(1.0, zc, 0, 0)); return; }
++  vec3 c = position(p, zc);
++  // The normal from the neighbours on the same surface (the smaller depth step on each axis).
++  float zl = zAt(p - ivec2(1, 0)), zr = zAt(p + ivec2(1, 0));
++  float zu = zAt(p - ivec2(0, 1)), zd = zAt(p + ivec2(0, 1));
++  bool right = zr > 0.0 && (zl <= 0.0 || abs(zr - zc) < abs(zc - zl));
++  bool down = zd > 0.0 && (zu <= 0.0 || abs(zd - zc) < abs(zc - zu));
++  vec3 dx = right ? position(p + ivec2(1, 0), zr) - c : c - position(p - ivec2(1, 0), zl);
++  vec3 dy = down ? position(p + ivec2(0, 1), zd) - c : c - position(p - ivec2(0, 1), zu);
++  vec3 n = cross(dx, dy);
++  float nl = length(n);
++  if (nl < 1e-12) { imageStore(aImage, p, vec4(1.0, zc, 0, 0)); return; }
++  n /= nl;
++  if (dot(n, c) > 0.0) n = -n;  // towards the camera
++  float radius = pc.ao.x;
++  float pixels = radius * 0.5 * float(pc.size.y) / (zc * pc.proj.w);
++  if (pixels < 1.0) { imageStore(aImage, p, vec4(1.0, zc, 0, 0)); return; }
++  pixels = min(pixels, 0.1 * float(pc.size.y));
++  // Interleaved gradient noise turns the spiral per pixel; the blur evens it out.
++  float turn = 6.2831853 * fract(52.9829189 * fract(dot(vec2(p), vec2(0.06711056, 0.00583715))));
++  float r2 = radius * radius, bias = 0.01 * radius + 0.001 * zc, sum = 0.0;
++  for (int i = 0; i < N; ++i) {
++    float a = (float(i) + 0.5) / float(N);
++    float angle = a * TURNS * 6.2831853 + turn;
++    ivec2 q = ivec2(vec2(p) + 0.5 + a * pixels * vec2(cos(angle), sin(angle)));
++    float zq = zAt(q);
++    if (zq <= 0.0) continue;
++    vec3 v = position(q, zq) - c;
++    float vv = dot(v, v), vn = dot(v, n);
++    float f = max(r2 - vv, 0.0);
++    sum += f * f * f * max((vn - bias) / (0.01 * r2 + vv), 0.0);
++  }
++  float ao = max(0.0, 1.0 - sum * pc.ao.y / (r2 * r2 * r2) * (5.0 / float(N)));
++  float fade = clamp((pc.ao.w - zc) / max(pc.ao.w - pc.ao.z, 1e-3), 0.0, 1.0);
++  imageStore(aImage, p, vec4(mix(1.0, ao, fade), zc, 0, 0));
++}
++)glsl";
++
++// Depth-aware 9-tap Gaussian, horizontal (aImage -> bImage) or vertical (bImage -> aImage).
++constexpr char kBlur[] = R"glsl(
++vec2 load(ivec2 p) { return BLUR_VERTICAL ? imageLoad(bImage, p).xy : imageLoad(aImage, p).xy; }
++void main() {
++  ivec2 p = ivec2(gl_GlobalInvocationID.xy);
++  if (any(greaterThanEqual(p, pc.size.xy))) return;
++  ivec2 dir = BLUR_VERTICAL ? ivec2(0, 1) : ivec2(1, 0);
++  vec2 c = load(p);
++  vec2 result = c;
++  if (c.y > 0.0) {
++    const float g[5] = float[](0.2270270, 0.1945946, 0.1216216, 0.0540540, 0.0162162);
++    float sum = c.x * g[0], weight = g[0];
++    for (int i = 1; i <= 4; ++i)
++      for (int s = -1; s <= 1; s += 2) {
++        vec2 t = load(clamp(p + dir * i * s, ivec2(0), pc.size.xy - 1));
++        if (t.y <= 0.0) continue;
++        float w = g[i] * max(0.0, 1.0 - abs(t.y - c.y) / (0.03 * c.y + 0.05));
++        sum += t.x * w;
++        weight += w;
++      }
++    result.x = sum / weight;
++  }
++  if (BLUR_VERTICAL) imageStore(aImage, p, vec4(result, 0, 0));
++  else imageStore(bImage, p, vec4(result, 0, 0));
++}
++)glsl";
++
++// Full resolution, four pixels of a row per RGBA8 texel: the occlusion upsampled with depth
++// weights; 1 for the sky, the far distance, the cars and the trees.
++constexpr char kCompose[] = R"glsl(
++void main() {
++  ivec2 t = ivec2(gl_GlobalInvocationID.xy);
++  if (any(greaterThanEqual(t, imageSize(factorImage)))) return;
++  vec4 result = vec4(1.0);
++  for (int k = 0; k < 4; ++k) {
++    ivec2 q = ivec2(t.x * 4 + k, t.y);
++    if (q.x >= pc.size.z) break;
++    float z = viewZ(depthAt(q));
++    if (z <= 0.0 || z >= pc.ao.w || keepsItsShading(q)) continue;
++    vec2 h = (vec2(q) + 0.5) / float(pc.misc.x) - 0.5;
++    ivec2 h0 = ivec2(floor(h));
++    vec2 f = h - vec2(h0);
++    float sum = 0.0, weight = 0.0;
++    for (int j = 0; j <= 1; ++j)
++      for (int i = 0; i <= 1; ++i) {
++        vec2 a = imageLoad(aImage, clamp(h0 + ivec2(i, j), ivec2(0), pc.size.xy - 1)).xy;
++        if (a.y <= 0.0) continue;
++        float w = (i == 1 ? f.x : 1.0 - f.x) * (j == 1 ? f.y : 1.0 - f.y) + 1e-4;
++        w /= 1e-3 + abs(a.y - z) / z;
++        sum += a.x * w;
++        weight += w;
++      }
++    if (weight > 0.0) result[k] = sum / weight;
++  }
++  imageStore(factorImage, t, result);
++}
++)glsl";
++
++constexpr char kApplyVertex[] = R"glsl(#version 450
++void main() {
++  vec2 p = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);
++  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
++}
++)glsl";
++
++constexpr char kApplyFragment[] = R"glsl(#version 450
++layout(binding=0) uniform sampler2D factorTex;
++layout(push_constant) uniform Params { ivec4 size; } pc;  // full width, height
++layout(location=0) out vec4 color;
++void main() {
++  ivec2 q = ivec2(gl_FragCoord.xy);
++  float f = 1.0;
++  if (all(lessThan(q, pc.size.xy))) f = texelFetch(factorTex, ivec2(q.x >> 2, q.y), 0)[q.x & 3];
++  color = vec4(f);
++}
++)glsl";
++}  // namespace
++
++struct VulkanCommandProcessor::Fh1WorldAo {
++  uint32_t depth_slot = 0;  // tf0 of the shadow passes
++  uint64_t computed_frame = UINT64_MAX;
++  bool ready = false, failed = false;
++  // The mask's render target as the shadow passes drew it: the factor is multiplied in after
++  // the next draw into it by another shader, the blur.
++  uint32_t mask_base = 0, mask_pitch = 0;
++
++  struct Image {
++    VkImage image = VK_NULL_HANDLE;
++    VkDeviceMemory memory = VK_NULL_HANDLE;
++    VkImageView view = VK_NULL_HANDLE;
++  };
++  uint32_t full_width = 0, full_height = 0, ao_width = 0, ao_height = 0, downsample = 1;
++  bool images_new = false;
++  Image z, a, b, factor;
++  VkSampler sampler = VK_NULL_HANDLE;
++  VkDescriptorSetLayout compute_set_layout = VK_NULL_HANDLE, apply_set_layout = VK_NULL_HANDLE;
++  VkPipelineLayout compute_layout = VK_NULL_HANDLE, apply_layout = VK_NULL_HANDLE;
++  std::array<VkPipeline, 5> compute{};
++  VkDescriptorPool pool = VK_NULL_HANDLE;
++  std::array<VkDescriptorSet, kSetRing> compute_sets{};
++  std::array<uint64_t, kSetRing> compute_set_submission{};
++  uint32_t compute_set_next = 0;
++  VkDescriptorSet apply_set = VK_NULL_HANDLE;
++  VkShaderModule apply_vertex = VK_NULL_HANDLE, apply_fragment = VK_NULL_HANDLE;
++  std::unordered_map<uint32_t, VkPipeline> apply_pipelines;
++  float params[16] = {};
++};
++
++void VulkanCommandProcessor::Fh1WorldAoInitialize() {
++  fh1_world_ao_ = new Fh1WorldAo;
++  static std::once_flag once;
++  std::call_once(once, [] {
++    world_ao_level = ao_policy::Level(rex::cvar::GetFlagByName("world_ambient_occlusion"));
++    rex::cvar::RegisterChangeCallback(
++        "world_ambient_occlusion", [](std::string_view, std::string_view value) {
++          world_ao_level = ao_policy::Level(value);
++          REXGPU_INFO("FH1 world AO: {}", world_ao_level.load() ? std::string(value) : "off");
++        });
++  });
++  if (world_ao_level.load()) REXGPU_INFO("FH1 world AO: level {}", world_ao_level.load());
++}
++
++void VulkanCommandProcessor::Fh1WorldAoShutdown() {
++  auto* ao = fh1_world_ao_;
++  if (!ao) return;
++  const auto* device = GetVulkanDevice();
++  const auto& f = device->functions();
++  const VkDevice d = device->device();
++  for (auto& [key, pipeline] : ao->apply_pipelines)
++    if (pipeline) f.vkDestroyPipeline(d, pipeline, nullptr);
++  for (auto pipeline : ao->compute)
++    if (pipeline) f.vkDestroyPipeline(d, pipeline, nullptr);
++  if (ao->apply_vertex) f.vkDestroyShaderModule(d, ao->apply_vertex, nullptr);
++  if (ao->apply_fragment) f.vkDestroyShaderModule(d, ao->apply_fragment, nullptr);
++  if (ao->pool) f.vkDestroyDescriptorPool(d, ao->pool, nullptr);
++  if (ao->compute_layout) f.vkDestroyPipelineLayout(d, ao->compute_layout, nullptr);
++  if (ao->apply_layout) f.vkDestroyPipelineLayout(d, ao->apply_layout, nullptr);
++  if (ao->compute_set_layout) f.vkDestroyDescriptorSetLayout(d, ao->compute_set_layout, nullptr);
++  if (ao->apply_set_layout) f.vkDestroyDescriptorSetLayout(d, ao->apply_set_layout, nullptr);
++  if (ao->sampler) f.vkDestroySampler(d, ao->sampler, nullptr);
++  for (auto* image : {&ao->z, &ao->a, &ao->b, &ao->factor}) {
++    if (image->view) f.vkDestroyImageView(d, image->view, nullptr);
++    if (image->image) f.vkDestroyImage(d, image->image, nullptr);
++    if (image->memory) f.vkFreeMemory(d, image->memory, nullptr);
++  }
++  delete ao;
++  fh1_world_ao_ = nullptr;
++}
++
++bool VulkanCommandProcessor::Fh1WorldAoResources(uint32_t width, uint32_t height) {
++  auto& ao = *fh1_world_ao_;
++  const auto* device = GetVulkanDevice();
++  const auto& f = device->functions();
++  const VkDevice d = device->device();
++  if (!ao.compute_layout) {
++    VkSamplerCreateInfo sampler{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
++    sampler.magFilter = sampler.minFilter = VK_FILTER_NEAREST;
++    sampler.addressModeU = sampler.addressModeV = sampler.addressModeW =
++        VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
++    if (f.vkCreateSampler(d, &sampler, nullptr, &ao.sampler) != VK_SUCCESS) return false;
++    std::array<VkDescriptorSetLayoutBinding, 6> bindings{};
++    for (uint32_t i = 0; i < 6; ++i)
++      bindings[i] = {i,
++                     i == 0 || i == 5 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
++                                      : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
++                     1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
++    VkDescriptorSetLayoutCreateInfo set{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
++    set.bindingCount = uint32_t(bindings.size());
++    set.pBindings = bindings.data();
++    if (f.vkCreateDescriptorSetLayout(d, &set, nullptr, &ao.compute_set_layout) != VK_SUCCESS)
++      return false;
++    VkDescriptorSetLayoutBinding apply_binding{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
++                                               VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
++    set.bindingCount = 1;
++    set.pBindings = &apply_binding;
++    if (f.vkCreateDescriptorSetLayout(d, &set, nullptr, &ao.apply_set_layout) != VK_SUCCESS)
++      return false;
++    VkPushConstantRange push{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ao.params)};
++    VkPipelineLayoutCreateInfo layout{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
++    layout.setLayoutCount = 1;
++    layout.pSetLayouts = &ao.compute_set_layout;
++    layout.pushConstantRangeCount = 1;
++    layout.pPushConstantRanges = &push;
++    if (f.vkCreatePipelineLayout(d, &layout, nullptr, &ao.compute_layout) != VK_SUCCESS)
++      return false;
++    VkPushConstantRange apply_push{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 16};
++    layout.pSetLayouts = &ao.apply_set_layout;
++    layout.pPushConstantRanges = &apply_push;
++    if (f.vkCreatePipelineLayout(d, &layout, nullptr, &ao.apply_layout) != VK_SUCCESS)
++      return false;
++    const VkDescriptorPoolSize sizes[] = {
++        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kSetRing * 2 + 1},
++        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kSetRing * 4}};
++    VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
++    pool.maxSets = kSetRing + 1;
++    pool.poolSizeCount = 2;
++    pool.pPoolSizes = sizes;
++    if (f.vkCreateDescriptorPool(d, &pool, nullptr, &ao.pool) != VK_SUCCESS) return false;
++    std::array<VkDescriptorSetLayout, kSetRing> layouts;
++    layouts.fill(ao.compute_set_layout);
++    VkDescriptorSetAllocateInfo alloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
++    alloc.descriptorPool = ao.pool;
++    alloc.descriptorSetCount = kSetRing;
++    alloc.pSetLayouts = layouts.data();
++    if (f.vkAllocateDescriptorSets(d, &alloc, ao.compute_sets.data()) != VK_SUCCESS) return false;
++    alloc.descriptorSetCount = 1;
++    alloc.pSetLayouts = &ao.apply_set_layout;
++    if (f.vkAllocateDescriptorSets(d, &alloc, &ao.apply_set) != VK_SUCCESS) return false;
++    const char* bodies[] = {kPrepare, kOcclusion, kBlur, kBlur, kCompose};
++    for (uint32_t i = 0; i < 5; ++i) {
++      std::string source = kComputeHeader;
++      if (i == 2 || i == 3)
++        source += i == 3 ? "#define BLUR_VERTICAL true\n" : "#define BLUR_VERTICAL false\n";
++      source += bodies[i];
++      std::vector<uint32_t> spirv;
++      std::string error;
++      if (!CompileFh1Compute(source, spirv, error)) {
++        REXGPU_ERROR("FH1 world AO: compute shader {}: {}", i, error);
++        return false;
++      }
++      ao.compute[i] = ui::vulkan::util::CreateComputePipeline(
++          device, ao.compute_layout, spirv.data(), spirv.size() * sizeof(uint32_t));
++      if (!ao.compute[i]) return false;
++    }
++    for (int stage = 0; stage < 2; ++stage) {
++      std::vector<uint32_t> spirv;
++      std::string error;
++      if (!CompileGlslToSpirv(stage ? VK_SHADER_STAGE_FRAGMENT_BIT : VK_SHADER_STAGE_VERTEX_BIT,
++                              stage ? kApplyFragment : kApplyVertex, spirv, error)) {
++        REXGPU_ERROR("FH1 world AO: apply shader: {}", error);
++        return false;
++      }
++      (stage ? ao.apply_fragment : ao.apply_vertex) = ui::vulkan::util::CreateShaderModule(
++          device, spirv.data(), spirv.size() * sizeof(uint32_t));
++      if (!(stage ? ao.apply_fragment : ao.apply_vertex)) return false;
++    }
++  }
++  if (width == ao.full_width && height == ao.full_height) return true;
++  // A new size (the render scale changed): nothing may still use the old images.
++  if (ao.z.image && !AwaitAllQueueOperationsCompletion()) return false;
++  for (auto* image : {&ao.z, &ao.a, &ao.b, &ao.factor}) {
++    if (image->view) f.vkDestroyImageView(d, image->view, nullptr);
++    if (image->image) f.vkDestroyImage(d, image->image, nullptr);
++    if (image->memory) f.vkFreeMemory(d, image->memory, nullptr);
++    *image = {};
++  }
++  ao.full_width = ao.full_height = 0;
++  const auto grid = ao_policy::GridFor(width, height);
++  ao.downsample = grid.downsample;
++  ao.ao_width = grid.width;
++  ao.ao_height = grid.height;
++  auto create = [&](Fh1WorldAo::Image& image, uint32_t w, uint32_t h, VkFormat format,
++                    VkImageUsageFlags usage) {
++    VkImageCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
++    info.imageType = VK_IMAGE_TYPE_2D;
++    info.format = format;
++    info.extent = {w, h, 1};
++    info.mipLevels = info.arrayLayers = 1;
++    info.samples = VK_SAMPLE_COUNT_1_BIT;
++    info.tiling = VK_IMAGE_TILING_OPTIMAL;
++    info.usage = usage;
++    if (!ui::vulkan::util::CreateDedicatedAllocationImage(
++            device, info, ui::vulkan::util::MemoryPurpose::kDeviceLocal, image.image, image.memory))
++      return false;
++    VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
++    view.image = image.image;
++    view.viewType = VK_IMAGE_VIEW_TYPE_2D;
++    view.format = format;
++    view.subresourceRange = kColorRange;
++    return f.vkCreateImageView(d, &view, nullptr, &image.view) == VK_SUCCESS;
++  };
++  if (!create(ao.z, ao.ao_width, ao.ao_height, VK_FORMAT_R32_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT) ||
++      !create(ao.a, ao.ao_width, ao.ao_height, VK_FORMAT_R16G16B16A16_SFLOAT,
++              VK_IMAGE_USAGE_STORAGE_BIT) ||
++      !create(ao.b, ao.ao_width, ao.ao_height, VK_FORMAT_R16G16B16A16_SFLOAT,
++              VK_IMAGE_USAGE_STORAGE_BIT) ||
++      !create(ao.factor, (width + 3) / 4, height, VK_FORMAT_R8G8B8A8_UNORM,
++              VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT))
++    return false;
++  VkDescriptorImageInfo factor{ao.sampler, ao.factor.view, VK_IMAGE_LAYOUT_GENERAL};
++  VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
++  write.dstSet = ao.apply_set;
++  write.descriptorCount = 1;
++  write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
++  write.pImageInfo = &factor;
++  f.vkUpdateDescriptorSets(d, 1, &write, 0, nullptr);
++  ao.full_width = width;
++  ao.full_height = height;
++  ao.images_new = true;
++  REXGPU_INFO("FH1 world AO: {}x{} scene, occlusion at {}x{}", width, height, ao.ao_width,
++              ao.ao_height);
++  return true;
++}
++
++void VulkanCommandProcessor::Fh1WorldAoCompute(VkImageView depth_view, VkImageView packed_view) {
++  auto& ao = *fh1_world_ao_;
++  const auto* device = GetVulkanDevice();
++  const auto& f = device->functions();
++  // The ring's set may still be read by a submission in flight.
++  const uint32_t slot = ao.compute_set_next++ % kSetRing;
++  if (ao.compute_set_submission[slot] > GetCompletedSubmission() &&
++      ao.compute_set_submission[slot] < GetCurrentSubmission())
++    CheckSubmissionFenceAndDeviceLoss(ao.compute_set_submission[slot]);
++  ao.compute_set_submission[slot] = GetCurrentSubmission();
++  const VkDescriptorSet set = ao.compute_sets[slot];
++  const VkDescriptorImageInfo images[] = {
++      {ao.sampler, depth_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
++      {VK_NULL_HANDLE, ao.z.view, VK_IMAGE_LAYOUT_GENERAL},
++      {VK_NULL_HANDLE, ao.a.view, VK_IMAGE_LAYOUT_GENERAL},
++      {VK_NULL_HANDLE, ao.b.view, VK_IMAGE_LAYOUT_GENERAL},
++      {VK_NULL_HANDLE, ao.factor.view, VK_IMAGE_LAYOUT_GENERAL},
++      {ao.sampler, packed_view ? packed_view : depth_view,
++       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
++  std::array<VkWriteDescriptorSet, 6> writes{};
++  for (uint32_t i = 0; i < 6; ++i) {
++    writes[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
++    writes[i].dstSet = set;
++    writes[i].dstBinding = i;
++    writes[i].descriptorCount = 1;
++    writes[i].descriptorType = i == 0 || i == 5 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
++                                                : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
++    writes[i].pImageInfo = &images[i];
++  }
++  f.vkUpdateDescriptorSets(device->device(), uint32_t(writes.size()), writes.data(), 0, nullptr);
++
++  SubmitBarriers(true);
++  // Whatever wrote the depth texture (its load, a transfer) and last frame's reads of the
++  // images come before this frame's dispatches.
++  VkMemoryBarrier memory{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
++  memory.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
++  memory.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
++  std::array<VkImageMemoryBarrier, 4> layouts{};
++  uint32_t layout_count = 0;
++  if (ao.images_new) {
++    for (auto* image : {&ao.z, &ao.a, &ao.b, &ao.factor}) {
++      auto& barrier = layouts[layout_count++];
++      barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
++      barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
++      barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++      barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
++      barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++      barrier.image = image->image;
++      barrier.subresourceRange = kColorRange;
++    }
++    ao.images_new = false;
++  }
++  deferred_command_buffer_.CmdVkPipelineBarrier(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
++                                                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &memory,
++                                                0, nullptr, layout_count, layouts.data());
++  float* p = ao.params;
++  // proj (A, B, tan x, tan y) is already in p[0..3].
++  p[4] = ao_policy::kRadius;
++  p[5] = ao_policy::Intensity(world_ao_level.load());
++  p[6] = ao_policy::kFadeStart;
++  p[7] = ao_policy::kFadeEnd;
++  int32_t* i = reinterpret_cast<int32_t*>(p + 8);
++  i[0] = int32_t(ao.ao_width);
++  i[1] = int32_t(ao.ao_height);
++  i[2] = int32_t(ao.full_width);
++  i[3] = int32_t(ao.full_height);
++  i[4] = int32_t(ao.downsample);
++  i[5] = packed_view ? 1 : 0;
++  i[6] = i[7] = 0;
++  const uint32_t ao_groups[2] = {(ao.ao_width + 7) / 8, (ao.ao_height + 7) / 8};
++  memory.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
++  memory.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
++  for (uint32_t pass = 0; pass < 5; ++pass) {
++    if (pass)
++      deferred_command_buffer_.CmdVkPipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
++                                                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1,
++                                                    &memory, 0, nullptr, 0, nullptr);
++    BindExternalComputePipeline(ao.compute[pass]);
++    deferred_command_buffer_.CmdVkBindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE,
++                                                     ao.compute_layout, 0, 1, &set, 0, nullptr);
++    deferred_command_buffer_.CmdVkPushConstants(ao.compute_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
++                                                sizeof(ao.params), ao.params);
++    if (pass < 4)
++      deferred_command_buffer_.CmdVkDispatch(ao_groups[0], ao_groups[1], 1);
++    else
++      deferred_command_buffer_.CmdVkDispatch(((ao.full_width + 3) / 4 + 7) / 8,
++                                             (ao.full_height + 7) / 8, 1);
++  }
++  memory.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
++  deferred_command_buffer_.CmdVkPipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
++                                                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1,
++                                                &memory, 0, nullptr, 0, nullptr);
++}
++
++VkPipeline VulkanCommandProcessor::Fh1WorldAoApplyPipeline(
++    VulkanRenderTargetCache::RenderPassKey key) {
++  auto& ao = *fh1_world_ao_;
++  if (auto it = ao.apply_pipelines.find(key.key); it != ao.apply_pipelines.end()) return it->second;
++  const auto* device = GetVulkanDevice();
++  VkPipelineShaderStageCreateInfo stages[2]{};
++  for (int i = 0; i < 2; ++i) {
++    stages[i].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
++    stages[i].stage = i ? VK_SHADER_STAGE_FRAGMENT_BIT : VK_SHADER_STAGE_VERTEX_BIT;
++    stages[i].module = i ? ao.apply_fragment : ao.apply_vertex;
++    stages[i].pName = "main";
++  }
++  VkPipelineVertexInputStateCreateInfo vertex_input{
++      VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
++  VkPipelineInputAssemblyStateCreateInfo assembly{
++      VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
++  assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
++  VkPipelineViewportStateCreateInfo viewport{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
++  viewport.viewportCount = viewport.scissorCount = 1;
++  VkPipelineRasterizationStateCreateInfo raster{
++      VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
++  raster.polygonMode = VK_POLYGON_MODE_FILL;
++  raster.cullMode = VK_CULL_MODE_NONE;
++  raster.lineWidth = 1.0f;
++  VkSampleMask sample_mask = 0b1001;
++  VkPipelineMultisampleStateCreateInfo multisample{
++      VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
++  if (key.msaa_samples == xenos::MsaaSamples::k2X &&
++      !render_target_cache_->IsMsaa2xSupported(key.depth_and_color_used != 0)) {
++    multisample.rasterizationSamples = VK_SAMPLE_COUNT_4_BIT;
++    multisample.pSampleMask = &sample_mask;
++  } else {
++    multisample.rasterizationSamples = VkSampleCountFlagBits(1u << uint32_t(key.msaa_samples));
++  }
++  // No depth or stencil test: the factor is 1 wherever it should not change the mask.
++  VkPipelineDepthStencilStateCreateInfo depth{
++      VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
++  std::array<VkPipelineColorBlendAttachmentState, xenos::kMaxColorRenderTargets> blend{};
++  uint32_t color_count = 0;
++  VkFormat color_formats[xenos::kMaxColorRenderTargets] = {};
++  const xenos::ColorRenderTargetFormat view_formats[] = {
++      key.color_0_view_format, key.color_1_view_format, key.color_2_view_format,
++      key.color_3_view_format};
++  for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i) {
++    if (!(key.depth_and_color_used & (1u << (1 + i)))) continue;
++    color_formats[i] = render_target_cache_->GetColorVulkanFormat(view_formats[i]);
++    color_count = i + 1;
++  }
++  // The mask is color target 0, the sun's visibility in red: red times the factor.
++  blend[0].blendEnable = VK_TRUE;
++  blend[0].srcColorBlendFactor = VK_BLEND_FACTOR_ZERO;
++  blend[0].dstColorBlendFactor = VK_BLEND_FACTOR_SRC_COLOR;
++  blend[0].colorBlendOp = VK_BLEND_OP_ADD;
++  blend[0].srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
++  blend[0].dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
++  blend[0].alphaBlendOp = VK_BLEND_OP_ADD;
++  blend[0].colorWriteMask = VK_COLOR_COMPONENT_R_BIT;
++  VkPipelineColorBlendStateCreateInfo blend_state{
++      VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
++  blend_state.attachmentCount = color_count;
++  blend_state.pAttachments = blend.data();
++  const VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
++  VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
++  dynamic.dynamicStateCount = 2;
++  dynamic.pDynamicStates = dynamic_states;
++  VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
++  const bool dynamic_rendering =
++      REXCVAR_GET(vulkan_dynamic_rendering) && device->properties().dynamicRendering;
++  if (dynamic_rendering) {
++    rendering.colorAttachmentCount = color_count;
++    rendering.pColorAttachmentFormats = color_count ? color_formats : nullptr;
++    if (key.depth_and_color_used & 1) {
++      const VkFormat depth_format = render_target_cache_->GetDepthVulkanFormat(key.depth_format);
++      rendering.depthAttachmentFormat = rendering.stencilAttachmentFormat = depth_format;
++    }
++  }
++  VkGraphicsPipelineCreateInfo info{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
++  info.pNext = dynamic_rendering ? &rendering : nullptr;
++  info.stageCount = 2;
++  info.pStages = stages;
++  info.pVertexInputState = &vertex_input;
++  info.pInputAssemblyState = &assembly;
++  info.pViewportState = &viewport;
++  info.pRasterizationState = &raster;
++  info.pMultisampleState = &multisample;
++  info.pDepthStencilState = &depth;
++  info.pColorBlendState = &blend_state;
++  info.pDynamicState = &dynamic;
++  info.layout = ao.apply_layout;
++  info.renderPass = dynamic_rendering ? VK_NULL_HANDLE
++                                      : render_target_cache_->GetHostRenderTargetsRenderPass(key);
++  VkPipeline pipeline = VK_NULL_HANDLE;
++  if (device->functions().vkCreateGraphicsPipelines(device->device(), VK_NULL_HANDLE, 1, &info,
++                                                    nullptr, &pipeline) != VK_SUCCESS)
++    pipeline = VK_NULL_HANDLE;
++  ao.apply_pipelines.emplace(key.key, pipeline);
++  return pipeline;
++}
++
++bool VulkanCommandProcessor::Fh1WorldAoProjection(float* params) {
++  // The shadow pass's own pixel constants (fh1_world_ao.h, Projection).
++  const RegisterFile& regs = *register_file_;
++  auto constant = [&](uint32_t index, uint32_t component) {
++    return regs.Get<float>(XE_GPU_REG_SHADER_CONSTANT_256_X + 4 * index + component);
++  };
++  return ao_policy::Projection(constant(0, 0), constant(1, 1), constant(25, 0), constant(25, 1),
++                               params);
++}
++
++bool VulkanCommandProcessor::Fh1WorldAoBeforeDraw(const Shader* pixel_shader,
++                                                  uint32_t used_texture_mask) {
++  auto* ao = fh1_world_ao_;
++  if (!ao || ao->failed || !pixel_shader || !world_ao_level.load(std::memory_order_relaxed) ||
++      !ao_policy::IsShadowPass(pixel_shader->ucode_data_hash()))
++    return true;
++  const uint64_t frame = GetCurrentFrame();
++  if (ao->computed_frame == frame) return true;
++  if (render_target_cache_->GetPath() != RenderTargetCache::Path::kHostRenderTargets) {
++    REXGPU_WARN("FH1 world AO: needs host render targets (not the interlock path); off");
++    ao->failed = true;
++    return true;
++  }
++  const RegisterFile& regs = *register_file_;
++  const auto fetch = regs.GetTextureFetch(ao->depth_slot);
++  const auto surface = regs.Get<reg::RB_SURFACE_INFO>();
++  // The main view's mask: its pitch is the scene depth's width (a mirror's would be smaller).
++  if (!(used_texture_mask & (1u << ao->depth_slot)) ||
++      fetch.format != xenos::TextureFormat::k_24_8_FLOAT ||
++      uint32_t(fetch.size_2d.width) + 1 != uint32_t(surface.surface_pitch) ||
++      surface.msaa_samples != xenos::MsaaSamples::k1X)
++    return true;
++  VkImageView view = texture_cache_->GetActiveBindingOrNullImageView(
++      ao->depth_slot, xenos::FetchOpDimension::k2D, false);
++  if (!view) return true;
++  ao->computed_frame = frame;
++  ao->ready = false;
++  if (!Fh1WorldAoProjection(ao->params)) return true;
++  const uint32_t width =
++      (uint32_t(fetch.size_2d.width) + 1) * texture_cache_->draw_resolution_scale_x();
++  const uint32_t height =
++      (uint32_t(fetch.size_2d.height) + 1) * texture_cache_->draw_resolution_scale_y();
++  // Resizing waits for the old images, closing the draw's current submission. Resume even
++  // on allocation failure so the guest draw can continue without AO. On device loss the
++  // caller must stop this draw instead of recording into a closed submission.
++  const auto resources = ao_policy::PrepareResourcesForDraw(
++      [&] { return Fh1WorldAoResources(width, height); },
++      [&] { return submission_open_; }, [&] { return BeginSubmission(false); }, [&] {
++        // The old texture request marked the submission just completed. Mark these images
++        // for the resumed submission and reacquire the depth view before recording.
++        texture_cache_->RequestTextures(used_texture_mask);
++        view = texture_cache_->GetActiveBindingOrNullImageView(
++            ao->depth_slot, xenos::FetchOpDimension::k2D, false);
++      });
++  if (resources == ao_policy::ResourceStatus::kSubmissionFailed || device_lost_) return false;
++  if (resources == ao_policy::ResourceStatus::kUnavailable) {
++    REXGPU_ERROR("FH1 world AO: could not create its resources; off");
++    ao->failed = true;
++    return true;
++  }
++  if (!view) return true;
++  // The pre-pass stencil is in the same resolve (the game's velocity pass reads it as 8-bit
++  // channels): the texture cache loads that view through a fetch constant the shadow passes do
++  // not use, set for this request and put back right after it.
++  VkImageView packed_view = VK_NULL_HANDLE;
++  if (!(used_texture_mask & (1u << kScratchFetch))) {
++    uint32_t* words =
++        &register_file_->values[XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 + 6 * kScratchFetch];
++    uint32_t saved[6];
++    std::memcpy(saved, words, sizeof(saved));
++    auto packed = fetch;
++    packed.format = xenos::TextureFormat::k_8_8_8_8;
++    packed.swizzle = xenos::XE_GPU_TEXTURE_SWIZZLE_RGBA;
++    std::memcpy(words, &packed, sizeof(saved));
++    texture_cache_->TextureFetchConstantWritten(kScratchFetch);
++    texture_cache_->RequestTextures(1u << kScratchFetch);
++    packed_view = texture_cache_->GetActiveBindingOrNullImageView(
++        kScratchFetch, xenos::FetchOpDimension::k2D, false);
++    std::memcpy(words, saved, sizeof(saved));
++    texture_cache_->TextureFetchConstantWritten(kScratchFetch);
++  }
++  Fh1WorldAoCompute(view, packed_view);
++  ao->mask_base = regs.Get<reg::RB_COLOR_INFO>().color_base;
++  ao->mask_pitch = surface.surface_pitch;
++  ao->ready = true;
++  return true;
++}
++
++void VulkanCommandProcessor::Fh1WorldAoAfterDraw(const Shader* pixel_shader) {
++  auto* ao = fh1_world_ao_;
++  if (!ao || !ao->ready || !pixel_shader || !in_render_pass_ ||
++      ao->computed_frame != GetCurrentFrame())
++    return;
++  // The first draw into the mask after its shadow passes is its blur (the 2x2 box in play,
++  // the 6-tap horizontal pass with Shadow softness Softer, a 4-tap one in photo mode, each
++  // followed by a resolve that the next pass or the world reads).
++  const RegisterFile& regs = *register_file_;
++  if (ao_policy::IsShadowPass(pixel_shader->ucode_data_hash()) ||
++      regs.Get<reg::RB_COLOR_INFO>().color_base != ao->mask_base ||
++      regs.Get<reg::RB_SURFACE_INFO>().surface_pitch != ao->mask_pitch)
++    return;
++  ao->ready = false;
++  const auto key = render_target_cache_->last_update_render_pass_key();
++  if (!(key.depth_and_color_used & 0b10)) return;
++  const VkPipeline pipeline = Fh1WorldAoApplyPipeline(key);
++  if (!pipeline) {
++    REXGPU_ERROR("FH1 world AO: could not create its pipeline; off");
++    ao->failed = true;
++    return;
++  }
++  BindExternalGraphicsPipeline(pipeline);
++  deferred_command_buffer_.CmdVkBindDescriptorSets(VK_PIPELINE_BIND_POINT_GRAPHICS,
++                                                   ao->apply_layout, 0, 1, &ao->apply_set, 0,
++                                                   nullptr);
++  const int32_t size[4] = {int32_t(ao->full_width), int32_t(ao->full_height), 0, 0};
++  deferred_command_buffer_.CmdVkPushConstants(ao->apply_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
++                                              sizeof(size), size);
++  deferred_command_buffer_.CmdVkDraw(3, 1, 0, 0);
++  // The guest's descriptor sets were replaced by this pipeline layout's.
++  current_graphics_descriptor_sets_bound_up_to_date_ = 0;
++}
++
++}  // namespace rex::graphics::vulkan
+diff --git a/src/graphics/vulkan/fh1_world_ao.h b/src/graphics/vulkan/fh1_world_ao.h
+new file mode 100644
+--- /dev/null
++++ b/src/graphics/vulkan/fh1_world_ao.h
+@@ -0,0 +1,88 @@
++// FH1 (#380): the decisions of the world ambient occlusion (fh1_world_ao.cpp), without Vulkan,
++// so tools/test_world_ao.cpp can check them.
++#pragma once
++
++#include <algorithm>
++#include <cmath>
++#include <cstdint>
++#include <iterator>
++#include <string_view>
++
++namespace rex::graphics::vulkan::fh1_world_ao {
++
++// Replacing images may wait for the queue and close the current draw's submission. Resume
++// and refresh its texture references before continuing, including when allocation failed
++// and the guest draw will proceed without AO. A failed resume must abort the draw.
++enum class ResourceStatus { kReady, kUnavailable, kSubmissionFailed };
++template <typename Update, typename IsOpen, typename Resume, typename Refresh>
++ResourceStatus PrepareResourcesForDraw(Update&& update, IsOpen&& is_open, Resume&& resume,
++                                      Refresh&& refresh) {
++  const bool ready = update();
++  if (!is_open()) {
++    if (!resume()) return ResourceStatus::kSubmissionFailed;
++    refresh();
++  }
++  return ready ? ResourceStatus::kReady : ResourceStatus::kUnavailable;
++}
++
++// The game's `world_ambient_occlusion`: 0 off, 1 low, 2 high; anything else is off.
++inline int Level(std::string_view value) {
++  return value == "high" ? 2 : value == "low" ? 1 : 0;
++}
++// The occlusion's strength (SAO intensity) for a level.
++inline float Intensity(int level) { return level >= 2 ? 1.0f : 0.6f; }
++
++// The engine effect's ApplyShadows techniques: the pixel shaders of the shadow mask's passes
++// (tf0 the scene depth, tf1 the cascade's shadow map).
++inline constexpr uint64_t kShadowPasses[] = {0x93626E75D17576C5ull, 0x26EB620936001876ull,
++                                             0x11824C2EC1B156C6ull, 0x26C4FD34AECBE4DEull,
++                                             0xFCDF9BE8C57F7D01ull, 0x8418C40F121D7EA7ull,
++                                             0x22DA22B5639EBAE4ull};
++inline bool IsShadowPass(uint64_t hash) {
++  return std::find(std::begin(kShadowPasses), std::end(kShadowPasses), hash) !=
++         std::end(kShadowPasses);
++}
++
++// Where the occlusion is computed: half the scene's resolution from 1920 pixels wide (render
++// scale 2 and above), the scene's own below.
++struct Grid {
++  uint32_t downsample, width, height;
++};
++inline Grid GridFor(uint32_t width, uint32_t height) {
++  const uint32_t d = width >= 1920 ? 2 : 1;
++  return {d, (width + d - 1) / d, (height + d - 1) / d};
++}
++
++// The shadow passes rebuild a pixel's view position from the depth with their pixel constants:
++// view z = c25.y / (1 - c25.x - depth), x = z * ndc.x / c0.x, y = z * ndc.y / c1.y. Out: A, B
++// and the tangents of half the field of view in x and y.
++inline bool Projection(float c0x, float c1y, float c25x, float c25y, float out[4]) {
++  if (!std::isfinite(c0x) || !std::isfinite(c1y) || !std::isfinite(c25x) ||
++      !std::isfinite(c25y) || c25y == 0.0f || std::fabs(c0x) < 1e-3f || std::fabs(c1y) < 1e-3f)
++    return false;
++  out[0] = c25x;
++  out[1] = c25y;
++  out[2] = 1.0f / std::fabs(c0x);
++  out[3] = 1.0f / std::fabs(c1y);
++  return true;
++}
++// The view distance of a depth value with those constants (the compute shaders' viewZ); 0 for
++// the sky.
++inline float ViewZ(const float projection[4], float depth) {
++  const float den = 1.0f - projection[0] - depth;
++  const float z = std::fabs(projection[1] / (std::fabs(den) > 1e-20f ? den : 1e-20f));
++  return depth <= 0.0f || !std::isfinite(z) ? 0.0f : z;
++}
++
++// The depth pre-pass's stencil (the low byte of the resolved depth): 0 the static world,
++// 3 x an object id for the cars, 128 the ground around the player's car, 129 the
++// alpha-tested trees. Cars and trees keep their own shading (the compose shader's
++// keepsItsShading).
++inline bool KeepsItsShading(uint32_t stencil) {
++  return (stencil >= 1 && stencil < 128) || stencil == 129;
++}
++
++// Radius (m), and the distance range over which the occlusion fades out (m).
++inline constexpr float kRadius = 1.5f, kFadeStart = 60.0f, kFadeEnd = 160.0f;
++
++}  // namespace rex::graphics::vulkan::fh1_world_ao

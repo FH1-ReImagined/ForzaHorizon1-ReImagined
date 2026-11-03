@@ -1,2 +1,4 @@
 // Shared ReImagined branding for Explorer and Windows shortcuts.
 1 ICON "@CMAKE_CURRENT_SOURCE_DIR@/resources/forza.ico"
+// Per-monitor-v2 DPI awareness (#418); 24 is RT_MANIFEST, 1 is CREATEPROCESS_MANIFEST_RESOURCE_ID.
+1 24 "@CMAKE_CURRENT_SOURCE_DIR@/resources/forza.manifest"

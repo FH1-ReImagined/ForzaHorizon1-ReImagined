@@ -68,6 +68,16 @@ class ReportTests(unittest.TestCase):
         self.assertIn("Exit code: 134", report.body)
         self.assertIn("Not recorded", report.body)
 
+    def test_native_tuning_is_recorded_at_launch_and_cli_overrides_config(self):
+        self.cfg.settings["forza_car_tuning"] = True
+        self.plan.toml_text += "forza_car_tuning = true\n"
+        context = crash_report.launch_context(self.cfg, self.plan)
+        self.cfg.settings["forza_car_tuning"] = False
+        self.assertIs(context["settings"]["forza_car_tuning"], True)
+        self.assertIn("forza_car_tuning = True", crash_report.collect(self.plan, 134, context).body)
+        self.plan.argv.append("--forza_car_tuning=false")
+        self.assertEqual(crash_report.launch_context(self.cfg, self.plan)["settings"]["forza_car_tuning"], "false")
+
     def test_known_internal_heap_stop_is_explained_and_raw_evidence_is_preserved(self):
         from test_game_exit import HEAP_FAILURE
         self.log.write_text("\n".join(HEAP_FAILURE))
@@ -131,7 +141,7 @@ Authorization: Bearer private-unquoted
         self.assertEqual(query["body"], [body])
         self.assertEqual(query["title"], ["Crash: test & check"])
         self.assertEqual(query["labels"], ["bug"])
-        self.assertTrue(url.startswith("https://github.com/Dyotson/ForzaHorizon1-ReImagined/issues/new?"))
+        self.assertTrue(url.startswith("https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/issues/new?"))
         self.assertIsNone(crash_report.issue_url("Crash", "日本語" * 5000))
 
 

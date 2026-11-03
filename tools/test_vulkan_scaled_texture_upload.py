@@ -4,7 +4,8 @@
 No game files or NVIDIA libraries are needed. Requires a Vulkan-capable NVIDIA
 device, the optional Python `vulkan` package, and an SDK with this patch applied.
 Tests independent X/Y scales 1..7, all four endian modes, aligned/ragged extents,
-and an offset source binding for each of the three supported image formats.
+and an offset source binding. Depth cases compare exact output bits with the
+original compiled UNorm24/float20e4 loaders, including conversion boundaries.
 """
 
 from pathlib import Path
@@ -20,11 +21,11 @@ parser.add_argument(
     "--sdk", required=True, type=Path, help="SDK with the applied patch series"
 )
 parser.add_argument(
-    "--format", choices=["all", "rgba", "rgb10a2", "r32f"], default="all"
+    "--format", choices=["all", "rgba", "rgb10a2", "r32f", "depth-unorm", "depth-float"], default="all"
 )
 args = parser.parse_args()
 if args.format == "all":
-    for fmt in ["rgba", "rgb10a2", "r32f"]:
+    for fmt in ["rgba", "rgb10a2", "r32f", "depth-unorm", "depth-float"]:
         subprocess.run(
             [sys.executable, __file__, "--sdk", str(args.sdk), "--format", fmt],
             check=True,
@@ -121,11 +122,27 @@ def buffer(data):
     return b, a, mapped
 
 
+depth_mode = {"depth-unorm": 1, "depth-float": 2}.get(args.format, 0)
+# Independent test inputs, including zero with stencil set, denormal/normal
+# boundaries, UNorm rounding boundaries and the common 0xC00000 clear value.
+depth_words = [
+    (depth << 8) | stencil
+    for depth in (0, 1, 2, 0x7FFFF, 0xFFFFF, 0x100000, 0x100001,
+                  0x7FFFFF, 0x800000, 0x800001, 0xBFFFFF, 0xC00000,
+                  0xC00001, 0xEFFFFF, 0xF00000, 0xFFFFFF)
+    for stencil in (0, 255)
+]
+boundary_words = []
+for word in depth_words:
+    halves = ((word & 0x00FF00FF) << 8) | ((word & 0xFF00FF00) >> 8)
+    boundary_words += [word, halves, ((word << 16) | (word >> 16)) & 0xFFFFFFFF,
+                       ((halves << 16) | (halves >> 16)) & 0xFFFFFFFF]
 src = buffer(
     array.array(
         "I",
         (
-            (i * 0x9E3779B1 ^ ((i >> 5) * 0x85EBCA6B)) & 0xFFFFFFFF
+            boundary_words[i % 256] if depth_mode and i % 256 < len(boundary_words)
+            else (i * 0x9E3779B1 ^ ((i >> 5) * 0x85EBCA6B)) & 0xFFFFFFFF
             for i in range(8 * 1024 * 1024)
         ),
     ).tobytes()
@@ -211,7 +228,11 @@ cmd = v.vkAllocateCommandBuffers(
     ),
 )[0]
 # Keep the nested stage alive until vkCreateComputePipelines returns (CFFI).
-code = shader_bytes("texture_load_32bpb_scaled_cs.h")
+reference_shader = {
+    "depth-unorm": "texture_load_depth_unorm_scaled_cs.h",
+    "depth-float": "texture_load_depth_float_scaled_cs.h",
+}.get(args.format, "texture_load_32bpb_scaled_cs.h")
+code = shader_bytes(reference_shader)
 module = v.vkCreateShaderModule(
     dev, v.VkShaderModuleCreateInfo(codeSize=len(code), pCode=code), None
 )
@@ -271,6 +292,8 @@ image_format = {
     "rgba": v.VK_FORMAT_R8G8B8A8_UNORM,
     "rgb10a2": v.VK_FORMAT_A2B10G10R10_UNORM_PACK32,
     "r32f": v.VK_FORMAT_R32_SFLOAT,
+    "depth-unorm": v.VK_FORMAT_R32_SFLOAT,
+    "depth-float": v.VK_FORMAT_R32_SFLOAT,
 }[format_name]
 print("Image format:", format_name, flush=True)
 image = v.vkCreateImage(
@@ -441,7 +464,8 @@ def bind_image(push):
     v.vkCmdBindDescriptorSets(
         cmd, v.VK_PIPELINE_BIND_POINT_COMPUTE, ipl, 0, 2, [iset, sets[1]], 0, None
     )
-    pc = v.ffi.new("uint32_t[]", push)
+    image_push = [push[0] | (depth_mode << 10), *push[1:]]
+    pc = v.ffi.new("uint32_t[]", image_push)
     v.vkCmdPushConstants(cmd, ipl, v.VK_SHADER_STAGE_COMPUTE_BIT, 0, 40, pc)
 
 

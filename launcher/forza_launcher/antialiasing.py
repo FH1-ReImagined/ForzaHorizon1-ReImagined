@@ -22,7 +22,8 @@ def configure_runtime(cfg, env, args, write=True):
             values.get("forza_ultrawide") or dlss.enabled(cfg) or
             fsr3.enabled(cfg)):
         return
-    sizes = {"1080p": (1920, 1080, 2), "1440p": (2560, 1440, 2), "4k": (3840, 2160, 3)}
+    sizes = {"720p": (1280, 720, 1), "1080p": (1920, 1080, 2),
+             "1440p": (2560, 1440, 2), "4k": (3840, 2160, 3)}
     size = sizes.get(values.get("resolution"))
     scene_scale = int(values.get("resolution_scale", 1))
     if size is None or scene_scale not in (1, 2, 3):

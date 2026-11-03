@@ -17,6 +17,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIR="$(mkdir -p "$1" && cd "$1" && pwd)"
 SECS="${2:-1800}"
 shift 2 2>/dev/null || shift $#
+. "$ROOT/tools/startup_movies.sh"
+forza_startup_movie_args "$@" || exit $?
 . "$ROOT/tools/bench_lock.sh"
 bench_lock_check || exit 3
 avail_gb=$(awk '/MemAvailable/ {print int($2 / 1048576)}' /proc/meminfo)
@@ -44,6 +46,7 @@ FORZA_FRAMEDUMP_TRIGGER="$DIR/dump.trigger" FORZA_FRAMEDUMP_DIR="$DIR" \
 FORZA_SCREENSHOT_TRIGGER="$DIR/shot.trigger" \
 LD_LIBRARY_PATH="${REXSDK:-$DEFAULT_SDK}/lib:$PWD" nohup timeout --signal=INT --kill-after=15 "$SECS" \
     ./forza --game_data_root="${FORZA_DATA:-$ROOT/extracted/game}" --log_file="$DIR/forza.log" \
-    --log_level="${FORZA_LOG_LEVEL:-info}" "$@" > "$DIR/run.out" 2>&1 &
+    --log_level="${FORZA_LOG_LEVEL:-info}" \
+    "${STARTUP_MOVIE_ARGS[@]}" > "$DIR/run.out" 2>&1 &
 echo $! > "$DIR/pid"
 echo "started pid $! in $DIR"

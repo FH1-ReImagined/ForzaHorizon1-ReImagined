@@ -10,7 +10,7 @@ from pathlib import Path
 
 from . import GITHUB_URL, __version__, fetch
 
-API_URL = "https://api.github.com/repos/Dyotson/ForzaHorizon1-ReImagined/releases/latest"
+API_URL = "https://api.github.com/repos/FH1-ReImagined/ForzaHorizon1-ReImagined/releases/latest"
 TIMEOUT = 15
 
 

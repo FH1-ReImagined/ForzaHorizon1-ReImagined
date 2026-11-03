@@ -124,8 +124,13 @@ if [ "$offline" = 0 ] && [ -z "${FORZA_SERVER:-}" ] &&
     # No shared server configured: a local one (or the one another instance started).
     if ! (exec 3<>/dev/tcp/127.0.0.1/21201) 2>/dev/null; then
         mkdir -p "$DATA_HOME/live_server"
+        # The game's database has the Co-op Festival's events (#67).
+        db=()
+        [ -f "$DATA/media/db/gamedb.slt" ] && db=(--game-db "$DATA/media/db/gamedb.slt")
+        [ -f "$ROOT/server/forza_live_server.py" ] ||
+            echo "server/ is empty (the Forza Live server is a submodule): git submodule update --init server" >&2
         python3 "$ROOT/server/forza_live_server.py" --host 127.0.0.1 --port 21200 \
-            --http-port 21201 --data-dir "$DATA_HOME/live_server" \
+            --http-port 21201 --server-name 127.0.0.1 --rebind-legacy --data-dir "$DATA_HOME/live_server" "${db[@]}" \
             > "$DATA_HOME/live_server/server.log" 2>&1 &
         server_pid=$!
         sleep 0.5

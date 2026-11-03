@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.20)
+project(forza_live_connection_test LANGUAGES CXX)
+enable_testing()
+add_executable(live_connection_test ../live_connection_test.cpp)
+target_compile_features(live_connection_test PRIVATE cxx_std_17)
+target_include_directories(live_connection_test PRIVATE ../../src)
+add_test(NAME live_connection COMMAND live_connection_test)

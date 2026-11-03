@@ -1,7 +1,7 @@
 // Texture pack DDS files (#384): src/graphics/pipeline/texture/pack_format.cpp of the patched SDK
 // source (patch 0280). Padded rows of uncompressed images (the header's pitch, per mip level),
 // headers that do not match their data, the DX10 header, and every format written by the dump
-// read back unchanged. The DDS files are made here.
+// read back unchanged. The DDS files are made here. Also the texture_packs order (patch 0310).
 // Build with the patched SDK source:
 //   c++ -std=c++20 -I ~/rexglue-sdk-src-forza/sdk/include
 //       ~/rexglue-sdk-src-forza/sdk/src/graphics/pipeline/texture/pack_format.cpp
@@ -300,6 +300,17 @@ int main() {
                           levels[i].size()) == 0);
       }
     }
+  }
+
+  // texture_packs (patch 0310): folder names in order, "." for the loose files; paths, "dump"
+  // and repeats left out.
+  {
+    size_t refused = 0;
+    CHECK(tp::ParsePackOrder("|", refused).empty() && refused == 0);
+    CHECK(tp::ParsePackOrder("", refused).empty());
+    const auto names = tp::ParsePackOrder(".|hd-pack|Rocks v2||hd-pack|../up|a/b|c\\d|C:|.|..|Dump|x", refused);
+    CHECK((names == std::vector<std::string>{".", "hd-pack", "Rocks v2", "x"}));
+    CHECK(refused == 6);
   }
 
   std::printf("texture pack DDS: PASS\n");

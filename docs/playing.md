@@ -24,6 +24,49 @@ tools/run_forza.sh 120        # a two-minute test run; logs in ${XDG_RUNTIME_DIR
 - **Cockpit gauges:** the game lights the instruments only when the headlights are on;
   `cockpit_gauges_lit = true` in `forza.toml` (launcher: Display, Picture, Cockpit gauges
   always lit) keeps them lit by day too, for your own car only.
+- **Radio station changes:** Audio > Radio > **Station changes** keeps the original
+  **Game** behavior by default: the station banner delays repeated changes and the
+  music fades out and in over 0.5 s each. **Fast** removes the banner gate, uses a
+  0.15 s repeat guard and the native 0.25 s fades. **Instant** uses a 0.075 s repeat
+  guard and 0.04 s fades, retaining the native zero-volume stream handoff. Both
+  quicker modes retarget an ongoing fade to the newest accepted station request,
+  including Radio Off, and apply to stock and custom radio stations. The repeat
+  guard bounds held/repeating bindings. Set `radio_station_switch` to `"game"`,
+  `"fast"`, or `"instant"` in `forza.toml`.
+  Stream startup, scheduling and the audio mixer still add latency. In two TU4
+  custom test-tone transitions, captured output crossed a fixed tone-amplitude
+  threshold 0.216 and 0.250 s after an accepted request; this measures output,
+  not the first audible sample or a guaranteed latency. Stock/custom station
+  cycles and pause/resume were exercised in bounded game runs. Disc/TU4 CPU
+  fixtures cover rapid retargeting and native locks; live sub-ramp input stress
+  and scripted-event transitions were not exercised. Global music, dialogue,
+  ducking and scripted-event fade rates retain their original values.
+- **Radio during races:** Audio > Radio > **Keep radio during races**
+  (`radio_keep_in_events = true`, off by default; restart after changing) restores the
+  selected stock or custom station, including Radio Off, at qualified career
+  and Rally race-opening music cues. Earlier unqualified intro music remains native.
+  The original soundtrack remains the default.
+  Story cinematics, post-race music, dialogue and sound effects keep their native
+  behavior; normal loading and finish fades still apply. Unrecognized or numbered
+  fallback cues retain the original soundtrack.
+- **Rubber banding (#433):** the game's CPU drivers race against where you are. Their event's
+  `AIRubberbands` row (or their skill's) starts a slow-down mode 1-50 m ahead of you and cuts
+  their torque from 10-600 m ahead (the weaker drivers' down to a fifth); 40-150 m behind (20
+  m more a place) they brake and corner toward the best values, and 10-25 m behind they get
+  their skill's best braking and cornering. `ai_rubber_banding = "off"` (launcher: Gameplay,
+  CPU drivers, Rubber banding: Off) races every CPU driver at its own skill wherever you are,
+  in single-player races and free roam. Online races (Horizon World events, Co-op Festival
+  rounds) keep the game's AI on every console. The difficulty (the skill rows), the post-race
+  skill adjustment and two boosts in the game's code (by grid place at the start, and for a
+  Nemesis rival) stay the game's. Measured with `FORZA_AI_TRACE=1` on Recaro Rush (FR02,
+  Medium: skills 66-73, rows 8-9) with the player standing on the grid: Game kept every CPU
+  driver in the torque cut (down to 0.19 of their torque) and the first reached the finish,
+  about 5 km on, after 182 s; Off had no cut, and six of seven finished after 150-159 s.
+  Details in `src/hooks/ai_catchup.cpp`.
+- **VR headset (experimental, #333):** launcher Display, VR (experimental), VR headset (experimental): Virtual
+  screen or Cockpit (`vr_mode = "screen"` / `"cockpit"`). Start the OpenXR runtime (WiVRn,
+  Monado, SteamVR) and connect the headset first; Home or both sticks held for a second
+  recentre. What works and how to test it: [vr.md](vr.md#testing-on-a-quest-3-with-wivrn).
 - **Keyboard and mouse:** `mnk_mode = true` in `forza.toml` (or `--mnk_mode=true`, or the
   launcher's Controls page); bindings and test results [below](#keyboard-and-mouse).
 - **Mouse cursor:** the game hides it after three seconds without movement and shows it
@@ -76,20 +119,30 @@ tools/run_forza.sh 120        # a two-minute test run; logs in ${XDG_RUNTIME_DIR
   what you can do: send a friend request, accept, decline, take a request back, remove,
   block, unblock. A request or an accepted one shows a short notice. A blocked player can't
   invite you or send you requests (they are dropped without telling them). Your friends
-  are tied to `friends_key` in `live_identity.txt`: keep that file (it also holds your
-  XUID) to keep your friends on another computer. With a server older than this, everyone
+  are tied to `signing_seed` (and, for older versions, `friends_key`) in
+  `live_identity.txt`: keep that file private (it also holds your XUID), and copy it to keep
+  your friends on another computer. With a server older than this, everyone
   online counts as a friend, as before.
   **Text chat (#92):** `F9` (`live_chat_key`) opens the friends screen on its **Chat** tab
   (with a controller: hold the left stick press, then LB to Chat; a friend's "Send a
   message" goes there too). Up/Down picks where the message goes: **Session** (the players
-  in your party or game session), **Horizon World** (the players in your world), or a
-  friend online (a direct message; only friends). Type and press Enter; with a controller,
+  in your party or game session), **Horizon World** (the players in your world), **Club**
+  (shown when you are in a car club, #145: the members of your club who are online, wherever
+  they are), or a friend online (a direct message; only friends). Type and press Enter; with a controller,
   A or Y opens the on-screen keyboard and Start sends. A message that arrives while the tab
   isn't open pops up for 6 s. "Mute in chat" in a player's menu hides their messages (also
   players who are not your friends: find them on Add friend); blocking hides them both ways.
   At most 200 characters a message and 5 messages in 10 s. Messages are not stored: the
   server passes them on to the players online and keeps only the last 200 in memory for its
-  admin. A player in free roam restarts the game to join,
+  admin. Lines that start with `/` are commands for the server, whichever channel you type
+  them in; its answers appear in the chat log. **Car clubs in the Horizon World (#145):**
+  `/club` lists the members of your club who are online and where they are (a Horizon
+  World with its players, a Co-op Festival world, or just online). In Multiplayer, Find
+  Game, Horizon World the server places you in a world with one of them first, when one has
+  room, and in the fullest world as before otherwise. `/club join Gamertag` (or `/club join`
+  for the world with most of them) puts that clubmate's world first for 10 minutes: if you
+  are in a world, leave it, then pick Horizon World again. Your clubmates see that you are
+  online and in which kind of world; blocking a player removes them from both. A player in free roam restarts the game to join,
   as on the console, which takes a few seconds. `live_accept_invites = false` ignores all
   invites. Games up to v0.1.12 invited everyone online and joined every invite at once
   (#90). The party leader then picks Create Custom Game, sets the game
@@ -192,36 +245,49 @@ tools/run_forza.sh 120        # a two-minute test run; logs in ${XDG_RUNTIME_DIR
 
 ## Steam Deck
 
-The launcher detects the Deck and applies its preset: Vulkan, render scale 1, AMD FSR 1, `frame_rate = 30`,
-background shader compilation and the shader cache on (the PC check asks for the same: 30 fps for its CPU,
-render scale 1 for its graphics). Keep these: render scale 2 and `frame_rate = 60` only make it slower. Play a
-session or two on a warm shader cache before judging the speed. Reported speed on a Steam Deck OLED (#45,
-0.1.27): 17 to 25 fps, 8 in an 8-car race. Since then the game needs less CPU on few cores (#286): waits wake only
-their own threads, and the render thread sleeps while it waits for the GPU (`gpu_wait_blocking`, on by default
-on Linux; nothing to set). We have no Deck. This PC limited to four cores holds 30 fps in free roam and in a race,
-and the Deck's graphics, about a quarter of this card's compute units at half its clock, may well be what limits
-it (`docs/perf.md`, "Low-end CPUs"); a log from a Deck with Steam's performance overlay at level 4 in a race would
-tell. Cutscene audio that does not match the picture comes with the low frame rate; it has not been reproduced
-here.
+Install, settings, controls and suspend: [steam_deck.md](steam_deck.md). In short: on SteamOS use the Flatpak
+launcher and add it to Steam as a non-Steam game. The launcher detects the Deck and applies (or, to an install that
+already had settings, offers once) its preset: 30 fps, render scale 1 with AMD FSR 1, Scene anti-aliasing Off,
+Console shadow and texture detail. The Deck is limited by its CPU (the GPU emulation's command processor,
+[perf.md](perf.md#steam-deck-and-4-core-cpus-the-built-in-benchmark-45-2026-10-23)); 40 fps suits its screen at
+40 Hz, Battery saver (*Auto on battery*) starts it on the lightest settings off the charger, and the game carries
+on after a sleep, signed in to Forza Live again with the same player id.
 
-**Battery saver** (Settings > Display > Frame rate, Linux): On, or *Auto on battery (Steam Deck)*, starts the
-game on the lightest settings: 30 fps, render scale 1 with AMD FSR 1 (AMD FSR 3 and SMAA off) and the render
-thread sleeping while it waits for the GPU. Your own settings are not changed: the next start on mains power uses
-them again, so a docked setup at 60 fps and render scale 2 comes back by itself. Auto looks at the power source
-when the game starts, not while it runs. It is off by default; on the Deck's own preset it only undoes a frame
-rate, render scale or filter you raised.
+## Auto-pause (#328)
 
-**Suspend and resume** (#140). The game should carry on where it was when the Deck wakes up: a suspend stops
-the clock the game runs on, so the game itself sees no gap. A game that was paused while that clock ran on (as
-`kill -STOP` does) does not count the time away either: the race clock did not count a 3 s or a 10 s stop.
-Signed in to Forza Live, the game says hello to the server as soon as it runs again. The server forgets a player
-after 30 s without one; from this version it gives a game that comes back its old player id, so the session it
-hosts and its address stay the same (an older server gives it a new id). Other players in your session see you
-leave after their own timeout, as on a console that lost its connection. `forza.log` has a `FORZA_RESUME:` line
-for each stop or sleep. Tested on Linux by stopping the game for 3 s, 10 s, 45 s, 2 and 10 minutes, offline in a
-race and signed in to a local server (free roam and a hosted Horizon World); not on a Deck yet: that the sound
-comes back (the game plays on the system's default output, which SDL follows when it changes), that the GPU
-survives the sleep without a "device lost", and that the Deck's controls come back.
+The launcher's **Controls > Auto-pause** offers **Pause when window loses focus** and
+**Pause when controller disconnects**. Both are off by default; restart the game after changing them.
+The matching `forza.toml` settings are `forza_pause_on_focus_loss` and
+`forza_pause_on_controller_disconnect`.
+
+While driving, a selected event requests the game's normal pause menu. Resume manually; returning
+to the window or reconnecting a controller never resumes the game. The disconnect option watches
+the physical pad or wheel last used, including when keyboard emulation keeps player 1 connected.
+Keyboard-only play and unplugging an idle spare controller do not trigger it. Menus, loading,
+rewind, text/invite/friends dialogs and benchmark input do not request another pause.
+Online sessions keep the game's usual pause behavior: opening the menu does not stop other players.
+Focus-loss auto-pause is suppressed while an OpenXR session is running, including virtual-screen
+and cockpit modes; controller-disconnect auto-pause remains available.
+Controller detection needs the optional `ForzaInputDisconnectSequence` export. Its ReIGlue
+implementation is [change 0399, SDK PR #3](https://github.com/FH1-ReImagined/ReIGlue/pull/3).
+The current SDK pin `ff1db6f6ff64f237ec2dbd28f06680205a6b8b1a` includes the merged change.
+An older runtime without the export logs a warning once if disconnect detection is requested
+and still supports focus auto-pause.
+
+Validation (Windows x64, 2026-10-29): `tools/tests/auto-pause` passes all five tests against
+the pinned SDK. The production world-update hook publishes each new world to both auto-pause
+and the camera before forwarding the native update, exercised for disc and TU4. The production
+pause poller checks manual START, paused, loading, rewind and inaccessible-world guards.
+A separate process requires the actual SDK export through production symbol discovery;
+another injects its absence to test the older-runtime fallback. XR cases cancel a pending
+focus pulse and consume new focus events without deferring them until the session ends.
+Disconnect requests remain active in VR, including when both reasons were pending.
+
+The exact pinned SDK's device-assignment fixture also passes against the full CI-built SDK
+runtime, covering active pad loss with keyboard still connected, idle spare removal, reconnect
+and synthetic removal. Client input hooks compile for disc and TU4; five launcher auto-pause
+and camera-settings tests pass. These fixtures inject events/device lists. Live Alt-Tab,
+physical USB/Bluetooth unplug, wheel, multiplayer and headset checks remain pending.
 
 ## Keyboard and mouse
 
@@ -437,6 +503,19 @@ wheel (the first player's; ...)`. Tested with a virtual vJoy (1234:bead, listed 
 feedback: the base is the wheel; `wheel_device` set to the vJoy makes it the wheel, and as the pedal device it is
 no wheel at all.
 
+**A device the launcher and the game name differently (#562).** The launcher (SDL 2) and the game (SDL 3) can read
+different names for the same device on Windows: a Thrustmaster wheel or pedal set (a TX, a T-LCM) is
+"Thrustmaster TX Racing Wheel" in the launcher and `"44F B669"` in the game, which gets no name for it. A device
+picked by name then matched nothing in the game (the log said `wheel_pedal_device "T-LCM Pedals" is not
+connected`, and the pedals were never read). Bindings now saves the wheel, pedal, shifter and handbrake devices by
+their USB ids (`wheel_pedal_device = 044f:b371`), which both read alike, and rewrites a device saved by its name
+the next time Controls is open with it connected. In the game, a name that matches nothing is also taken for a
+joystick without a name of its own that is a known device of that kind (a T-LCM for the pedal device, a TH8 for
+the shifter, a Thrustmaster wheel for `wheel_device`), and when a configured device is not found the log lists
+every joystick the game sees once (`Wheel: SDL sees N joystick(s)`, then their name, GUID, VID, PID, axes,
+buttons and hats), so a report shows what the game has. Not tested with a real TX and T-LCM: please report them
+with the `Wheel:` lines.
+
 **Analog handbrake (#303).** The game's wheel layouts bind the handbrake to the left stick up and down as well as
 to B (gamedb.slt `WheelLayouts`, as the clutch is on the right stick Y): the Xbox 360 wheel's analog handbrake.
 The game takes the stronger of the two, and a stick direction is analog (0 to 1), so the driver sends a handbrake
@@ -459,13 +538,13 @@ edited by hand:
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `wheel_mode` | `auto` | `auto`: SDL says it is a wheel, or its name looks like one (G29, T300, Fanatec, Moza, ...). `on`: every controller without a gamepad mapping is a wheel. `off`: wheel support off |
-| `wheel_device` | found | The wheel (#306): the first player's, which pedal, shifter and handbrake devices are read with. Empty: one with force feedback first, then one SDL lists as a wheel, then the first; a device name (as Bindings lists it), SDL GUID or `vid:pid` picks one and makes it a wheel (launcher: Use as the wheel) |
+| `wheel_device` | found | The wheel (#306): the first player's, which pedal, shifter and handbrake devices are read with. Empty: one with force feedback first, then one SDL lists as a wheel, then the first; a device name (as Bindings lists it), SDL GUID or `vid:pid` (what Bindings saves) picks one and makes it a wheel (launcher: Use as the wheel) |
 | `wheel_rotation`, `wheel_lock` | 900, 900 | The wheel's rotation as set in its driver, and the travel (lock to lock) that gives the game's full steering. 900/540 makes the steering about 1.7 times quicker |
 | `wheel_deadzone`, `wheel_invert_steering` | 0, off | Steering deadzone (0 to 0.5); swap left and right |
 | `wheel_steer_offset` | 0.05 | Only with `wheel_900_steering` off: compensates an inner steering deadzone (below) |
 | `wheel_pedals` | `auto` | Separate pedals; `combined` is one axis with throttle one way and brake the other |
 | `wheel_invert_throttle`, `wheel_invert_brake` | off | Pedals found backwards |
-| `wheel_pedal_device` | found | Pedals on their own USB device: empty finds a known pedal set or one named like pedals; a device name (as Bindings lists it), SDL GUID or `vid:pid` picks one; `none` reads the wheel's own pedals |
+| `wheel_pedal_device` | found | Pedals on their own USB device: empty finds a known pedal set or one named like pedals; a device name (as Bindings lists it), SDL GUID or `vid:pid` (what Bindings saves) picks one; `none` reads the wheel's own pedals |
 | `wheel_pedal_axes` | by model or detected | Axis numbers on the pedal device, e.g. `throttle=2,brake=1,clutch=0`; a pedal set here reads the pedal device, one set in `wheel_axes` the wheel |
 | `wheel_throttle_curve`, `wheel_brake_curve` | 1.0 | Gamma: 1 linear, above 1 softer at the start |
 | `wheel_axes` | detected | e.g. `steer=0,throttle=2,brake=5,clutch=1`; a number past the wheel's axes (Clear writes 99) unbinds, a negative one means the default. `handbrake=N`: an analog handbrake on the wheel (#303; 99: none, also no handbrake device) |
@@ -476,6 +555,7 @@ edited by hand:
 | `wheel_ffb_min_strength` | 0 | Minimum steering force (#303): the game's steering forces weaker than this percentage of the full force are scaled up, stronger ones stay (launcher: Minimum force; 0 is off) |
 | `wheel_ffb_spring_strength` | 100 | The centring spring and the damper, in percent of `wheel_ffb_strength` (launcher: Centring strength) |
 | `wheel_rumble_engine_strength`, `wheel_rumble_road_strength` | 50, 80 | The rumble from the game's engine motor (its right motor) and from its road motor (left: road surface, kerbs, impacts), in percent of `wheel_ffb_strength` (launcher: Engine rumble, Road rumble); 100, 100 before #273 |
+| `wheel_vibration_rate` | 60 | How many times a second the wheel's vibration is updated, 15 to 120, whatever the frame rate (launcher: Wheel vibration updates per second). 60 was the smoothest on a Fanatec CSR Elite and a Simagic Alpha EVO Pro; lower it (30) if the vibration feels too strong (#467) |
 | `wheel_rumble_style` | `fine` | `fine`: each rumble motor a light, quick vibration (40 and ~71 Hz); `classic`: one 25 Hz vibration, as before (#273) |
 | `wheel_ffb_reverse` | off | Reverse the game's steering force, for a wheel that pulls away from the centre in corners |
 | `wheel_ffb_keep_playing` | 0 | For a wheel that ends force feedback effects by itself (#304): start every effect that plays again every this many seconds. 0: never (an effect the wheel says has stopped is still started again); -1: not even that |
@@ -483,6 +563,7 @@ edited by hand:
 | `wheel_shifter` | `off` | `h`: an H-pattern shifter selects the gear; `sequential`: its up and down buttons shift like the paddles |
 | `wheel_shifter_buttons` | by model | e.g. `1=12,2=13,3=14,4=15,5=16,6=17,r=18` (gears 1 to 7 and reverse) or `up=..,down=..`; SDL button numbers, -1 unmaps |
 | `wheel_shifter_clutch`, `wheel_clutch_threshold` | off, 0.5 | H-pattern: a gear engages only with the clutch pressed this far (0.1 to 1) |
+| `wheel_shifter_neutral_ms` | 400 | H-pattern: how long the lever may sit in neutral between two gates and still go straight from one gear to the other, so the game shows an upshift as one (#468); 0 to 2000 milliseconds, 0: neutral at once, as before |
 | `wheel_shifter_follow_slot` | on | H-pattern: on, the game takes the lever's gear whenever it sets the gear itself (race and event starts and finishes), as on the Xbox; off, a gear engages only when the lever moves, for switching to the paddles (#303; launcher: Gear follows the lever's slot) |
 | `wheel_shifter_device` | found | A shifter on its own USB device: empty finds a known one or one named like a shifter; a name, SDL GUID or `vid:pid` picks one; `none` reads the wheel's own buttons |
 | `wheel_shifter_device_buttons` | by model | Its gears, e.g. `1=0,2=1,3=2,4=3,5=4,6=5,r=6`, or `up=..,down=..`; while a shifter device is connected every gear comes from it |
@@ -538,6 +619,15 @@ button.
   you move the lever (where the lever sits when the game starts is not a move). Tested with it off, a virtual
   wheel and DS-8X, the lever left in 3rd: the paddles shifted freely, a race started in 1st, and moving the
   lever to 4th engaged 4th.
+- **Through neutral (#468).** The game numbers its gears R 0, 1 to 8 and neutral 9, and takes a change to a
+  higher number for an upshift (that is what the cockpit's paddle animation shows). The lever crosses neutral
+  between two gates, so every H-pattern shift used to reach the game as neutral, then the gear: a downshift, and
+  a car with paddles pulled the downshift paddle on every upshift. Now a lever that leaves a gear keeps it for
+  `wheel_shifter_neutral_ms` (400 ms by default) while it is in neutral: one that reaches another gate in that
+  time goes straight there (2nd to 3rd is an upshift), one that stays in neutral longer is neutral then (SDK
+  0404). The log shows the first few changes and how the game takes them, e.g. `Wheel: H-pattern 2 > 3, an
+  upshift for the game (the lever crossed neutral in 180 ms)`. If slow shifts still show the downshift paddle,
+  raise it; 0 gives neutral at once, as before.
 - **Realistic shifting:** `wheel_shifter_clutch` makes a new gear engage only while the clutch is pressed at
   least `wheel_clutch_threshold` (default half way); moved into a gear without the clutch, the car stays in
   neutral until you press it. Off by default (the lever's gear engages at once).
@@ -607,6 +697,15 @@ slides, so the engine starts at 50 percent and the road at 80. With the defaults
 road at most 0.12 and the engine 0.075 of the motor's force, where classic at the old 100 percent gave 0.36. The
 style is read when the game opens the wheel: restart after changing it. Please tell us which values feel right
 on your wheel (#4).
+
+**The same vibration at every frame rate (#467).** The game sets its rumble once a frame, and every change used to
+go to the wheel: about 60 updates of the vibration a second at a 60 fps cap and two to four times as many at
+higher caps. A wheel that starts its sine again at every update (DirectInput does when it cannot change a playing
+effect) then plays a buzz at the frame rate instead of the 40 and 71 Hz vibration, which a Simagic owner felt
+"through the entire rig" at 240 fps. The vibration is now updated about 30 times a second at every cap, each time
+with the average strength (root mean square) since the last update, so it carries the same energy a second
+whatever the frame rate (SDK 0403). The log's 10 s force feedback summary shows it: `..., 1203 rumbles, 309
+vibration updates (31 a second, up to 12%), ...` (the game's rumbles, then what the wheel got).
 
 **Minimum force (#303).** The game's steering force follows the car: light cars give a light wheel, and a heavy
 one (a WRX STI on a Simagic EVO Pro in #4) several times more. `wheel_ffb_min_strength` (launcher: Minimum force,

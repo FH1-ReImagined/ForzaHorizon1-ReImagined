@@ -26,7 +26,7 @@ SRC="${REXSDK_SRC:-$ROOT/forza-recomp/out/macos-sdk-src}"
 JOBS="${REXSDK_JOBS:-6}"
 
 if [ "$MODE" = all ] || [ "$MODE" = sdk ]; then
-    # Reuse the canonical pinned checkout and patch series, then build the whole SDK.
+    # Reuse the pinned ReIGlue checkout (tools/build_rexglue_sdk.sh), then build the whole SDK.
     # A complete install keeps codegen, runtime, headers and GPU plugin together.
     REXSDK_SRC="$SRC" "$ROOT/tools/build_rexglue_sdk.sh" --source-only
     # Shallow checkouts omit the v* ancestor used by the SDK's version generator.
@@ -51,7 +51,7 @@ if [ "$MODE" = host ] || [ "$MODE" = gpu ]; then
     BUILD="$ROOT/forza-recomp/out/build/macos-host-$TU"
     cmake -S "$ROOT/tools/cmake/macos-host-check" -B "$BUILD" -G Ninja \
         -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$SDK" -DFORZA_TITLE_UPDATE="$TU" \
-        -Drexglue_DIR="$SDK/lib/cmake/rexglue"
+        -Drexglue_DIR="$SDK/lib/cmake/rexglue" -DFORZA_NATIVE_PAUSE=ON
     if [ "$MODE" = gpu ]; then
         cmake --build "$BUILD" --target forza_macos_gpu_check --parallel "$JOBS"
         for lib in librexruntime.dylib librexgpu-xenos.dylib; do

@@ -88,7 +88,11 @@ class UrlopenTests(unittest.TestCase):
                 fetch.urlopen("https://github.com/x/y.zip")
         text = str(cm.exception)
         self.assertIn("github.com", text)
-        self.assertRegex(text, "antivirus")
+        self.assertIn("date/time", text)
+        self.assertIn("Certificate verification remains enabled", text)
+        self.assertIn("antivirus program scans HTTPS traffic", text)
+        self.assertIn("proxy replaces certificates", text)
+        self.assertIn("turn off its HTTPS scanning or add the launcher as an exception", text)
         self.assertRegex(text, "proxy")
         self.assertIn("launcher.log", text)
         self.assertEqual(log.call_count, 2)
@@ -109,7 +113,7 @@ class UrlopenTests(unittest.TestCase):
     def test_update_check_reports_the_certificate_problem(self):
         with patch.object(fetch.urllib.request, "urlopen", side_effect=cert_error()), \
                 patch("forza_launcher.paths.log_error"):
-            with self.assertRaisesRegex(updater.UpdateError, "api.github.com.*antivirus"):
+            with self.assertRaisesRegex(updater.UpdateError, "api.github.com.*date/time"):
                 updater.check()
 
 

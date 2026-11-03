@@ -7,11 +7,12 @@ import tempfile
 from dataclasses import asdict
 from pathlib import Path
 
-from . import OLD_PUBLIC_SERVERS, PUBLIC_SERVER, display, gpu, paths, schema, specs
+from . import OLD_PUBLIC_SERVERS, PUBLIC_SERVER, display, gpu, languages, paths, schema, specs
 from .haptics.settings import DEFAULTS as HAPTICS_DEFAULTS, normalize as normalize_haptics
 
 # Settings of the launcher itself: not game cvars, never written to forza.toml.
-LAUNCHER_ONLY = ("share_shader_list", "battery_saver")
+LAUNCHER_ONLY = ("share_shader_list", "coop_results", "battery_saver", "game_language", "vr_mode",
+                 "vr_picture", "vr_seat_height_cm")
 ONLINE_MODES = ["public", "local", "custom", "offline"]
 # First-run values that differ from the game's own defaults.
 FIRST_RUN = {"frame_rate": 60, "present_effect": "fsr"}
@@ -24,6 +25,9 @@ def _default():
         "save_manager": {"automatic": True, "keep_automatic": 10},
         # Mods (#149, mods.py): folder names in load order, and those turned off.
         "mods": {"order": [], "disabled": []},
+        # Texture packs (#384, texture_packs.py): the same for the folders in <data>/textures.
+        "texture_packs": {"order": [], "disabled": []},
+        "custom_radio": {"version": 1, "ffmpeg": "", "stations": {}},
         "check_updates": True,    # one background check per packaged launcher session
         "game_package": "",       # the Games on Demand package (file)
         "tu_package": "",         # the player's title update package (TU4)
@@ -44,6 +48,11 @@ def _default():
         "specs": {"checked": False, "fingerprint": "", "dismissed": "", "values": None},
         # Battery saver (#140): the settings it forced at the last start (power.py); None: none.
         "power": {"applied": None},
+        # Play in VR (vr.py): the first-time checklist was answered with "Don't show again".
+        "vr": {"checklist_hidden": False},
+        # The "Online features" choice (online_features.py, PRIVACY.md): on (None until made), the
+        # first-run question still to ask, and the installer run whose choice was applied.
+        "online_features": {"on": None, "ask": False, "installer": ""},
         # One-time fixes of values an older launcher saved: done once, so a later choice sticks.
         "migrated": {"discord_application_id": False},
     }
@@ -91,6 +100,10 @@ class Config:
             return
         if isinstance(data, dict):
             _merge(self.d, data)
+            # Station slot names are dynamic keys, unlike the fixed settings schema.
+            custom = data.get("custom_radio")
+            if isinstance(custom, dict) and isinstance(custom.get("stations"), dict):
+                self.d["custom_radio"]["stations"] = custom["stations"]
             self.loaded = True
         # Migrate the former combined AA/upscaling selectors before choice coercion.
         if self.d["settings"].get("fh1_upscaler") == "dlaa":
@@ -180,20 +193,26 @@ class Config:
         return specs.warnings(self.pc_specs(), self.effective_settings())
 
     def specs_banner_due(self) -> bool:
-        """Some settings are heavy for this PC and the player has not answered for this hardware."""
+        """Some settings are heavy for this PC (or a Steam Deck's differ from its preset) and the player has
+        not answered for this hardware."""
         s = self.pc_specs()
         return (s.known() and self.d["specs"].get("dismissed") != s.signature()
-                and any(w.fix for w in self.specs_warnings()))
+                and bool(any(w.fix for w in self.specs_warnings()) or specs.deck_offer(s, self.effective_settings())))
+
+    def specs_banner_text(self) -> str:
+        return specs.banner_text(self.pc_specs())
 
     def dismiss_specs_banner(self):
         self.d["specs"]["dismissed"] = self.pc_specs().signature()
 
     def use_recommended(self) -> list:
-        """Apply the fixes of the warnings only (never another setting); returns the keys changed."""
+        """Apply the fixes of the warnings only, and on a Steam Deck its preset (never another setting);
+        returns the keys changed."""
         fixes = {}
         for w in self.specs_warnings():
             for key, value in w.fix.items():   # the CPU and the card may both limit the frame rate: the lower wins
                 fixes[key] = min(fixes[key], value) if key == "frame_rate" and key in fixes else value
+        fixes.update(specs.deck_offer(self.pc_specs(), {**self.effective_settings(), **fixes}))
         changed = [k for k, v in fixes.items() if self.settings.get(k) != v]
         self.settings.update(fixes)
         self.dismiss_specs_banner()
@@ -287,6 +306,10 @@ def render_toml(cfg: Config) -> str:
                 or s.key in LAUNCHER_ONLY:
             continue
         v = schema.coerce(s, settings.get(s.key, s.default))
+        if s.key in ("user_language", "user_country"):    # the Game language choice (#434) sets both
+            v = dict(zip(("user_language", "user_country"), languages.resolve(
+                settings.get("game_language", ""), settings.get("user_language", s.default),
+                settings.get("user_country", s.default))))[s.key]
         if v != s.default:
             lines.append(f"{s.key} = {toml_value(v)}")
     # public and custom servers are named here too; local (an environment variable at start)

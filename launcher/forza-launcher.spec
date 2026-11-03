@@ -4,6 +4,7 @@
 # files beside it. The Forza Live server runs inside this executable (--live-server), so
 # the stdlib modules it imports are collected as hidden imports.
 import ast
+import importlib.util
 import sys
 from pathlib import Path
 
@@ -15,9 +16,9 @@ images = repo / "docs" / "images"
 
 stdlib = set(sys.stdlib_module_names)
 hidden = set()
-for f in (repo / "server").glob("*.py"):
-    if f.name.startswith("test_"):
-        continue
+if not (repo / "server" / "forza_live_server.py").is_file():
+    raise SystemExit("server/ is empty: the Forza Live server is a git submodule (git submodule update --init server)")
+for f in [repo / "server" / "forza_live_server.py", *sorted((repo / "server" / "forza_live").rglob("*.py"))]:
     for node in ast.walk(ast.parse(f.read_text(encoding="utf-8"))):
         if isinstance(node, ast.Import):
             hidden.update(a.name.split(".")[0] for a in node.names)
@@ -53,11 +54,20 @@ hidden += ["sdl2dll"]
 
 # The title update step (a Python tool the frozen app runs itself with --run-script), and the shader
 # prebuild (#226), which imports pipeline_list, fxobj_shaders, xxh3, lzx_delta and apply_title_update.
-for _tool in ("apply_title_update.py", "lzx_delta.py", "xdc_decode.py", "livery_codec.py", "pipeline_list.py", "fxobj_shaders.py", "xxh3.py"):
+for _tool in ("apply_title_update.py", "lzx_delta.py", "xdc_decode.py", "extract_map_points.py", "livery_codec.py", "pipeline_list.py", "fxobj_shaders.py", "xxh3.py", "native_menu_scene.py", "offline_cars_flow.py", "native_tuning_assets.py"):
     if (repo / "tools" / _tool).is_file():
         datas.append((str(repo / "tools" / _tool), "tools"))
+datas.append((str(repo / "tools" / "native_menu" / "fh1_donors.json"), "tools/native_menu"))
+for name in ("change_car", "tune_car", "garage", "autoshow", "social_friends", "social_world", "social_game", "social_requests", "social_chat", "social_connection"):
+    datas.append((str(repo / "tools" / "native_menu" / "icons" / (name + ".xds")), "tools/native_menu/icons"))
+for name in ("ATTRIBUTION.md", "FONT-AWESOME-LICENSE.txt"):
+    datas.append((str(repo / "tools" / "native_menu" / "icons" / name), "tools/native_menu/icons"))
+# The licence of the RFC 8032 code forza_launcher/ed25519.py is derived from (#515).
+datas.append((str(root / "forza_launcher" / "RFC8032-LICENSE.txt"), "forza_launcher"))
 # The shipped pipeline list (hashes and render state only).
 datas.append((str(root / "forza_launcher" / "data" / "pipelines-4D5309C9.json"), "forza_launcher/data"))
+# The known-good DLC files (sizes and SHA-1 only, forza_launcher/dlccheck.py, #422).
+datas.append((str(root / "forza_launcher" / "data" / "dlc-4D5309C9.json"), "forza_launcher/data"))
 
 a = Analysis(
     [str(root / "main.py")],
@@ -65,7 +75,7 @@ a = Analysis(
     datas=datas,
     binaries=collect_dynamic_libs("sdl2dll"),
     hiddenimports=hidden + ["install_dlc", "xcontent_extract", "xiso_extract", "xdc_decode", "livery_codec", "tomllib", "pipeline_list",
-                            "fxobj_shaders", "xxh3", "lzx_delta", "apply_title_update"],
+                            "fxobj_shaders", "xxh3", "lzx_delta", "apply_title_update", "offline_cars_flow", "extract_map_points"],
     excludes=["tkinter", "unittest", "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets",
               "PySide6.QtQml", "PySide6.QtQuick", "PySide6.Qt3DCore", "PySide6.QtMultimedia",
               "PySide6.QtNetwork", "PySide6.QtPdf", "PySide6.QtSql", "PySide6.QtTest"],
@@ -80,11 +90,26 @@ if sys.platform == "win32":
     a.binaries = [entry for entry in a.binaries
                   if Path(entry[0]).name.lower() not in {"icu.dll", "icuuc.dll", "icuin.dll"}]
 pyz = PYZ(a.pure)
+# The Windows version resource (company, product, description, versions, original file name) of
+# forza-launcher.exe, generated from forza_launcher/_version.py (#482, #354). Windows only: the Linux
+# build has no version resource and does not run packaging/windows_version_info.py.
+version_file = None
+if sys.platform == "win32":
+    _wvi_spec = importlib.util.spec_from_file_location("windows_version_info", root / "packaging" / "windows_version_info.py")
+    _wvi = importlib.util.module_from_spec(_wvi_spec)
+    _wvi_spec.loader.exec_module(_wvi)
+    _version_ns = {}
+    exec((root / "forza_launcher" / "_version.py").read_text(encoding="utf-8"), _version_ns)
+    _work = Path(globals().get("workpath") or root / "build")
+    _work.mkdir(parents=True, exist_ok=True)
+    version_file = _work / "forza-launcher-version.txt"
+    version_file.write_text(_wvi.version_file_text(_version_ns["__version__"]), encoding="utf-8", newline="\n")
 exe = EXE(
     pyz, a.scripts, [],
     exclude_binaries=True,
     name="forza-launcher",
     console=False,
     icon=str(repo / "forza-recomp" / "resources" / "forza.ico") if sys.platform == "win32" else None,
+    version=str(version_file) if version_file else None,
 )
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="forza-launcher")

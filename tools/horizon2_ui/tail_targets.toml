@@ -1,0 +1,18 @@
+# FH2 Xbox 360 retail 0.0.0.12 (Title ID 4D530AA4, Media ID 7C7779D1).
+# Tail-only entry points confirmed against the owner's executable. These are
+# codegen boundaries, not patches to the executable or substitutes for game code.
+[functions]
+0x82C9EFD8 = { name = "sub_82C9EFD8" }
+0x82C9EFF0 = { name = "sub_82C9EFF0" }
+0x82C9EFF8 = { name = "sub_82C9EFF8" }
+0x82C9F000 = { name = "sub_82C9F000" }
+0x82C9F008 = { name = "sub_82C9F008" }
+0x82C9F010 = { name = "sub_82C9F010" }
+0x82CBFCB8 = { name = "sub_82CBFCB8" }
+0x82CBFCC0 = { name = "sub_82CBFCC0" }
+0x82CBFCC8 = { name = "sub_82CBFCC8" }
+0x82CBFCD0 = { name = "sub_82CBFCD0" }
+0x82E83A70 = { name = "sub_82E83A70" }
+0x830453EC = { name = "sub_830453EC" }
+0x8305E804 = { name = "sub_8305E804" }
+0x8305E91C = { name = "sub_8305E91C" }

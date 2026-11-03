@@ -12,6 +12,8 @@ import zlib
 from . import save_editor as profile_editor, saves, unicorns
 
 MAX_DATABASE = 32 * 1024**2
+# Matches forza-recomp/src/platform/garage_capacity.h; container-size checks are separate.
+GARAGE_CAPACITY = 1000
 CHUNK = 32768
 GARAGE_COLUMNS = set('''Id CarId PerformanceIndex ClassID PartsValue SpeedRating AccelerationRating
 LaunchRating BrakingRating HandlingRating CurbWeight WeightDistribution AspirationTypeId SimPeakPower
@@ -134,7 +136,11 @@ def decode(profile, raw, keys):
 def _open(database):
     db = sqlite3.connect(':memory:')
     try:
-        db.enable_load_extension(False)
+        # Some Python builds (including macOS) omit loadable-extension support.
+        # Where the API exists, explicitly keep it disabled before reading the save.
+        disable_extensions = getattr(db, 'enable_load_extension', None)
+        if disable_extensions is not None:
+            disable_extensions(False)
         db.execute('PRAGMA trusted_schema=OFF')
         db.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, MAX_DATABASE)
         db.deserialize(database)
@@ -266,6 +272,10 @@ def add_missing(cfg, profile, cancelled=lambda: False, progress=lambda *_: None)
             existing = tuple(cid for cid, _, _ in unicorns.CARS if cid in owned)
             if not missing:
                 return Result((), existing)
+            count = db.execute('SELECT count(*) FROM Career_Garage').fetchone()[0]
+            if count + len(missing) > GARAGE_CAPACITY:
+                raise saves.SaveError(f'The garage holds at most {GARAGE_CAPACITY:,} cars. '
+                                      f'Adding these {len(missing)} cars would exceed that limit.')
             unicorns.check_files(cfg.game_files())
             ordinal = max(db.execute('SELECT coalesce(max(Id),0) FROM Career_Garage').fetchone()[0],
                           db.execute('SELECT coalesce(max(LastUsedGarageId),0) FROM LastUsedGarageId').fetchone()[0])

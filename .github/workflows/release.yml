@@ -1,6 +1,7 @@
 # Builds the launcher installers and attaches them to the release.
 #
-# The installers and the Flatpak bundle hold the launcher, the project's own sources, the Forza Live server and the
+# The installers and the Flatpak bundle hold the launcher, the project's own sources, the Forza Live server (the
+# server/ submodule, FH1-ReImagined/forza-live, checked out by the jobs that package or test it) and the
 # patched ReXGlue SDK pieces. They hold NO game code, NO game data and NO built game: the
 # launcher builds the game on the player's computer from their own copy of Forza Horizon.
 #
@@ -13,6 +14,11 @@ on:
     tags: ["v*"]
   pull_request:
     branches: [main, 'launcher-stack/**']
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'screenshots/**'
+      - '.github/ISSUE_TEMPLATE/**'
   workflow_dispatch:
 
 concurrency:
@@ -33,6 +39,8 @@ jobs:
       QT_QPA_PLATFORM: offscreen
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true   # server/: the Forza Live server (FH1-ReImagined/forza-live)
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -43,10 +51,50 @@ jobs:
         run: python -m pip install -r launcher/requirements.txt
       - name: Verify Qt runtime is available
         run: python -c "from PySide6.QtWidgets import QApplication"
+      - name: Texture pack compressor and its round trip (forza-texcompress, #413)
+        shell: bash
+        run: |
+          cmake -S forza-recomp/texcompress -B "$RUNNER_TEMP/texcompress" -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$RUNNER_TEMP/texcompress" --config Release --parallel 2
+          ctest --test-dir "$RUNNER_TEMP/texcompress" -C Release --output-on-failure
+          exe=forza-texcompress; [ "$RUNNER_OS" = Windows ] && exe=forza-texcompress.exe
+          echo "FORZA_TEXCOMPRESS=$RUNNER_TEMP/texcompress/$exe" >> "$GITHUB_ENV"
       - name: Launcher unit and Qt tests
         run: python -m unittest discover -s launcher -p 'test_*.py' -v
+      - if: runner.os == 'Linux'
+        name: Forza Live server tests (the server/ submodule's pinned commit)
+        working-directory: server
+        run: python -m unittest discover -s tests -t .
+      - name: forza.exe DPI manifest (#418)
+        run: python tools/test_dpi_manifest.py -v
       - name: Livery codec tests
         run: python -m unittest discover -s tools -p 'test_livery_codec.py' -v
+      - name: Resource hook audit tests (synthetic images)
+        run: python -m unittest discover -s tools -p 'test_resource_data_hooks.py' -v
+      - name: Thumbnail and photo sync renewal contracts (no game)
+        shell: bash
+        run: |
+          cmake -S forza-recomp/tests/thumbnail-sync -B "$RUNNER_TEMP/thumbnail-sync"
+          cmake --build "$RUNNER_TEMP/thumbnail-sync" --config Release --parallel 1
+          ctest --test-dir "$RUNNER_TEMP/thumbnail-sync" -C Release --output-on-failure
+      - if: runner.os == 'Linux'
+        name: Radio station production wrapper regressions (disc and TU4)
+        run: |
+          cmake -S forza-recomp/tests/radio-station -B "$RUNNER_TEMP/radio-station" -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$RUNNER_TEMP/radio-station" --parallel 1
+          ctest --test-dir "$RUNNER_TEMP/radio-station" --output-on-failure
+      - name: Render comparison and session safety tests (no game)
+        run: |
+          python -m pip install Pillow
+          python -m unittest discover -s tools -p 'test_render*.py' -v
+      - if: runner.os == 'Linux'
+        name: FFCB slot wait regression (synthetic events, base and TU4)
+        run: python tools/test_ffcb_wake.py --compiler g++ --output "$RUNNER_TEMP/ffcb-wake"
+      - if: runner.os == 'Linux'
+        name: Resource ownership regression
+        run: |
+          g++ -std=c++20 -O2 -pthread forza-recomp/tests/resource_data_take_test.cpp -o "$RUNNER_TEMP/resource-data-test"
+          "$RUNNER_TEMP/resource-data-test"
       - name: Standalone car tuning model, library and donor checks
         shell: bash
         run: |
@@ -63,6 +111,11 @@ jobs:
         run: |
           g++ -std=c++20 -O2 -I forza-recomp/src/kernel forza-recomp/tests/gamertag_text_test.cpp -o "$RUNNER_TEMP/gamertag-test"
           "$RUNNER_TEMP/gamertag-test"
+      - if: runner.os == 'Linux'
+        name: Content manifest text
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src/kernel forza-recomp/tests/content_manifest_test.cpp -o "$RUNNER_TEMP/content-manifest-test"
+          "$RUNNER_TEMP/content-manifest-test"
       - if: runner.os == 'Linux'
         name: On-screen keyboard
         run: |
@@ -99,6 +152,16 @@ jobs:
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src tools/test_lsp_request_header.cpp -o "$RUNNER_TEMP/lsp-request-header-test"
           "$RUNNER_TEMP/lsp-request-header-test"
       - if: runner.os == 'Linux'
+        name: Signed requests to the Forza Live server
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src tools/test_live_signing.cpp -o "$RUNNER_TEMP/live-signing-test"
+          "$RUNNER_TEMP/live-signing-test"
+      - if: runner.os == 'Linux'
+        name: Effective startup performance settings
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/performance_settings_test.cpp -o "$RUNNER_TEMP/performance-settings-test"
+          "$RUNNER_TEMP/performance-settings-test"
+      - if: runner.os == 'Linux'
         name: Scene MSAA and tiling choice
         run: |
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/scene_tiling_test.cpp -o "$RUNNER_TEMP/scene-tiling-test"
@@ -114,25 +177,69 @@ jobs:
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/world_detail_test.cpp -o "$RUNNER_TEMP/world-detail-test"
           "$RUNNER_TEMP/world-detail-test"
       - if: runner.os == 'Linux'
+        name: Shadow softness levels
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/shadow_filter_test.cpp -o "$RUNNER_TEMP/shadow-filter-test"
+          "$RUNNER_TEMP/shadow-filter-test"
+      - if: runner.os == 'Linux'
+        name: CPU drivers without rubber banding
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/ai_catchup_test.cpp -o "$RUNNER_TEMP/ai-catchup-test"
+          "$RUNNER_TEMP/ai-catchup-test"
+      - if: runner.os == 'Linux'
+        name: Custom Race statements
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/custom_race_test.cpp -o "$RUNNER_TEMP/custom-race-test"
+          "$RUNNER_TEMP/custom-race-test"
+      - if: runner.os == 'Linux'
+        name: Camera-facing minimap headings
+        run: |
+          g++ -std=c++20 -O2 -pthread -Wall -Wextra -Werror forza-recomp/tests/minimap_heading_test.cpp -o "$RUNNER_TEMP/minimap-heading-test"
+          "$RUNNER_TEMP/minimap-heading-test"
+      - if: runner.os == 'Linux'
         name: Mods over the title update's archive
         run: |
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/mod_archive_test.cpp -o "$RUNNER_TEMP/mod-archive-test"
           "$RUNNER_TEMP/mod-archive-test"
+      - if: runner.os == 'Linux'
+        name: VR head pose, OpenXR maths and frame pairing
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror forza-recomp/tests/vr_head_pose_math_test.cpp -o "$RUNNER_TEMP/vr-head-pose-test"
+          "$RUNNER_TEMP/vr-head-pose-test"
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/xr_math_test.cpp -o "$RUNNER_TEMP/xr-math-test"
+          "$RUNNER_TEMP/xr-math-test"
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/xr_frame_tags_test.cpp -o "$RUNNER_TEMP/xr-frame-tags-test"
+          "$RUNNER_TEMP/xr-frame-tags-test"
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/vr_cockpit_space_test.cpp -o "$RUNNER_TEMP/vr-cockpit-space-test"
+          "$RUNNER_TEMP/vr-cockpit-space-test"
+          # The actual camera hook must restore flat/menu state after a posed cockpit view.
+          for update in 0 4; do
+            g++ -std=c++20 -O2 -pthread -DFORZA_TITLE_UPDATE="$update" \
+              -I forza-recomp/src -I forza-recomp/tests/xr_lifecycle/mocks \
+              forza-recomp/tests/xr_lifecycle/vr_camera_test.cpp -o "$RUNNER_TEMP/vr-camera-$update-test"
+            "$RUNNER_TEMP/vr-camera-$update-test"
+          done
 
-  # The patched SDK pieces for Linux: the plugin, runtime and codegen tool built from the SDK
-  # source with this repository's patches (tools/build_rexglue_sdk.sh). Cached on the patches.
+  # The patched SDK pieces for Linux: the plugin, runtime and codegen tool built from ReIGlue,
+  # the project's fork of the SDK, at the revision tools/build_rexglue_sdk.sh pins. Cached on that script.
   sdk-linux:
     # 22.04: the oldest runner image, so the overlay needs glibc 2.35 only
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+      - name: Test scoped event radio wrappers (disc and TU4)
+        run: |
+          cmake -S forza-recomp/tests/radio-events -B "$RUNNER_TEMP/radio-events" -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$RUNNER_TEMP/radio-events" --config Release --parallel 1
+          ctest --test-dir "$RUNNER_TEMP/radio-events" -C Release --output-on-failure
+
       - name: Test Linux dependency retry handling
         run: python3 -m unittest launcher/test_ci_linux_sdk_setup.py
       - id: cache
         uses: actions/cache@v4
         with:
           path: rexglue-overlay-linux-amd64.tar.gz
-          key: sdk-overlay-linux-${{ hashFiles('patches/rexglue-sdk/**', 'tools/build_rexglue_sdk.sh', 'tools/test_readback_history.cpp', 'tools/test_frame_cost.cpp', 'tools/test_texture_pack_dds.cpp', 'tools/test_shader_load_memo.cpp', 'tools/test_pipeline_lookahead.cpp', 'forza-recomp/tests/wheel_ff_log_test.cpp', 'forza-recomp/tests/wheel_ff_reject_test.cpp', 'forza-recomp/tests/wheel_thrustmaster_test.cpp', 'forza-recomp/tests/wheel_rumble_test.cpp', 'forza-recomp/tests/wheel_ff_test.cpp', 'forza-recomp/tests/wheel_devices_test.cpp', 'forza-recomp/tests/wheel_buttons_test.cpp', 'forza-recomp/tests/wheel_shifter_test.cpp', 'forza-recomp/tests/wheel_min_force_test.cpp', 'forza-recomp/tests/wheel_gear_request_test.cpp', 'forza-recomp/tests/wheel_handbrake_test.cpp', 'forza-recomp/tests/wheel_primary_test.cpp', 'tools/test_wait_wakeups.cpp', 'tools/test_driver_pipeline_cache.cpp', 'tools/test_pipeline_store.cpp', 'tools/test_fh1_screen_raster.cpp', 'tools/test_render_target_trim.cpp', 'tools/test_vulkan_memory_placement.cpp', 'tools/test_submission_watch.cpp', 'tools/test_gamepad_remap.cpp', 'tools/test_pipeline_prebuild.cpp', 'tools/test_vfs_host_errors.cpp', 'tools/test_xma_invalid_input.cpp', 'launcher/packaging/ci_linux_sdk_setup.sh', 'launcher/packaging/ci_toolchain_debs.txt', 'launcher/forza_launcher/pins.py') }}
+          key: sdk-overlay-linux-${{ hashFiles('tools/tests/auto-pause/**','forza-recomp/tests/auto_pause*','forza-recomp/src/platform/auto_pause*','forza-recomp/src/hooks/telemetry.cpp','forza-recomp/src/platform/camera_fov.h','forza-recomp/src/platform/driving_gate.h','forza-recomp/src/platform/guest_*.h','forza-recomp/src/platform/sdk_import.*','forza-recomp/src/platform/xr.h','forza-recomp/src/tu4_addresses.h','tools/test_presenter_reconnect.cpp', 'tools/build_rexglue_sdk.sh', 'tools/test_readback_history.cpp', 'tools/test_frame_cost.cpp', 'tools/test_world_ao.cpp', 'tools/test_vr_stereo.cpp', 'tools/test_texture_pack_dds.cpp', 'tools/test_shader_load_memo.cpp', 'tools/test_pipeline_lookahead.cpp', 'forza-recomp/tests/wheel_ff_log_test.cpp', 'forza-recomp/tests/wheel_ff_reject_test.cpp', 'forza-recomp/tests/wheel_thrustmaster_test.cpp', 'forza-recomp/tests/wheel_rumble_test.cpp', 'forza-recomp/tests/wheel_rumble_pace_test.cpp', 'forza-recomp/tests/wheel_ff_test.cpp', 'forza-recomp/tests/wheel_devices_test.cpp', 'forza-recomp/tests/wheel_buttons_test.cpp', 'forza-recomp/tests/wheel_shifter_test.cpp', 'forza-recomp/tests/wheel_min_force_test.cpp', 'forza-recomp/tests/wheel_gear_request_test.cpp', 'forza-recomp/tests/wheel_handbrake_test.cpp', 'forza-recomp/tests/wheel_primary_test.cpp', 'tools/test_wait_wakeups.cpp', 'tools/test_driver_pipeline_cache.cpp', 'tools/test_pipeline_store.cpp', 'tools/test_fh1_screen_raster.cpp', 'tools/test_render_target_trim.cpp', 'tools/test_vulkan_memory_placement.cpp', 'tools/test_submission_watch.cpp', 'tools/test_gamepad_remap.cpp', 'tools/test_pipeline_prebuild.cpp', 'tools/test_vfs_host_errors.cpp', 'tools/test_xma_invalid_input.cpp', 'launcher/packaging/ci_linux_sdk_setup.sh', 'launcher/packaging/ci_toolchain_debs.txt', 'launcher/forza_launcher/pins.py') }}
       - if: steps.cache.outputs.cache-hit != 'true'
         name: Build dependencies, LLVM, CMake and the pinned SDK nightly
         run: |
@@ -173,6 +280,14 @@ jobs:
           clang++ -std=c++17 -Wall -Wextra -Werror -I"$HOME/rexglue-sdk-src-forza/sdk/src/graphics" \
             tools/test_frame_cost.cpp -o "$RUNNER_TEMP/frame-cost-test"
           "$RUNNER_TEMP/frame-cost-test"
+          # #333: VR true stereo's decisions (ReIGlue 0396).
+          clang++ -std=c++17 -Wall -Wextra -Werror -I"$HOME/rexglue-sdk-src-forza/sdk/src/graphics" \
+            tools/test_vr_stereo.cpp -o "$RUNNER_TEMP/vr-stereo-test"
+          "$RUNNER_TEMP/vr-stereo-test"
+          # #380: world ambient occlusion (patch 0350).
+          clang++ -std=c++17 -Wall -Wextra -Werror -I"$HOME/rexglue-sdk-src-forza/sdk/src/graphics/vulkan" \
+            tools/test_world_ao.cpp -o "$RUNNER_TEMP/world-ao-test"
+          "$RUNNER_TEMP/world-ao-test"
           # #384: texture pack DDS files (patch 0280).
           clang++ -std=c++20 -Wall -Wextra -Werror -I"$HOME/rexglue-sdk-src-forza/sdk/include" \
             "$HOME/rexglue-sdk-src-forza/sdk/src/graphics/pipeline/texture/pack_format.cpp" \
@@ -198,9 +313,10 @@ jobs:
           # #303: the minimum force, the H-pattern gear on lever moves (and the shifter it sits
           # on), the analog handbrake and which device is the wheel (patches 0131-0134, #306);
           # #308: Thrustmaster wheels and refused effects (0135, 0136); #304: the force feedback
-          # in the log and the effects kept playing (0145, 0146).
+          # in the log and the effects kept playing (0145, 0146); #467: the vibration at a fixed pace
+          # (ReIGlue 0403); #468: an H-pattern shift through neutral (0404, wheel_gear_request).
           for t in wheel_shifter wheel_min_force wheel_gear_request wheel_handbrake \
-                   wheel_primary wheel_thrustmaster wheel_ff_reject wheel_ff_log; do
+                   wheel_primary wheel_thrustmaster wheel_ff_reject wheel_ff_log wheel_rumble_pace; do
             clang++ -std=c++17 -Wall -Wextra -Werror -I"$HOME/rexglue-sdk-src-forza/sdk/include" \
               -I"$HOME/rexglue-sdk-src-forza/sdk/src/input/wheel" \
               "forza-recomp/tests/${t}_test.cpp" -o "$RUNNER_TEMP/${t}-test"
@@ -216,6 +332,10 @@ jobs:
           clang++ -std=c++23 -pthread -I"$overlay/include" tools/test_vfs_host_errors.cpp \
             -L"$overlay/lib" -lrexruntime -Wl,-rpath,"$overlay/lib" -o "$RUNNER_TEMP/vfs-host-errors-test"
           "$RUNNER_TEMP/vfs-host-errors-test"
+          cmake -S tools/tests/auto-pause -B "$RUNNER_TEMP/auto-pause" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_PREFIX_PATH="$overlay"
+          cmake --build "$RUNNER_TEMP/auto-pause" --parallel 2
+          ctest --test-dir "$RUNNER_TEMP/auto-pause" --output-on-failure
           clang++ -std=c++23 -pthread -DSPDLOG_FMT_EXTERNAL -DSPDLOG_COMPILED_LIB -I"$overlay/include" \
             tools/test_xma_invalid_input.cpp -L"$overlay/lib" -lrexruntime -Wl,-rpath,"$overlay/lib" \
             -o "$RUNNER_TEMP/xma-invalid-input-test"
@@ -251,6 +371,22 @@ jobs:
             -DFORZA_PATCHED_SDK_SOURCE="$HOME/rexglue-sdk-src-forza/sdk"
           "$HOME/cmake/bin/cmake" --build "$RUNNER_TEMP/overlay-sdk" --parallel 2
           "$HOME/cmake/bin/ctest" --test-dir "$RUNNER_TEMP/overlay-sdk" --output-on-failure
+      - name: Minimap camera native adapter regressions
+        run: |
+          "$HOME/cmake/bin/cmake" -S forza-recomp/tests/minimap-camera -B "$RUNNER_TEMP/minimap-camera-tests" \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER="$HOME/llvm/bin/clang++" \
+            -DCMAKE_PREFIX_PATH="$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64"
+          "$HOME/cmake/bin/cmake" --build "$RUNNER_TEMP/minimap-camera-tests" --parallel 2
+          "$HOME/cmake/bin/ctest" --test-dir "$RUNNER_TEMP/minimap-camera-tests" --output-on-failure
+      - name: Custom Race statements and native card context regressions
+        run: |
+          # The context fixture compiles the actual hook and needs the SDK headers.
+          # Run on cache hits too, so every PR head exercises both tests.
+          "$HOME/cmake/bin/cmake" -S forza-recomp/tests/custom-race -B "$RUNNER_TEMP/custom-race-tests" \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER="$HOME/llvm/bin/clang++" \
+            -DCMAKE_PREFIX_PATH="$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64"
+          "$HOME/cmake/bin/cmake" --build "$RUNNER_TEMP/custom-race-tests" --parallel 2
+          "$HOME/cmake/bin/ctest" --test-dir "$RUNNER_TEMP/custom-race-tests" --output-on-failure
       - name: Benchmark and title-modal regression tests
         run: |
           "$HOME/cmake/bin/cmake" -S forza-recomp/tests/benchmark -B "$RUNNER_TEMP/benchmark-tests" \
@@ -258,6 +394,13 @@ jobs:
             -DCMAKE_PREFIX_PATH="$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64"
           "$HOME/cmake/bin/cmake" --build "$RUNNER_TEMP/benchmark-tests" --parallel 2
           "$HOME/cmake/bin/ctest" --test-dir "$RUNNER_TEMP/benchmark-tests" --output-on-failure
+      - name: Native quit allocation, forwarding and save-completion adapter
+        run: |
+          "$HOME/cmake/bin/cmake" -S forza-recomp/tests/native-quit -B "$RUNNER_TEMP/native-quit-tests" \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER="$HOME/llvm/bin/clang++" \
+            -DCMAKE_PREFIX_PATH="$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64"
+          "$HOME/cmake/bin/cmake" --build "$RUNNER_TEMP/native-quit-tests" --parallel 2
+          "$HOME/cmake/bin/ctest" --test-dir "$RUNNER_TEMP/native-quit-tests" --output-on-failure
       - uses: actions/upload-artifact@v4
         with:
           name: sdk-overlay-linux
@@ -269,14 +412,15 @@ jobs:
   sdk-windows:
     runs-on: windows-2022
     steps:
-      # Keep line endings as committed: with autocrlf the patches get CRLF and git apply fails.
+      # Keep line endings as committed: with autocrlf the SDK checkout and its SDL patch get CRLF
+      # and git apply fails.
       - run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
       - id: cache
         uses: actions/cache@v4
         with:
           path: rexglue-overlay-windows-amd64.tar.gz
-          key: sdk-overlay-windows-${{ hashFiles('patches/rexglue-sdk/**', 'tools/build_rexglue_sdk.sh', 'tools/test_driver_pipeline_cache.cpp', 'tools/test_pipeline_store.cpp', 'tools/test_fh1_screen_raster.cpp', 'tools/test_pipeline_prebuild.cpp', 'tools/test_vfs_host_errors.cpp', 'tools/tests/sdk-filesystem/**', 'tools/cmake/windows-native-clang-cl.cmake', 'launcher/forza_launcher/pins.py') }}
+          key: sdk-overlay-windows-${{ hashFiles('tools/tests/auto-pause/**','forza-recomp/tests/auto_pause*','forza-recomp/src/platform/auto_pause*','forza-recomp/src/hooks/telemetry.cpp','forza-recomp/src/platform/camera_fov.h','forza-recomp/src/platform/driving_gate.h','forza-recomp/src/platform/guest_*.h','forza-recomp/src/platform/sdk_import.*','forza-recomp/src/platform/xr.h','forza-recomp/src/tu4_addresses.h','tools/test_presenter_reconnect.cpp', 'tools/build_rexglue_sdk.sh', 'tools/test_driver_pipeline_cache.cpp', 'tools/test_pipeline_store.cpp', 'tools/test_fh1_screen_raster.cpp', 'tools/test_pipeline_prebuild.cpp', 'tools/test_vfs_host_errors.cpp', 'tools/tests/sdk-filesystem/**', 'tools/cmake/windows-native-clang-cl.cmake', 'launcher/forza_launcher/pins.py') }}
       - if: steps.cache.outputs.cache-hit != 'true'
         uses: actions/setup-python@v5
         with:
@@ -286,7 +430,7 @@ jobs:
         with:
           arch: x64
       - if: steps.cache.outputs.cache-hit != 'true'
-        name: LLVM, SDK source and patches
+        name: LLVM and the SDK source (ReIGlue)
         shell: bash
         run: |
           python launcher/packaging/ci_fetch.py llvm-windows "$RUNNER_TEMP/llvm" --strip 1
@@ -335,7 +479,18 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE="$PWD/tools/cmake/windows-native-clang-cl.cmake"
           cmake --build "$RUNNER_TEMP/sdk-filesystem" --parallel 2
           ctest --test-dir "$RUNNER_TEMP/sdk-filesystem" --output-on-failure
+          cmake -S tools/tests/auto-pause -B "$RUNNER_TEMP/auto-pause" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$PREFIX" \
+            -DCMAKE_TOOLCHAIN_FILE="$PWD/tools/cmake/windows-native-clang-cl.cmake"
+          cmake --build "$RUNNER_TEMP/auto-pause" --parallel 2
+          ctest --test-dir "$RUNNER_TEMP/auto-pause" --output-on-failure
           cp "$SRC/LICENSE" "$PREFIX/LICENSE-rexglue-sdk.txt"
+          # The OpenXR loader for the VR setting (docs/vr.md, "Packaging"; pinned in pins.py): the
+          # launcher copies every DLL of bin/ next to forza.exe. The game opens it only with VR on.
+          python launcher/packaging/ci_fetch.py openxr-loader-windows "$RUNNER_TEMP/openxr"
+          cp "$RUNNER_TEMP/openxr/x64/bin/openxr_loader.dll" "$PREFIX/bin/"
+          mkdir -p "$PREFIX/share/licenses/openxr-loader"
+          cp "$RUNNER_TEMP/openxr/share/doc/openxr/LICENSE" "$PREFIX/share/licenses/openxr-loader/LICENSE.txt"
           tar -C "$PREFIX" -czf rexglue-overlay-windows-amd64.tar.gz .
       - if: failure()
         uses: actions/upload-artifact@v4
@@ -352,6 +507,8 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true   # server/: the Forza Live server (FH1-ReImagined/forza-live)
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -393,6 +550,8 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true   # server/: the Forza Live server (FH1-ReImagined/forza-live)
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -406,6 +565,20 @@ jobs:
           v="${GITHUB_REF_NAME#v}"; [ "$GITHUB_REF_TYPE" = tag ] || v="0.0.0-dev.${GITHUB_SHA::7}"
           printf '"""Launcher version."""\n__version__ = "%s"\n' "$v" > launcher/forza_launcher/_version.py
           echo "VERSION=$v" >> "$GITHUB_ENV"
+      # PyInstaller's stock Windows bootloader is the same binary in every program it has packed, malware
+      # included, and antivirus machine learning keys on it (#482, #354). So PyInstaller is installed from its
+      # source distribution with the bootloader compiled here, with the Visual Studio C++ tools of the runner
+      # (PyInstaller's waf finds them itself). The version is whatever launcher/requirements-build.txt allows,
+      # as on Linux. The next step's pip install then finds it already satisfied and leaves it alone.
+      - name: PyInstaller with its bootloader built from source
+        shell: bash
+        env:
+          PYINSTALLER_COMPILE_BOOTLOADER: "1"
+          PYINSTALLER_BOOTLOADER_WAF_ARGS: --target-arch=64bit
+        run: |
+          python -m pip install --no-binary pyinstaller -r launcher/requirements-build.txt
+          # fails when run.exe or runw.exe is still byte-identical to the stock wheel's
+          python launcher/packaging/check_bootloader.py
       - name: Build the launcher
         shell: bash
         run: |
@@ -416,6 +589,26 @@ jobs:
           dist/forza-launcher/forza-launcher.exe --version
           dist/forza-launcher/forza-launcher.exe --run-script packaging/gamepad_smoke.py gamepad-smoke.txt
           test -s gamepad-smoke.txt
+      # The spec gave forza-launcher.exe a Windows version resource (company, product, description, versions,
+      # original file name) from forza_launcher/_version.py; fail the build if it did not land.
+      - name: Check the launcher's version resource
+        shell: pwsh
+        run: |
+          $info = (Get-Item launcher/dist/forza-launcher/forza-launcher.exe).VersionInfo
+          $info | Format-List CompanyName, ProductName, FileDescription, FileVersion, ProductVersion, OriginalFilename, InternalName, LegalCopyright
+          $numeric = (python launcher/packaging/windows_version_info.py "$env:VERSION").Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Could not compute the numeric version' }
+          if (-not $info.CompanyName -or -not $info.FileDescription -or $info.OriginalFilename -ne 'forza-launcher.exe' -or $info.ProductVersion -ne $env:VERSION -or $info.FileVersion -ne $numeric) {
+            throw 'forza-launcher.exe has no (or the wrong) version resource'
+          }
+      # TODO(code signing, #482, #354): sign launcher/dist/forza-launcher/forza-launcher.exe here, before the
+      # smoke test and the Package step copy it, so the payload manifest below hashes the signed file. Needs a
+      # code-signing certificate (SignPath Foundation or Certum, still to be chosen) and its secrets, for
+      # example:
+      #   - name: Sign the launcher
+      #     shell: pwsh
+      #     run: <signtool sign /fd SHA256 /tr <timestamp server> /td SHA256 ...> launcher/dist/forza-launcher/forza-launcher.exe
+      # then the signature is verified: (Get-AuthenticodeSignature <file>).Status -eq 'Valid'.
       - name: Smoke test the packaged window
         shell: bash
         run: python launcher/packaging/smoke_gui.py launcher/dist/forza-launcher/forza-launcher.exe
@@ -428,14 +621,36 @@ jobs:
       - name: Installer (Inno Setup, with the Visual C++ 2015-2022 x64 redistributable)
         shell: pwsh
         run: |
-          Invoke-WebRequest https://aka.ms/vs/17/release/vc_redist.x64.exe -OutFile vc_redist.x64.exe
+          # The redistributable the installer bundles: a versioned Microsoft download pinned by SHA-256 in
+          # launcher/forza_launcher/pins.py ("vc-redist-x64"), then Microsoft's Authenticode signature.
+          python launcher/packaging/ci_fetch.py vc-redist-x64 vc_redist.x64.exe
+          if ($LASTEXITCODE -ne 0) { throw 'The pinned Visual C++ redistributable could not be downloaded or did not match its SHA-256 (see the message above)' }
+          $sig = Get-AuthenticodeSignature -LiteralPath vc_redist.x64.exe
+          $sig | Format-List Status, StatusMessage, SignerCertificate
+          if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch '(^|, )O=Microsoft Corporation(,|$)') {
+            throw "vc_redist.x64.exe is not validly signed by Microsoft ($($sig.Status): $($sig.SignerCertificate.Subject))"
+          }
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; }
-          & $iscc "/DAppVersion=$env:VERSION" "/DStage=$PWD\out\ForzaHorizon1-ReImagined" "/DRedist=$PWD\vc_redist.x64.exe" "/DOut=$PWD\installer" launcher\packaging\installer.iss
+          # Hash the final staged payload before Inno Setup packages it. Keep a copy
+          # outside the installer so a quarantined file can still be identified.
+          python launcher/packaging/windows_build_manifest.py out/ForzaHorizon1-ReImagined --version "$env:VERSION" --commit "$env:GITHUB_SHA" --run-url "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not generate the Windows payload manifest' }
+          # The installer's own version resource needs a four-part number (installer.iss: VersionNumeric).
+          $numeric = (python launcher/packaging/windows_version_info.py "$env:VERSION").Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Could not compute the numeric version' }
+          & $iscc "/DAppVersion=$env:VERSION" "/DVersionNumeric=$numeric" "/DStage=$PWD\out\ForzaHorizon1-ReImagined" "/DRedist=$PWD\vc_redist.x64.exe" "/DOut=$PWD\installer" launcher\packaging\installer.iss
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup failed' }
+          Copy-Item -LiteralPath out/ForzaHorizon1-ReImagined/windows-build-manifest.json -Destination "installer/ForzaHorizon1-ReImagined-windows-files-$env:VERSION.json"
+      # TODO(code signing, #482, #354): sign installer/*.exe here (the Setup program), the same way as the
+      # launcher above, before it is uploaded. Inno Setup can also sign the installer and its uninstaller while
+      # compiling (a SignTool entry in [Setup] plus iscc /S...), which also covers unins000.exe.
       - uses: actions/upload-artifact@v4
         with:
           name: launcher-windows
-          path: installer/*.exe
+          path: |
+            installer/*.exe
+            installer/*-windows-files-*.json
 
   # The installer on a clean Windows machine: silent install, files and shortcuts, the launcher's
   # --version and --dry-run, silent uninstall (launcher/packaging/test_installer.ps1).
@@ -464,6 +679,8 @@ jobs:
       options: --privileged
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true   # server/: the Forza Live server (FH1-ReImagined/forza-live)
       - uses: actions/download-artifact@v4
         with:
           name: sdk-overlay-linux
@@ -501,7 +718,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          notes="Installers for the Forza Horizon 1: ReImagined launcher. They contain no game code and no game data: the launcher builds the game on your computer from your own copy of Forza Horizon (Games on Demand package). See https://dyotson.github.io/ForzaHorizon1-ReImagined/"
+          notes="Installers for the Forza Horizon 1: ReImagined launcher. They contain no game code and no game data: the launcher builds the game on your computer from your own copy of Forza Horizon (Games on Demand package). See https://dyotson.github.io/ForzaHorizon1-ReImagined/. Code signing policy: https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined#code-signing-policy. Privacy policy: https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/blob/main/PRIVACY.md"
           gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
             gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --notes "$notes"
           # The SDK overlays are artifacts only for the packaging jobs; every package carries its own.

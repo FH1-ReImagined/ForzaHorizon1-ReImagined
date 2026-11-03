@@ -13,7 +13,9 @@
 #             cars' positions in DIR/cars.txt (tools/carlog.py)
 #   cold      runs with an empty shader cache (--cache_root=DIR/cache_cold); warm (default)
 #             uses the normal one.
-# Intro videos are skipped with START/A through the input FIFO as they start; each scene
+# The boot videos are skipped by --skip_startup_movies (default; FORZA_SKIP_MOVIES=false
+# plays them and START skips each); the in-game videos are skipped with START/A through the
+# input FIFO as they start; each scene
 # is labelled once it is reached (SCENE:<name>), so loading and videos stay out of the
 # scene's numbers.
 #
@@ -34,6 +36,8 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SCENARIO="$1"; DIR="$2"; CACHE="${3:-warm}"
 shift 3 2>/dev/null || shift $#
+. "$ROOT/tools/startup_movies.sh"
+forza_startup_movie_args "$@" || exit $?
 mkdir -p "$DIR"
 
 machine_state() {  # others load1 mem_gb
@@ -59,7 +63,7 @@ prof() {
     [ "${PERF_THREADS:-0}" = 1 ] && echo "$(date +%s.%N) $([ "$1" = START ] && echo start || echo end)" >> "$DIR/marks.txt"
     return 0
 }
-"$ROOT/tools/live_session.sh" "$DIR" 600 "${extra[@]}" "$@" > /dev/null || exit $?
+"$ROOT/tools/live_session.sh" "$DIR" 600 "${extra[@]}" "${STARTUP_MOVIE_ARGS[@]}" > /dev/null || exit $?
 GAME_PID=$(ps -o pid= --ppid "$(cat "$DIR/pid")" | tr -d ' ')
 # Threads made later inherit the CPU set of the thread that makes them; pin again at the scene.
 pin() { [ -n "${PERF_CPUSET:-}" ] && taskset -a -p -c "$PERF_CPUSET" "$GAME_PID" > /dev/null; return 0; }
@@ -71,10 +75,15 @@ say() { echo "$1" > "$fifo"; }
 alive() { kill -0 "$(cat "$DIR/pid")" 2>/dev/null; }
 wait_s() { local end=$((SECONDS + $1)); while [ $SECONDS -lt $end ] && alive; do sleep 1; done; }
 
-# Boot videos (Microsoft Studios, Playground): START skips each as it starts. The title
-# screen ("PRESS START") follows; START there opens the main menu.
-for t in 8 10 12 14; do wait_s $((t - SECONDS)); say START; done
-wait_s 6; say SCENE:title; wait_s 10
+# Boot videos (Microsoft Studios, Playground): skipped by the game's --skip_startup_movies
+# (live_session.sh passes it; FORZA_SKIP_MOVIES=false plays them, then START skips each as it
+# starts). The title screen ("PRESS START") follows; START there opens the main menu.
+if [ "$STARTUP_SKIP_MOVIES" = true ]; then
+    wait_s 10; say SCENE:title; wait_s 6
+else
+    for t in 8 10 12 14; do wait_s $((t - SECONDS)); say START; done
+    wait_s 6; say SCENE:title; wait_s 10
+fi
 say START; wait_s 6; say SCENE:main_menu
 case "$SCENARIO" in
     menu) prof START; wait_s 30; prof STOP ;;

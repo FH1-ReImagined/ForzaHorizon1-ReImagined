@@ -94,6 +94,68 @@ int main() {
     invalid = Payload(id, 128, 1); ++invalid[20]; CHECK(!ValidPayload(invalid, id));
 
     CHECK(Read(path, id).entries.empty() && !Read(path, id).rejected);
+
+    // #443: adding only omitted entries must not rewrite the bounded subset.
+    // A tiny budget exercises the same writer as the 512 MiB production limit.
+    {
+      const auto bounded = root / "bounded.vkpc";
+      WriteState state;
+      const uint64_t budget = kHeaderSize + kEntryHeaderSize + entries[0].size();
+      auto save = [&](const std::vector<Entry>& list) {
+        return Write(bounded, list, id, budget, &state);
+      };
+      CHECK(save(entries).written);
+      const auto stamp = std::filesystem::file_time_type::clock::now() - std::chrono::hours(24);
+      std::filesystem::last_write_time(bounded, stamp);
+      auto more = entries;
+      more.push_back(MakeEntry(0x2000, Payload(id, 200, 9), 200));
+      auto skipped = save(more);
+      CHECK(skipped.unchanged && !skipped.written && skipped.entries == 1 && skipped.skipped == 4);
+      CHECK(std::filesystem::last_write_time(bounded) == stamp);
+      // Separately loaded but identical bytes also skip; no pointer-only decision.
+      more[0] = Read(bounded, id).entries[0];
+      CHECK(save(more).unchanged);
+      // Same-sized data and even a checksum collision still require replacement.
+      auto changed = more;
+      changed[0] = MakeEntry(changed[0].key, Payload(id, changed[0].size(), 7), 100);
+      changed[0].checksum = more[0].checksum;  // force a collision for the comparison
+      CHECK(save(changed).written);
+      CHECK(save(more).written);
+      changed = more; ++changed[0].fresh_size;
+      CHECK(save(changed).written);
+      changed = more; --changed[0].key;
+      CHECK(save(changed).written);
+      // A new earlier key displaces a retained entry; removing it restores the old one.
+      changed = more;
+      changed.insert(changed.begin(), MakeEntry(1, Payload(id, 100, 8), 100));
+      CHECK(save(changed).written && Read(bounded, id).entries[0].key == 1);
+      CHECK(save(more).written);
+      // A smaller entry can fill leftover budget even when larger entries were omitted.
+      const uint64_t larger = budget + kEntryHeaderSize + 40;
+      changed = more;
+      changed.push_back(MakeEntry(0x3000, Payload(id, 40, 8), 40));
+      CHECK(Write(bounded, changed, id, larger, &state).written);
+      CHECK(Read(bounded, id).entries.size() == 2);
+      // State is local to a destination, identity and cache lifetime.
+      CHECK(Write(root / "other.vkpc", changed, id, larger, &state).written);
+      CHECK(Write(bounded, changed, id, larger, &state).written);
+      state = {};
+      CHECK(Write(bounded, changed, id, larger, &state).written);
+      auto other_id = id; ++other_id.driver;
+      CHECK(Write(bounded, changed, other_id, larger, &state).written);
+      CHECK(!Read(bounded, other_id).rejected);
+      CHECK(Write(bounded, changed, id, larger, &state).written);
+      changed.clear(); more.clear();
+      CHECK(!state.entries.back().data.lock());  // snapshots do not retain old payloads
+      CHECK(save(entries).written);
+      // A failed atomic replacement must not mark the changed contents as saved.
+      const auto blocked = root / "blocked.vkpc";
+      std::filesystem::create_directory(blocked);
+      CHECK(!Write(blocked, entries, id, budget, &state).written);
+      std::filesystem::remove(blocked);
+      CHECK(Write(blocked, entries, id, budget, &state).written);
+      CHECK(Write(blocked, entries, id, budget, &state).unchanged);
+    }
     auto written = Write(path, entries, id);
     CHECK(written.written && written.bytes == std::filesystem::file_size(path));
     auto read = Read(path, id);
@@ -138,7 +200,8 @@ int main() {
     WriteBytes(damaged, format1);
     CHECK(Read(damaged, id).entries.empty() && Read(damaged, id).rejected);
 
-    // Size limits: an oversized file is not read, and a save over the limit writes nothing.
+    // Size limits: an oversized file is not read. A save retains complete entries
+    // within its budget, rather than losing all persistence when one more is added.
     {
       std::ofstream oversized(root / "oversized", std::ios::binary);
       oversized.seekp(std::streamoff(kMaxFileSize + 1)); oversized.put(0);
@@ -146,13 +209,34 @@ int main() {
     CHECK(Read(root / "oversized", id).entries.empty() && Read(root / "oversized", id).rejected);
     std::filesystem::remove(root / "oversized");
     {
-      auto big = MakeEntry(1, Payload(id, kMaxEntrySize, 7), kMaxEntrySize);
-      std::vector<Entry> many(kMaxFileSize / kMaxEntrySize + 1, big);
-      for (size_t i = 0; i < many.size(); ++i) many[i].key = i;
+      // Small budgets exercise the real encoder, filesystem replacement and reader
+      // without writing a 512 MiB fixture. Exactly two entries fit including headers.
+      const uint64_t budget = kHeaderSize + 2 * (kEntryHeaderSize + 128);
+      std::vector<Entry> many;
+      for (uint64_t key = 0; key < 6; ++key)
+        many.push_back(MakeEntry(key, Payload(id, 128, uint8_t(key)), 128));
+      for (int session = 0; session < 3; ++session) {
+        const auto bounded = Write(path, many, id, budget);
+        CHECK(bounded.written && bounded.entries == 2 && bounded.skipped == 4);
+        CHECK(bounded.bytes == budget && std::filesystem::file_size(path) == budget);
+        read = Read(path, id);
+        CHECK(!read.rejected && read.entries.size() == 2);
+        for (size_t i = 0; i < 2; ++i) CHECK(SameEntry(read.entries[i], many[i]));
+      }
+      // A large first entry does not prevent a later small entry from fitting.
+      many.insert(many.begin(), MakeEntry(99, Payload(id, 512, 7), 512));
+      const auto bounded = Write(path, many, id, budget - 1);
+      CHECK(bounded.written && bounded.entries == 1 && bounded.skipped == 6);
+      read = Read(path, id);
+      CHECK(!read.rejected && read.entries.size() == 1 && SameEntry(read.entries[0], many[1]));
+      CHECK(bounded.bytes == kHeaderSize + kEntryHeaderSize + 128);
       const auto before = ReadBytes(path);
-      const auto over = Write(path, many, id);
-      CHECK(!over.written && over.too_large && over.bytes > kMaxFileSize);
+      CHECK(!Write(path, many, id, kHeaderSize - 1).written);
       CHECK(ReadBytes(path) == before);
+      // Omitted entries remain available to the next save with a larger budget.
+      const auto full = Write(path, many, id);
+      CHECK(full.written && full.entries == many.size() && full.skipped == 0);
+      CHECK(Read(path, id).entries.size() == many.size());
       CHECK(!ValidPayload(Payload(id, kMaxEntrySize + 1, 7), id));
     }
 
@@ -180,8 +264,33 @@ int main() {
           if (!SameEntry(current.entries[i], expect[i])) failed = true;
       }
     });
-    for (size_t i = 0; i < 50; ++i) Write(path, i % 2 ? entries : replacement, id);
+    WriteState concurrent_state;  // one storage writer, concurrent file readers
+    for (size_t i = 0; i < 50; ++i) {
+      const auto& list = i % 2 ? entries : replacement;
+      const auto saved = Write(path, list, id, kMaxFileSize, &concurrent_state);
+      // On Windows a reader can temporarily deny atomic replacement. The next
+      // attempt must retry; only a successful/unchanged snapshot may skip.
+      if (saved.written || saved.unchanged) {
+        if (!Write(path, list, id, kMaxFileSize, &concurrent_state).unchanged) failed = true;
+      }
+    }
     finish = true; reader.join(); CHECK(!failed);
+
+#ifdef _WIN32
+    // An existing reader that denies deletion forces atomic replacement to fail.
+    // Retain the exact old bytes and remove the failed save's temporary file.
+    {
+      const auto before = ReadBytes(path);
+      HANDLE held = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+      CHECK(held != INVALID_HANDLE_VALUE);
+      const auto blocked = Write(path, entries, id, kHeaderSize + kEntryHeaderSize + 128);
+      CloseHandle(held);
+      CHECK(!blocked.written && ReadBytes(path) == before);
+      for (const auto& item : std::filesystem::directory_iterator(root))
+        CHECK(item.path().filename().string().find("cache.vkpc.tmp-") != 0);
+    }
+#endif
 
     // Classification of what a pipeline's own cache holds after creation.
     {

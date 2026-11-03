@@ -1,0 +1,16 @@
+cmake_minimum_required(VERSION 3.25)
+project(custom_race_tests LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+find_package(rexglue 0.10.0 REQUIRED CONFIG)
+
+add_executable(custom_race_test ../custom_race_test.cpp)
+target_include_directories(custom_race_test PRIVATE ../../src)
+add_executable(custom_race_context_test ../custom_race_context_test.cpp)
+target_compile_definitions(custom_race_context_test PRIVATE FORZA_TITLE_UPDATE=4)
+target_include_directories(custom_race_context_test PRIVATE ../../src)
+target_link_libraries(custom_race_context_test PRIVATE rex::runtime)
+
+enable_testing()
+add_test(NAME custom_race COMMAND custom_race_test)
+add_test(NAME custom_race_context COMMAND custom_race_context_test)

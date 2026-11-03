@@ -111,9 +111,9 @@ def urlopen(req, timeout=60):
     host = _host(req)
     raise CertificateError(
         f"The certificate of {host} could not be verified ({getattr(last, 'reason', last)}). "
-        "This usually means an antivirus program is scanning HTTPS traffic (turn off its web or HTTPS "
-        "scanning, or add this launcher as an exception) or a proxy or firewall replaces certificates. "
-        "Details are in launcher.log.") from last
+        "Check this computer's date/time and trusted certificates, and whether an antivirus program "
+        "scans HTTPS traffic or a proxy replaces certificates (turn off its HTTPS scanning or add "
+        "the launcher as an exception). Certificate verification remains enabled. Details are in launcher.log.") from last
 
 
 def _host(req) -> str:
@@ -153,7 +153,11 @@ def download(name: str, cache: Path, progress=lambda d, t: None, cancelled=lambd
         if e.code == 416:  # the partial file is already complete
             resp, have = None, have
         else:
+            e.resource_name, e.resource_host = final.name, _host(req)
             raise
+    except OSError as e:
+        e.resource_name, e.resource_host = final.name, _host(req)
+        raise
     if resp is not None:
         if resp.status == 200 and have:  # the server ignored Range: start over
             have = 0
@@ -167,10 +171,13 @@ def download(name: str, cache: Path, progress=lambda d, t: None, cancelled=lambd
                 f.write(chunk)
                 done += len(chunk)
                 progress(done, total)
-    if sha256_of(part) != digest:
+    actual_digest = sha256_of(part)
+    if actual_digest != digest:
         part.unlink(missing_ok=True)
-        raise RuntimeError(f"{final.name}: the download does not match its pinned checksum "
-                           "(it was deleted; try again)")
+        raise RuntimeError(f"{final.name}: the download does not match its pinned checksum. "
+                           f"Expected SHA-256 {digest}; actual SHA-256 {actual_digest}. "
+                           f"The invalid partial file {part} was deleted; retry the download. "
+                           "Other cached downloads were kept.")
     os.replace(part, final)
     return final
 

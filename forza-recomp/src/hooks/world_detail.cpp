@@ -10,6 +10,8 @@
 //   (trees up a hill, posts, rocks) cast no shadow on the console. world_shadow_detail scales it.
 // - <MipMapLodBiasModifier> (+1404, 0): the track pass adds it to the texture LOD bias of the
 //   track's textures. world_texture_detail makes it negative: sharper mip levels further away.
+// - <ToneMapeDelay> (+416, 0.075): the exposure's adaptation rate. The VR cockpit slows it
+//   (ScaleExposureAdaptation, vr_exposure_speed; docs/vr.md "Version 4").
 // What is not here, and why (docs/graphics-detail.md): the world's model LODs (terrain patches,
 // mid-distance terrain, LOD00-02 meshes) are chosen per PVS zone in the track data, not by a
 // distance at run time; the main view's size test (<screenAreaDistances mainScene>) culls almost
@@ -25,6 +27,7 @@
 #include <rex/ppc/context.h>
 #include <rex/ppc/func.h>
 
+#include <atomic>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -71,6 +74,12 @@ void StoreF(uint8_t* base, uint32_t address, float f) {
   std::memcpy(&v, &f, 4);
   Store32(base, address, v);
 }
+
+// The loaded track's settings struct and its own exposure adaptation rate (after the overrides).
+std::atomic<uint32_t> track_settings{0};
+std::atomic<float> track_tone_delay{0.0f};
+std::atomic<float> track_main_scene{-1.0f};
+std::atomic<float> track_shadow_depth{-1.0f};
 
 // FORZA_TRACK_SETTINGS="1272=600,1404=-1" sets track settings floats by offset after the
 // options (a test aid for comparing values; "i" before a value stores an integer).
@@ -120,4 +129,21 @@ extern "C" REX_FUNC(TrackSettingsLoad) {
               settings, caster, LoadF(base, settings + wd::kShadowDepthArea), bias,
               LoadF(base, settings + wd::kMipLodBias));
   ApplyTestOverrides(base, settings);
+  track_tone_delay = LoadF(base, settings + wd::kToneMapDelay);
+  track_main_scene = LoadF(base, settings + wd::kMainSceneArea);
+  track_shadow_depth = LoadF(base, settings + wd::kShadowDepthArea);
+  track_settings = settings;
 }
+
+namespace forza::world_detail {
+void ScaleExposureAdaptation(uint8_t* base, float scale) {
+  const uint32_t settings = track_settings.load(std::memory_order_relaxed);
+  if (!settings) return;
+  const float want = ExposureAdaptation(track_tone_delay.load(std::memory_order_relaxed), scale);
+  if (LoadF(base, settings + kToneMapDelay) != want) StoreF(base, settings + kToneMapDelay, want);
+}
+bool IsCameraCullDistance(float d) {
+  return d > 0.0f && (d == track_main_scene.load(std::memory_order_relaxed) ||
+                      d == track_shadow_depth.load(std::memory_order_relaxed));
+}
+}  // namespace forza::world_detail

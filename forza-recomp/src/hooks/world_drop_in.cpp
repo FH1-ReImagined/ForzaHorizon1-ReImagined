@@ -41,6 +41,7 @@
 #include "../kernel/live.h"
 #include "../platform/guest_addr.h"
 #include "../platform/guest_memory.h"
+#include "../platform/world_session.h"
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
@@ -59,7 +60,6 @@ REXCVAR_DEFINE_BOOL(world_drop_in, true, "Network/Forza Live",
 
 namespace {
 constexpr uint32_t kModeFindGame = 7;
-constexpr uint8_t kPresetFreeRoam = 7;          // GameTypePreset of the round (kPreset below)
 constexpr uint32_t kOnlineGame = FORZA_ADDR(0x83305CC4);    // pointer to the online game object
 constexpr uint32_t kGameModeInfo = FORZA_ADDR(0x832DF00C);  // pointer; +52 is the HUD/game mode value
 constexpr uint32_t kRaceTypeOnlineRace = 6, kRaceTypeOnlineFreeRoam = 18;
@@ -87,15 +87,15 @@ bool Trace() {
   return on;
 }
 
-// The online game object while it runs the world (our playlist is the world's, Find
-// Game's mode, a free-roam round), else 0. A round of another game type served on the
-// world's playlist (docs/online_vision.md, phase 2) stays a Find Game round.
+// A world needs Find Game mode and a free-roam round. An invite has no local
+// matchmaking playlist yet; known other playlists and non-free-roam rounds
+// still fail closed (docs/online_vision.md, phase 2).
 uint32_t WorldGame(uint8_t* base) {
-  if (!REXCVAR_GET(world_drop_in) || !forza::LiveIsWorldPlaylist(forza::LiveMatchPlaylist())) return 0;
+  if (!REXCVAR_GET(world_drop_in)) return 0;
   const uint32_t game = Load32(forza::GuestPtr(base, kOnlineGame));
   if (!game) return 0;
   const uint8_t* g = forza::GuestPtr(base, game);
-  if (Load32(g + 40) != kModeFindGame || g[kPreset] != kPresetFreeRoam) return 0;
+  if (!forza::world_session::IsWorld(forza::LiveMatchPlaylist(),Load32(g+40),g[kPreset])) return 0;
   return game;
 }
 
@@ -181,7 +181,8 @@ extern "C" REX_FUNC(sub_82875FB8) {
 // sub_825F5AA8(options): sets the class of each bucket that restricts to "any" (255) from the
 // options' recommended class range (see 4. above). The world keeps "any".
 extern "C" REX_FUNC(sub_825F5AA8) {
-  if (REXCVAR_GET(world_drop_in) && forza::LiveIsWorldPlaylist(forza::LiveMatchPlaylist())) {
+  if (REXCVAR_GET(world_drop_in) &&
+      (forza::LiveIsWorldPlaylist(forza::LiveMatchPlaylist()) || WorldGame(base))) {
     if (Trace()) REXLOG_INFO("WORLD: the buckets keep any car class");
     return;
   }

@@ -17,12 +17,13 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import __version__, paths, pins
+from . import __version__, paths, pins, tuning_status
 from . import build_env, cleanenv, datafolder, fetch, specs
 from .fetch import Cancelled
 
@@ -106,6 +107,15 @@ def runtime_dir(root: Path) -> Path:
 
 
 EXCLUDE_DIRS = {"out", "__pycache__"}
+# Original preparation source only; no generated tuning assets are distributed.
+NATIVE_TUNING_FILES = ("native_tuning_assets.py",)
+
+# Original resource preparation shipped with the project; no generated game assets.
+NATIVE_MENU_FILES = ("native_menu_scene.py", "offline_cars_flow.py", "lzx_delta.py",
+                     "native_menu/fh1_donors.json", "native_menu/icons/ATTRIBUTION.md",
+                     "native_menu/icons/FONT-AWESOME-LICENSE.txt",
+                     *(f"native_menu/icons/{name}.xds" for name in
+                       ("change_car", "tune_car", "garage", "autoshow", "social_friends", "social_world", "social_game", "social_requests", "social_chat", "social_connection")))
 
 
 def source_files(proj: Path):
@@ -123,6 +133,15 @@ def source_files(proj: Path):
         yield Path("generated") / "rexglue.cmake"
 
 
+def server_files(server: Path):
+    """The Forza Live server files a release ships, relative to server/ (the submodule): the
+    entry point and the forza_live package with its data, without tests or caches."""
+    yield Path("forza_live_server.py")
+    for f in sorted((server / "forza_live").rglob("*")):
+        if f.is_file() and f.suffix in (".py", ".xml") and "__pycache__" not in f.parts:
+            yield f.relative_to(server)
+
+
 _SOURCES_MEMO = {}
 
 
@@ -130,7 +149,8 @@ def sources_hash(proj: Path) -> str:
     """SHA-1 of the build sources. The window asks at every page change, so the files are read again
     only when one changed (size or modification time), not every time (#124)."""
     base = proj / "forza-recomp"
-    cm = proj / "tools" / "cmake" / "windows-native-clang-cl.cmake"
+    extras = [proj / "tools" / "cmake" / "windows-native-clang-cl.cmake"]
+    extras += [proj / "tools" / name for name in (*NATIVE_TUNING_FILES, *NATIVE_MENU_FILES)]
     rels, sig = sorted(source_files(proj)), []
     for rel in rels:
         try:
@@ -138,11 +158,12 @@ def sources_hash(proj: Path) -> str:
             sig.append((str(rel), st.st_mtime_ns, st.st_size))
         except OSError:
             sig.append((str(rel), 0, 0))
-    try:
-        st = cm.stat()
-        sig.append((str(cm), st.st_mtime_ns, st.st_size))
-    except OSError:
-        pass
+    for extra in extras:
+        try:
+            st = extra.stat()
+            sig.append((str(extra), st.st_mtime_ns, st.st_size))
+        except OSError:
+            sig.append((str(extra), 0, 0))
     key = str(proj)
     hit = _SOURCES_MEMO.get(key)
     if hit and hit[0] == sig:
@@ -151,8 +172,10 @@ def sources_hash(proj: Path) -> str:
     for rel in rels:
         h.update(str(rel).replace("\\", "/").encode())
         h.update((base / rel).read_bytes())
-    if cm.is_file():
-        h.update(cm.read_bytes())
+    for extra in extras:
+        if extra.is_file():
+            h.update(extra.relative_to(proj).as_posix().encode())
+            h.update(extra.read_bytes())
     _SOURCES_MEMO[key] = (sig, h.hexdigest())
     return h.hexdigest()
 
@@ -171,6 +194,13 @@ def tu_id(title_update: str = "") -> str:
 CPU_BASELINE, CPU_V3 = "baseline", "x86-64-v3"
 CPU_TOO_OLD = ("The game was built for a newer CPU (x86-64-v3: AVX2, FMA, BMI2, MOVBE) than this PC's and cannot "
                "start here. Rebuild it on this PC: Setup > Build.")
+
+
+def build_id_arg() -> str:
+    """The CMake option that names this build to the Forza Live server (FORZA_BUILD_ID, sent as
+    X-Forza-Build on every title service call, and kept with each leaderboard row: #517): the
+    launcher's version, which is what a player's game was built by."""
+    return "-DFORZA_BUILD_ID=" + re.sub(r"[^A-Za-z0-9._+-]", "_", __version__)[:40]
 
 
 def cpu_target() -> str:
@@ -368,6 +398,22 @@ def run(cmd, cwd, env, rep: Reporter, on_line=None, low_priority=False, monitor=
     """Run a command, streaming its output to rep.log; raises BuildError on failure and
     Cancelled when the player cancels."""
     rep.log("$ " + " ".join(str(c) for c in cmd))
+    output_tail = ""
+    error_lines = []
+
+    def failure(message, code=None, kind=BuildError):
+        error = kind(message)
+        error.command = str(cmd[0])
+        error.exit_code = code
+        error.cwd = str(cwd)
+        # Output is evidence, not a guessed diagnosis. The complete stream is
+        # already in the build log; keep both early diagnostics and a bounded tail.
+        context = (f"Command: {str(cmd[0])[:512]}\nWorking directory: {str(cwd)[:512]}"
+                   + (f"\nExit code: {code}" if code is not None else ""))
+        first = "\nFirst error lines:\n" + "\n".join(error_lines) if error_lines else ""
+        tail = "\nLast command output:\n" + output_tail if output_tail else ""
+        error.detail = (context + first + tail)[:8192]
+        return error
     kw = {}
     if IS_WIN:
         kw["creationflags"] = 0x08000000 | 0x00000200 | (0x00004000 if low_priority else 0)
@@ -380,7 +426,7 @@ def run(cmd, cwd, env, rep: Reporter, on_line=None, low_priority=False, monitor=
                                 stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True,
                                 encoding="utf-8", errors="replace", bufsize=1, **kw)
     except OSError as e:
-        raise BuildError(f"Could not start {cmd[0]}: {e}")
+        raise failure(f"Could not start {cmd[0]}: {e}") from e
     denied = []     # lines saying access was denied (Windows: OneDrive, antivirus, Controlled folder access)
     mon = None
     if monitor is not None:
@@ -397,6 +443,11 @@ def run(cmd, cwd, env, rep: Reporter, on_line=None, low_priority=False, monitor=
     try:
         for line in proc.stdout:
             line = line.rstrip("\n")
+            output_tail = (output_tail + "\n" + line[-2000:])[-5500:]
+            if len(error_lines) < 3 and re.search(
+                    r"(?:^|\s)(?:fatal error|error(?:\s+[A-Z]+\d+)?):|^CMake Error|^FAILED:",
+                    line, re.IGNORECASE):
+                error_lines.append(line[:400])
             if IS_WIN and len(denied) < 3 and datafolder.ACCESS_DENIED_RE.search(line):
                 denied.append(line)
             if on_line:
@@ -405,6 +456,7 @@ def run(cmd, cwd, env, rep: Reporter, on_line=None, low_priority=False, monitor=
         code = proc.wait()
     finally:
         stop.set()
+        proc.stdout.close()
         if mon:
             mon.stop_flag.set()
             monitor["peak"] = max(monitor.get("peak", 0), mon.peak)
@@ -412,12 +464,12 @@ def run(cmd, cwd, env, rep: Reporter, on_line=None, low_priority=False, monitor=
         raise Cancelled()
     if code != 0:
         if denied:
-            raise FolderBlocked(datafolder.blocked_message(root_hint(cwd), denied[0]))
+            raise failure(datafolder.blocked_message(root_hint(cwd), denied[0]), code, FolderBlocked)
         if IS_WIN and CURRENT_ROOT:     # a denied folder can also look like "file not found" to a program
             why = datafolder.read_problem(CURRENT_ROOT)
             if why:
-                raise FolderBlocked(datafolder.blocked_message(CURRENT_ROOT, why))
-        raise BuildError(f"{Path(str(cmd[0])).name} failed (exit code {code}); see the log above.")
+                raise failure(datafolder.blocked_message(CURRENT_ROOT, why), code, FolderBlocked)
+        raise failure(f"{Path(str(cmd[0])).name} failed (exit code {code}); see the build log for full output.", code)
 
 
 # ---- the build tree's file times -------------------------------------------------------------
@@ -576,6 +628,15 @@ def ensure_toolchain(opts: Options, rep: Reporter, lo, hi):
     return tools
 
 
+def sdk_identity(overlay: Path | None, dev: Path | None) -> str:
+    ident = f"{pins.SDK_TAG}|{overlay.stat().st_size if overlay else (str(dev) if dev else 'none')}"
+    if overlay is None and dev is not None:
+        helper = dev / "lib/cmake/rexglue/rexglue_helpers.cmake"
+        if helper.is_file():
+            ident += "|cmake=" + hashlib.sha256(helper.read_bytes()).hexdigest()
+    return ident
+
+
 def ensure_sdk(opts: Options, rep: Reporter, lo, hi) -> Path:
     """The patched SDK prefix: the pinned nightly plus this project's patched plugin, runtime and
     codegen tool (Linux), or the project's own SDK build (Windows). Returns the prefix."""
@@ -583,7 +644,7 @@ def ensure_sdk(opts: Options, rep: Reporter, lo, hi) -> Path:
     marker = prefix / ".forza-sdk-ready"
     overlay = sdk_overlay_archive()
     dev = dev_sdk_overlay()
-    ident = f"{pins.SDK_TAG}|{overlay.stat().st_size if overlay else (str(dev) if dev else 'none')}"
+    ident = sdk_identity(overlay, dev)
     if marker.is_file() and marker.read_text() == ident:
         rep.log(f"SDK ready: {prefix}")
         return prefix
@@ -605,7 +666,10 @@ def ensure_sdk(opts: Options, rep: Reporter, lo, hi) -> Path:
         if overlay is not None:
             fetch.extract_tar(overlay, stage, cancelled=rep.cancelled)
         else:  # development: the checkout's own overlay
-            for rel in ("lib/librexgpu-xenos.so", "lib/librexruntime.so", "bin/rexglue"):
+            for rel in ("lib/librexgpu-xenos.so", "lib/librexruntime.so", "bin/rexglue",
+                        "lib/cmake/rexglue/rexglue_helpers.cmake"):
+                if rel.endswith(".cmake") and not (dev / rel).is_file():
+                    continue  # an overlay made before it carried ReIGlue's CMake helpers
                 dst = stage / rel
                 dst.unlink(missing_ok=True)
                 shutil.copy2((dev / rel).resolve(), dst)
@@ -658,6 +722,194 @@ def apply_title_update(opts: Options, rep: Reporter, game_files: Path) -> Path |
     if missing:
         raise BuildError("The title update step did not produce " + ", ".join(missing) + ".")
     return out.parent
+
+
+def native_tuning_script() -> Path | None:
+    """Prefer the tool belonging to the shipped project (also used in its source hash)."""
+    proj = project_dir()
+    locations = ([proj / "tools"] if proj else []) + [paths.LAUNCHER_ROOT / "tools"]
+    for folder in locations:
+        if all((folder / name).is_file() for name in NATIVE_TUNING_FILES):
+            return folder / "native_tuning_assets.py"
+    return None
+
+
+def native_menu_script() -> Path | None:
+    """Prefer the tool belonging to the shipped project (also used in its source hash)."""
+    proj = project_dir()
+    locations = ([proj / "tools"] if proj else []) + [paths.LAUNCHER_ROOT / "tools"]
+    for folder in locations:
+        if all((folder / name).is_file() for name in NATIVE_MENU_FILES):
+            return folder / "native_menu_scene.py"
+    return None
+
+
+def _scoped_path(parent: Path, child: Path) -> Path:
+    """Check resolved targets before replacing or removing launcher-owned directories."""
+    parent, child = parent.resolve(), child.resolve()
+    if child == parent or not child.is_relative_to(parent):
+        raise BuildError(f"Build output {child} is outside {parent}.")
+    return child
+
+
+def _publish_runtime_update(root: Path, source: Path | None, rep: Reporter, name="update"):
+    """Copy completely before replacing the old update; retain it if publishing fails."""
+    if name not in ("update", "update-native", "update-menu"):
+        raise BuildError("Unsupported runtime update destination.")
+    rt = runtime_dir(root).resolve()  # build/runtime may be linked to another drive.
+    rt.mkdir(parents=True, exist_ok=True)
+    target = _scoped_path(rt, rt / name)
+    if target != rt / name:
+        raise BuildError(f"runtime/{name} must be a regular directory, not a directory link.")
+    if source is not None:
+        source = source.resolve()
+        if source.is_relative_to(rt) or rt.is_relative_to(source):
+            raise BuildError("The source title update must be outside the runtime directory.")
+    temporary = _scoped_path(rt, Path(tempfile.mkdtemp(prefix=".update-install-", dir=rt)))
+    candidate, previous = temporary / "new", temporary / "previous"
+    retain_previous = False
+    try:
+        if source is not None:
+            shutil.copytree(source, candidate)
+        if rep.cancelled():
+            raise Cancelled()
+        if target.exists():
+            os.replace(target, previous)
+        try:
+            if source is not None:
+                os.replace(candidate, target)
+        except OSError:
+            if previous.exists():
+                try:
+                    os.replace(previous, target)
+                except OSError as error:
+                    retain_previous = True
+                    raise BuildError(f"Could not restore the previous update; it is preserved at {previous}: "
+                                     f"{error}") from error
+            raise
+    finally:
+        if not retain_previous:
+            _rmtree(_scoped_path(rt, temporary))
+
+
+def stage_runtime_update(opts: Options, rep: Reporter, tu: Path | None) -> bool:
+    """Prepare original native tuning resources from FH1 only; fall back to the stock TU.
+
+    The preparation tool only sees a new private output directory. Its source TU is also
+    the codegen input and is never modified. Return whether native resources were installed.
+    """
+    work = build_dir(opts.root).resolve()
+    rt = runtime_dir(opts.root)
+
+    def record(value):
+        try:
+            tuning_status.write(rt, value)
+        except OSError as error:
+            rep.log(f"Could not save tuning diagnostic: {error}")
+
+    def unavailable(value):
+        record(value)
+        rep.log(tuning_status.summary(value) + f" Diagnostic: {value['code']}. Installing the stock FH1 update.")
+        if value["detail"]:
+            rep.log("Tuning preparation details: " + value["detail"])
+        _publish_runtime_update(opts.root, None, rep, "update-native")
+        return False
+
+    if tu is not None and work.is_relative_to(tu.resolve()):
+        raise BuildError("The source title update must not contain the build workspace.")
+    # Always install the unmodified update. Restart-only options select the
+    # independent prepared overlay at launch, without requiring a rebuild.
+    _publish_runtime_update(opts.root, tu, rep)
+    if tu is None:
+        return unavailable(tuning_status.failure("no_title_update", "This build has no Title Update 4 selected.",
+                           "Select your FH1 Title Update 4 package in Setup, then Build."))
+    work.mkdir(parents=True, exist_ok=True)
+    script = native_tuning_script()
+    if script is None:
+        return unavailable(tuning_status.failure("missing_tools", "This launcher is missing the tuning preparation tool.",
+                           "Reinstall the current launcher release, then Build with Title Update 4 selected."))
+    with tempfile.TemporaryDirectory(prefix="native-tuning-", dir=work) as directory:
+        prepared = Path(directory) / "overlay"
+        rep.status("Preparing native tuning resources from your FH1 update")
+        output_lines = []
+        diagnostic = None
+
+        def preparation_line(line):
+            nonlocal diagnostic
+            output_lines.append(line[-1000:])
+            del output_lines[:-8]
+            diagnostic = tuning_status.tool_failure(line) or diagnostic
+
+        try:
+            cmd = [sys.executable] + (["--run-script"] if paths.FROZEN else []) + [
+                script, tu, "--output", prepared]
+            run(cmd, opts.root, cleanenv.clean_environment(), rep, low_priority=opts.low_priority,
+                on_line=preparation_line)
+            required = (*TU_EXECUTABLES, "media.zip", "native-tuning-provenance.json")
+            missing = [name for name in required if not (prepared / name).is_file()]
+            if missing:
+                raise BuildError("Preparation did not produce " + ", ".join(missing))
+            report = json.loads((prepared / "native-tuning-provenance.json").read_text(encoding="utf-8"))
+            if not isinstance(report, dict) or report.get("schema") != 1 or \
+                    not isinstance(report.get("source_archive_sha256"), str) or \
+                    len(report["source_archive_sha256"]) != 64 or not isinstance(report.get("entries"), list):
+                raise BuildError("Preparation produced an unrecognized resource manifest")
+        except (BuildError, OSError, ValueError) as error:
+            if diagnostic is None:
+                denied = isinstance(error, (PermissionError, FolderBlocked))
+                diagnostic = tuning_status.failure(
+                    "access_denied" if denied else "preparation_failed",
+                    "Tuning preparation could not access a required file." if denied else "Tuning resource preparation failed.",
+                    "Check the file access error and your selected data folder." if denied else
+                    "Send the build log, including the preparation error; another rebuild alone may not fix it.",
+                    str(error) + ("\n" + "\n".join(output_lines) if output_lines else ""))
+            return unavailable(diagnostic)
+        _publish_runtime_update(opts.root, prepared, rep, "update-native")
+    rep.log("Installed native tuning resources prepared from FH1; no other game files are needed.")
+    record(tuning_status.failure("ready", "Tuning resources were prepared successfully.", ""))
+    return True
+
+
+def stage_native_menu_update(opts: Options, rep: Reporter, tu: Path | None) -> bool:
+    """Prepare original native menu resources from FH1 only; fall back to the stock TU.
+
+    The preparation tool only sees a new private output directory. Its source TU is also
+    the codegen input and is never modified. Return whether native resources were installed.
+    """
+    work = build_dir(opts.root).resolve()
+    if tu is not None and work.is_relative_to(tu.resolve()):
+        raise BuildError("The source title update must not contain the build workspace.")
+    if tu is None:
+        _publish_runtime_update(opts.root, None, rep, "update-menu")
+        return False
+    work.mkdir(parents=True, exist_ok=True)
+    script = native_menu_script()
+    if script is None:
+        rep.log("Native menu unavailable: preparation tools are missing; installing the stock FH1 update.")
+        _publish_runtime_update(opts.root, None, rep, "update-menu")
+        return False
+    with tempfile.TemporaryDirectory(prefix="native-menu-", dir=work) as directory:
+        prepared = Path(directory) / "overlay"
+        rep.status("Preparing native menu resources from your FH1 update")
+        try:
+            cmd = [sys.executable] + (["--run-script"] if paths.FROZEN else []) + [
+                script, tu, "--output", prepared]
+            run(cmd, opts.root, cleanenv.clean_environment(), rep, low_priority=opts.low_priority)
+            required = (*TU_EXECUTABLES, "media.zip", "native-menu-provenance.json")
+            missing = [name for name in required if not (prepared / name).is_file()]
+            if missing:
+                raise BuildError("Preparation did not produce " + ", ".join(missing))
+            report = json.loads((prepared / "native-menu-provenance.json").read_text(encoding="utf-8"))
+            if not isinstance(report, dict) or report.get("schema") != 1 or \
+                    report.get("backend") != "fh1-native-menu-resources":
+                raise BuildError("Preparation produced an unrecognized resource manifest")
+        except (BuildError, OSError, ValueError) as error:
+            rep.log(f"Native menu unavailable: {error}; installing the stock FH1 update.")
+            _publish_runtime_update(opts.root, None, rep, "update-menu")
+            return False
+        _publish_runtime_update(opts.root, prepared, rep, "update-menu")
+    rep.log("Installed native menu resources prepared from FH1; no other game files are needed.")
+    return True
 
 
 def sync_sources(opts: Options, rep: Reporter, game_files: Path, tu: Path | None = None) -> Path:
@@ -836,6 +1088,7 @@ def _run_build(opts: Options, rep: Reporter, game_files: Path) -> Path:
         if not (src / manifest).is_file():
             raise BuildError("These project sources have no Title Update 4 support (forza_manifest_tu4.toml).")
     cmake_extra.append("-DFORZA_TITLE_UPDATE=" + ("4" if tu is not None else "0"))
+    cmake_extra.append(build_id_arg())
     rep.log("building " + ("with Title Update 4 (" + manifest + ")" if tu is not None else "the base game"))
     target = cpu_target()
     cmake_extra.append("-DFORZA_CPU_TARGET=" + target)
@@ -851,7 +1104,7 @@ def _run_build(opts: Options, rep: Reporter, game_files: Path) -> Path:
     bdir = src / "out" / "build" / PLAT
     overlay = sdk_overlay_archive()
     dev = dev_sdk_overlay()
-    sdk_ident = f"{pins.SDK_TAG}|{overlay.stat().st_size if overlay else (str(dev) if dev else 'none')}"
+    sdk_ident = sdk_identity(overlay, dev)
     stamp = configure_stamp(tools, sdk_ident, tu is not None)
 
     # A tree CMake configured for another version of the launcher (a build that stopped, then an
@@ -895,13 +1148,13 @@ def _run_build(opts: Options, rep: Reporter, game_files: Path) -> Path:
     rt = stage_runtime(opts, rep, bdir, sdk)
     # runtime/update is the game's update: (--update_data_root): the patched executables and the
     # update's media.zip. A base build has none.
-    shutil.rmtree(rt / "update", ignore_errors=True)
-    if tu is not None:
-        shutil.copytree(tu, rt / "update")
+    native_tuning = stage_runtime_update(opts, rep, tu)
+    native_menu = stage_native_menu_update(opts, rep, tu)
     wall = time.time() - t0
     peak = monitor.get("peak", 0)
     write_state(root, {"started": t0, "id": cid, "complete": True,
                        "when": time.strftime("%Y-%m-%d %H:%M"), "tu4": tu is not None, "cpu_target": target,
+                       "native_tuning": native_tuning, "native_menu": native_menu,
                        "seconds": round(wall), "peak_rss_gb": round(peak / 2 ** 30, 1), "jobs": opts.jobs})
     (rt / "version.txt").write_text(f"built {time.strftime('%Y-%m-%d')} (sources {sources_hash(project_dir())[:8]})\n")
     rep.progress(1.0, "done")
@@ -925,6 +1178,12 @@ def stage_runtime(opts: Options, rep: Reporter, bdir: Path, sdk: Path) -> Path:
     notice = bdir / "LICENSE-Pinyon-Shift"
     if notice.is_file():
         shutil.copy2(notice, rt / notice.name)
+    # The texture compressor (#413, forza-recomp/texcompress) the texture packs page runs.
+    tool = bdir / ("forza-texcompress" + EXE)
+    if tool.is_file():
+        tmp = rt / ("." + tool.name + ".new")
+        shutil.copy2(tool, tmp)
+        os.replace(tmp, rt / tool.name)
     if IS_WIN:
         for f in [bdir / "forza.exe"] + sorted(bdir.glob("forza_*.dll")):
             shutil.copy2(f, rt / f.name)
@@ -952,6 +1211,13 @@ def stage_runtime(opts: Options, rep: Reporter, bdir: Path, sdk: Path) -> Path:
         tmp = rt / ("." + name + ".new")
         shutil.copy2((sdk / "lib" / name).resolve(), tmp)
         os.replace(tmp, rt / name)
+    # The OpenXR loader for the VR setting, when the overlay carries one (docs/vr.md, Packaging);
+    # without it the game uses the system's libopenxr_loader.so.1.
+    loader = sdk / "lib" / "libopenxr_loader.so.1"
+    if loader.exists():
+        tmp = rt / ".libopenxr_loader.so.1.new"
+        shutil.copy2(loader.resolve(), tmp)
+        os.replace(tmp, rt / loader.name)
     # the plugin comes out of the SDK's build tree, whose runpath points into that tree
     script = rt / ".rpath.cmake"
     script.write_text(f'file(RPATH_SET FILE "{(rt / "librexgpu-xenos.so").as_posix()}" NEW_RPATH "$ORIGIN")\n')

@@ -26,6 +26,8 @@
 // party, the menu stayed up; checked with a boot from "softreboot" data alone too). The
 // game object is cleared of it when its main loop starts (sub_823ED888, after the boot
 // read it): the invite join and the menus work as before, and Single Player loads.
+// skip_startup_movies uses the same boot on a first start: with it the game reads the
+// "softreboot" text as launch data and skips the movies.
 
 #include "../platform/guest_addr.h"
 #include "../platform/guest_memory.h"
@@ -63,6 +65,10 @@ REXCVAR_DEFINE_BOOL(title_relaunch, true, "Network/Forza Live",
                     "When the game restarts itself (accepting an invite in free roam), "
                     "start it again instead of closing");
 
+REXCVAR_DEFINE_BOOL(skip_startup_movies, false, "Gameplay",
+                    "Skip the startup movies (Microsoft Studios, Dolby, Playground Games): the game "
+                    "boots as after a restart of itself");
+
 namespace {
 
 using GuestFunc = void (*)(PPCContext&, uint8_t*);
@@ -84,7 +90,18 @@ void LoadBootDataLocked() {
   if (boot_loaded) return;
   boot_loaded = true;
   const char* relaunched = std::getenv("FORZA_RELAUNCHED");
-  if (!relaunched || std::strcmp(relaunched, "1") != 0) return;
+  if (!relaunched || std::strcmp(relaunched, "1") != 0) {
+    // skip_startup_movies: a cold boot with the launch data of a soft reboot, the text
+    // sub_824AC7E8 sets ("softreboot", 11 bytes with the NUL). sub_824B32E0 then sets the
+    // byte +39 (cleared when the main loop starts) and the boot skips its movies.
+    if (REXCVAR_GET(skip_startup_movies)) {
+      static const char kSoftReboot[] = "softreboot";
+      boot_data.assign(kSoftReboot, kSoftReboot + sizeof(kSoftReboot));
+      boot_present = true;
+      REXLOG_INFO("FORZA_LOADER: skip_startup_movies: booting as a soft reboot");
+    }
+    return;
+  }
   const auto path = LaunchDataFile();
   std::ifstream in(path, std::ios::binary);
   if (in) {

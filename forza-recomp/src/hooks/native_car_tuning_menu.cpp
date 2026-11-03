@@ -2,10 +2,12 @@
 // tu_address_map: TU4 addresses
 #include "../platform/native_car_tuning_menu.h"
 #include "../platform/native_car_tuning.h"
+#include "../platform/native_pause_scene.h"
 #include "../platform/guest_addr.h"
 
 #if FORZA_TU4
 #include "../platform/guest_memory.h"
+#include "../platform/offline_cars.h"
 #include "../platform/native_tuning_components.h"
 #include "../platform/native_tuning_assets.h"
 #include "../platform/car_tuning_library.h"
@@ -96,12 +98,8 @@ class UI {
 };
 
 Access AccessFor(uint8_t* base, uint32_t parent) {
-  uint32_t presence = 0, region = 0;
   const bool paused = base && parent && Read(base, parent) == 0x82061F94;
-  const bool free_roam = forza::LiveLocalActivity(presence, region) && presence == 1 &&
-                         // The title also constructs a host game object during offline play.
-                         // NetworkOn is the runtime virtual-network gate, not the host role.
-                         region == 0 && !forza::NetworkOn();
+  const bool free_roam = offline_cars::Available(base, parent);
   // BeginNative independently matches current owned garage ID, profile car ID,
   // live-car model ID, and actual live-car definition before granting access.
   return {paused, free_roam, true};
@@ -140,6 +138,7 @@ native_tuning_components::Workspace workspace;
 uint64_t next_generation = 0;
 
 void ParentRows(UI& ui, bool show) {
+  if (native_pause_scene::Page(ui.ctx, ui.base, form.parent, show)) return;
   const bool valid = form.parent && Read(ui.base, form.parent) == 0x82061F94;
   const auto component = valid ? Read(ui.base, form.parent + 0x170) : 0;
   if (!show) {

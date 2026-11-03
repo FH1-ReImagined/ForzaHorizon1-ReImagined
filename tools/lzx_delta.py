@@ -7,6 +7,11 @@ reference data placed at the end of the window).
 
     apply_delta_records(records, window_size, dest)   # xex2_delta_patch records, in place
 """
+
+# Derived from libmspack's lzxd.c, (C) 2003-2013 Stuart Caie, licensed under the GNU Lesser
+# General Public License version 2.1. As LGPL 2.1 section 3 allows, this derived file is
+# distributed under the GNU General Public License version 3 or later, like the rest of this
+# repository (see LICENSE and NOTICE.md).
 import struct
 
 MIN_MATCH = 2

@@ -227,6 +227,27 @@ class DlcWarningUI(unittest.TestCase):
         self.assertIn(DISPLAY, self.setup.dlcwarning.text())
         self.assertIn("FFFFFFFFFFFFFFFF", self.setup.dlcwarning.text())
 
+    def test_folder_changed_during_probe_is_scanned_again(self):
+        source = self.root / "input"
+        extracted(source, KNOWN, "Official fixture")
+        describe = installer.describe_dlc_folder
+        calls = []
+
+        def changed_after_scan(folder):
+            answer = describe(folder)
+            calls.append(folder)
+            if len(calls) == 1:
+                before = source.stat()
+                extracted(source, UNKNOWN, DISPLAY)
+                os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns + 3_000_000_000))
+            return answer
+
+        with patch.object(installer, "describe_dlc_folder", side_effect=changed_after_scan):
+            self.select(source)
+        self.assertGreaterEqual(len(calls), 2)
+        self.assertFalse(self.setup.dlcwarning.isHidden())
+        self.assertIn(DISPLAY, self.setup.dlcwarning.text())
+
     def test_changing_to_known_empty_missing_or_cleared_folder_removes_warning(self):
         unknown = self.root / "unknown"
         known = self.root / "known"

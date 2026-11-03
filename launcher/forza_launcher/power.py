@@ -1,10 +1,11 @@
 """Battery saver (#140): the lightest settings while a Steam Deck runs on its battery.
 
 Settings > Display > Frame rate > Battery saver: Off (the default), On, or Auto on battery
-(Steam Deck). When it applies, the game starts at 30 fps and render scale 1 with AMD FSR 1:
-AMD FSR 3 becomes FSR 1, SMAA and the temporal anti-aliasing become the game's own, and the
-render thread sleeps while it waits for the GPU (gpu_wait_blocking, already the default on
-Linux). The player's own settings stay in launcher.json and come back at the next start on
+(Steam Deck). When it applies, the game starts at 30 fps (20 and 40, chosen for a screen 30
+does not divide, stay) and render scale 1 with AMD FSR 1 and the scene in one pass without MSAA
+(scene_msaa off): AMD FSR 3 becomes FSR 1, SMAA and the temporal anti-aliasing become the game's
+own, and the render thread sleeps while it waits for the GPU (gpu_wait_blocking, already the
+default on Linux). The player's own settings stay in launcher.json and come back at the next start on
 mains power. The power source is read once, when the game starts, from
 /sys/class/power_supply; a controller's or a mouse's battery (scope Device) does not count.
 No Qt in here (test_power.py).
@@ -20,9 +21,11 @@ OFF, ON, AUTO = "off", "on", "auto"
 MODES = [(OFF, "Off"), (ON, "On"), (AUTO, "Auto on battery (Steam Deck)")]
 MAINS, BATTERY = "mains", "battery"
 FRAME_RATE = 30
+KEEP_FRAME_RATES = (20, 40)   # rates under 60 a player picks for a screen 30 does not divide
 # Passed as a flag: the launcher's own switch for it is Windows only (Advanced > GPU).
 FLAGS = ["--gpu_wait_blocking=true"]
 SYSFS = "/sys"
+PROC = "/proc"
 
 
 def _read(path: str) -> str:
@@ -59,16 +62,17 @@ def power_source(sysfs: str | None = None) -> str:
     return ""
 
 
-def is_deck(sysfs: str | None = None) -> bool:
-    """The Steam Deck by its DMI board name, as the GPU and specs detection find it."""
-    dmi = f"{sysfs or SYSFS}/devices/virtual/dmi/id"
-    return gpu.is_steam_deck_dmi(_read(f"{dmi}/board_name"), _read(f"{dmi}/board_vendor"),
-                                 _read(f"{dmi}/product_name"))
+def is_deck(sysfs: str | None = None, proc: str | None = None) -> bool:
+    """The Steam Deck, as the GPU and specs detection find it (gpu.steam_deck_reason)."""
+    return bool(gpu.steam_deck_reason(sysfs or SYSFS, proc or PROC))
 
 
 def overrides(settings: dict) -> dict:
-    """The launcher settings battery saver changes, from the player's (effective) settings."""
-    out = {"frame_rate": FRAME_RATE, "resolution_scale": 1}
+    """The launcher settings battery saver changes, from the player's (effective) settings. A frame rate
+    of 20 or 40 stays: the player chose it for a screen that 30 does not divide (a Deck at 40 Hz)."""
+    rate = settings.get("frame_rate")
+    out = {"frame_rate": rate if rate in KEEP_FRAME_RATES else FRAME_RATE, "resolution_scale": 1,
+           "scene_msaa": "off"}
     if settings.get("present_effect") == "fsr3":
         out["present_effect"] = "fsr"
     if settings.get("forza_antialiasing", "game") != "game":
@@ -84,12 +88,13 @@ class Saver:
     reason: str = ""                               # why it applies or not, for the launcher log
     settings: dict = field(default_factory=dict)   # launcher settings to start the game with
     flags: list = field(default_factory=list)
+    frame_rate: int = FRAME_RATE                   # the frame rate this start runs at
 
     def note(self) -> str:
         if not self.active:
             return ""
-        return (f"Battery saver ({self.reason}): {FRAME_RATE} fps, render scale 1, AMD FSR 1, "
-                "sleeping GPU waits. Your own settings apply again on mains power.")
+        return (f"Battery saver ({self.reason}): {self.frame_rate} fps, render scale 1, AMD FSR 1, scene "
+                "anti-aliasing Off, sleeping GPU waits. Your own settings apply again on mains power.")
 
 
 def decide(settings: dict, sysfs: str | None = None) -> Saver:
@@ -107,7 +112,8 @@ def decide(settings: dict, sysfs: str | None = None) -> Saver:
         reason = "on battery"
     else:
         reason = "on"
-    return Saver(True, reason, overrides(settings), list(FLAGS))
+    changes = overrides(settings)
+    return Saver(True, reason, changes, list(FLAGS), changes.get("frame_rate", settings.get("frame_rate", FRAME_RATE)))
 
 
 def setting_warning(mode: str, sysfs: str | None = None) -> str:

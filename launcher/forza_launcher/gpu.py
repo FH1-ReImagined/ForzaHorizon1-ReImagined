@@ -26,6 +26,10 @@ PCI_VENDOR = {0x10DE: NVIDIA, 0x1002: AMD, 0x1022: AMD, 0x8086: INTEL}
 # the value of the game's gpu_vendor setting (rexglue SDK patch 0054) for each vendor the game can be told
 SDK_VENDORS = {NVIDIA: "nvidia", AMD: "amd", INTEL: "intel"}
 DECK_BOARDS = {"jupiter", "galileo"}  # LCD and OLED Steam Deck (DMI board name)
+# The Deck's APU (#140), for when the DMI names are missing or blank: its graphics (PCI 1002:163f Van Gogh
+# in the LCD model, 1002:1435 Sephiroth in the OLED) and its CPU's name in /proc/cpuinfo or Windows.
+DECK_GPU_IDS = {0x163F, 0x1435}
+DECK_APU_NAME = re.compile(r"\bAMD Custom (?:APU|GPU) 0(?:405|932)\b", re.I)
 # Adapters that are not a GPU the game could use
 _IGNORED = ("microsoft basic", "remote", "virtual", "parsec", "citrix", "vmware", "virtio", "hyper-v",
             "mirage", "displaylink", "indirect")
@@ -81,10 +85,41 @@ def is_steam_deck_dmi(board_name: str, board_vendor: str = "", product_name: str
     return False
 
 
-def detect_linux(sysfs: str = "/sys") -> Detected:
+def _cpu_model(cpuinfo: str) -> str:
+    m = re.search(r"^model name\s*:\s*(.+)$", cpuinfo or "", re.M)
+    return m.group(1).strip() if m else ""
+
+
+def steam_deck_reason(sysfs: str = "/sys", proc: str = "/proc", env=None) -> str:
+    """How this Linux PC is known to be a Steam Deck, or '' when it is not one: the DMI board or product
+    name (Jupiter, Galileo) from Valve, else the Deck's APU (its graphics' PCI id or the CPU's name).
+    Steam's SteamDeck=1 (Game Mode sets it for what it starts; Steam on other handhelds in the Deck's
+    interface does too) is only a hint: it counts with an "AMD Custom APU" CPU whose number is not known."""
     dmi = f"{sysfs}/devices/virtual/dmi/id"
     if is_steam_deck_dmi(_read(f"{dmi}/board_name"), _read(f"{dmi}/board_vendor"), _read(f"{dmi}/product_name")):
-        return Detected(DECK, "Steam Deck", "dmi board name")
+        return "dmi board name"
+    for card in sorted(glob.glob(f"{sysfs}/class/drm/card*")):
+        if not re.fullmatch(r"card\d+", os.path.basename(card)):
+            continue
+        try:
+            vendor, device = int(_read(f"{card}/device/vendor"), 16), int(_read(f"{card}/device/device"), 16)
+        except ValueError:
+            continue
+        if vendor == 0x1002 and device in DECK_GPU_IDS:
+            return f"APU graphics 1002:{device:04x}"
+    cpu = _cpu_model(_read(f"{proc}/cpuinfo"))
+    if DECK_APU_NAME.search(cpu):
+        return "APU " + cpu
+    env = os.environ if env is None else env
+    if env.get("SteamDeck") == "1" and re.search(r"\bAMD Custom APU\b", cpu, re.I):
+        return "SteamDeck=1 and " + cpu
+    return ""
+
+
+def detect_linux(sysfs: str = "/sys", proc: str = "/proc", env=None) -> Detected:
+    reason = steam_deck_reason(sysfs, proc, env)
+    if reason:
+        return Detected(DECK, "Steam Deck", reason)
     found = {}
     for card in sorted(glob.glob(f"{sysfs}/class/drm/card*")):
         if not re.fullmatch(r"card\d+", os.path.basename(card)):
@@ -191,6 +226,8 @@ def detect_windows() -> Detected:
             pass
     if board.strip().lower() in DECK_BOARDS:
         return Detected(DECK, "Steam Deck", source + " baseboard")
+    if any(DECK_APU_NAME.search(n) for n in names):
+        return Detected(DECK, "Steam Deck", source + " APU graphics")
     v, name = vendor_from_adapters(names)
     return Detected(v, name or (LABELS[v] + " graphics" if v else ""), source) if v else Detected()
 
@@ -229,6 +266,14 @@ class Preset:
 
 _FSR = {"present_effect": "fsr", "resolution_scale": 1, "async_shader_compilation": True,
         "store_shaders": True}
+# The Steam Deck's settings (#140, docs/steam_deck.md), also what specs.py offers on one. The command
+# processor of the GPU emulation sets its frame rate (docs/perf.md): the one-pass scene takes about a fifth
+# of its work away, and 540p saves only GPU time. Shadow and texture detail stay the game's own (their cost
+# is within the noise on a fast PC, docs/graphics-detail.md; not measured on a Deck). Its 16:10 screen shows
+# the 16:9 picture pixel for pixel between two bars.
+DECK_SETTINGS = {"frame_rate": 30, "resolution_scale": 1, "present_effect": "fsr", "scene_msaa": "off",
+                 "world_shadow_detail": "console", "world_texture_detail": "console", "scene_resolution": "720",
+                 "present_letterbox": True}
 
 PRESETS = {
     NVIDIA: Preset(
@@ -263,14 +308,19 @@ PRESETS = {
         [("Nobody has reported a run on Intel graphics yet; please say how it goes (GitHub issues).", 0)]),
     DECK: Preset(
         "Steam Deck",
-        {**_FSR, "frame_rate": 30, "gpu_backend": "vulkan"},
-        "Vulkan, render scale 1 with AMD FSR 1 and the 30 fps cap: the Deck's APU is the limit.",
+        {**_FSR, **DECK_SETTINGS, "gpu_backend": "vulkan"},
+        "Vulkan, render scale 1 with AMD FSR 1, 30 fps, Scene anti-aliasing Off and Console shadow and "
+        "texture detail: the Deck is limited by the CPU time of the GPU emulation.",
         [Known("resolution_scale", lambda v: int(v) >= 2,
                "The Steam Deck runs 17 to 25 fps at render scale 1; higher scales are slower still.", 45),
-         Known("frame_rate", lambda v: int(v) > 30,
-               "The Steam Deck cannot hold more than the 30 fps cap (17 to 25 fps measured at 60).", 45)],
-        [("The game runs at 17 to 25 fps on a Steam Deck OLED with the previous defaults; a 40 fps cap "
-          "(for the 40 Hz mode) is not available, only 30 or 60 and above.", 45),
+         Known("frame_rate", lambda v: int(v) > 40,
+               "The Steam Deck cannot hold more than 30 fps in most places (17 to 25 fps measured at 60); "
+               "40 suits its screen at 40 Hz.", 45)],
+        [("40 fps divides the Deck's screen at 40 Hz (LCD) or 80 Hz (OLED): set that refresh rate in Steam's "
+          "Performance menu, then Frame rate 40 or Match display. The Deck holds it only in light scenes; 30 "
+          "on a 60 Hz screen is steadier.", 140),
+         ("The Deck's 1280x800 screen shows the game's 16:9 picture pixel for pixel with a thin black bar above "
+          "and below (Letterbox other aspect ratios, on by default).", 140),
          ("Battery saver (Display > Frame rate) can start the game on these settings by itself whenever "
           "the Deck runs on its battery (Auto on battery), whatever you set for playing docked.", 140)]),
 }

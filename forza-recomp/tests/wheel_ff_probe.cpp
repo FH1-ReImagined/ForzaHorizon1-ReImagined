@@ -291,8 +291,10 @@ void RumbleStyles() {
                   wheel.Playing(sines.back().id),
               "classic: one 25 Hz sine plays");
       }
+      // The vibration is updated about 30 times a second (#467, ReIGlue 0403): the game's state
+      // polls, several a frame, send what comes due after its last rumble.
       Check(GameFfSetRumble(0, 0), "rumble off");
-      std::this_thread::sleep_for(std::chrono::milliseconds(150));
+      Poll(driver, found[0].id, 150);
       for (const auto& u : wheel.Sines()) {
         Check(!wheel.Playing(u.id), "no rumble: every sine stops");
       }

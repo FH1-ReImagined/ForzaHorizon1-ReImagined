@@ -41,19 +41,33 @@ def monitor_rate(monitor, rates=None):
 
 
 def clamp(rate) -> int:
-    """A valid frame rate: 30, or 60 to 240 (the game's range)."""
+    """A valid frame rate: 60 to 240 (the game's range), 40 for a 40 Hz screen (a Steam Deck's lowest), 30 for
+    any other under 60."""
     rate = int(round(rate))
-    return 30 if rate < MIN_RATE else min(rate, MAX_RATE)
+    if rate < MIN_RATE:
+        return 40 if rate == 40 else 30
+    return min(rate, MAX_RATE)
 
 
 def safe_cap(pc):
     """The highest rate the specs warnings accept on this PC (None = no limit known)."""
+    if specs.is_deck(pc):
+        return specs.DECK_FPS
     caps = []
     if specs.cpu_tier(pc) in (specs.LOW, specs.MID):
         caps.append({specs.LOW: 30, specs.MID: 60}[specs.cpu_tier(pc)])
     if specs.gpu_tier(pc) in (specs.LOW, specs.MID):
         caps.append(60)
     return min(caps) if caps else None
+
+
+def under_cap(hz, cap) -> int:
+    """The rate for a screen of `hz` on a PC capped below 60: one the refresh rate divides, so every frame
+    stays on screen equally long (a Steam Deck: 40 at 80 Hz, 30 at 60 or 90 Hz), else the cap."""
+    for rate in (cap, 40, 30):
+        if rate <= cap and abs(hz / rate - round(hz / rate)) < 0.02:
+            return rate
+    return cap
 
 
 def resolve(monitor, pc=None, rates=None, log=None) -> int:
@@ -67,9 +81,10 @@ def resolve(monitor, pc=None, rates=None, log=None) -> int:
         rate = clamp(hz)
     cap = safe_cap(pc) if pc is not None else None
     if cap and rate > cap:
+        capped = under_cap(hz or FALLBACK, cap) if cap < MIN_RATE else cap
         if log:
-            log(f"Match display: {rate} fps is more than this PC is likely to hold; using {cap} fps.")
-        rate = cap
+            log(f"Match display: {rate} fps is more than this PC is likely to hold; using {capped} fps.")
+        rate = capped
     return rate
 
 

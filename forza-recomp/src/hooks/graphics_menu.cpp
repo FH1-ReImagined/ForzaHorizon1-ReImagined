@@ -2,7 +2,10 @@
 // tu_address_map: TU4 addresses
 // The scene/model layouts below are validated for Title Update 4 only.
 #include "../platform/graphics_menu.h"
+#include "../platform/native_pause_scene.h"
+#include "../platform/native_quit.h"
 #include "../platform/native_car_tuning_menu.h"
+#include "../platform/custom_race.h"
 #include "../platform/benchmark.h"
 #include "../platform/hud_overlay.h"
 #include "../platform/graphics_presets.h"
@@ -249,7 +252,11 @@ std::vector<std::pair<std::string, std::string>> preview_baseline;
 
 bool IsLive(const Setting &setting) {
   return setting.key == "vsync" || setting.key == "anisotropic_override" ||
-         setting.key == "forza_hud_edges" || setting.key == "forza_performance_overlay";
+         setting.key == "forza_hud_edges" || setting.key == "forza_performance_overlay" ||
+         setting.key == "world_shadow_filter" || setting.key == "world_ambient_occlusion" ||
+         setting.key == "forza_cockpit_fov" || setting.key == "forza_chase_near_fov" ||
+         setting.key == "forza_chase_far_fov" || setting.key == "forza_hood_fov" ||
+         setting.key == "forza_bumper_fov" || setting.key == "forza_minimap_camera";
 }
 
 void RememberPreview() {
@@ -285,8 +292,15 @@ bool ApplyPreview() {
 }
 
 constexpr size_t kAntiAliasing = 9;
-// Preset first, then image quality, frame pacing, HUD and monitoring.
-constexpr std::array<size_t, 10> kDisplayOrder{8, 0, 1, kAntiAliasing, 2, 5, 3, 4, 6, 7};
+constexpr size_t kShadowSoftness = 10, kAmbientOcclusion = 11;
+constexpr size_t kCockpitFov = 12;
+constexpr size_t kChaseNearFov = 13, kChaseFarFov = 14, kHoodFov = 15, kBumperFov = 16;
+constexpr std::array<size_t, 5> kCameraFovs{kChaseNearFov, kChaseFarFov, kCockpitFov, kHoodFov, kBumperFov};
+// Preset first, then image quality, frame pacing, cameras, HUD and monitoring.
+constexpr size_t kMinimapOrientation = 17;
+constexpr std::array<size_t, 18> kDisplayOrder{8, 0, 1, kAntiAliasing, 2, 5,
+    kShadowSoftness, kAmbientOcclusion, 3, 4,
+    kChaseNearFov, kChaseFarFov, kCockpitFov, kHoodFov, kBumperFov, 6, kMinimapOrientation, 7};
 void AntiAliasingChoices() {
   auto &aa = settings[kAntiAliasing];
   if (settings[1].value != "off") {
@@ -315,7 +329,8 @@ void Snapshot() {
        "resolution",
        "Output resolution",
        "",
-       {{"1080p", "1920 x 1080"},
+       {{"720p", "1280 x 720"},
+        {"1080p", "1920 x 1080"},
         {"1440p", "2560 x 1440"},
         {"4k", "3840 x 2160"}}},
       {"upscaler", "fh1_upscaler", "Upscaling", "", {{"off", "Off"}}},
@@ -367,10 +382,21 @@ void Snapshot() {
        {{"custom", "Custom"}, {"auto", "Auto (recommended)"}, {"low", "Low"},
         {"medium", "Medium"}, {"high", "High"}}},
       {"anti_aliasing", "", "Anti-aliasing", "game", {}},
+      {"world_shadow_filter", "world_shadow_filter", "Shadow softness", "",
+       {{"console", "Console"}, {"soft", "Soft"}, {"softer", "Softer"}}},
+      {"world_ambient_occlusion", "world_ambient_occlusion", "Ambient occlusion", "",
+       {{"off", "Off"}, {"low", "Low"}, {"high", "High"}}},
+      {"forza_cockpit_fov", "forza_cockpit_fov", "Cockpit base FOV", "", {{"0", "Stock (62 degrees)"}}},
+      {"forza_chase_near_fov", "forza_chase_near_fov", "Chase near base FOV", "", {{"0", "Stock (48.5 degrees)"}}},
+      {"forza_chase_far_fov", "forza_chase_far_fov", "Chase far base FOV", "", {{"0", "Stock (58 degrees)"}}},
+      {"forza_hood_fov", "forza_hood_fov", "Hood base FOV", "", {{"0", "Stock (66 degrees)"}}},
+      {"forza_bumper_fov", "forza_bumper_fov", "Bumper base FOV", "", {{"0", "Stock (53 degrees)"}}},
+      {"forza_minimap_camera", "forza_minimap_camera", "Minimap orientation", "",
+       {{"false", "Vehicle (stock)"}, {"true", "Camera"}}},
   };
-#ifdef __APPLE__
-  settings[0].choices.insert(settings[0].choices.begin(), {"720p", "1280 x 720"});
-#endif
+  for (const auto index : kCameraFovs)
+    for (int degrees = 40; degrees <= 90; ++degrees)
+      settings[index].choices.push_back({std::to_string(degrees), std::to_string(degrees) + " degrees"});
   auto &modes = settings[1].choices;
 #ifdef _WIN32
   if (rex::cvar::GetFlagByName("gpu_backend") == "vulkan" &&
@@ -409,9 +435,23 @@ void Snapshot() {
     if (setting.value.empty())
       setting.value = setting.choices.front().value;
   }
+  // A value the screen does not offer would be saved back as it is; show and keep the
+  // game's look (Console, Off).
+  for (const size_t world : {kShadowSoftness, kAmbientOcclusion}) {
+    auto &setting = settings[world];
+    if (std::none_of(setting.choices.begin(), setting.choices.end(),
+                     [&](const Choice &choice) { return choice.value == setting.value; }))
+      setting.value = setting.choices.front().value;
+  }
   // Never let an unknown/current launcher mode silently select spinner index
   // zero (1080p). Native ultrawide owns drawing and output until restart.
   auto &output = settings[0];
+  for (const auto index : kCameraFovs) {
+    auto &fov = settings[index];
+    if (std::none_of(fov.choices.begin(), fov.choices.end(),
+                     [&](const Choice &choice) { return choice.value == fov.value; }))
+      fov.value = "0";
+  }
   if (const auto extent = forza::ultrawide::OutputSize(); extent.width) {
     output.choices = {{output.value, std::to_string(extent.width) + " x " +
         std::to_string(extent.height) + " (window)"}};
@@ -489,12 +529,16 @@ bool SaveNativeConfig() {
       "fh1_upscaler", "fh1_output_width", "fh1_output_height", "resolution_scale",
       "draw_resolution_scale_x", "draw_resolution_scale_y", "fh1_scene_720p_native_hud",
       "fh1_native_scene_scale", "swap_post_effect", "anisotropic_override", "vsync",
-      "forza_hud_edges", "forza_performance_overlay"}) {
+      "forza_hud_edges", "forza_performance_overlay", "world_shadow_filter", "world_ambient_occlusion",
+      "forza_cockpit_fov", "forza_chase_near_fov", "forza_chase_far_fov", "forza_hood_fov", "forza_bumper_fov",
+      "forza_minimap_camera"}) {
     auto value = rex::cvar::GetFlagByName(name);
     if (value.empty()) continue;
     const std::string key(name);
     if (key == "resolution" || key == "fh1_upscaler" || key == "swap_post_effect" ||
-        key == "forza_performance_overlay") value = "\"" + value + "\"";
+        key == "forza_performance_overlay" || key == "world_shadow_filter" ||
+        key == "world_ambient_occlusion")
+      value = "\"" + value + "\"";
     updates.emplace_back(key, value);
   }
   auto temporary = native_config_path;
@@ -531,6 +575,7 @@ extern "C" REX_FUNC(MenuBind) {
   using namespace forza::graphics_menu;
   active_menu = ctx.r3.u32;
   from_main_menu = false;
+  if(forza::native_pause_scene::Owns(active_menu))return;
   Native ui(ctx, base);
   if (ui) {
     const bool tuning = forza::car_tuning_menu::Available(ctx, base, active_menu);
@@ -567,6 +612,7 @@ std::vector<uint32_t> native_rows;
 std::vector<uint32_t> retired_choices;
 uint32_t empty_pause_source = 0;
 void PauseRows(Native &ui, uint8_t *base, bool show) {
+  if(forza::native_pause_scene::Page(ui.context(),base,active_menu,show))return;
   auto component = Read(base, active_menu + 0x170);
   const auto source = from_main_menu ? Read(base, active_menu + 0x174) : active_menu + 0x174;
   if (!show && !empty_pause_source) {
@@ -575,6 +621,11 @@ void PauseRows(Native &ui, uint8_t *base, bool show) {
       return;
     ui.Call(0x828EED20, {empty_pause_source});
   }
+  // Graphics is created asynchronously. Keep the title's shifted transforms
+  // while its rows are still visible, including their unfocus animations.
+  // Restore only when the new page is ready to hide them, before rebinding
+  // the component can retire or reuse those row nodes.
+  if (!show && from_main_menu) RestoreTitle(base);
   ui.Call(0x828B82C8,
           {component, show ? source : empty_pause_source});
   ui.Call(Read(base, Read(base, component + 0x6C) + 0x28), {component + 0x6C});
@@ -587,6 +638,10 @@ void PauseRows(Native &ui, uint8_t *base, bool show) {
   }
 }
 std::string Help(size_t i) {
+  if (i == kMinimapOrientation)
+    return "Vehicle keeps the stock minimap. Camera rotates it with where you look. TU4 desktop gameplay only; the full map stays unchanged. Save keeps the choice; Back discards.";
+  if (std::find(kCameraFovs.begin(), kCameraFovs.end(), i) != kCameraFovs.end())
+    return "Base vertical FOV: Stock or 40-90 degrees. Speed can widen it; transitions blend changes. Off with VR head tracking. Save applies; Back discards.";
   if ((i <= 2 || i == 8 || i == kAntiAliasing) && forza::ultrawide::OutputSize().width) {
     const auto drawing = forza::ultrawide::DrawingSize();
     return "Ultrawide follows the window. Drawing: " + std::to_string(drawing.width) +
@@ -599,6 +654,7 @@ std::string Help(size_t i) {
   if (i == 1 || i == 2 || i == kAntiAliasing) {
     const auto mode = BackendMode();
     const auto output = settings[0].value == "4k" ? "3840 x 2160" :
+        settings[0].value == "720p" ? "1280 x 720" :
         settings[0].value == "1080p" ? "1920 x 1080" : "2560 x 1440";
     std::string scene;
     if (mode == "off") {
@@ -622,7 +678,9 @@ std::string Help(size_t i) {
       "Move ultrawide HUD anchors to the center or edges. Save applies this change when HUD layout is enabled.",
       "Show measured game FPS, optionally with recent frame times in milliseconds. Save applies this change.",
       "Adjust reconstruction and filtering together. Auto uses available features and output size, not a benchmark. HUD and FPS limit stay unchanged.",
-      "Game default preserves guest MSAA. SMAA is spatial. DLAA and FSR Native AA are temporal at output resolution. Turn off upscaling to select a separate AA method."};
+      "Game default preserves guest MSAA. SMAA is spatial. DLAA and FSR Native AA are temporal at output resolution. Turn off upscaling to select a separate AA method.",
+      "Softer, smoother edges on the world's shadows: Soft filters them over a 1.5x wider area, Softer 2x with a wider blur (a little GPU time). Console is the game's filter. Save applies this change.",
+      "Darker sunlight where the world's surfaces meet: under cars, along rails and curbs, at the foot of walls and in creases of the ground. Low or High strength (about 0.5 ms per frame at 2560x1440). Off is the game's lighting. Save applies this change."};
   return i < std::size(help) ? help[i] : "Save applies graphics changes without restarting.";
 }
 uint32_t MakeChoices(Native &ui, uint8_t *base, size_t i) {
@@ -647,6 +705,8 @@ bool Relevant(size_t i) {
 #endif
   if (i == 2) return BackendMode() == "off";
   if (i == kAntiAliasing) return settings[1].value == "off";
+  // The occlusion is a pass of the Vulkan renderer (SDK patch 0350).
+  if (i == kAmbientOcclusion) return rex::cvar::GetFlagByName("gpu_backend") != "d3d12";
   if (i == 6) return rex::cvar::GetFlagByName("forza_ultrawide") == "true" ||
                      rex::cvar::GetFlagByName("forza_hud_layout") == "true";
   return true;
@@ -808,6 +868,7 @@ extern "C" REX_FUNC(__imp__sub_827142C0);
 extern "C" REX_FUNC(__imp__sub_82736B08);
 
 extern "C" REX_FUNC(sub_827303E8) {
+  if (forza::custom_race::TryBind(ctx, base)) return;
   if (forza::car_tuning_menu::TryBind(ctx, base)) return;
   using namespace forza::graphics_menu;
   if (!opening_graphics) {
@@ -865,6 +926,7 @@ extern "C" REX_FUNC(sub_827303E8) {
               native_rows.size());
 }
 extern "C" REX_FUNC(sub_82739190) {
+  if (forza::custom_race::TryNotify(ctx, base)) return;
   if (forza::car_tuning_menu::TryNotify(ctx, base)) return;
   using namespace forza::graphics_menu;
   if (ctx.r3.u32 != graphics_screen) {
@@ -886,16 +948,18 @@ extern "C" REX_FUNC(sub_82739190) {
   }
 }
 extern "C" REX_FUNC(sub_827142C0) {
+  if (forza::custom_race::TryDestroy(ctx, base)) return;
   if (forza::car_tuning_menu::TryDestroy(ctx, base)) return;
   using namespace forza::graphics_menu;
   if (ctx.r3.u32 != graphics_screen) {
     __imp__sub_827142C0(ctx, base);
+    forza::native_pause_scene::Page(ctx,base,active_menu,true);
     return;
   }
   Native ui(ctx, base);
   if (!ui)
     return;
-  if (empty_pause_source)
+  if (empty_pause_source || forza::native_pause_scene::Owns(active_menu))
     PauseRows(ui, base, true);
   RestorePreview();
   for (uint32_t row : native_rows) {
@@ -916,6 +980,7 @@ extern "C" REX_FUNC(sub_827142C0) {
   save_requested = false;
 }
 extern "C" REX_FUNC(sub_82736B08) {
+  if (forza::custom_race::TryInput(ctx, base)) return;
   if (forza::car_tuning_menu::TryInput(ctx, base)) return;
   using namespace forza::graphics_menu;
   if (ctx.r3.u32 != graphics_screen) {
@@ -987,9 +1052,14 @@ extern "C" REX_FUNC(__imp__sub_82836928);
 extern "C" REX_FUNC(sub_8283CB68) {
   using namespace forza::graphics_menu;
   const uint32_t menu = ctx.r3.u32;
-  RestoreTitle(base);
+  // A mode transition can destroy the old title scene before rebuilding this
+  // list (for example, Exit Multiplayer). Its cached nodes are no longer ours
+  // to restore; only the new scene may receive the layout adjustment below.
+  title_layout_pending = false;
+  title_offsets.clear();
   __imp__sub_8283CB68(ctx, base);
   main_menu = menu;
+  forza::native_quit::Title(ctx,base,menu);
   const auto source = Read(base, menu + 0x174);
   Native ui(ctx, base);
   if (source && ui) {
@@ -1006,6 +1076,7 @@ extern "C" REX_FUNC(sub_82836928) {
   using namespace forza::graphics_menu;
   const bool title_choice = ctx.r3.u32 == main_menu && ctx.r4.u32 == 2 &&
                             Read(base, main_menu + 0x260) == 12;
+  if(title_choice)forza::native_quit::Cancel();
   if (ctx.r3.u32 == main_menu && ctx.r4.u32 == 2 && ctx.r6.u32 == kBenchmark &&
       Read(base, main_menu + 0x260) == 12) {
     forza::benchmark::Show();
@@ -1014,7 +1085,6 @@ extern "C" REX_FUNC(sub_82836928) {
   if (ctx.r3.u32 == main_menu && ctx.r4.u32 == 2 && ctx.r6.u32 == kGraphics &&
       Read(base, main_menu + 0x260) == 12) {
     title_layout_pending = false;
-    RestoreTitle(base);
     active_menu = main_menu;
     from_main_menu = true;
     OpenGraphics(ctx, base);
@@ -1034,6 +1104,7 @@ extern "C" REX_FUNC(sub_82836928) {
 namespace forza::graphics_menu {
 void Tick(PPCContext& ctx, uint8_t* base) {
   forza::car_tuning_menu::Tick(ctx, base);
+  forza::custom_race::Tick(ctx, base);
   UpdatePerformanceOverlay();
   RefreshRelevance(ctx, base);
   if (title_layout_pending && main_menu && Read(base, main_menu + 0x260) == 12) {
@@ -1048,8 +1119,12 @@ void Tick(PPCContext& ctx, uint8_t* base) {
         // instance transform moves text, tape and hit geometry together.
         // Use rendered row spacing, not a pixel constant, so the offset also
         // scales with native HUD output.
-        const auto first_object = Read(base, Read(base, first + 0x2C) + 4);
-        const auto second_object = Read(base, Read(base, second + 0x2C) + 4);
+        // A row listed before its scene node exists has none (+0x2C is 0): reading
+        // through it would read guest address 4. Tick runs every frame; wait for it.
+        const auto first_node = Read(base, first + 0x2C);
+        const auto second_node = Read(base, second + 0x2C);
+        const auto first_object = first_node ? Read(base, first_node + 4) : 0;
+        const auto second_object = second_node ? Read(base, second_node + 4) : 0;
         const float spacing = first_object && second_object
             ? std::bit_cast<float>(Read(base, first_object + 0xB0)) -
               std::bit_cast<float>(Read(base, second_object + 0xB0)) : 0;
@@ -1106,8 +1181,10 @@ void Tick(PPCContext& ctx, uint8_t* base) {
       message = "Live graphics requires the updated Vulkan renderer.";
     } else {
       const auto output = settings[0].value;
-      const auto width = output == "4k" ? "3840" : output == "1080p" ? "1920" : output == "720p" ? "1280" : "2560";
-      const auto height = output == "4k" ? "2160" : output == "1080p" ? "1080" : output == "720p" ? "720" : "1440";
+      const auto width = output == "4k" ? "3840" : output == "720p" ? "1280" :
+          output == "1080p" ? "1920" : "2560";
+      const auto height = output == "4k" ? "2160" : output == "720p" ? "720" :
+          output == "1080p" ? "1080" : "1440";
       applying_settings = settings;
       applying_request = std::to_string(++request_id) + " " + width + " " + height +
           " " + settings[2].value + " " + BackendMode();

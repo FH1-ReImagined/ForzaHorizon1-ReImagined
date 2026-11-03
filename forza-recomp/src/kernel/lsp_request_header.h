@@ -1,15 +1,17 @@
-// forza - one header line added to every HTTP request the game sends to its title servers.
+// forza - header lines added to every HTTP request the game sends to its title servers.
 //
 // The Forza Live server takes a title service call's player from the X-UserId header the
-// game writes, which anyone can write. Our game adds its Live identity's friends key
-// (X-Friends-Key, the secret the server bound to the XUID at the first HELLO; the launcher's
-// shader list upload proves itself the same way), so the server can tell the player's own
-// calls from someone else's (server/forza_live_lsp.py verify_caller). The game's requests
-// are HTTP/1.1 with Content-Length over one kept-alive connection (docs/title_services.md);
-// the head of each request is held until it is complete, the line goes in before its blank
-// line, and the body passes through. LspTitleStream keeps the socket's nonblocking contract
-// on top of that (live_tcp.cpp). Header-only so tools/test_lsp_request_header.cpp can test it
-// without the runtime.
+// game writes, which anyone can write. Our game signs each call with its Live identity's
+// friends key (X-Forza-Auth, live_signing.h; the launcher's shader list upload proves itself
+// the same way), so the server can tell the player's own calls from someone else's
+// (server/forza_live/title_services/lsp.py verify_caller) without the key ever being sent. The game's
+// requests are HTTP/1.1 with Content-Length over one kept-alive connection
+// (docs/title_services.md); each request is held until its head and body are complete (the
+// signature covers the body), the lines go in before the head's blank line, and the request
+// goes out. A body over kMaxBody passes through unsigned (the server takes 8 MB). The lines
+// also name the game's build (BuildLine, X-Forza-Build).
+// LspTitleStream keeps the socket's nonblocking contract on top of that (live_tcp.cpp).
+// Header-only so tools/test_lsp_request_header.cpp can test it without the runtime.
 
 #pragma once
 
@@ -17,6 +19,7 @@
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
 
 namespace forza {
@@ -24,15 +27,16 @@ namespace forza {
 class LspRequestHeader {
  public:
   static constexpr size_t kMaxHead = 64 * 1024;
+  static constexpr uint64_t kMaxBody = 16 * 1024 * 1024;
 
-  // `line`: a complete header line, "Name: value\r\n".
-  explicit LspRequestHeader(std::string line) : line_(std::move(line)) {
-    const size_t colon = line_.find(':');
-    name_ = Lower(line_.substr(0, colon == std::string::npos ? 0 : colon));
-  }
+  // The header lines ("Name: value\r\n" each, or nothing) for a complete request: its head
+  // (up to and including the blank line) and its body.
+  using Lines = std::function<std::string(const std::string& head, const std::string& body)>;
 
-  // The bytes to send for these bytes of the request stream: everything except a request
-  // head that is not complete yet, which is held for the next call.
+  explicit LspRequestHeader(Lines lines) : lines_(std::move(lines)) {}
+
+  // The bytes to send for these bytes of the request stream: every complete request with its
+  // lines; a request not complete yet is held for the next call.
   std::string Feed(const uint8_t* data, size_t size) {
     std::string out;
     size_t i = 0;
@@ -41,11 +45,18 @@ class LspRequestHeader {
         out.append(reinterpret_cast<const char*>(data) + i, size - i);
         break;
       }
-      if (body_left_ > 0) {
+      if (body_left_ > 0) {  // a body too large to hold: it goes out as it comes
         const size_t take = size_t(std::min<uint64_t>(body_left_, size - i));
         out.append(reinterpret_cast<const char*>(data) + i, take);
         i += take;
         body_left_ -= take;
+        continue;
+      }
+      if (have_head_) {  // the body of the held head
+        const size_t take = std::min(body_want_ - body_.size(), size - i);
+        body_.append(reinterpret_cast<const char*>(data) + i, take);
+        i += take;
+        if (body_.size() == body_want_) out += Finish();
         continue;
       }
       const size_t search = head_.size() >= 3 ? head_.size() - 3 : 0;
@@ -61,29 +72,54 @@ class LspRequestHeader {
       }
       const size_t head_size = end + 4;
       const size_t rest = head_.size() - head_size;  // after the head, from this call's data
-      std::string head = head_.substr(0, head_size);
-      head_.clear();
+      head_.resize(head_size);
       i = size - rest;
-      if (!Has(head, name_)) head.insert(head_size - 2, line_);
-      body_left_ = ContentLength(head);
-      out += head;
+      const uint64_t length = ContentLength(head_);
+      if (length > kMaxBody) {
+        out += head_;
+        head_.clear();
+        body_left_ = length;
+        continue;
+      }
+      have_head_ = true;
+      body_want_ = size_t(length);
+      if (body_want_ == 0) out += Finish();
     }
     return out;
   }
 
-  // Bytes of a request head held back (tests).
-  size_t Pending() const { return head_.size(); }
-
- private:
-  static std::string Lower(std::string s) {
-    for (char& c : s) c = char(std::tolower(static_cast<unsigned char>(c)));
-    return s;
-  }
+  // Bytes of a request held back until it is complete.
+  size_t Pending() const { return head_.size() + body_.size(); }
 
   // Whether the head has a header of this (lower-case) name.
   static bool Has(const std::string& head, const std::string& name) {
     const std::string lower = Lower(head);
     return !name.empty() && lower.find("\r\n" + name + ":") != std::string::npos;
+  }
+
+  // The line that names the game's build to the server (X-Forza-Build, #517; the server keeps it
+  // with each leaderboard row): "<id>/tu<0|4>", the id being the launcher's version or
+  // git-<commit>. Nothing when the head names one already.
+  static std::string BuildLine(const std::string& head, const std::string& build_id,
+                               int title_update) {
+    if (Has(head, "x-forza-build")) return {};
+    return "X-Forza-Build: " + build_id + "/tu" + std::to_string(title_update) + "\r\n";
+  }
+
+ private:
+  std::string Finish() {
+    std::string head = std::move(head_), body = std::move(body_);
+    head_.clear();
+    body_.clear();
+    have_head_ = false;
+    body_want_ = 0;
+    if (lines_) head.insert(head.size() - 2, lines_(head, body));
+    return head + body;
+  }
+
+  static std::string Lower(std::string s) {
+    for (char& c : s) c = char(std::tolower(static_cast<unsigned char>(c)));
+    return s;
   }
 
   static uint64_t ContentLength(const std::string& head) {
@@ -101,23 +137,26 @@ class LspRequestHeader {
     return value;
   }
 
-  std::string line_, name_;
-  std::string head_;
+  Lines lines_;
+  std::string head_, body_;
+  bool have_head_ = false;
+  size_t body_want_ = 0;
   uint64_t body_left_ = 0;
   bool passthrough_ = false;
 };
 
-// A title server connection's outgoing side with the line added, behaving like the
-// nonblocking socket the game made (FIONBIO) and with exact progress: the bytes the line adds
+// A title server connection's outgoing side with the lines added, behaving like the
+// nonblocking socket the game made (FIONBIO) and with exact progress: the bytes the lines add
 // mean the request stream that goes out differs from the game's, so the stream keeps what
 // the socket has not taken yet (Pending) and sends it before anything newer.
 //
 // Send(data, size, send) returns how many of the game's bytes were taken (all of them, once
-// nothing older is waiting: they go through LspRequestHeader and whatever the socket does not
-// take now waits), kWouldBlock when older output is still waiting (nothing taken, as a full
-// socket would say), or kError after a hard socket error (the connection is dead; the error
-// is the socket's). Taken bytes are never sent twice or dropped, and nothing here waits:
-// Flush (from send, recv and select) moves waiting output on as the socket takes it.
+// nothing older is waiting: they go through LspRequestHeader, which holds a request until it
+// is complete, and whatever the socket does not take now waits), kWouldBlock when older
+// output is still waiting (nothing taken, as a full socket would say), or kError after a hard
+// socket error (the connection is dead; the error is the socket's). Taken bytes are never
+// sent twice or dropped, and nothing here waits: Flush (from send, recv and select) moves
+// waiting output on as the socket takes it.
 //
 // `send(data, size, would_block)` writes to the socket: bytes written, or -1 with
 // would_block set when it is full.
@@ -126,7 +165,7 @@ class LspTitleStream {
   static constexpr int64_t kWouldBlock = -2;
   static constexpr int64_t kError = -1;
 
-  explicit LspTitleStream(std::string line) : header_(std::move(line)) {}
+  explicit LspTitleStream(LspRequestHeader::Lines lines) : header_(std::move(lines)) {}
 
   template <class SendFn>
   int64_t Send(const uint8_t* data, size_t size, SendFn&& send) {
@@ -163,7 +202,7 @@ class LspTitleStream {
 
   // Bytes taken from the game that the socket has not taken yet.
   size_t Pending() const { return out_.size() - sent_; }
-  // A request head held until it is complete (tests).
+  // A request held until it is complete (tests).
   size_t HeldHead() const { return header_.Pending(); }
 
  private:

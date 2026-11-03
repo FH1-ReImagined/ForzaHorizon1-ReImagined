@@ -100,6 +100,7 @@ class HapticsService:
             self._peer = None
             self._xbox = XboxOutput(self._token, self._xbox_capable)
         return {'FORZA_TELEMETRY_PORT': str(self._socket.getsockname()[1]),
+                'FORZA_TELEMETRY_PHYSICS': '1',
                 'FORZA_TELEMETRY_TOKEN': f'{self._token:016x}'}
 
     def start(self):

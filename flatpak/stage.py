@@ -6,7 +6,7 @@
     assets/                          logo.svg, logo.png, social-preview.png
     tools/                           the Python tools the launcher runs (extraction, DLC, title update)
     project/forza-recomp, project/tools/cmake   the project's own sources (no generated code)
-    server/                          the Forza Live server
+    server/                          the Forza Live server (the server/ submodule, FH1-ReImagined/forza-live)
     sdk-overlay/rexglue-overlay-linux-amd64.tar.gz   the patched ReXGlue SDK pieces (built by CI)
     licenses/
     wheels/                          not here: the manifest downloads the PySide6 wheels itself
@@ -56,17 +56,25 @@ def main():
         copy(REPO / "docs" / "images" / n, out / "assets" / n)
     for n in TOOLS:
         copy(REPO / "tools" / n, out / "tools" / n)
+    for resource in builder.NATIVE_TUNING_FILES:
+        copy(REPO / "tools" / resource, out / "project" / "tools" / resource)
     for rel in builder.source_files(REPO):
         copy(REPO / "forza-recomp" / rel, out / "project" / "forza-recomp" / rel)
     for f in sorted((REPO / "tools" / "cmake").glob("*.cmake")):
         copy(f, out / "project" / "tools" / "cmake" / f.name)
-    for f in sorted((REPO / "server").glob("*.py")):
-        if not f.name.startswith("test_"):
-            copy(f, out / "server" / f.name)
-    if (REPO / "server" / "playground_rounds.xml").is_file():
-        copy(REPO / "server" / "playground_rounds.xml", out / "server" / "playground_rounds.xml")
+    for name in builder.NATIVE_MENU_FILES:
+        copy(REPO / "tools" / name, out / "project" / "tools" / name)
+    if not (REPO / "server" / "forza_live_server.py").is_file():
+        sys.exit("server/ is empty: the Forza Live server is a git submodule (git submodule update --init server)")
+    for f in builder.server_files(REPO / "server"):
+        copy(REPO / "server" / f, out / "server" / f)
     copy(Path(a.overlay), out / "sdk-overlay" / "rexglue-overlay-linux-amd64.tar.gz")
     copy(REPO / "LICENSE", out / "licenses" / "ForzaHorizon1-ReImagined.txt")
+    # The GPLv3 section 7 additional permission and the relicensing note travel with the license, and so
+    # does the license of the Forza Live server (AGPL-3.0-or-later), whose files are packaged above.
+    copy(REPO / "NOTICE.md", out / "licenses" / "NOTICE.txt")
+    if (REPO / "server" / "LICENSE").is_file():
+        copy(REPO / "server" / "LICENSE", out / "licenses" / "forza-live.txt")
     if a.sdk_license:
         copy(Path(a.sdk_license), out / "licenses" / "rexglue-sdk.txt")
     print(out)

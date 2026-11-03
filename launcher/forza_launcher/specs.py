@@ -28,6 +28,7 @@ GIB = 1024 ** 3
 # The game's guest resolution: render scale n draws n times this (docs/launcher.md, Render scale)
 GUEST_SIZE = (1280, 720)
 RAM_LOW_GB = 7.0   # "8 GB" PCs report 7.0 to 7.9 GiB once the integrated GPU and firmware have taken theirs
+DECK_NAME = "Steam Deck"   # gpu_name of a Steam Deck, whatever its graphics are called (gpu.steam_deck_reason)
 
 
 @dataclass
@@ -46,9 +47,11 @@ class Specs:
         return bool(self.cpu_name or self.cpu_cores or self.ram_gb or self.gpu_name or self.vram_gb)
 
     def signature(self) -> str:
-        """Identifies this hardware; the one-time banner comes back only when it changes."""
-        return "|".join(str(x) for x in (self.cpu_name, self.cpu_cores, self.avx2, round(self.ram_gb),
-                                          self.gpu_name, round(self.vram_gb, 1), self.integrated))
+        """Identifies this hardware; the one-time banner comes back only when it changes (or, on a Steam
+        Deck, when its preset does: DECK_OFFER)."""
+        sig = "|".join(str(x) for x in (self.cpu_name, self.cpu_cores, self.avx2, round(self.ram_gb),
+                                         self.gpu_name, round(self.vram_gb, 1), self.integrated))
+        return sig + "|" + DECK_OFFER if is_deck(self) else sig
 
 
 def specs_from_dict(d) -> Specs:
@@ -114,10 +117,19 @@ def is_integrated(vendor: str, name: str, vram_gb: float = 0.0):
     return None
 
 
+# The Steam Deck preset's revision (#140): a Deck whose player answered the banner before it existed
+# is asked once more.
+DECK_OFFER = "deck-preset-2"
+
+
+def is_deck(s: Specs) -> bool:
+    return s.gpu_name == DECK_NAME
+
+
 def cpu_tier(s: Specs) -> str:
     """Limits the frame rate (the game's simulation runs on the CPU).
     low: no AVX2, under 4 cores, under 8 GB RAM, or a Steam Deck. mid: under 6 cores. high: 6+ cores with AVX2."""
-    if s.avx2 is False or 0 < s.cpu_cores < 4 or 0 < s.ram_gb < RAM_LOW_GB or s.gpu_name == "Steam Deck":
+    if s.avx2 is False or 0 < s.cpu_cores < 4 or 0 < s.ram_gb < RAM_LOW_GB or is_deck(s):
         return LOW
     if s.cpu_cores <= 0:
         return UNKNOWN
@@ -272,12 +284,12 @@ def detect_linux(sysfs: str = "/sys", proc: str = "/proc", lspci_text=None, smi_
     if not s.cpu_threads:
         s.cpu_threads = os.cpu_count() or 0
         s.cpu_cores = s.cpu_cores or s.cpu_threads
-    deck = gpu.detect_linux(sysfs).vendor == gpu.DECK
+    deck = gpu.detect_linux(sysfs, proc).vendor == gpu.DECK
     cards = linux_cards(sysfs, _lspci() if lspci_text is None else lspci_text,
                         _nvidia_smi() if smi_text is None else smi_text)
     card = best_card(cards)
     if deck:
-        s.gpu_name, s.integrated = "Steam Deck", True
+        s.gpu_name, s.integrated = DECK_NAME, True
         s.vram_gb = card.vram_gb if card else 0.0
     elif card:
         s.gpu_name, s.vram_gb, s.integrated = card.name, card.vram_gb, card.integrated
@@ -345,8 +357,9 @@ def parse_powershell(text: str) -> Specs:
             continue
         vram = (registry.get(name.lower()) or _to_int(g.get("AdapterRAM"))) / GIB
         cards.append(_Card(vendor, name, vram, is_integrated(vendor, name, vram)))
-    if str(data.get("board") or "").strip().lower() in gpu.DECK_BOARDS:
-        s.gpu_name, s.integrated = "Steam Deck", True
+    if (str(data.get("board") or "").strip().lower() in gpu.DECK_BOARDS or gpu.DECK_APU_NAME.search(s.cpu_name)
+            or any(gpu.DECK_APU_NAME.search(c.name) for c in cards)):
+        s.gpu_name, s.integrated = DECK_NAME, True
         s.vram_gb = max((c.vram_gb for c in cards), default=0.0)
         return s
     card = best_card(cards)
@@ -540,6 +553,32 @@ def fingerprint() -> str:
 # --- recommendations and warnings ------------------------------------------------------------------
 FPS_BY_CPU = {LOW: 30, MID: 60, HIGH: 60}      # never above 60 automatically
 SCALE_BY_GPU = {LOW: 1, MID: 1, HIGH: 2}
+# The most a Steam Deck is offered without a warning: 40 fps, one frame per refresh of its screen at 40 Hz
+# (LCD) or two at 80 Hz (OLED). It holds it only in light scenes; 30 is its preset.
+DECK_FPS = 40
+DECK_FRAME_RATES = (20, 30, 40)    # the rates under 60 its screen's refresh rates divide
+
+
+def deck_offer(s: Specs, settings: dict) -> dict:
+    """On a Steam Deck, the values of its preset (gpu.DECK_SETTINGS) that `settings` (effective: Match display
+    already a number) do not have; {} anywhere else. A frame rate of 20 or 40 (for a 40 Hz screen) counts as
+    the preset's."""
+    if not is_deck(s):
+        return {}
+    out = {}
+    for key, value in gpu.DECK_SETTINGS.items():
+        if key == "frame_rate" and _int(settings.get(key), 30) in DECK_FRAME_RATES:
+            continue
+        if settings.get(key, value) != value:
+            out[key] = value
+    return out
+
+
+def banner_text(s: Specs) -> str:
+    if is_deck(s):
+        return ("Steam Deck: use its preset? 30 fps, render scale 1 with AMD FSR 1, Scene anti-aliasing Off and "
+                "Console shadow and texture detail run it best (the CPU work of the GPU emulation is its limit).")
+    return "Some settings are heavy for this PC."
 
 
 @dataclass
@@ -579,7 +618,16 @@ def warnings(s: Specs, settings: dict) -> list:
         out.append(Warn("resolution_scale", f"Render scale {scale} renders {size}, which is heavy even for "
                         f"{_gpu_label(s)}; 2 is the most tested.", {"resolution_scale": 2}))
     limit = {LOW: 30, MID: 60}.get(c)
-    if limit and fps > limit:
+    if is_deck(s):
+        if fps > DECK_FPS:
+            out.append(Warn("frame_rate", f"{fps} fps is more than a Steam Deck holds: the CPU work of the "
+                            "GPU emulation sets its frame rate. Use 30, or 40 with the screen at 40 Hz (LCD) "
+                            "or 80 Hz (OLED).", {"frame_rate": 30}))
+        if settings.get("scene_msaa", "game") != "off":
+            out.append(Warn("scene_msaa", "On a Steam Deck the GPU emulation's CPU work sets the frame rate, and "
+                            "most of it is the scene's three 4x MSAA passes. Off draws the scene in one pass: "
+                            "about a fifth less of that work.", {"scene_msaa": "off"}))
+    elif limit and fps > limit:
         out.append(Warn("frame_rate", f"{fps} fps needs a fast CPU: the game's simulation runs on the CPU. "
                         f"A {_cpu_label(s)} may not hold it in free roam; try {limit}.", {"frame_rate": limit}))
     if g in (LOW, MID) and fps > 60:
@@ -613,6 +661,7 @@ def recommended(s: Specs, settings: dict, vendor: str = "") -> dict:
         want["resolution_scale"] = SCALE_BY_GPU[g]
         if g == LOW and settings.get("present_effect") == "fsr3":
             want["present_effect"] = "fsr"
+    want.update(deck_offer(s, {**settings, **want}))
     out = {}
     for key, value in want.items():
         if settings.get(key) != value and not gpu.warnings(vendor, {key: value}):

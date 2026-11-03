@@ -1,0 +1,130 @@
+diff --git a/include/rex/graphics/pipeline/shader/shader.h b/include/rex/graphics/pipeline/shader/shader.h
+index 4cf38547..5f919a02 100644
+--- a/include/rex/graphics/pipeline/shader/shader.h
++++ b/include/rex/graphics/pipeline/shader/shader.h
+@@ -963,6 +963,14 @@ class Shader {
+   // failure. Not thread-safe.
+   void DestroyTranslation(uint64_t modification);
+ 
++  // FH1 (#45, patch 0362): GetOrCreateTranslation answers a repeat of the modification it was
++  // last asked for from a memo (the map lookup, two a draw, was about 1% of the command
++  // processor); the backend sets these from gpu_shader_translation_memo(_verify) at each frame
++  // start. Verify: also look the map up and log a difference.
++  static inline bool fh1_translation_memo_enabled = false;
++  static inline bool fh1_translation_memo_verify = false;
++  static inline uint64_t fh1_translation_memo_mismatches = 0;
++
+   // An externally managed identifier of the shader storage the microcode of the
+   // shader was last written to, or was loaded from, to only write the shader
+   // microcode to the storage once. UINT32_MAX by default.
+@@ -1030,6 +1038,9 @@ class Shader {
+ 
+   // Modification bits -> translation.
+   std::unordered_map<uint64_t, Translation*> translations_;
++  // FH1 (#45, patch 0362): the last translation GetOrCreateTranslation returned, and for what.
++  Translation* fh1_memo_translation_ = nullptr;
++  uint64_t fh1_memo_modification_ = 0;
+ 
+   uint32_t ucode_storage_index_ = UINT32_MAX;
+ 
+diff --git a/src/graphics/pipeline/shader/shader.cpp b/src/graphics/pipeline/shader/shader.cpp
+index a53a2225..cb203e91 100644
+--- a/src/graphics/pipeline/shader/shader.cpp
++++ b/src/graphics/pipeline/shader/shader.cpp
+@@ -18,6 +18,7 @@
+ #include <rex/filesystem.h>
+ #include <rex/graphics/format/ucode.h>
+ #include <rex/graphics/pipeline/shader/shader.h>
++#include <rex/logging.h>
+ #include <rex/math.h>
+ #include <rex/memory.h>
+ #include <rex/string.h>
+@@ -95,18 +96,40 @@ std::pair<std::filesystem::path, std::filesystem::path> Shader::Translation::Dum
+ }
+ 
+ Shader::Translation* Shader::GetOrCreateTranslation(uint64_t modification, bool* is_new) {
++  // FH1 (#45, patch 0362): the same modification as last time (the memo is emptied when its
++  // translation is destroyed).
++  if (fh1_translation_memo_enabled && fh1_memo_translation_ &&
++      fh1_memo_modification_ == modification) {
++    if (fh1_translation_memo_verify) {
++      auto it = translations_.find(modification);
++      if (it == translations_.end() || it->second != fh1_memo_translation_) {
++        ++fh1_translation_memo_mismatches;
++        REXGPU_WARN("Shader translation memo: shader {:016X} modification {:016X} differs from "
++                    "the map ({} so far)",
++                    ucode_data_hash(), modification, fh1_translation_memo_mismatches);
++      }
++    }
++    if (is_new) {
++      *is_new = false;
++    }
++    return fh1_memo_translation_;
++  }
++  Translation* translation;
+   auto it = translations_.find(modification);
+   if (it != translations_.end()) {
+     if (is_new) {
+       *is_new = false;
+     }
+-    return it->second;
+-  }
+-  Translation* translation = CreateTranslationInstance(modification);
+-  translations_.emplace(modification, translation);
+-  if (is_new) {
+-    *is_new = true;
++    translation = it->second;
++  } else {
++    translation = CreateTranslationInstance(modification);
++    translations_.emplace(modification, translation);
++    if (is_new) {
++      *is_new = true;
++    }
+   }
++  fh1_memo_translation_ = translation;
++  fh1_memo_modification_ = modification;
+   return translation;
+ }
+ 
+@@ -115,6 +138,9 @@ void Shader::DestroyTranslation(uint64_t modification) {
+   if (it == translations_.end()) {
+     return;
+   }
++  if (fh1_memo_translation_ == it->second) {
++    fh1_memo_translation_ = nullptr;
++  }
+   delete it->second;
+   translations_.erase(it);
+ }
+diff --git a/src/graphics/vulkan/command_processor.cpp b/src/graphics/vulkan/command_processor.cpp
+index edf0e42f..f3396408 100644
+--- a/src/graphics/vulkan/command_processor.cpp
++++ b/src/graphics/vulkan/command_processor.cpp
+@@ -171,6 +171,17 @@ REXCVAR_DEFINE_BOOL(gpu_plain_register_ranges, true, "GPU/Vulkan",
+                     "start)")
+     .lifecycle(rex::cvar::Lifecycle::kHotReload);
+ 
++REXCVAR_DEFINE_BOOL(gpu_shader_translation_memo, true, "GPU/Vulkan",
++                    "Each shader answers a draw that needs the same translation (modification) "
++                    "as the last draw that used it without looking its translations up (read at "
++                    "each frame start)")
++    .lifecycle(rex::cvar::Lifecycle::kHotReload);
++
++REXCVAR_DEFINE_BOOL(gpu_shader_translation_memo_verify, false, "GPU/Vulkan",
++                    "With gpu_shader_translation_memo, still look each translation up and log a "
++                    "difference (testing)")
++    .lifecycle(rex::cvar::Lifecycle::kHotReload);
++
+ REXCVAR_DEFINE_BOOL(vulkan_dynamic_rendering, true, "GPU/Vulkan",
+                     "Use VK_KHR_dynamic_rendering for Vulkan GPU emulation when supported by the "
+                     "device (falls back to render passes otherwise)")
+@@ -7235,6 +7246,9 @@ bool VulkanCommandProcessor::BeginSubmission(bool is_guest_command) {
+     // FH1 (#45, patch 0360): the packet loop stores the plain registers itself (the same
+     // stores WriteRegistersFromMem and WriteRegister do for them).
+     fh1_plain_registers_ = REXCVAR_GET(gpu_plain_register_ranges) ? plain_registers.bits() : nullptr;
++    // FH1 (#45, patch 0362).
++    Shader::fh1_translation_memo_enabled = REXCVAR_GET(gpu_shader_translation_memo);
++    Shader::fh1_translation_memo_verify = REXCVAR_GET(gpu_shader_translation_memo_verify);
+     if (fh1_other_render_targets_) Fh1SelectNativeHud(false);
+     if (fh1_dlss_) fh1_dlss_->BeginFrame(frame_current_);
+     fh1_scene_composited_ = false;

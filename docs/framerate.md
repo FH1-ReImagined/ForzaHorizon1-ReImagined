@@ -138,7 +138,7 @@ about 100 at 60, 150-200 at 144, more when the render thread keeps up): a 144 fp
 sends up to twice the traffic of a 60 fps one (about 50 KB/s to each peer at about 250
 bytes a datagram in that test; through the relay with four players, one datagram a frame of
 about 100 bytes per car, about 14 KB/s per peer at 144 fps: `docs/online_vision.md`, "Three
-and four players"). The server's relay budget (256 KB/s per player, `--rate-limit`, `docs/hosting.md`) covers a world
+and four players"). The server's relay budget (256 KB/s per player, `--rate-limit`, forza-live's `docs/configuration.md`) covers a world
 of 8 at 240 fps; direct peer-to-peer paths are not limited. Seen in both
 runs and unrelated to the frame rate: the host's race clock started about 12 s before the
 peer's (A 00:15.150, B 00:03.100 at the same moment, 60 against 60).
@@ -407,6 +407,29 @@ dt still sums to real time; a late frame gets its real length as before. When th
 keeps up, nothing waits (at 60: 0 waits, dt 16.667 ms on 100% of frames, as before). At 30 (the
 default) the hook does nothing. `FORZA_RENDER_SYNC=0` turns it off; the FRAMETIME line counts the
 waits.
+
+For the persistent garage slowdown reported in #187, `FORZA_FRAMETIME_LOG=1`
+also reports `timeouts=`: waits that reached 50 ms without either a new swap
+or the matching render-loop idle acknowledgment added by #240. A normal
+swap or idle acknowledgment ends the wait without increasing this counter. A
+steady 18.2 FPS alone does not establish that this wait is responsible. The
+timeout count and total wait time distinguish render-sync delays from slow
+rendering or presentation. `FORZA_RENDER_SYNC=0` provides a comparison run;
+it can bring back the HUD/judder problem described above, so it is a diagnostic
+comparison rather than a recommended permanent setting.
+
+Local testing on 21 October reached South Beaumont's outpost with a copied
+Golf R save, entered through the normal X prompt, opened Garage and Custom
+Upgrade, then left through the normal confirmation. At a 240 FPS cap the
+persistent 18.2 FPS lock did not occur. The developer pacing options stayed
+unchanged; briefly forcing `framesperrender=2` separately also did not reproduce
+the lock. Those tests used an instrumented TU4 development host, offline
+Windows/NVIDIA/Vulkan, 720p/render scale 1. Other game processes were running,
+so the FPS values are not benchmark results. No pacing reset or timeout
+workaround was justified by that local result. Those tests predate #240's
+independent Linux reproduction and render-loop fix below; the reporter's
+South Beaumont trigger remains unconfirmed. The 22 October integration keeps
+#240's per-wait identifier and swap-or-idle predicate unchanged.
 
 Measured: race scenario (Millennia Masters, 7 AI cars, 26 s at full throttle), TU4 build, warm
 cache, the reporter's settings (`--frame_rate=240 --resolution_scale=2 --anisotropic_override=5

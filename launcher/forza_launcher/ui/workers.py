@@ -3,7 +3,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, Signal
 
-from .. import builder, datafolder, fetch, installer, paths
+from .. import builder, datafolder, errors, fetch, installer, paths
 
 
 class Task(QThread):
@@ -15,14 +15,20 @@ class Task(QThread):
     def __init__(self, fn, name="task"):
         super().__init__()
         self.fn, self.name = fn, name
+        self.stage = ""
         self._cancel = False
         self.blocked = False    # the data folder was denied (builder.FolderBlocked)
+        self.warning = False    # it worked, but its message is a warning (damaged DLC)
 
     def cancel(self):
         self._cancel = True
 
     def cancelled(self):
         return self._cancel
+
+    def report_status(self, text):
+        self.stage = text
+        self.status.emit(text)
 
     def run(self):
         try:
@@ -32,11 +38,11 @@ class Task(QThread):
             self.done.emit(False, "Cancelled.")
         except (installer.InstallError, builder.BuildError) as e:
             self.blocked = self.blocked or isinstance(e, builder.FolderBlocked)
-            log = paths.log_error(f"{self.name}: {e}")
-            self.done.emit(False, f"{e}\n(Details: {log})")
+            log = paths.log_error(f"{self.name} ({self.stage}): {e}\n{getattr(e, 'detail', '')}", e)
+            self.done.emit(False, errors.message(e, self.name, log, self.stage))
         except BaseException as e:  # never let a thread die silently (SystemExit from a tool included)
-            log = paths.log_error(f"{self.name}: unexpected {type(e).__name__}", e)
-            self.done.emit(False, f"Unexpected error: {type(e).__name__}: {e}\n(Details: {log})")
+            log = paths.log_error(f"{self.name} ({self.stage}): unexpected {type(e).__name__}", e)
+            self.done.emit(False, errors.message(e, self.name, log, self.stage))
 
 
 class Probe(QObject):
@@ -75,7 +81,7 @@ class TaskReporter(builder.Reporter):
         self.t.log.emit(text)
 
     def status(self, text):
-        self.t.status.emit(text)
+        self.t.report_status(text)
 
     def progress(self, fraction, detail=""):
         self.t.progress.emit(float(fraction), detail)
@@ -88,7 +94,7 @@ def extract_task(package, dest):
     def fn(t: Task):
         def prog(done, total, name):
             t.progress.emit(done / total if total else 0, name)
-        t.status.emit("Extracting the game files")
+        t.report_status("Extracting the game files")
         notes = []
         total = installer.extract_game(package, Path(dest), prog, t.cancelled, notes.append)
         return f"Extracted {total / 2**30:.1f} GB. " + " ".join(notes)
@@ -98,7 +104,7 @@ def extract_task(package, dest):
 def verify_task(folder):
     """Check an extracted game folder (decoding the executable of another printing takes a while)."""
     def fn(t: Task):
-        t.status.emit("Checking the game files")
+        t.report_status("Checking the game files")
         ok, msg = installer.check_game_folder(Path(folder))
         if not ok:
             raise installer.InstallError(msg)
@@ -110,9 +116,11 @@ def dlc_task(folder, user_data):
     def fn(t: Task):
         def prog(done, total, name):
             t.progress.emit(done / total if total else 0, name)
-        t.status.emit("Installing DLC")
-        n = installer.install_dlc_folder(folder, Path(user_data), prog, t.cancelled, t.log.emit)
-        return f"Installed {n} DLC package(s)."
+        t.report_status("Installing DLC")
+        damaged = []
+        n = installer.install_dlc_folder(folder, Path(user_data), prog, t.cancelled, t.log.emit, damaged)
+        t.warning = bool(damaged)
+        return f"Installed {n} DLC package(s)." + installer.damaged_note(damaged)
     return Task(fn, "install DLC")
 
 
@@ -132,7 +140,7 @@ def prebuild_task(cfg):
         if g is None:
             raise builder.BuildError(game.missing_message(looked))
         try:
-            return shader_prebuild.prebuild(cfg, g, t.status.emit, lambda f, d: t.progress.emit(f, d),
+            return shader_prebuild.prebuild(cfg, g, t.report_status, lambda f, d: t.progress.emit(f, d),
                                             t.cancelled, t.log.emit)
         except InterruptedError:
             raise installer.Cancelled() from None
@@ -144,7 +152,7 @@ def prebuild_task(cfg):
 def move_task(old, new, with_user, with_game):
     """Copy the user data of the old data folder into the new one (the old one is left as it is)."""
     def fn(t: Task):
-        t.status.emit("Copying your saves and files to the new folder")
+        t.report_status("Copying your saves and files to the new folder")
 
         def prog(frac, name):
             t.progress.emit(frac, name)

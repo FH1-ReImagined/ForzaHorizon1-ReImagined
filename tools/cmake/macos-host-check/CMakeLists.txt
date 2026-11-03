@@ -8,6 +8,7 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(FORZA_TITLE_UPDATE 0 CACHE STRING "Game version: 0 or 4")
 get_filename_component(FORZA_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
+include("${FORZA_ROOT}/forza-recomp/cmake/NativePause.cmake")
 find_package(rexglue 0.10.0 REQUIRED CONFIG)
 
 # Compile host integration without game data, generated code, linking or launching.
@@ -17,9 +18,11 @@ add_library(forza_host_check OBJECT ${HOST_SOURCES} app_header_check.cpp)
 target_include_directories(forza_host_check PRIVATE
     "${FORZA_ROOT}/forza-recomp" "${FORZA_ROOT}/forza-recomp/src"
     "${FORZA_ROOT}/forza-recomp/thirdparty/discord-rpc/include"
-    "${FORZA_ROOT}/forza-recomp/thirdparty/discord-rpc/src")
+    "${FORZA_ROOT}/forza-recomp/thirdparty/discord-rpc/src"
+    "${FORZA_ROOT}/forza-recomp/thirdparty/openxr/include")
 target_link_libraries(forza_host_check PRIVATE rex::runtime rex::renderdoc)
 target_compile_definitions(forza_host_check PRIVATE FORZA_TITLE_UPDATE=${FORZA_TITLE_UPDATE})
+forza_apply_native_pause(forza_host_check)
 
 # Exercise the installed plugin ABI and SDK Vulkan device creation without a game.
 add_executable(forza_macos_gpu_check gpu_check.cpp)

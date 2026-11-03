@@ -13,7 +13,7 @@ label spots in world metres); the landmass, the regions' soft shapes and the pea
 on them are generated from it and from the roads. The landmark icons are drawn here.
 
   tools/build_map_roads.py --game extracted/game [--ghosts DATA_DIR/ghosts] [--carlog DRIVE.log] \\
-      --points site/data/map_points.json --out site/images/colorado-map.svg
+      --points ../website/data/map_points.json --out ../website/images/colorado-map.svg
 
 The sat-nav file (big-endian): a 40-byte header (a magic word, then the counts of nodes,
 segments, properties, node-list entries, memberships, property names and property values, and
@@ -34,7 +34,7 @@ its position as three big-endian floats (x, y, z in metres), among others (times
 
 Coordinates: the game's x grows east and z north; the SVG has 1 unit = UNIT metres, north up.
 The colours are CSS custom properties (--map-*) with fallbacks, so a page that inlines the
-SVG styles it for light and dark (site/style.css).
+SVG styles it for light and dark (the website's style.css; FH1-ReImagined/website).
 """
 import argparse
 import json
@@ -859,9 +859,9 @@ def main(argv=None):
     ap.add_argument("--game", help="the extracted game (the folder with media/): its sat-nav road network")
     ap.add_argument("--ghosts", action="append", default=[], help="a folder of ghost .bin files (extra driven lines)")
     ap.add_argument("--carlog", action="append", default=[], help="a tools/carlog.py log of our own drive")
-    ap.add_argument("--points", required=True, help="site/data/map_points.json")
+    ap.add_argument("--points", required=True, help="the website's data/map_points.json")
     ap.add_argument("--terrain", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "map_terrain.json"))
-    ap.add_argument("--out", required=True, help="the map SVG (site/images/colorado-map.svg)")
+    ap.add_argument("--out", required=True, help="the map SVG (the website's images/colorado-map.svg)")
     a = ap.parse_args(argv)
     lines = []
     if a.game:

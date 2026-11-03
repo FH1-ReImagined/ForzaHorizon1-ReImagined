@@ -109,7 +109,7 @@ edge artifact. The stationary traffic comparison does not establish that all mot
 artifacts are fixed; that case remains under investigation.
 
 The independent Windows build, Vulkan output-pipeline and NVIDIA cubemap fixes
-were merged separately in [PR #58](https://github.com/Dyotson/ForzaHorizon1-ReImagined/pull/58).
+were merged separately in [PR #58](https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/pull/58).
 This DLSS draft is based on main after that merge.
 
 Review validation (RTX 5060 Ti, Windows): the rebuilt SDK ran DLSS, DLAA and Off;

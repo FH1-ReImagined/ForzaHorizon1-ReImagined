@@ -3,7 +3,7 @@
 Planned work, not started; each item is also a GitHub issue. Findings and progress go to
 `docs/PROJECT.md` (status log) or the topic's doc once work begins.
 
-## Installers for Windows and Linux ([#1](https://github.com/Dyotson/ForzaHorizon1-ReImagined/issues/1))
+## Installers for Windows and Linux ([#1](https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/issues/1))
 
 An installer per platform, built by GitHub Actions and published as release assets, so
 players do not have to follow the build steps in the README.
@@ -26,7 +26,7 @@ players do not have to follow the build steps in the README.
   codegen, which needs the game's `default.xex`) and, for Windows, the MSVC CRT and
   Windows SDK from `xwin` (Microsoft's license).
 
-## More than 8 players in free roam ([#2](https://github.com/Dyotson/ForzaHorizon1-ReImagined/issues/2))
+## More than 8 players in free roam ([#2](https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/issues/2))
 
 Raise the Horizon World's cap of 8 players (`docs/online_vision.md`, "Session cap: 8").
 
@@ -39,7 +39,7 @@ Raise the Horizon World's cap of 8 players (`docs/online_vision.md`, "Session ca
   to read.
 - Server side: 8 is also in the server, in the placement (one world per 8 players,
   `server/forza_live_server.py`), the served playlist's `MaxPlayers`
-  (`server/forza_live_lsp.py`) and `MAX_PLAYERS` (event grids, `server/forza_world.py`).
+  (`server/forza_live/title_services/lsp.py`) and `MAX_PLAYERS` (event grids, `server/forza_live/world/world.py`).
   A broadcast counts once per recipient against the sender's relay budget
   (256 KB/s, `--rate-limit`, sized for a world of 8 at 240 fps), so a larger world needs a larger
   budget.

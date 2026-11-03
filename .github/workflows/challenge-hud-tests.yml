@@ -2,10 +2,30 @@ name: challenge-hud-tests
 on:
   pull_request:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'screenshots/**'
+      - '.github/ISSUE_TEMPLATE/**'
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
+  garage-capacity-tests:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-2022, macos-15]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: cmake -S forza-recomp/tests/garage-capacity -B garage-capacity-tests
+      - run: cmake --build garage-capacity-tests --config Debug
+      - run: ctest --test-dir garage-capacity-tests -C Debug --output-on-failure
+      - run: python -m unittest discover -s launcher -p test_garage.py
   native-message-tests:
     runs-on: ${{ matrix.os }}
     strategy:
@@ -27,6 +47,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           .\achievement-hud-test.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          clang-cl /nologo /std:c++17 /EHsc /W4 /WX forza-recomp/tests/cockpit_fov_test.cpp /Fe:cockpit-fov-test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\cockpit-fov-test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($tu in @(0, 4)) {
+            clang-cl /nologo /std:c++17 /EHsc /W4 /WX /DFORZA_TITLE_UPDATE=$tu /Iforza-recomp/tests/camera-fov-stubs /Iforza-recomp/src forza-recomp/tests/camera_fov_hook_test.cpp /Fe:camera-fov-hook-$tu.exe
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            & ".\camera-fov-hook-$tu.exe"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
           clang-cl /nologo /std:c++17 /EHsc /W4 /WX /Iforza-recomp/tests/stall-stubs forza-recomp/tests/stall_watch_test.cpp /Fe:stall-watch-test.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           .\stall-watch-test.exe
@@ -34,14 +64,27 @@ jobs:
           clang-cl /nologo /std:c++17 /EHsc /W4 /WX /DFORZA_CPU_TARGET_V3=1 forza-recomp/tests/cpu_target_test.cpp forza-recomp/src/platform/cpu_target.cpp user32.lib /Fe:cpu-target-test.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           .\cpu-target-test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          clang-cl /nologo /std:c++17 /EHsc /W4 /WX forza-recomp/tests/auto_pause_test.cpp /Fe:auto-pause-test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\auto-pause-test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - if: runner.os != 'Windows'
         run: |
           g++ -std=c++17 -pthread -Wall -Wextra -Werror forza-recomp/tests/challenge_hud_test.cpp -o challenge-hud-test
           ./challenge-hud-test
           g++ -std=c++17 -pthread -Wall -Wextra -Werror forza-recomp/tests/achievement_hud_test.cpp -o achievement-hud-test
           ./achievement-hud-test
+          g++ -std=c++17 -Wall -Wextra -Werror forza-recomp/tests/cockpit_fov_test.cpp -o cockpit-fov-test
+          ./cockpit-fov-test
+          for tu in 0 4; do
+            g++ -std=c++17 -Wall -Wextra -Werror -DFORZA_TITLE_UPDATE=$tu -Iforza-recomp/tests/camera-fov-stubs -Iforza-recomp/src forza-recomp/tests/camera_fov_hook_test.cpp -o camera-fov-hook-$tu
+            ./camera-fov-hook-$tu
+          done
           g++ -std=c++17 -pthread -Wall -Wextra -Werror -Iforza-recomp/tests/stall-stubs forza-recomp/tests/stall_watch_test.cpp -o stall-watch-test
           ./stall-watch-test
+          g++ -std=c++17 -Wall -Wextra -Werror forza-recomp/tests/auto_pause_test.cpp -o auto-pause-test
+          ./auto-pause-test
       - if: runner.os == 'Linux'
         run: |
           g++ -std=c++17 -Wall -Wextra -Werror -DFORZA_CPU_TARGET_V3=1 forza-recomp/tests/cpu_target_test.cpp forza-recomp/src/platform/cpu_target.cpp -o cpu-target-test

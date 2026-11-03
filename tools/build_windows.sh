@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Cross-compile the Windows version from Linux and package it in
 # forza-recomp/out/dist/windows:
-#   1. the ReXGlue SDK (runtime and Xenos GPU plugin) from source, with this project's
-#      patches and the Vulkan backend (the SDK's prebuilt Windows plugin has none), and
+#   1. the ReXGlue SDK (runtime and Xenos GPU plugin) from source, ReIGlue (this project's
+#      fork) with the Vulkan backend (the SDK's prebuilt Windows plugin has none), and
 #   2. the game against it, reusing the generated code of the Linux build.
 #
 # Usage: tools/build_windows.sh [--sdk-only | --game-only]   (two chunks: the SDK build is long)
 #
 # Needs, besides what the Linux build needs (run it first: it runs codegen, and
-# tools/build_rexglue_sdk.sh checks out and patches the SDK source):
+# tools/build_rexglue_sdk.sh checks out the SDK source):
 #   - Homebrew's llvm (clang, clang-cl, llvm-lib, llvm-rc) and lld (lld-link);
 #   - the MSVC CRT and Windows SDK, unpacked by xwin (https://github.com/Jake-Shadle/xwin).
 #     Running it means accepting Microsoft's license:
@@ -26,7 +26,7 @@ PREFIX="${REXSDK_WIN_PREFIX:-$HOME/rexglue-sdk-patched-forza/0.10.0.24/win-amd64
 JOBS="${JOBS:-$(nproc)}"
 
 [ -d "$XWIN/crt/include" ] || { echo "no MSVC CRT at $XWIN (run xwin splat, see above)" >&2; exit 1; }
-[ -d "$SRC/.git" ] || { echo "no SDK source at $SRC (run tools/build_rexglue_sdk.sh [--source-only] first)" >&2; exit 1; }
+[ -e "$SRC/.git" ] || { echo "no SDK source at $SRC (run tools/build_rexglue_sdk.sh [--source-only] first)" >&2; exit 1; }
 [ -f "$ROOT/forza-recomp/generated/default/sources.cmake" ] ||
     { echo "no generated code (build the Linux version first)" >&2; exit 1; }
 
@@ -81,6 +81,13 @@ cmake -S "$SRC" -B "$SRC/out/build/win-cross" -G Ninja -DCMAKE_BUILD_TYPE=Releas
     -DCMAKE_TOOLCHAIN_FILE="$ROOT/tools/cmake/windows-clang.cmake" > /dev/null
 ninja -C "$SRC/out/build/win-cross" -j "$JOBS"
 cmake --install "$SRC/out/build/win-cross" > /dev/null
+# The OpenXR loader for the VR setting (docs/vr.md, "Packaging"), as the release workflow adds it.
+openxr_tmp="$(mktemp -d)"
+python3 "$ROOT/launcher/packaging/ci_fetch.py" openxr-loader-windows "$openxr_tmp" > /dev/null
+cp "$openxr_tmp/x64/bin/openxr_loader.dll" "$PREFIX/bin/"
+mkdir -p "$PREFIX/share/licenses/openxr-loader"
+cp "$openxr_tmp/share/doc/openxr/LICENSE" "$PREFIX/share/licenses/openxr-loader/LICENSE.txt"
+rm -rf "${openxr_tmp:?}"
 fi
 [ "$STEP" = --sdk-only ] && exit 0
 
@@ -114,11 +121,20 @@ if [ -f "$PREFIX/share/licenses/amd-fidelityfx-fsr3/LICENSE.txt" ]; then
 fi
 cp "$ROOT/tools/xcontent_extract.py" "$ROOT/tools/xiso_extract.py" "$ROOT/tools/install_dlc.py" "$DIST/"
 mkdir -p "$DIST/server"
-cp "$ROOT"/server/*.py "$DIST/server/"
+# The Forza Live server: its entry point and the forza_live package (no tests).
+cp "$ROOT/server/forza_live_server.py" "$DIST/server/"
+cp -r "$ROOT/server/forza_live" "$DIST/server/"
+find "$DIST/server" -name __pycache__ -prune -exec rm -rf {} +
+if [ -f "$PREFIX/share/licenses/openxr-loader/LICENSE.txt" ]; then
+    cp "$PREFIX/share/licenses/openxr-loader/LICENSE.txt" "$DIST/licenses/OpenXR-loader.txt"
+fi
 if [ -f "$PREFIX/share/licenses/smaa/LICENSE.txt" ]; then
     cp "$PREFIX/share/licenses/smaa/LICENSE.txt" "$DIST/licenses/SMAA.txt"
 fi
 cp "$ROOT/LICENSE" "$DIST/licenses/ForzaHorizon1-ReImagined.txt"
+# The GPLv3 section 7 additional permission and the relicensing note, and the server's license.
+cp "$ROOT/NOTICE.md" "$DIST/licenses/NOTICE.txt"
+[ -f "$ROOT/server/LICENSE" ] && cp "$ROOT/server/LICENSE" "$DIST/licenses/forza-live.txt"
 cp "$SRC/LICENSE" "$DIST/licenses/rexglue-sdk.txt"
 [ -f "$PREFIX/licenses/SDL3/LICENSE.txt" ] && cp "$PREFIX/licenses/SDL3/LICENSE.txt" "$DIST/licenses/SDL3.txt"
 # play.bat is the Windows play.sh (local Forza Live server, --offline); CRLF for cmd.exe.

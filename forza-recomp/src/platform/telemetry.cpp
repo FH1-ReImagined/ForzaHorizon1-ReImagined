@@ -13,6 +13,7 @@
 #include "xbox_haptics.h"
 #include "guest_addr.h"
 #include "guest_memory.h"
+#include "car_physics.h"
 #include <rex/memory/utils.h>
 #include <array>
 #include <algorithm>
@@ -31,6 +32,7 @@ uint64_t Now() {
 }
 struct Bridge {
   bool enabled = false;
+  bool physics = false;
 #ifdef _WIN32
   SOCKET socket = INVALID_SOCKET;
 #else
@@ -77,6 +79,8 @@ struct Bridge {
     destination.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     destination.sin_port = htons(uint16_t(n));
     enabled = true;
+    const char* physics_env = std::getenv("FORZA_TELEMETRY_PHYSICS");
+    physics = physics_env && std::strcmp(physics_env, "1") == 0;
     const char* per_user = std::getenv("FORZA_PAD_PER_USER");
     if (per_user && std::strcmp(per_user, "1") == 0) user_mask = 1;
   }
@@ -134,7 +138,7 @@ bool LocalCar(uint8_t* base, uint32_t& id, std::array<float, 3>& position,
   }
   return false;
 }
-template<class T> void Put(std::array<uint8_t, 96>& data, size_t& offset, T value) {
+template<size_t N, class T> void Put(std::array<uint8_t, N>& data, size_t& offset, T value) {
   static_assert(std::endian::native == std::endian::little);
   std::memcpy(data.data() + offset, &value, sizeof(value));
   offset += sizeof(value);
@@ -196,6 +200,14 @@ void Input(bool connected, uint8_t left, uint8_t right, uint16_t buttons, int16_
   s.input_time = connected ? Now() : 0;
   s.left = left; s.right = right; s.buttons = buttons; s.steer = steer;
 }
+bool LocalCarPosition(uint8_t* base, float& x, float& z) {
+  uint32_t car;
+  std::array<float, 3> position{}, forward{};
+  if (!LocalCar(base, car, position, forward)) return false;
+  x = position[0];
+  z = position[2];
+  return true;
+}
 void Rumble(uint16_t left, uint16_t right) {
   Gate().Rumble(left, right, Now());  // always: the wheel reads it without the bridge
 }
@@ -210,6 +222,10 @@ void Physics(uint8_t* base) {
   uint32_t car = 0, flags = 0;
   std::array<float, 3> position{}, forward{}, velocity{}, acceleration{};
   const bool valid = LocalCar(base, car, position, forward);
+  const CarPhysics physics = valid && s.physics
+      ? ReadCarPhysics(car, FORZA_TU4 != 0,
+                       [base](uint32_t a, void* p, size_t n) { return Read(base, a, p, n); })
+      : CarPhysics{};
   if (valid) flags |= 1;
   if (s.input_time && now - s.input_time < 250) flags |= 2;
   const float dt = float(now - s.last_time) / 1000;
@@ -233,22 +249,32 @@ void Physics(uint8_t* base) {
   }
   s.car = car; s.position = position; s.velocity = velocity;
   s.have_velocity = (flags & 4) != 0; s.last_time = now;
-  std::array<uint8_t, 96> packet{};
+  std::array<uint8_t, 140> packet{};
+  const uint16_t packet_size = s.physics ? 140 : 96;
   std::memcpy(packet.data(), "FH1T", 4);
   size_t offset = 4;
-  Put(packet, offset, uint16_t(1)); Put(packet, offset, uint16_t(packet.size()));
+  Put(packet, offset, uint16_t(s.physics ? 2 : 1)); Put(packet, offset, packet_size);
   const uint32_t sequence = s.sequence++;
   s.sent[sequence % s.sent.size()] = {sequence, now};
+  if (physics.valid) flags |= 16;
   Put(packet, offset, s.token); Put(packet, offset, sequence); Put(packet, offset, flags);
   Put(packet, offset, now); Put(packet, offset, car);
   // Driving: a local car, fresh input and the game's rumble running; not in menus.
-  const bool driving = valid && (flags & 2) && Gate().Driving(now);
+  const bool driving = valid && (flags & 2) &&
+      (s.physics ? Player().State() == Drive::kDriving : Gate().Driving(now));
   Put(packet, offset, uint32_t(driving));
   for (auto v : {position, velocity, acceleration, forward}) for (float f : v) Put(packet, offset, f);
   Put(packet, offset, s.left); Put(packet, offset, s.right);
   Put(packet, offset, uint8_t(0)); Put(packet, offset, int8_t(s.steer / 256));
   Put(packet, offset, s.buttons); Put(packet, offset, uint16_t(0));
-  sendto(s.socket, reinterpret_cast<const char*>(packet.data()), int(packet.size()), 0,
+  if (s.physics) {
+    for (float value : {physics.rpm, physics.redline, physics.speed, physics.controls[1],
+                        physics.controls[0], physics.controls[4]}) Put(packet, offset, value);
+    const float direction = physics.gear == 0 ? -1.0f : 1.0f;
+    for (float slip : physics.slip) Put(packet, offset, direction * slip);
+    Put(packet, offset, uint32_t(physics.abs));
+  }
+  sendto(s.socket, reinterpret_cast<const char*>(packet.data()), packet_size, 0,
          reinterpret_cast<sockaddr*>(&s.destination), sizeof(s.destination));
   ReceiveXbox(s, now, driving);
 }

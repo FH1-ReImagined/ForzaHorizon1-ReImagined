@@ -18,6 +18,8 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SECS="${1:-60}"
 shift || true
+. "$ROOT/tools/startup_movies.sh"
+forza_startup_movie_args "$@" || exit $?
 RUN="${FORZA_RUN_DIR:-${XDG_RUNTIME_DIR:-/tmp}/forza_run}"
 mkdir -p "$RUN"
 . "$ROOT/tools/bench_lock.sh"
@@ -41,7 +43,8 @@ DEFAULT_SDK="$HOME/rexglue-sdk-patched-forza/0.10.0.24/linux-amd64"
 export LD_LIBRARY_PATH="${REXSDK:-$DEFAULT_SDK}/lib:$PWD"
 timeout --signal=INT --kill-after=10 "$SECS" ./forza \
     --game_data_root="${FORZA_DATA:-$ROOT/extracted/game}" \
-    --log_file="$RUN/forza.log" --log_level="${FORZA_LOG_LEVEL:-info}" "$@" > "$RUN/run.out" 2>&1
+    --log_file="$RUN/forza.log" --log_level="${FORZA_LOG_LEVEL:-info}" \
+    "${STARTUP_MOVIE_ARGS[@]}" > "$RUN/run.out" 2>&1
 echo "EXIT=$?" >> "$RUN/run.out"
 tail -1 "$RUN/run.out"
 

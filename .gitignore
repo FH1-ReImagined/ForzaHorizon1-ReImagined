@@ -15,6 +15,7 @@ forza-recomp/codegen-warnings.log
 # Ghidra projects (analysis of the game binary)
 ghidra_projects/
 # Build/editor noise
+/build/
 __pycache__/
 *.pyc
 .vscode/

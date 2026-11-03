@@ -25,11 +25,13 @@ std::mutex view_mutex;
 View view;
 std::atomic<Screen> screen{Screen::hidden};
 std::atomic<int> action{0};
+std::atomic<bool> reset_pad{false};
 std::atomic<bool> automatic{false}, boot_input{false}, confirm_input{false},
     pause_input{false};
 std::filesystem::path source_root, settings_snapshot;
 uint32_t title_menu = 0, single_player_id = 10;
 bool title_started = false, event_started = false;
+[[maybe_unused]] bool title_listed = false;
 Clock::time_point started = Clock::now(), world_ready{};
 
 void Environment(const char *name, const std::string &value) {
@@ -52,6 +54,8 @@ void Status(const std::string &status, Screen next) {
   std::lock_guard lock(view_mutex);
   view.status = status;
   view.screen = next;
+  if (next == Screen::setup || next == Screen::results)
+    reset_pad.store(true);
   screen.store(next);
 }
 uint32_t Read(uint8_t *base, uint32_t address) {
@@ -97,6 +101,10 @@ bool GraphicsFlag(const std::string &key) {
     return false;
   return key.starts_with("fh1_") || key.starts_with("fsr3_") ||
          key == "forza_hud_edges" || key == "forza_performance_overlay" ||
+         key == "forza_cockpit_fov" || key == "forza_chase_near_fov" ||
+         key == "forza_chase_far_fov" || key == "forza_hood_fov" ||
+         key == "forza_bumper_fov" ||
+         key == "world_shadow_filter" || key == "world_ambient_occlusion" ||
          key == "frame_rate" || key == "video_mode_refresh_rate" ||
          key == "resolution" || key == "resolution_scale" || key == "vsync" ||
          key == "anisotropic_override" || key == "swap_post_effect";
@@ -301,6 +309,7 @@ void Completed(bool valid, const char *reason,
   view.status = valid ? "Benchmark complete"
                       : std::string("Benchmark incomplete: ") + reason;
   view.screen = Screen::results;
+  reset_pad.store(true);
   screen.store(Screen::results);
   confirm_input.store(false);
   pause_input.store(valid);
@@ -309,7 +318,12 @@ uint16_t Pad(uint16_t buttons, bool &block_all) {
   static uint16_t previous = 0;
   static Screen previous_screen = Screen::hidden;
   const auto current = screen.load();
-  const uint16_t pressed = current == previous_screen ? buttons & ~previous : 0;
+  // Pad is not polled while the overlay is hidden. After closing and reopening
+  // setup, previous_screen can still be setup: discard the opening A press on
+  // every dialog entry, even when no hidden-screen poll occurred between them.
+  const bool entered = reset_pad.exchange(false);
+  const uint16_t pressed = !entered && current == previous_screen
+                               ? buttons & ~previous : 0;
   previous = buttons;
   previous_screen = current;
   if (pause_input.exchange(false)) {
@@ -365,16 +379,22 @@ void FlowTick(PPCContext &ctx, uint8_t *base) {
     return;
   }
 #if defined(FORZA_TITLE_UPDATE) && FORZA_TITLE_UPDATE == 4
-  if (!title_started && Valid(title_menu) &&
-      Read(base, title_menu + 0x260) == 12) {
-    const auto component = Read(base, title_menu + 0x170);
-    if (!Valid(component))
+  // The title list ignores presses until its scene has loaded, which takes seconds on a
+  // new profile. Calling its choice handler (sub_82836928) on the first tick that listed
+  // the rows started the game's Single Player transition too early: it read guest
+  // address 4 and the game closed (#540). Boot's A presses (boot_input) choose the
+  // highlighted Single Player as a player's do, once the game takes them; the menu's
+  // state is then Single Player's id.
+  if (!title_started && Valid(title_menu)) {
+    const auto state = Read(base, title_menu + 0x260);
+    if (state == 12)
+      title_listed = true;
+    else if (title_listed && state == single_player_id) {
+      boot_input.store(false);
+      title_started = true;
+      REXLOG_INFO("BENCHMARK: loading single player for fixed event FR02");
       return;
-    boot_input.store(false);
-    title_started = true;
-    Call(ctx, base, 0x82836928,
-         {title_menu, 2, component + 8, single_player_id});
-    REXLOG_INFO("BENCHMARK: loading single player for fixed event FR02");
+    }
   }
   if (title_started && !event_started) {
     const auto activities = Activities(base);

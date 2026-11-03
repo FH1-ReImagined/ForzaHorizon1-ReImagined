@@ -12,6 +12,18 @@ from forza_launcher.config import Config
 
 
 class InGameGraphicsTests(unittest.TestCase):
+    def test_minimap_orientation_round_trip(self):
+        self.assertFalse(self.cfg.settings["forza_minimap_camera"])
+        for value in ("true", "false"):
+            self.request(forza_minimap_camera=value)
+            self.assertTrue(ingame.import_pending(self.cfg, lambda _: None))
+            self.assertEqual(Config(self.cfg.path).settings["forza_minimap_camera"], value == "true")
+
+    def test_minimap_orientation_rejects_invalid_values(self):
+        with self.assertRaises(ValueError):
+            ingame.translate({"version": 1, "settings": {"forza_minimap_camera": "camera"}},
+                             self.cfg.settings)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -38,6 +50,17 @@ class InGameGraphicsTests(unittest.TestCase):
         self.assertEqual(saved.settings["anisotropic_override"], 5)
         self.assertFalse(saved.settings["forza_hud_edges"])
 
+    def test_native_720p_output_survives_save_and_reload(self):
+        self.request(output="720p", upscaler="off", anti_aliasing="game",
+                     resolution_scale="1")
+        self.assertTrue(ingame.import_pending(self.cfg, lambda _: None))
+        saved = Config(self.cfg.path)
+        self.assertEqual(saved.settings["resolution"], "720p")
+        self.assertEqual(saved.settings["resolution_scale"], 1)
+        self.assertEqual(saved.settings["forza_antialiasing"], "game")
+        # Reconstruction selectors have separate, higher-output schemas.
+        self.assertIn(saved.settings["fsr3_output_resolution"], ("1080p", "1440p", "4k"))
+
     def test_current_720p_does_not_reset_reconstruction_output(self):
         previous = self.cfg.settings["fsr3_output_resolution"]
         self.request(output="720p", upscaler="off", anti_aliasing="game", frame_rate="120")
@@ -46,6 +69,45 @@ class InGameGraphicsTests(unittest.TestCase):
         self.assertEqual(saved.settings["resolution"], "720p")
         self.assertEqual(saved.settings["fsr3_output_resolution"], previous)
         self.assertEqual(saved.settings["frame_rate"], 120)
+
+    def test_cockpit_fov_round_trip_and_stock_reset(self):
+        self.assertEqual(self.cfg.settings["forza_cockpit_fov"], 0)
+        for degrees in (40, 62, 75, 90, 0):
+            self.request(forza_cockpit_fov=str(degrees))
+            self.assertTrue(ingame.import_pending(self.cfg, lambda _: None))
+            self.assertEqual(Config(self.cfg.path).settings["forza_cockpit_fov"], degrees)
+
+    def test_invalid_cockpit_fov_rejects_whole_request(self):
+        previous = dict(self.cfg.settings)
+        for value in ("-1", "1", "39", "91", "nan", "inf", "62.5", "true"):
+            self.request(frame_rate="120", forza_cockpit_fov=value)
+            self.assertFalse(ingame.import_pending(self.cfg, lambda _: None))
+            self.assertEqual(self.cfg.settings, previous)
+            self.assertTrue(self.pending.exists())
+
+    def test_all_camera_bases_round_trip_and_reject_partial_requests(self):
+        values = {key: str(60 + index) for index, key in enumerate(sorted(schema.CAMERA_FOV_KEYS))}
+        self.request(**values)
+        self.assertTrue(ingame.import_pending(self.cfg, lambda _: None))
+        restored = Config(self.cfg.path)
+        for key, value in values.items():
+            self.assertEqual(restored.settings[key], int(value))
+        previous = dict(self.cfg.settings)
+        for key in schema.CAMERA_FOV_KEYS:
+            bad = {**values, key: "91"}
+            self.request(**bad)
+            self.assertFalse(ingame.import_pending(self.cfg, lambda _: None))
+            self.assertEqual(self.cfg.settings, previous)
+
+    def test_camera_and_world_lighting_settings_survive_one_native_save(self):
+        fovs = {key: str(40 + i * 10) for i, key in enumerate(sorted(schema.CAMERA_FOV_KEYS))}
+        self.request(**fovs, world_shadow_filter="softer", world_ambient_occlusion="high")
+        self.assertTrue(ingame.import_pending(self.cfg, lambda _: None))
+        saved = Config(self.cfg.path)
+        for key, value in fovs.items():
+            self.assertEqual(saved.settings[key], int(value))
+        self.assertEqual(saved.settings["world_shadow_filter"], "softer")
+        self.assertEqual(saved.settings["world_ambient_occlusion"], "high")
 
     def test_ultrawide_live_settings_preserve_launcher_rendering(self):
         self.cfg.settings.update(forza_ultrawide=True, resolution="720p", resolution_scale=1)
@@ -96,6 +158,32 @@ class InGameGraphicsTests(unittest.TestCase):
 
 
 
+
+    def test_shadow_softness_is_imported_and_validated(self):
+        for value in ("soft", "softer", "console"):
+            with self.subTest(value=value):
+                self.request(frame_rate="60", world_shadow_filter=value)
+                self.assertTrue(ingame.import_pending(self.cfg, lambda _: None))
+                self.assertEqual(Config(self.cfg.path).settings["world_shadow_filter"], value)
+        previous = dict(self.cfg.settings)
+        for bad in ("high", "Soft", ""):
+            with self.subTest(bad=bad):
+                self.request(frame_rate="120", world_shadow_filter=bad)
+                self.assertFalse(ingame.import_pending(self.cfg, lambda _: None))
+                self.assertEqual(self.cfg.settings, previous)
+
+    def test_ambient_occlusion_is_imported_and_validated(self):
+        for value in ("low", "high", "off"):
+            with self.subTest(value=value):
+                self.request(frame_rate="60", world_ambient_occlusion=value)
+                self.assertTrue(ingame.import_pending(self.cfg, lambda _: None))
+                self.assertEqual(Config(self.cfg.path).settings["world_ambient_occlusion"], value)
+        previous = dict(self.cfg.settings)
+        for bad in ("on", "High", ""):
+            with self.subTest(bad=bad):
+                self.request(frame_rate="120", world_ambient_occlusion=bad)
+                self.assertFalse(ingame.import_pending(self.cfg, lambda _: None))
+                self.assertEqual(self.cfg.settings, previous)
 
     def test_20_and_40_fps_are_imported(self):
         for rate in (20, 40, 30):

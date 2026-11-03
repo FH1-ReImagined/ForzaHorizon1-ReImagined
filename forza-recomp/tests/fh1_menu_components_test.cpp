@@ -4,6 +4,19 @@
 using namespace forza::fh1_menu_components;
 void Check(bool condition,const char* message){if(!condition){std::cerr<<message<<'\n';std::exit(1);}}
 int main(){
+  {
+    const std::array<float,16> identity{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
+    const float width=500,height=216,shear=kMenuShear*height/width;
+    const auto uv=UprightShearUV(identity,shear);
+    for(float u:{0.f,.25f,.5f,1.f})for(float v:{0.f,.5f,1.f}){
+      const auto screen_x=width*u+kMenuShear*height*(v-.5f);
+      const auto sample_u=uv[0]*u+uv[4]*v+uv[12];
+      Check(std::fabs(screen_x-width*sample_u)<.0001f,"Map texture must cancel the quad shear at every height");
+      Check(uv[1]*u+uv[5]*v+uv[13]==v,"Map vertical sampling must stay upright");
+    }
+    const auto tab=MenuQuad({64,112,192,42});
+    Check(std::fabs(tab.w-kMenuScaleX*192)<.0001f,"Tab geometry must use the shared composition width");
+  }
   const auto grid=SliderGridStart(188.55,0,.1);
   Check(std::fabs(grid-188.6)<1e-8,"Choice grid must align to display precision, not raw minimum");
   Check(std::fabs((grid+489*1.3)-824.3)<1e-8,"Spring choices must avoid half-decimal rounding midpoints");
