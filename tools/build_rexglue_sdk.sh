@@ -50,7 +50,7 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # A reviewed full commit can be pinned before a maintainer publishes a tag.
 # When a tag is supplied, its target must still match this immutable commit.
 REIGLUE_TAG=
-REIGLUE_COMMIT=f43e29b1a0a8782b84de153d6c24ed0eb63a483e  # 0419 (ReIGlue PR #25: the presenter keeps the nightly's layout), on top of merged #21-#24: 0414, 0415 (Steam Deck, off by default), 0405 (Windows 0xE0000000 view), 0416-0418 (vector math as on Xenon)
+REIGLUE_COMMIT=bcd3fd11fe773a0e0d20858aebcf0f8c6358a17d  # 0420 (ReIGlue PR #26: the command processor on two threads, gpu_split_command_processor, off by default) on top of 0419 (ReIGlue PR #25: the presenter keeps the nightly's layout) and merged #21-#24: 0414, 0415 (Steam Deck, off by default), 0405 (Windows 0xE0000000 view), 0416-0418 (vector math as on Xenon)
 REIGLUE_URL="${REIGLUE_URL:-https://github.com/FH1-ReImagined/ReIGlue}"
 NIGHTLY="${REXSDK_NIGHTLY:-$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64}"
 SRC="${REXSDK_SRC:-$HOME/rexglue-sdk-src-forza/sdk}"

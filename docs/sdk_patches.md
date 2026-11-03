@@ -569,3 +569,14 @@ speedometer). Not tested with a real pad yet.
 ## ReIGlue dependency for auto-pause
 
 Change 0399 was merged in [ReIGlue PR #3](https://github.com/FH1-ReImagined/ReIGlue/pull/3) and is included in the current pin `ff1db6f6ff64f237ec2dbd28f06680205a6b8b1a`. Its optional `ForzaInputDisconnectSequence(user_mask)` bridge counts loss of the last active physical device. Synthetic keyboard/NOP devices, idle spares and reconnecting alone do not count. It replaces the obsolete local 0148 patch. Client tests require the current export and separately inject its absence to preserve older-runtime focus support. No immutable tag is changed; physical disconnect and headset acceptance remain outstanding.
+
+## ReIGlue 0420: the command processor on two threads (#474)
+
+[ReIGlue PR #26](https://github.com/FH1-ReImagined/ReIGlue/pull/26) (pinned here while it is reviewed) adds
+`--gpu_split_command_processor` (restart, default off, Vulkan only): the "GPU Commands" thread decodes the PM4 stream
+against a shadow register file and a "GPU Recorder" thread applies the register writes and runs the draws, copies,
+swaps and fence writes in order (after Pinyon Shift's ShiftGlue `9362a07`, `7440c33` and `9bf779f`; credited in
+ReIGlue's NOTICE). `--gpu_split_elide_unchanged_registers` (default on) only matters with the split. With the split
+off nothing changes but the draw's code moving into `ExecuteDraw`. What waits for what, the measurements and the
+picture checks are in [perf.md](perf.md#decoding-and-recording-on-two-threads-474-reiglue-0420): +5 % uncapped on
+eight cores, -11 % in free roam on four cores without SMT, so it stays off until a Deck has tried it.
