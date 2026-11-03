@@ -10,6 +10,15 @@ local copies without downloading dependencies.
 | `bc7enc_rdo` | `forza-texcompress` (texture packs, #413) | [richgel999/bc7enc_rdo@b9438627eef73a1157e84201b6fa6eb2ffd6d9f0](https://github.com/richgel999/bc7enc_rdo/tree/b9438627eef73a1157e84201b6fa6eb2ffd6d9f0) | `bbb33d1dbb6178a3a2c044956c3cc0b8ea9fc2f2903824379dd86f87d53b64c6` |
 | `openxr` (`include/openxr/openxr.h`, `openxr_platform.h`, `openxr_platform_defines.h`) | VR setting (`src/platform/xr.cpp`; the loader is opened at run time, not linked) | [KhronosGroup/OpenXR-SDK release-1.1.62](https://github.com/KhronosGroup/OpenXR-SDK/tree/release-1.1.62) | `dcc7c89b6af5d0364447debfe1b0437713bcedd0e8c0c2819c75ec6f546b393d` |
 
+`ReGPU` (Direct3D 12 Xbox 360 GPU, MIT, `ReGPU/LICENSE`) is the `rexglue-driver` branch of
+[zer0ducksgiven/ReGPU](https://github.com/zer0ducksgiven/ReGPU) at `f1edab4`, as tracked files
+(`git archive`), unchanged. It is built only into the Windows GPU plugin `rexgpu-regpu.dll`
+(`regpu-plugin/`, `--gpu_plugin=regpu`); its license is copied to `licenses/ReGPU.txt`.
+`fidelityfx-fsr1` holds only the FSR 1 shader headers ReGPU compiles into its upscaler (fxc at build
+time), unchanged, from [GPUOpen-LibrariesAndSDKs/FidelityFX-SDK v2.0.0](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/tree/v2.0.0)
+(`f4c1da8e`): `api/internal/gpu/ffx_*.h` without `ffx_core_cpu.h`, and
+`upscalers/fsr3/include/gpu/fsr1/ffx_fsr1.h`. MIT; `LICENSE.txt` is the notice from their headers.
+
 Not vendored: `src/kernel/ed25519.h` (Ed25519 signing and SHA-512 for signed requests to the
 Forza Live server, #515) is this project's code in the formulation of TweetNaCl (Bernstein et
 al., public domain), checked against the RFC 8032 vectors by `tools/test_live_signing.cpp`. The
