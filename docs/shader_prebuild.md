@@ -169,7 +169,12 @@ A list is JSON with:
   and `partitions` (`main`, `ui`, `scene`). Format 1 had the fields as named dicts, 1.5 KB
   per pipeline; `merge` still reads it;
 - `shaders`: one recipe per hash. `file`: the blob with this hash. `bound`: `base` hash
-  plus `fetch` / `export` / `nop` fields. `missing`: not in the game files.
+  plus `fetch` / `export` / `nop` fields. `image` (#614): microcode with no blob header in the
+  executable image (the D3D library's own shaders), `size` bytes at one of `offsets`, one
+  offset per known executable (Title Update 4's, the disc's); the build takes the one whose
+  XXH3 is the hash. `missing`: not in the game files. `make` writes `image` recipes when an
+  executable image is among its sources; the recipes uploaded from players' sessions (phase 3)
+  keep the other kinds.
 
 `check` refuses anything else. Every value must be a valid value of its field (an enum
 may have fewer values than its bits hold: a blend factor has 4 bits and 15 values), every
@@ -345,11 +350,11 @@ Store fixes (#167, #247), as of PR #253:
 
 ### The shipped list
 
-`launcher/forza_launcher/data/pipelines-4D5309C9.json`: 1190 pipelines and 971 shader
+`launcher/forza_launcher/data/pipelines-4D5309C9.json`: 1197 pipelines and 973 shader
 recipes, storage version `fbo:20260228/20261018`. 430 KB of text, one pipeline or shader
 per line (43 KB gzip): small enough for git, and a new capture changes only the lines of
 new pipelines. `check` passes: hashes, decoded render state, vertex layout and export
-fields only.
+fields, and image offsets.
 
 Captured on Linux (RADV) with scripted runs (`live_session.sh` and the autopress FIFO,
 scratch copies of a free-roam save, offline), each into its own cache root:
@@ -363,6 +368,7 @@ scratch copies of a free-roam save, offline), each into its own cache root:
 | Free roam near the spawn (a failed fast-travel run) | main | 278 |
 | SMAA at 1440p: the first run above, and the race | ui, scene | 415 + 643, 316 + 473 |
 | SMAA at 1080p, the race: the HUD raster is scaled (FH1 fractional raster, modification bit 63) | ui, scene | 315 + 480 |
+| #614: the race (60 s with autodrive following the AI) and a free-roam drive (70 s on the County Route 203 loop), each from an empty cache and after a prebuild; 7 pipelines not listed before | main | 444 |
 
 Partitions in the merged list: 445 pipelines in all three, 247 main and scene, 154 main
 only, 289 ui only (281 of them the fractional raster variant), 25 scene and ui, 22 main and
@@ -371,8 +377,13 @@ split caches (`split_partitions`): which of the two would draw it is unknown. Wi
 the HUD cache imports 634 pipelines and the scene cache 850 (the 269 fractional variants
 are dropped there, the raster is not scaled).
 
-Shaders: 524 `file`, 443 `bound`, 4 `missing`; 1148 of the 1190 pipelines (96.5%) can be
-rebuilt from the player's files. The rest compile in play, as before.
+Shaders: 525 `file`, 444 `bound`, 2 `image`, 2 `missing`; 1194 of the 1197 pipelines (99.7%)
+can be rebuilt from the player's files. The rest compile in play, as before. Before #614 the two
+`image` shaders were `missing` (1148 of 1190): a vertex shader of 96 bytes and a pixel shader of
+36 that the D3D library keeps in the executable without a blob header (Title Update 4 image
+offsets 882440 and 882536, the disc's 810200 and 810296). 39 of the 42 listed pipelines that
+could not be built used them, 27 of them in the `main` partition, and those were most of what
+a first session after the prebuild still compiled in play (see docs/perf.md, #614).
 
 Coverage of earlier play (phase 1 stores, older versions, so compared by shader hashes and
 render state without the modification bits): 759 of the 940 pipelines of the long-played

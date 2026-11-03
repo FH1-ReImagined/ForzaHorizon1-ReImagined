@@ -215,6 +215,11 @@ add("cockpit_gauges_lit", "Cockpit gauges always lit", "Display", "bool", False,
     "Keep your car's instrument backlight on by day too, as the game shows it at night, so the "
     "gauges are easy to read in cockpit view. The headlights stay as they are, and other "
     "players' cars are not changed.", "Picture")
+add("motion_blur", "Motion blur", "Display", "bool", True,
+    "Blur moving scenery and wheels while driving fast. Off eliminates speed blur trails "
+    "while keeping tone mapping, bloom and vignette untouched. Useful for high refresh rates "
+    "or players prone to motion sickness. Also in the in-game Graphics screen, where it "
+    "applies live.", "Picture")
 if IS_WINDOWS:
     add("gpu_backend", "Graphics API", "Display", "choice", "vulkan",
         "Vulkan includes this project's fixes and is recommended; Direct3D 12 is the SDK's own and "

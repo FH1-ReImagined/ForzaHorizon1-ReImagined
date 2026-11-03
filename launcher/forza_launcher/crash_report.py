@@ -17,6 +17,7 @@ SETTING_KEYS = (
     "present_effect", "swap_post_effect", "native_2x_msaa", "scene_msaa", "scene_resolution",
     "anisotropic_override",
     "world_shadow_detail", "world_texture_detail", "world_shadow_filter", "world_ambient_occlusion",
+    "motion_blur",
     "texture_dump", "texture_replace",
     "fh1_upscaler", "fh1_output_resolution", "fsr3_mode", "fsr3_output_resolution",
     "fh1_upscale_quality", "fh1_aa", "resolution", "forza_ultrawide",
@@ -24,6 +25,10 @@ SETTING_KEYS = (
     "forza_car_tuning", "skip_startup_movies",
 )
 MAX_ISSUE_URL = 7500
+# What to attach (#609): forza.log holds this session only; the launcher keeps the one before.
+LOG_FILES_NOTE = ("Attach `forza.log` from **Play > Open log folder**: it holds this session only. "
+                  "`forza.previous.log` is the session before it (attach it too if the problem "
+                  "started there); `forza.1.log` is the start of a session that reached 50 MB.")
 
 
 def redact(text, private=()):
@@ -107,17 +112,27 @@ def collect(plan, code, context):
     clean = lambda text: redact(text, private)
     log = game.log_path_of(plan)
     current = game.log_is_current(plan)
+    # This session only (#609): the launcher moved the last one's to forza.previous.log. When the
+    # session reached the size limit its start is in forza.1.log (game.session_roll).
+    roll = game.session_roll(plan) if current else None
     try:
         tail = game.read_log_tail(log) if log is not None and current else []
         note = "" if tail else "The log is empty or no log path was configured."
+    except FileNotFoundError:
+        tail, note = [], "The game wrote no log in this session."
     except OSError:
         tail, note = [], "The game log could not be read."
+    if roll is not None and len(tail) < 200:
+        try:
+            tail = game.read_log_tail(roll, 200 - len(tail)) + tail
+        except OSError:
+            pass
     startup = ""
     if not current:
         note = "No new log output was written. The previous run's log has been excluded."
     if log is not None and current:
         try:
-            with log.open("rb") as f:
+            with (roll or log).open("rb") as f:
                 startup = f.read(32768).decode("utf-8", errors="replace")
         except OSError:
             pass
@@ -160,7 +175,8 @@ def collect(plan, code, context):
         f"## Call chain\n```text\n{clean(chr(10).join(chain)) or 'Not recorded'}\n```\n\n"
         f"## Graphics device from log\n```text\n{clean(chr(10).join(device)) or 'Not recorded'}\n```\n\n"
         f"## Launch settings\n```text\n{clean(settings)}\n```\n\n"
-        f"## Log tail (up to 200 lines / 64 KiB)\n```text\n{clean(chr(10).join(tail)) or note}\n```\n"
+        f"## Log tail (up to 200 lines / 64 KiB)\n```text\n{clean(chr(10).join(tail)) or note}\n```\n\n"
+        f"## Full log\n{LOG_FILES_NOTE}\n"
     )
     return CrashReport("Crash: " + fault[:110], body, log)
 

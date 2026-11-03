@@ -160,14 +160,14 @@ Your IP address and other players:
   - updates, the launcher updates you downloaded. In the Flatpak they go to ~/Downloads/ForzaHorizon1-ReImagined instead.
 - Game data, in %LOCALAPPDATA%\ForzaReImagined (Windows; older installs used Documents\forza) or ~/.local/share/forza (Linux), or in a folder you chose in the launcher:
   - saves, the built game, downloaded tools and shader caches;
-  - forza.log, the game's log;
+  - forza.log, the game's log of the last session (at most 100 MB: from 50 MB it continues in a new file and keeps the first part as forza.1.log), and forza.previous.log (with forza.previous.1.log) from the session before;
   - shader_share.json, which records the shader entries already sent;
   - live_identity.txt, which holds your XUID, gamertag, friends key and signing key;
   - with "This PC": the local server's data in live_server, including its server.log and its player and friends records;
   - with "Continue a Xenia Canary save": a copy of that save in a xenia-<XUID> folder.
 - In the Flatpak, both folders are inside ~/.var/app/io.github.dyotson.ForzaHorizon1ReImagined.
 - Uninstalling keeps all of these files. Delete the folders yourself to remove them.
-- forza.log can record your LAN IP address, your public IP address (on a server you connect to directly), the server's address, your country and language settings, other players' LAN IP addresses, the first two numbers of their public IP addresses (from 0.2.4; older versions wrote them whole), their gamertags and XUIDs, and the chat messages you send and receive. Check it before you attach it to a public issue.
+- forza.log (and its other copies) can record your LAN IP address, your public IP address (on a server you connect to directly), the server's address, your country and language settings, other players' LAN IP addresses, the first two numbers of their public IP addresses (from 0.2.4; older versions wrote them whole), their gamertags and XUIDs, and the chat messages you send and receive. Check it before you attach it to a public issue.
 - Keep live_identity.txt private. Its signing key (and, for older versions, its friends key) is the secret that proves to the server that your friends list is yours.
 
 ## What the public server keeps, and for how long

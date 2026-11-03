@@ -97,7 +97,7 @@ body:
     id: log
     attributes:
       label: Log
-      description: "In the launcher, press **Open log folder** (Play page) and drag `forza.log` here. For install or build problems, also `launcher.log` (Windows: %APPDATA%\\ForzaReImagined\\launcher.log; Linux: ~/.config/forza-reimagined/launcher.log; Flatpak: ~/.var/app/io.github.dyotson.ForzaHorizon1ReImagined/config/forza-reimagined/launcher.log). For a crash, the last 100 lines matter most."
+      description: "In the launcher, press **Open log folder** (Play page) and drag `forza.log` here: it holds the last session you played (if the problem was in the one before, attach `forza.previous.log` as well). For install or build problems, also `launcher.log` (Windows: %APPDATA%\\ForzaReImagined\\launcher.log; Linux: ~/.config/forza-reimagined/launcher.log; Flatpak: ~/.var/app/io.github.dyotson.ForzaHorizon1ReImagined/config/forza-reimagined/launcher.log). For a crash, the last 100 lines matter most."
   - type: checkboxes
     id: legal
     attributes:
