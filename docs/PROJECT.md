@@ -95,9 +95,10 @@ nice -n 15 ninja -C forza-recomp/out/build/linux -j4
 
 ## Pre-release checks
 
-`tools/prerelease.sh [--skip-build] [--only sdk,build,unit,boot,server,launcher,ci] [--iso PATH] [--ci]`
-runs them all, non-interactively, in about 25 minutes: one PASS/FAIL line per check, the last 30 lines of a
-failing check's log, full logs in `~/.cache/forza-prerelease/<timestamp>/`, exit status = failures.
+`tools/prerelease.sh [--skip-build] [--only sdk,build,unit,boot,server,render,launcher,ci] [--iso PATH] [--ci]`
+runs them all, non-interactively, in about 30 minutes: one PASS/FAIL line per check (SKIP when a check cannot
+run here and says why), the last 30 lines of a failing check's log, full logs in
+`~/.cache/forza-prerelease/<timestamp>/`, exit status = failures (skips do not count).
 
 | Check | What |
 |---|---|
@@ -106,6 +107,7 @@ failing check's log, full logs in `~/.cache/forza-prerelease/<timestamp>/`, exit
 | unit | `launcher/test_*.py` and `server/test_*.py` |
 | boot | TU4 build to the main menu on a scratch copy of the Xenia save (never `~/.local/share/forza`) with `present_effect` bilinear, cas and fsr, then the base build: no fault, frame rate above 5 fps, a non-flat presenter image that changed after START (the screenshot hook captures the guest output before the upscaling filter, so the filter itself is not seen; a crash or Presenter layout mismatch with the SDK would show) |
 | server | a Forza Live server on ports 21310/21311: the game signs in, reaches the menu, its stats reads (XUserReadStats) are answered |
+| render | `tools/render_test.py check` (#507, `docs/render-tests.md`): the `linux-tu4` build plays six scenes (title, free roam at midday and dawn, cockpit, photo mode, a race start) and each is compared with the image baselines in `~/.local/share/forza-render-baselines` (`FORZA_RENDER_BASELINES`). SKIP when there are no baselines (record them once on a known-good build); FAIL when a scene is outside its tolerance or cannot be captured; the report is `render-report/index.html` in the check's log folder. `PRERELEASE_RENDER_FLAGS` adds game flags (a graphics change under test) |
 | launcher | the launcher as a frozen build runs it (foreign `LD_LIBRARY_PATH`, #53): AES helper, default.xex and facades out of the disc image (`--iso`, default `HorizonISO/*.iso`) |
 | ci | `--ci`: `gh workflow run release.yml` (artifacts only) and wait for it; prints the run id |
 

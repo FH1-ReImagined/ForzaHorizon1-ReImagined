@@ -92,6 +92,13 @@ benchmark lock (`tools/bench_lock.sh`) and does not start with less than 10 GB o
 The exit status is 0 when every scene passes, 1 when one fails and 2 when a scene could not
 be captured.
 
+`tools/prerelease.sh` runs this check as its `render` step (`--only render`) against the
+`linux-tu4` build under test, with `--retries 2`: it passes when every scene is within its
+tolerance, fails when one is outside it or could not be captured (the report is
+`render-report/index.html` in the prerelease log folder), and is skipped with a message when
+there are no baselines yet. `PRERELEASE_RENDER_FLAGS="--anisotropic_override=0"` adds game flags,
+like `--` above. It plays no part in CI.
+
 ### Hangs
 
 The game sometimes stops presenting right after it enters free roam (#512). The tool watches
