@@ -2659,3 +2659,198 @@ pose pairing), native upscaling with DLSS (the replay's split submission), and a
 is the Deck layout of Pinyon Shift; it does nothing on a CPU without SMT because on four cores with one thread each it
 measured slower, so only a Deck can say whether it helps. The command processor split (#474) is the large item and is
 not started.
+
+## Where a frame's CPU time goes (#607, 2026-11-03)
+
+Step 1 of #607: per frame, which thread uses the CPU, what the GPU command processor spends it on, and what each
+thread waits for, on this PC with 8 and 4 cores, with the Steam Deck preset, and in the players' logs. Nothing was
+changed in the game or the SDK.
+
+**Method.** TU4 game of main 9724662 (`-DFORZA_CPU_TARGET=x86-64-v3`) with main's ReIGlue plugin and runtime
+(0.10.0.24 overlay), Ryzen 7 7800X3D (8 cores, no SMT), RX 9060 XT (RADV, Mesa 26.2.1), the golden TU4 save in a
+scratch `--user_data_root`, scratch XDG dirs, offline, audio muted, warm scratch shader cache, BENCH lock held, no
+other game. Scenes: **free roam** (60 s on County Route 203 and Route 28, `tools/autodrive.py` on a
+`tools/nav_route.py` loop), **race** (GoPro Millennia Masters with 7 AI cars, 50 s from the start, autodrive
+following the AI) and the **benchmark** (its measured minute). Configurations: **pc8** = the AMD preset (60 fps,
+render scale 1, AMD FSR 1, the game's 4x MSAA) on all 8 cores; **pc4** = the same on CPUs 0-3 (`taskset`, again at
+the scene); **deck4** = the launcher's Steam Deck preset (30 fps, `scene_msaa=off`, console shadow and texture
+detail, 720p scene) on CPUs 0-3; **u** = the same with `--frame_rate=240`, where the frame rate follows the CPU side.
+One run each. Per thread: CPU time and run-queue wait from `/proc/<pid>/task/*/schedstat` once a second
+(`tools/thread_stats.py sample`) over the scene; roles from an `eu-stack` snapshot after the scene (guest entry
+functions); the command processor's CPU, draws and timed waits from `--fh1_frame_cost_csv`; the render thread's waits
+from `FORZA_GPU_WAIT_LOG=1`; what each thread runs from `PERF_CPUPROF` (1 ms CPU-time samples, self time only),
+symbolized with `llvm-addr2line` (librexruntime, the plugin, `forza`) and `eu-addr2line` (RADV's MiniDebugInfo). perf
+is not installed on this Fedora Atomic host and `perf_event_paranoid` is 2 (no `perf sched`, no kernel samples), so
+time in system calls shows as the libc function that made the call. Other load on the game's CPUs during the scenes
+(the desktop, the samplers, autodrive): 25-130% of a core, 187% in `bench pc8u`.
+
+### Threads, ms of CPU a frame
+
+| Run | fps | Draws | All threads | Command processor | Render thread | Main loop | Audio mixer | Vulkan submission | Other game threads | XMA decoder | Host, other |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| free roam pc8 | 60.0 | 3,417 | 15.9 | 4.86 | 3.30 | 2.13 | 1.52 | 1.33 | 2.39 | 0.07 | 0.27 |
+| race pc8 | 59.9 | 4,561 | 18.9 | 6.27 | 3.40 | 2.47 | 2.06 | 1.55 | 2.72 | 0.14 | 0.24 |
+| benchmark pc8 | 59.9 | 4,196 | 19.2 | 5.90 | 3.39 | 2.45 | 2.31 | 1.42 | 3.26 | 0.19 | 0.33 |
+| free roam pc4 | 59.7 | 3,499 | 16.7 | 5.12 | 3.20 | 2.50 | 1.64 | 1.35 | 2.51 | 0.06 | 0.29 |
+| race pc4 | 59.9 | 4,500 | 17.7 | 6.03 | 3.08 | 2.38 | 1.90 | 1.42 | 2.52 | 0.10 | 0.28 |
+| benchmark pc4 | 59.7 | 4,194 | 19.1 | 6.02 | 3.44 | 2.53 | 2.29 | 1.43 | 2.91 | 0.14 | 0.33 |
+| free roam deck4 | 30.0 | 2,812 | 19.3 | 4.05 | 3.44 | 2.96 | 3.02 | 1.19 | 4.02 | 0.13 | 0.47 |
+| race deck4 | 30.0 | 3,360 | 19.3 | 4.45 | 3.24 | 2.75 | 3.63 | 1.10 | 3.49 | 0.23 | 0.44 |
+| benchmark deck4 | 30.0 | 3,190 | 20.9 | 4.31 | 3.55 | 2.99 | 4.23 | 1.13 | 3.84 | 0.31 | 0.53 |
+| benchmark pc8u | 129.5 | 4,461 | 17.3 | 6.07 | 3.67 | 2.26 | 1.15 | 1.45 | 2.42 | 0.09 | 0.17 |
+| benchmark pc4u | 132.6 | 4,284 | 15.8 | 5.70 | 3.36 | 2.12 | 1.04 | 1.30 | 2.11 | 0.06 | 0.15 |
+| benchmark deck4u | 156.7 | 3,558 | 13.8 | 4.26 | 3.32 | 2.07 | 0.92 | 1.06 | 2.01 | 0.06 | 0.12 |
+| race deck4u | 173.4 | 3,193 | 12.3 | 3.87 | 2.72 | 2.15 | 0.65 | 1.01 | 1.86 | 0.00 | 0.09 |
+
+- **Command processor** (`GPU Commands`): PM4 decoding and everything per draw, 1.2-1.6 us a draw. Per frame it
+  follows the draws: the Deck preset's one-pass scene draws 20-25% less than the 4x MSAA scene (three EDRAM tiles)
+  on the same four cores, and its command processor needs 21-28% less.
+- **Render thread** (`sub_8261E178`, the game's D3D command building): 81-87% guest code, 6-10% `sched_yield` (the
+  yield phase of `gpu_wait.cpp`'s waits), the rest locks, `mprotect` and write-watch faults.
+- **Main loop** (`sub_825CEC88`, simulation, physics and AI): 94-97% guest code. 2.1-3.0 ms a frame, a little more
+  per frame at 30 fps than at 60.
+- **Audio mixer** (`sub_83075D18`): fixed per second (110-127 ms a second, 11-13% of a core), so 3.6-4.2 ms a frame
+  at 30 fps and 0.7-1.2 ms uncapped; 83-89% guest DSP code, 8-13% the WMA decoder in the runtime.
+- **Vulkan submission**: the deferred command buffer's replay, 74-78% inside RADV (`radv_bind_descriptor_sets`,
+  `radv_CmdBindPipeline`, `radv_emit_all_graphics_states`, `radv_CmdDrawIndexed`), 6-7% `ioctl`.
+- **Other game threads**: the game's workers (`sub_82C6BD58` 0.6-1.1 ms, `sub_82EE37A0`, `sub_82CCC368`,
+  `sub_824A2080`, `sub_82F0CF00`, 0.1-0.8 ms each). Host threads (pipeline compilers, vsync, input) cost little with a
+  warm cache.
+
+The game's own threads (render thread, main loop, audio mixer, workers) use more CPU in total than the emulation of the
+GPU (command processor and submission: 26-29% of all CPU with the Deck preset at 30 fps, 39-41% at 60 fps and
+uncapped), but they run in parallel; the frame waits on one chain (below).
+
+### The command processor, % of its CPU
+
+| Area | free roam pc8 | race pc8 | bench pc8 | free roam pc4 | race pc4 | bench pc4 | free roam deck4 | race deck4 | bench deck4 | bench pc8u | bench deck4u | race deck4u |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Bindings, textures, samplers (`UpdateBindings`, `RequestTextures`, texture map, views, sampler lookups) | 22.2 | 20.8 | 20.3 | 20.4 | 20.8 | 20.4 | 21.3 | 21.9 | 20.1 | 20.2 | 20.7 | 21.1 |
+| PM4 packet loop (`ExecutePacket*`, with 0360's inline register stores) | 16.3 | 16.9 | 17.1 | 16.3 | 16.6 | 16.7 | 13.3 | 15.2 | 14.8 | 17.0 | 15.7 | 14.6 |
+| Vulkan driver (RADV: `radv_UpdateDescriptorSets` and its buffer descriptors, 85-90% of it) | 7.2 | 9.9 | 9.7 | 9.4 | 8.9 | 10.0 | 10.2 | 8.2 | 9.3 | 9.4 | 7.9 | 8.2 |
+| Register writes (`WriteRegistersFromMem`, `copy_and_swap`, `WriteRegister`) | 9.3 | 8.6 | 9.1 | 8.8 | 9.0 | 8.9 | 8.0 | 8.3 | 9.1 | 9.1 | 8.8 | 8.6 |
+| Shared memory, memory watches (`RequestRanges`, `mprotect`, `EnableAccessCallbacks`) | 7.6 | 7.2 | 7.8 | 7.0 | 7.4 | 7.7 | 8.4 | 8.9 | 9.7 | 8.4 | 9.3 | 9.1 |
+| Shaders and pipelines (`IM_LOAD`, translations, pipeline map) | 6.8 | 6.6 | 6.6 | 7.0 | 6.8 | 6.4 | 7.4 | 6.4 | 7.0 | 6.3 | 6.5 | 6.9 |
+| System constants, viewport, dynamic state | 6.1 | 6.2 | 6.0 | 5.7 | 5.6 | 5.4 | 5.4 | 5.9 | 5.5 | 5.9 | 6.1 | 6.2 |
+| `memcpy`, `memcmp`, `memset` | 5.8 | 5.3 | 5.3 | 5.4 | 5.3 | 5.4 | 6.3 | 6.2 | 6.7 | 5.4 | 5.7 | 5.6 |
+| System calls (futex, yield, ioctl) | 3.8 | 3.0 | 3.4 | 5.2 | 4.3 | 4.5 | 3.0 | 2.8 | 2.8 | 3.5 | 3.2 | 3.2 |
+| `IssueDraw` itself | 3.4 | 3.5 | 3.4 | 3.0 | 3.4 | 3.3 | 3.2 | 3.6 | 3.3 | 3.3 | 3.6 | 3.7 |
+| Render targets | 2.4 | 2.4 | 2.2 | 2.6 | 2.3 | 2.5 | 3.1 | 3.0 | 2.7 | 2.5 | 3.0 | 2.9 |
+| Command recording, submission, sync | 1.8 | 1.8 | 1.8 | 1.9 | 1.9 | 1.7 | 2.5 | 1.8 | 2.0 | 1.8 | 1.9 | 1.9 |
+| Primitive processing | 1.2 | 1.6 | 1.2 | 1.2 | 1.4 | 1.1 | 1.3 | 1.5 | 1.1 | 1.2 | 1.5 | 1.5 |
+| Other runtime, plugin and libc code | 6.2 | 6.2 | 6.3 | 6.1 | 6.4 | 5.8 | 6.7 | 6.3 | 5.9 | 5.9 | 6.2 | 6.3 |
+| **= ms of CPU a frame** | 4.85 | 6.26 | 5.90 | 5.12 | 6.02 | 6.02 | 4.05 | 4.46 | 4.32 | 6.07 | 4.26 | 3.87 |
+
+The split hardly moves between scenes, presets and core counts: it is a cost per draw. In four groups:
+
+- **Draw setup that touches descriptors** (bindings, textures, samplers and the driver's descriptor writes): 29-31%,
+  1.1-1.9 ms a frame. The command processor's own Vulkan calls are almost only `vkUpdateDescriptorSets`; its
+  command recording goes into the deferred command buffer (1.8-2.5%), which the submission thread replays.
+- **PM4 decode and register writes** (packet loop, register writes, the copies): 28-32%, 1.1-1.9 ms.
+- **The rest of the draw setup** (shaders, system constants, viewport, render targets, primitives, `IssueDraw`,
+  command recording): 20-23%.
+- **System calls and other runtime, plugin and libc code**: 9-11%.
+- **Guest memory** (shared memory ranges, `mprotect`, watches): 7-10%.
+
+The Vulkan driver in all, per frame: 1.1-1.8 ms, two thirds of it on the submission thread (the replay), one third on
+the command processor (descriptor writes).
+
+### Waits, ms a frame
+
+| | free roam pc8 | race pc8 | bench pc8 | free roam pc4 | race pc4 | bench pc4 | free roam deck4 | race deck4 | bench deck4 | bench pc8u | bench pc4u | bench deck4u | race deck4u |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Frame time | 16.68 | 16.70 | 16.69 | 16.74 | 16.69 | 16.75 | 33.33 | 33.34 | 33.34 | 7.72 | 7.54 | 6.38 | 5.77 |
+| Render thread waiting for the GPU emulation (`GPUWAIT`) | 11.89 | 11.93 | 11.64 | 11.47 | 11.83 | 11.07 | 27.20 | 29.39 | 27.40 | 1.97 | 2.01 | 1.75 | 1.75 |
+| Command processor waiting for the game (`WAIT_REG_MEM`) | 11.15 | 9.54 | 9.86 | 9.93 | 9.57 | 9.01 | 27.57 | 27.62 | 27.60 | 0.65 | 0.71 | 0.81 | 0.64 |
+| Command processor waiting for the GPU | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| Command processor waiting for readbacks | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| Command processor off the CPU otherwise (frame - CPU - timed waits - run queue) | | | | | | | | | | 0.68 | 0.69 | 1.09 | 1.04 |
+| Run-queue wait (runnable, no free CPU): command processor | 0.18 | 0.29 | 0.35 | 1.18 | 0.50 | 1.11 | 0.91 | 0.29 | 0.51 | 0.31 | 0.44 | 0.22 | 0.22 |
+| Run-queue wait: render thread | 0.17 | 0.29 | 0.35 | 1.32 | 0.74 | 1.39 | 1.39 | 0.36 | 0.84 | 0.44 | 0.80 | 0.40 | 0.45 |
+| Run-queue wait: all threads | 1.2 | 2.1 | 6.1 | 9.9 | 6.1 | 10.0 | 10.5 | 4.3 | 7.7 | 2.5 | 4.4 | 2.4 | 2.4 |
+
+- **Capped**, every frame fits: the command processor is busy 29-38% of a 60 fps frame and 12-13% of a 30 fps frame,
+  and the frame cap is spent in two matching waits: the render thread in the D3D library's wait for the swaps
+  (`gpu_wait.cpp`) and the command processor in `WAIT_REG_MEM` for the next frame's commands.
+- **Uncapped**, the command processor is the chain the frame waits for: it runs 67-79% of the frame, waits 0.6-0.8
+  ms for the game's commands and is off the CPU for another 0.7-1.1 ms outside its timed waits, about the submission
+  thread's replay of the frame (1.0-1.45 ms a frame): the swap waits for that replay (`AwaitSubmissionThread`, see
+  #476 above; `vulkan_present_on_submission_thread` is off by default). The render thread waits for it 1.8-2.0 ms a
+  frame.
+- No GPU waits and no readback waits on this PC in any scene (#545's readback changes); the RX 9060 XT is never the limit.
+- Four cores cost run-queue time, not CPU time: at 60 fps the command processor waits for a CPU 0.5-1.2 ms a frame
+  on four cores against 0.2-0.35 on eight, the render thread 0.7-1.4 against 0.2-0.35; the CPU time per frame is the
+  same.
+
+### Players' logs (Windows)
+
+The `GPU minute` lines of the logs attached to recent issues: the median over the minutes with at least 1,000 draws
+and a timed command processor, per GPU and frame cap; CPUs as the reporters named them. "Busy" = command processor CPU
+x fps.
+
+| Issue | CPU | GPU (driver) | Cap, MSAA | Minutes | fps | Command processor ms a frame | us a draw | Busy | GPU waits ms | Game waits ms | Draws |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| #564 | i7-14700K | RX 6750 XT (AMD) | 120, game | 304 | 60.8 | 5.3 | 1.51 | 32% | 0.1 | 1.4 | 3,395 |
+| #534 | Core Ultra 7 255HX | RTX 5070 Laptop | 60, game | 190 | 60.0 | 5.3 | 1.60 | 32% | 0.0 | 10.2 | 3,242 |
+| #550 | | RTX 4090 | 120, game | 6 | 118.8 | 4.5 | 1.58 | 53% | 0.0 | 3.4 | 2,808 |
+| #546 | | RTX 5060 Ti | 240, off | 7 | 162.8 | 3.2 | 1.91 | 52% | 0.1 | 0.3 | 1,597 |
+| #562 | Ryzen 7 5700X3D | RTX 4070 Ti SUPER | 60, game (scale 3) | 16 | 58.7 | 5.7 | 2.25 | 33% | 2.3 | 5.8 | 2,471 |
+| #600 | Ryzen 7 5700X | Arc B580 (Intel) | 60, game | 27 | 59.3 | 6.5 | 2.50 | 39% | 0.0 | 8.9 | 2,669 |
+| #567 | i7-10700 | RTX 2060 SUPER | 60, game | 259 | 59.3 | 7.8 | 2.81 | 46% | 0.5 | 5.7 | 2,781 |
+| #567 | i7-10700 | RTX 2060 SUPER | 240, game | 159 | 76.8 | 9.2 | 2.86 | 71% | 0.6 | 0.8 | 3,070 |
+| #490 | Ryzen 5 5600X | RTX 3060 | 60, game (scale 2) | 59 | 41.4 | 7.0 | 2.22 | 29% | 12.2 | 2.7 | 3,114 |
+| #556 | Ryzen 3 1200 (4 cores) | GTX 1650 | 60, off | 18 | 52.6 | 8.4 | 3.84 | 44% | 0.8 | 3.9 | 2,126 |
+| #543 | Ryzen 3 3100 (4 cores, 8 threads) | GTX 1050 Ti | 60, game | 14 | 39.2 | 10.1 | 3.58 | 40% | 8.4 | 2.7 | 2,764 |
+| #551 | Ryzen 7 7730U | Radeon Vega iGPU (AMD) | 30, off | 114 | 29.1 | 12.9 | 6.21 | 38% | 4.2 | 5.3 | 2,088 |
+| #551 | Ryzen 7 7730U | Radeon Vega iGPU (AMD) | 60, off | 45 | 31.0 | 15.5 | 6.08 | 48% | 11.6 | 0.0 | 2,459 |
+
+- The command processor's cost per draw spans 4x: 1.5-1.6 us on recent desktop and laptop CPUs (this PC: 1.2-1.6), 2.2-2.9
+  on Zen 3 and Comet Lake desktops, 3.6-3.8 on 4-core Zen 1 and Zen 2, 6 on a 15-28 W Zen 3 laptop. The draws per
+  frame are about the same everywhere (1,600-3,400), so the per-draw cost is the frame's cost.
+- Where the frame is below its cap, it is either the GPU (`GPU waits` 8-12 ms: #490 at render scale 2, #543, #551 at 60)
+  or the command processor chain (#567 at 240: busy 71%, game waits 0.8 ms, GPU waits 0.6; the other 2.4 ms of its
+  13 ms frame it is off the CPU, as here, only longer). On the Vega laptop both: 13-16 ms of command processor and 4-12 ms of GPU waits a frame.
+- The logs carry no per-thread numbers for the game's threads; those come only from runs here.
+
+### Ranked: where the frame's critical chain goes
+
+Uncapped on four cores with the Deck preset (race deck4u, 5.77 ms a frame), the closest this PC gets to the Deck's
+bound; the 8-core benchmark (bench pc8u, 7.72 ms, 4x MSAA) in brackets:
+
+1. Command processor, descriptor-related draw setup (bindings, textures, samplers, `vkUpdateDescriptorSets`):
+   1.14 ms, 20% of the frame (1.80 ms, 23%).
+2. Command processor, PM4 decode and register writes with their copies: 1.12 ms, 19% (1.91 ms, 25%).
+3. Command processor off the CPU waiting for the submission thread's replay at the swap: about 1.0 ms, 18% (0.7 ms, 9%).
+4. Command processor, the rest of the draw setup: 0.90 ms, 16% (1.28 ms, 17%).
+5. Command processor waiting for the game's commands: 0.64 ms, 11% (0.65 ms, 8%).
+6. Command processor, system calls and other runtime and libc code: 0.37 ms, 6% (0.57 ms, 7%).
+7. Command processor, guest memory ranges and watches: 0.35 ms, 6% (0.51 ms, 7%).
+8. Command processor waiting for a CPU: 0.22 ms, 4% (0.31 ms, 4%).
+
+Off the chain and in parallel, per frame: the render thread 2.7-3.7 ms (of it 0.2-0.35 ms yielding in its GPU waits),
+the main loop 2.1-3.0 ms, the submission thread 1.0-1.5 ms (three quarters in RADV), the audio mixer 0.65-4.2 ms
+(fixed per second), the workers 1.9-4.0 ms in all. On a Deck these share four cores and eight threads with the chain;
+with each thread 2-2.5 times slower there, the chain above would be 12-14 ms (70-85 fps) if nothing else got in the
+way, so the Deck's 20-30 fps also carries the waits for a CPU and the SMT sharing, which this PC cannot show. A Deck
+log with the Deck preset is what #45 and #559 still need.
+
+### The cuts this points at
+
+1. **Present without waiting for the replay** (`vulkan_present_on_submission_thread`, #476, built and off by default):
+   the 0.7-1.1 ms a frame the command processor sits off the CPU at the swap. Measured before: +15% uncapped with the
+   Deck preset, +10% with 4x MSAA, identical pictures. Estimated saving: 1.0 ms of 5.8 (Deck preset), 0.7 of 7.7 (4x MSAA)
+   on this PC, about 2-2.5 ms on a Deck. Left: a Deck run, VR, DLSS and a Windows run before it becomes the default.
+2. **Reuse unchanged bindings** (#192, texture and sampler bindings; #179, dynamic constant descriptors): 29-31% of the
+   command processor, 1.1-1.9 ms a frame, with `vkUpdateDescriptorSets` 7-8% of the thread. If half of it goes,
+   0.6-0.9 ms a frame here (10-15% of the command processor), 1.3-2 ms on a Deck. Sean's drafts measured +6.5% and +7.7%
+   fps on a CPU-bound PC.
+3. **Decode on one thread, record on another** (#474): PM4 decode and register writes are 28-32% of the command
+   processor (1.1-1.9 ms a frame) and could leave the thread the frame waits for, less the hand-off; estimated 0.8-1.3
+   ms a frame here, 2-3 ms on a Deck, if the decoder gets a core of its own (Pinyon Shift measured 6% from the split
+   alone; the plan is in the #474 section above). It needs free cores, so it helps 6-8-core PCs first; on a Deck it
+   depends on the SMT sibling, which this PC cannot show.
+
+Not worth it first: the guest memory watches (6-10%, rounds 2-3 above already took the walk), the render thread's
+yields (0.2-0.35 ms a frame, not on the chain), the GPU and readback waits (zero here; on players' PCs a GPU limit is
+a setting, render scale or MSAA). The audio mixer is a fixed 11-13% of a core here, 2-2.5 times that on a Deck, where it
+competes for the four cores; worth a look after the three above.
