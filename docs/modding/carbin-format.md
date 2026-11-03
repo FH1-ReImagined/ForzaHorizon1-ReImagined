@@ -15,6 +15,7 @@ rather than of the code, it says so.
   - [2. How a texture's role is known](#2-how-a-textures-role-is-known)
   - [3. Where the material parameters are](#3-where-the-material-parameters-are)
   - [A new mesh or a new material](#a-new-mesh-or-a-new-material)
+- [Samplers of the in-race shaders](#samplers-of-the-in-race-shaders)
 - [Damage (deformation) data](#damage-deformation-data)
 - [Still unknown](#still-unknown)
 - [The tool](#the-tool)
@@ -266,12 +267,13 @@ instance (the mesh) has no say: it picks the technique, and the technique fixes 
 
 Each shader blob in an `.fxobj` carries its own constant table with the samplers it really
 uses and their texture slots; `tools/carbin_dump.py --media` prints them for the garage
-effects (`<name>.fxobj`). For example `carbon_fiber.fxobj`'s pixel shader samples
+effects (`<name>.fxobj`), and for each material also the samplers of its in-race technique (marked `race`). For example `carbon_fiber.fxobj`'s pixel shader samples
 `CarbonFiberASampler`, `envSampler`, `blurredCubemapSampler` and `trackLightmapSampler`;
 `chrome.fxobj`'s samples no car texture at all (only the environment), which is why `chrome`
-meshes collapse their UVs to one point. For the in-race library (`shaders_v16.fxobj`) the link
-from a technique to its shader blobs is inside the effect's binary tables, which are not decoded
-yet (see [still unknown](#still-unknown)).
+meshes collapse their UVs to one point. For the in-race library (`shaders_v16.fxobj`) the
+technique-to-blob link is not a table that is decoded here, but the blobs are stored in technique
+order and that order, checked against what the game draws, gives every technique its
+samplers: see [Samplers of the in-race shaders](#samplers-of-the-in-race-shaders).
 
 ### 3. Where the material parameters are
 
@@ -306,6 +308,159 @@ There is no material *instance* object with its own textures. To add geometry:
   `traffic_numplates_DXT1.xds` and a per-plate UV constant (`psNumplateUV`).
 - Keep `nodamage` and `damage` in the same layout: the damage blend reads both with the same UVs.
 
+## Samplers of the in-race shaders
+
+What each technique of `shaders_v16.fxobj` (the library the race, free roam and photo mode use)
+samples, slot by slot. **Measured at run time**, not read from a table: a Title Update 4 build
+logged, for every draw, the pixel shader's microcode hash and the texture in each fetch slot
+(Forza Horizon 1: ReImagined, Vulkan, free roam, photo mode and the start of a race with the
+Aventador and its CPU rivals; 3,500 distinct draw states). Each hash was found in the library's
+shader blobs, whose constant table names the sampler of each register. The register number *is*
+the texture fetch slot (the log's slot 0 held the car's `nodamage.xds` for the sampler
+`baseSampler`, register 0, and the same held for every other sampler whose file was
+identified). The base game's
+`shaders_v16.fxobj` and the Title Update 4 one have identical sampler tables.
+
+**Which texture file is in a slot** was found with the texture fingerprint of the game's texture
+packs ([texture_packs.md](../texture_packs.md)), computed offline for the car's files: an `.xds` is
+a 52-byte D3D texture header plus the texture's guest memory (tiled, byte-swapped as on the
+console). The header's last 24 bytes are the GPU fetch constant: dword 0 bit 31 tiled and bits
+22-30 the pitch in 32-texel units, dword 1 bits 0-5 the format and bits 6-7 the endianness, dword 2
+bits 0-12 and 13-25 the width and the height minus 1. The fingerprint is
+`XXH3_64(u32 le: 1, format, endianness, width, height, pitch, tiled, packed_mips = 1, u64 le: D)`
+with `D = XXH3_64(the blocks of the base level)` (the tiled data as it is when the size in blocks
+is a multiple of 32, else the blocks untiled to rows), and the format as the game loads it (the
+`..._AS_16_16_16_16` DXT variants 51 and 53 load as DXT1 = 18 and DXT5 = 20). `nodamage.xds`,
+`damage.xds`, `lights.xds`, `damageLights.xds` of the Aventador, the grille, dirt, glass, carbon
+and tyre textures all matched exactly. A texture without a fingerprint is one the engine writes
+(the scene copies, the environment cubes, the shadow mask).
+
+**Which technique a shader belongs to**: the library stores the pixel shaders (240) in the order
+of its techniques (254 names in its string table, between the effect's parameter names and
+`D3DX9.1 Effect Compiler`, leaving out the pass names `p0`, `p1`, `Cleanup` that are in the same
+list): one shader per
+technique from `body_traffic` to `brake_badge`, except that `cockpit_ghostInterior` shares the
+shader before it and `detail_glass_red`, `detail_glass_clear` and `detail_glass_amber` have two
+passes (two shaders each); the last 39 shaders belong one each to `tire` to `missingBrakePink`;
+the 31 shadow techniques between (`shadowMap` to `dropShadowBrake`) share 15 shaders in a way not
+decoded (they are not drawn into the car view, so their samplers are not listed). This is
+checked in two ways: the samplers fit the names all along (`numberplate` has `Numplate`,
+`undercarriage` has `Undercarriage`, `badge2` has `Badge2`, the six gauge techniques have
+`CockpitGaugeEmissive`, `blur_rim` has `blurRim1-4`, ...), and for each of 144 pairs of a car
+and a lights shader seen drawing with that car's own `lights.xds` (32 techniques, 11 cars), the
+car has the shader's technique as a material in its model (144 of 144). 109 of the 223 techniques
+with a shader were seen drawing in the session. `tools/carbin_dump.py --media` applies the same
+rule and prints the samplers of each material.
+
+A technique has the same slots on every car. Slot 13 (`ShadowMaskSamp`) is the
+engine's screen-space shadow mask in every technique that has it; `env*` are engine textures
+(`envSampler` a 256x256 cube, `envStaticSampler` a 128x128 cube, `envBackgroundSampler` a
+copy of the scene).
+
+**body** (also `body_2`, `body_3`; the paint colour comes from constants, not a texture)
+
+| slot | sampler | texture |
+|---|---|---|
+| 0 | `baseSampler` | the car's `nodamage.xds` (LOD0 model: `nodamage_LOD0.xds`) |
+| 1 | `damageSampler` | `damage.xds` (`damage_LOD0.xds`) |
+| 2 | `DirtSampler` | `Shared.zip` `dirt_pattern.xds` |
+| 3 | `DirtMaskSampler` | `Shared.zip` `dirt_mask.xds` |
+| 4 | `envBackgroundSampler` | engine (scene copy) |
+| 5 | `envSampler` | engine (environment cube) |
+| 6 | `envStaticSampler` | engine (static cube) |
+| 13 | `ShadowMaskSamp` | engine |
+
+**tire** (and `tire_V2`; the tyre is drawn from three pictures of the tread and sidewall)
+
+| slot | sampler | texture |
+|---|---|---|
+| 1 | `blurTireSampler` | `Shared.zip` `tireA0.xds` (`tireB0.xds`, `tireC0.xds` for tyre types B, C) |
+| 2 | `blurTireSampler2` | `tireA1.xds` (`tireB1`, ...) |
+| 3 | `blurTireSampler3` | `tireA2.xds` (`tireB2`, ...) |
+| 4 | `blurTireSampler4` | none (a 32x32 engine placeholder) |
+| 13 | `ShadowMaskSamp` | engine |
+
+`tread` samples `treadSampler` in slot 1 and `treadNormalSampler` in slot 2 (`treadA_CLR.xds`,
+`treadA_NRM.xds` in `media/wheels/tirea.zip`, the B and C tyres in `TireB.zip`, `TireC.zip`);
+`sidewall` and `scaling_text` sample `sidewallSampler` (slot 1, `sidewallA_CLR.xds`) and
+`sidewallNormalSampler` (slot 2, `sidewallA_NRM.xds`; in `tirea.zip` and the `Tire?<car>.zip`
+archives). `wheel_black` samples nothing.
+
+**rim** (and `rim_V2`, `outer_rim`, `inner_rim`, `inner_rim_V2`, `blur_lip`, `blur_lip_V2`,
+`wheel_emblem`, `wheel_emblem_V2`, `rim_bump_metal`, `rim_bump_metal2`)
+
+| slot | sampler | texture |
+|---|---|---|
+| 0 | `baseSampler` | the wheel's `wheel.xds` (LOD0: `wheel_LOD0.xds`), in `media/wheels/<wheel>.zip` |
+| 1 | `envSampler` | engine |
+| 2 | `envStaticSampler` | engine |
+| 13 | `ShadowMaskSamp` | engine |
+
+`chrome_rim`, `chrome_rim_V2`, `chrome_blur_lip` and `chrome_blur_lip_V2` are the same without
+slot 0 (no texture). `blur_rim`, `blur_rim_V2`, `chrome_blur_rim` and `chrome_blur_rim_V2` (the
+spinning rim) have no slot 0 either, and slots 1 and 2 as above plus `blurRimSampler1`
+(slot 3, `wheel0.xds`), `blurRimSampler2` (4, `wheel1.xds`), `blurRimSampler3` (5, `wheel3.xds`)
+and `blurRimSampler4` (6, a 32x32 engine placeholder), all from the wheel's archive.
+
+**hidhead** (and the other 50 lights techniques: `head_light`, `xenonhead`, `oldhead`, `fullbeam`,
+`fogwhite`, `fogred`, `tail_light`, `tail_light_lod0`, `tail_light_on`, `tail_light2`, `taillightst`,
+`taillight2S`, `brkreverse`, `linred`, `rinred`, `indicator_left`, `indicator_right`, the `drl*`
+daytime lights, `numplate`, `brinl`, `brinr`, `lindtailside`, `rindtailside`, `slorange`,
+`slinlorange`, `slinrorange`, `textured_reflector`, `reflector`, `lights_glass` and `lights_gls_*`)
+
+| slot | sampler | texture |
+|---|---|---|
+| 1 | `LightsSampler` | the car's `lights.xds` (LOD0 model: `lights_LOD0.xds`) |
+| 2 | `envSampler` | engine |
+| 3 | `envStaticSampler` | engine |
+| 4 | `DamageLightsSampler` | `damageLights.xds` (`damageLights_LOD0.xds`) |
+| 13 | `ShadowMaskSamp` | engine |
+
+`lights.xds` is one atlas for all the car's lamps: a lights mesh's UVs pick its lamp, and the
+technique decides the colour and glow it reads from it. Only `reverse_light` and
+`reverse_light_lod0` lack slot 4. `head_light2` is the exception among the head lamps: it samples
+only `baseSampler` (0), `envSampler` (1) and `envStaticSampler` (2), like `white_brake`, `badge`
+and the rim group. The three `detail_glass_*` techniques have two passes: the first samples
+`LightsSampler` (1) and `DamageLightsSampler` (2) only, the second `envBackgroundSampler` (1),
+`envSampler` (2), `envStaticSampler` (3) and `DamageLightsSampler` (4).
+
+Other techniques, in groups with the same samplers (all of them are in the tool's output; slots
+in brackets; every one that draws into the car view also has `ShadowMaskSamp` in slot 13, except
+the interior-only gauge and mirror ones):
+
+| techniques | samplers (slot) |
+|---|---|
+| `body_2`, `body_3`, `cockpit_body`, `lights_body`, `headlight_paint`, `stripe_badge` | as `body` |
+| `misc`, `liveryBadge` | `base` 0, `damage` 1, `DirtMask` 2, `envBackground` 3, `env` 4, `envStatic` 5 |
+| `race_kit_red`, `cage`, `weatherstrip`, `frame` | `base` 0, `damage` 1, `DirtMask` 2, `env` 3, `envStatic` 4 |
+| `engine`, `plastic`, `plastic2`, `dullplastic`, `embossed_plastic*`, `matte`, `matte_colors*` | `base` 0, `damage` 1, `DirtMask` 2 |
+| `interior`, `defrost_lines` | `base` 0, `damage` 1 |
+| `interior_banner` | `base` 0, `damage` 1, `Dirt` 2, `DirtMask` 3 |
+| `rubber_trim`, `rubber_trim_2` | `Dirt` 1, `DirtMask` 2 |
+| `emblem` | `base` 0, `DirtMask` 1, `env` 2, `envStatic` 3 |
+| `badge2` | as `emblem`, plus `Badge2Sampler` 4 (the car's `badge2.xds`) |
+| `badge`, `white_brake`, `head_light2` | `base` 0, `env` 1, `envStatic` 2 |
+| `mottled`, `cloth`, `cloth2`, `caliper`, `rotor`, `hub`, `brake_badge` | `base` 0 (a brake's own picture, for example `Shared.zip` `rotor0.xds`) |
+| `bottom`, `bottom_2` | `damage` 1, `DirtMask` 2, `env` 3, `envStatic` 4 |
+| `undercarriage` | `damage` 1, `DirtMask` 2, `UndercarriageSampler` 3 (`Shared.zip` `undercarriage.xds`), `env` 4, `envStatic` 5 |
+| `body_traffic` | `base` 0, `env` 1, `NumplateSampler` 2 (`Shared.zip` `traffic_numplates_DXT1.xds`) |
+| `numberplate` | `env` 1, `NumplateSampler` 2 |
+| `window`, `window_2`, `frontwindow*`, `inside_window`, `glass`, `glass_2`, `cockpit_glass`, `red_glass` | `envBackground` 1, `env` 2, `envStatic` 3, `DamageGlassSampler` 4 (`Shared.zip` `glass_texture.xds`) |
+| `window_traffic`, `window_traffic_dark` | `env` 1, `DamageGlass` 2 |
+| `chrome`, `chrome_2`, `chrome_3`, `badge_chrome`, `black_glass` | `env` 1, `envStatic` 2 |
+| `chrome_bump` | `ChromeNormal` 1, `env` 2, `envStatic` 3 |
+| `lights_chrome` | `env` 1, `envStatic` 2, `lightsNormal` 3 |
+| `black_glass_breakable` | `env` 1, `envStatic` 2, `DamageGlass` 3 |
+| `carbon_fiber`, `carbon_fiber2`, `carbon_fiber3` | `CarbonFiberDiffuseSampler` 1 (`Shared.zip` `carbonFiber.xds`), `CarbonFiberSampler` 2 (`carbonFiberNormal.xds`), `envBackground` 3, `env` 4, `envStatic` 5 |
+| `carbon_fiber_aniso` | `DirtMask` 1, `CarbonFiber` 2, `envBackground` 3, `env` 4, `envStatic` 5 |
+| `grille1`, `grille1_alpha`; `grille2`, `grille2_alpha` | `Grille1Sampler` 1 (`grille1_alpha.xds`); `Grille2Sampler` 1 (`grille2_alpha.xds`) |
+| `bumper_frame` | `BumperFrameSampler` 1 (`Shared.zip` `bumper_frame.xds`) |
+| `ZOnly`, `ghost*`, `black`, `wheel_black`, `gauge_red`, `geoShadow*`, `missing*`, the shadow-pass techniques | none (the shadow ones are not listed) |
+
+The `cockpit_*` and gauge techniques use `CockpitInteriorHiSampler` (the car's `interior_LOD0.xds`),
+`CockpitGaugeEmissiveSampler` (`interior_emissive_LOD0.xds`), the normal maps of `textures.xml`,
+`digitalGaugeSampler` (engine) and `mirrorSamplerDefault` (engine); the tool prints their slots.
+
 ## Damage (deformation) data
 
 The shape of the damage lives in the `Morph` and `Morph_LOD0` buffers of each section that can
@@ -335,12 +490,56 @@ exhausts and glass. Seats, interior, wheels, brakes and the steering wheel have 
   data is consistent with that: the front bumper's offsets point rearwards (+z) and the rear
   bumper's forwards (−z), and left and right parts mirror each other in x. Most values are small (a few tens of 1023); undercarriages and some
   body panels use large ones, up to the full range.
-- At run time the game scales the offsets by how damaged that area is and by
-  `MorphDamageScale` (6.0 in `GlobalCarAttribs.xml`; the same for hood and cockpit views).
-  The exact formula (whether the section's half extents also scale it, and how the damage amount
-  per vertex is found) is in the vertex shader and was not traced (see below).
+- At run time the vertex shader adds the offset to the vertex position, scaled by how damaged
+  that spot of the car is: see [The morph formula](#the-morph-formula).
 - The damaged textures are separate: `damage.xds` / `damagelights.xds` are the damaged
   versions of `nodamage.xds` / `lights.xds`, and `TextureDamageScale` scales that effect.
+
+### The morph formula
+
+Read from the car vertex shader (`body` and the other paint techniques; its microcode as the
+game binds it, Xenos assembly) and **measured in the game** with a changed car.
+
+```
+D        = damage at the vertex, 0..1 (see below)
+scale    = clamp(D, 0, 1) * MorphDamageScale        (6.0), clamped again to 0..1
+offset   = 2 * decode(Morph entry)                  (decode as above: x, y /1023, z /511)
+position = unpacked position + offset * scale       (model space, metres)
+```
+
+- The shader doubles the decoded offset: an entry of `x = +1.0` (`0x000003FF`) moves the vertex
+  **2.0 m** at full damage, and the range of an entry is ±2 m.
+- `MorphDamageScale` reaches the shader as the fourth component of a constant (`c58` = 0, 1, 1,
+  6: the clamp bounds of `D`, `TextureDamageScale`, `MorphDamageScale`). The product is
+  saturated, so **any damage of 1/6 or more moves the vertex by the full offset**, and below that
+  the offset grows linearly with `D` (at `D` = 0.05 it is 0.3 of the offset). Raising
+  `MorphDamageScale` makes a car dent fully from a lighter hit; it never exceeds the stored offset.
+- `D` is read from a damage grid the game keeps for each car: 10 x 10 x 10 cells of two `vec4`
+  (the eight corner values of the cell), over the car's bounding box (the shader constants hold
+  its corner and the reciprocal of its size: 2.27 x 1.68 x 4.91 m in one draw's constants), and the shader
+  interpolates between the corners (trilinear). So a section's offsets are not scaled by the
+  section's own extents or by anything stored per section: only by the grid at the vertex's
+  position. A section with no damage in its part of the grid does not move, whatever its `Morph`.
+- `Morph` is only fetched when a constant (`c127.x`) is non-zero (it was 1 in the draws logged).
+  The hood and cockpit views have their own scale in `GlobalCarAttribs.xml`
+  (`HoodViewAndCockpitViewMorphDamageScale`, 6.0 as well); that one was not logged.
+
+Measured with a copy of the Aventador in which every `Morph` entry of `bumperFa` (the front
+bumper, 10,892 LOD0 vertices) is `0x000003FF`, the damage grid filled with one value, and the
+game's photo mode (front view, 1280x720), with the bumper's position taken from the car in
+the unchanged run:
+
+| grid value `D` | `scale` | bumper shift (the emblem), predicted | measured |
+|---|---|---|---|
+| 0 | 0 | none | none (the car as shipped) |
+| 0.05 | 0.3 | 0.6 m | about 180 px (the emblem; the bumper's tips 155 to 165 px) |
+| 1.0 | 1.0 | 2.0 m | about 600 px, the whole bumper beside the car |
+
+The pixel values are read off the screenshots. The bumper is about 1.95 m wide and 480 px wide
+at that depth (246 px per metre), so 0.6 m is about 150 px (seen 155 to 180, with the
+perspective) and the ratio of the two shifts is about 3.4 (predicted 1 / 0.3 = 3.33). With a factor of 1 instead of 2 the 0.05 case would be 75 px. The
+bumper moved to the car's right (to the left of the picture, looking at the front), the
+direction of `+x` in the car's axes.
 
 ### Editing safely
 
@@ -363,14 +562,14 @@ exhausts and glass. Seats, interior, wheels, brakes and the steering wheel have 
 
 ## Still unknown
 
-- **Technique → samplers for the in-race library** (`shaders_v16.fxobj` and its variants). The
-  effect format links techniques and passes to shader blobs through tables not decoded here;
-  the garage `<name>.fxobj` files are decoded (one technique each). How to settle it at run time
-  is in the runtime check below.
+- The 31 shadow techniques (`shadowMap` to `dropShadowBrake`) share 15 pixel shaders, and which
+  technique uses which was not decoded. They are never drawn into the car's picture, only into
+  the shadow maps, and the other techniques do not depend on them.
 - A few material names match no technique: `Reserved`, `wingz_LOD0` to `wingz_LOD5`, and the
   brakes' `brake` and `drum` (probably given a prefix such as `brake_` by the brake loader).
-- **The morph formula**: what multiplies the decoded offset besides `MorphDamageScale`
-  (the section's half extents or not), and how the per-vertex damage amount is computed.
+- The axes of `y` and `z` in a morph entry were not measured separately (`x` was: it moves the
+  vertex along the car's `+x`); the shader adds the entry to the position in the same space.
+  How the game fills the damage grid from a crash (the 10 x 10 x 10 values) is not decoded.
 - The 16-byte morph entries of wheel models.
 - Unnamed fields: the wheel records, the 48 bytes and lights' details in `CCarModelData`, the
   emitters, the `vec3`, the `f32` and the flag in `CCarPartData`, the position's `w`, the last
@@ -379,20 +578,30 @@ exhausts and glass. Seats, interior, wheels, brakes and the steering wheel have 
 - When the game reads the `stripped_` files, and whether `SuperLOD` textures are ever used in
   this game (most cars ship none).
 
-### Runtime checks that would settle them
+### How the runtime checks were made
 
-1. **Samplers per technique** (garage or photo mode, one car): log, for each draw, the pixel
-   shader's microcode hash and, for each texture fetch slot it uses, the bound texture's
-   fingerprint (the same xxHash3 fingerprint as `texture_dump`). With `texture_dump` on, each
-   fingerprint maps to a dumped texture, which you can match to the car's `.xds` files. Offline,
-   each pixel shader hash maps to a blob in `shaders_v16.fxobj` (`tools/fxobj_shaders.py` hashes
-   them the same way), and that blob's constant table gives the sampler name of each slot. To
-   name the technique of each blob, also log the technique name the game looks up when it
-   loads the car shaders (the code that reads `CustomCarShaders.xml`, `CCarShaderManager::Init`).
-2. **Morph scale**: in a scratch copy of a car, set every `Morph` entry of one section (for
-   example `hooda`) to `x = +1.0` (`0x000003FF`), damage the car, and capture a frame
-   (RenderDoc on the Vulkan build): the vertex shader's output position minus the undamaged one,
-   divided by 1.0, is the scale for that damage amount.
+Both were done on a Title Update 4 build of this project with the free-roam car of the test
+save (the Aventador), in scratch folders (scratch data, config and save copies; the car file
+changed through a [mod](../modding.md) folder, never in the game's files).
+
+1. **Samplers.** `tools/carbin_runtime/reiglue-draw-textures.patch` is a small change to
+   ReIGlue (the project's SDK fork, against the revision `tools/build_rexglue_sdk.sh` pinned
+   when this was written). With `FORZA_DRAW_TEXTURES=<file>` the GPU plugin writes one line for
+   each new combination of pixel shader and bound textures: `ps <hash> vs <hash>` and, for each
+   fetch slot the pixel shader reads, `t<slot>=<fingerprint>:<w>x<h>:f<format>:d<dimension>`
+   (the fingerprint is the texture pack's, so `texture_dump=true` must be on; it is 0 for a
+   texture the engine writes). `FORZA_DRAW_VS_CONSTS=<vertex shader hash>` also writes that
+   vertex shader's float constants for its first 16 draws. Both are off unless set. The hash is
+   `tools/fxobj_shaders.py`'s (XXH3-64 of the big-endian microcode); `--dump_shaders=<folder>`
+   writes the shader's Xenos assembly. Offline: each pixel shader hash to its blob in
+   `shaders_v16.fxobj` (the Title Update 4 `media.zip` copy, which the game uses) and its
+   constant table; each fingerprint to a file as described above.
+2. **Morph scale.** A mod folder with the car's `LAM_LP7004_12_lod0.carbin` and
+   `LAM_LP7004_12.carbin` in which every `Morph` and `Morph_LOD0` entry of `bumperFa` was set to
+   `0x000003FF` (4 bytes each at the buffer's data offset, as `tools/carbin_dump.py` finds it),
+   loaded through `--forza_mods_dir`. The damage grid of the car's draws was filled in the plugin
+   with a fixed value (a local test aid, not in the patch; a game could not be damaged to the same
+   amount twice by hand) and photo mode's picture compared with the unchanged run.
 
 ## The tool
 
@@ -403,12 +612,16 @@ archives (the archives' LZX members need `tools/unxmem`, built from `tools/unxme
 tools/carbin_dump.py media/cars/AUD_R8GT_11.zip                 # every file: sections, counts
 tools/carbin_dump.py --meshes X.carbin                          # meshes: material, LOD, list, UVs
 tools/carbin_dump.py --morph 5 X.carbin                         # morph statistics, 5 entries decoded
-tools/carbin_dump.py --media extracted/game/media --meshes X.zip  # material -> effect -> samplers -> textures
+tools/carbin_dump.py --media extracted/game/media --meshes X.zip  # material -> race samplers (slot) and garage effect -> textures
 tools/carbin_dump.py --json X.carbin                            # all of it as JSON (no vertex data)
 ```
 
-It prints "parsed to the end" when the whole file matched this description. It reads only, and
-prints no vertex data.
+With `--media` each material also lists its in-race samplers with their texture slots
+(`race <sampler> (sN)`) and the texture each one picks, from `shaders_v16.fxobj` as described in
+[Samplers of the in-race shaders](#samplers-of-the-in-race-shaders). Nothing is listed for a
+technique that is not placed there (the shadow techniques), or when the library does not have the
+layout checked there. The tool prints "parsed to the end" when the whole file matched this
+description. It reads only, and prints no vertex data.
 
 ## Sources
 
@@ -420,6 +633,9 @@ prints no vertex data.
   blobs' own constant tables in the `.fxobj` files.
 - The game's `textures.xml`, `CustomCarShaders.xml`, `ShaderSettings.xml`, `CarAttribs.xml` and
   `GlobalCarAttribs.xml`.
+- A run of the game with the draw log of
+  [How the runtime checks were made](#how-the-runtime-checks-were-made): the pixel shaders and
+  textures of every draw, and the car vertex shader's assembly and constants.
 - Prior art: Forza Studio (the FM3/FM4-era `.carbin`/`.xds` viewer) has no public source or format
   notes that could be found; Doliman100's
   [ForzaTech-extraction-tools](https://github.com/Doliman100/ForzaTech-extraction-tools) covers the

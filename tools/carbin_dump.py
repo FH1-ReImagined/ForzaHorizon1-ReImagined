@@ -250,20 +250,28 @@ def morph_stats(data, vb, first):
 SAMPLER_RULES = {
     # Bound by the car code, not by textures.xml (strings in the executable next to the
     # loader: "\nodamage.xds", "\damage.xds", "_LOD0.xds", "lights_nrm_s_LOD0.xds", ...).
-    "baseSampler": "nodamage.xds (LOD1-5) / nodamage_LOD0.xds (LOD0), car folder",
+    # The tyre and rim rows were confirmed at run time (docs/modding/carbin-format.md).
+    "baseSampler": "nodamage.xds (LOD1-5) / nodamage_LOD0.xds (LOD0), car folder "
+                   "(rim: wheel.xds / wheel_LOD0.xds; brake: rotor0.xds ...)",
     "damageSampler": "damage.xds (LOD1-5) / damage_LOD0.xds (LOD0), car folder",
     "lightsNormalSampler": "lights_nrm_s_LOD0.xds, car folder",
-    "treadSampler": "cars/shared tire%c%d.xds / tread textures (picked by the tyre)",
-    "treadNormalSampler": "tyre tread normal map (picked by the tyre)",
-    "sidewallSampler": "tyre sidewall (picked by the tyre)",
-    "sidewallNormalSampler": "tyre sidewall normal map (picked by the tyre)",
-    "blurTireSampler": "tyre motion blur (picked by the tyre)",
-    "blurRimSampler1": "rim motion blur (picked by the wheel)",
+    "treadSampler": "treadA_CLR.xds (A, B or C by the tyre), media/wheels/tire?.zip",
+    "treadNormalSampler": "treadA_NRM.xds (A, B or C by the tyre), media/wheels/tire?.zip",
+    "sidewallSampler": "sidewallA_CLR.xds (by the tyre), media/wheels/Tire?<car>.zip",
+    "sidewallNormalSampler": "sidewallA_NRM.xds (by the tyre), media/wheels/Tire?<car>.zip",
+    "blurTireSampler": "tireA0.xds (A, B or C by the tyre), cars/Shared.zip",
+    "blurTireSampler2": "tireA1.xds, cars/Shared.zip",
+    "blurTireSampler3": "tireA2.xds, cars/Shared.zip",
+    "blurTireSampler4": "none (a 32x32 placeholder of the engine)",
+    "blurRimSampler1": "wheel0.xds, media/wheels/<wheel>.zip",
+    "blurRimSampler2": "wheel1.xds, media/wheels/<wheel>.zip",
+    "blurRimSampler3": "wheel3.xds, media/wheels/<wheel>.zip",
+    "blurRimSampler4": "none (a 32x32 placeholder of the engine)",
 }
 ENGINE_SAMPLERS = re.compile(
     r"^(env|blurredCubemap|specularCubemap|ambientCubemap|shLookupCubemap|trackLightmap|"
     r"s_|mirror|windshieldReflection|digitalGauge|nullSampler|shadowMap|rimShadow|"
-    r"tireShadow)")
+    r"tireShadow|ShadowMaskSamp|CSMShadowMap)")
 
 
 def unxmem_member(zip_path, name, out_dir):
@@ -321,6 +329,56 @@ def shader_blob_samplers(data):
         out.append(("ps" if magic == 0x102A1100 else "vs", samplers))
         pos = start + vsize + psize
 
+# The in-race library (shaders_v16.fxobj) stores its shader blobs in technique order: the
+# pixel shaders (240) follow the techniques (254 names; the pass names "p0", "p1" and "Cleanup"
+# are strings in the same list). The first 186 pixel shaders belong to the techniques up to
+# brake_badge, one each, except that cockpit_ghostInterior shares the previous one and the three
+# detail_glass_* techniques have two passes; the shadow techniques (shadowMap to dropShadowBrake)
+# share 15 shaders in a way not decoded, and the last 39 pixel shaders belong one each to the
+# techniques tire to missingBrakePink. Checked at run time against the shaders and textures of
+# the draws of a car (docs/modding/carbin-format.md); another file whose counts differ gets no
+# answer.
+RACE_PASS_NAMES = ("p0", "p1", "Cleanup")
+RACE_TWO_PASS = ("detail_glass_red", "detail_glass_clear", "detail_glass_amber")
+RACE_SHARES_PREVIOUS = ("cockpit_ghostInterior",)
+
+
+def race_library_samplers(data):
+    """{technique: [pixel shader sampler dict (name -> slot), per pass]} from shaders_v16.fxobj,
+    or {} when the file does not have the layout described above."""
+    try:
+        first = data.index(b"body_traffic\0")
+        names, pos = [], first
+        while True:
+            end = data.index(b"\0", pos)
+            text = data[pos:end].decode("latin1")
+            pos = end + 1
+            if text == "D3DX9.1 Effect Compiler":
+                break
+            if text not in RACE_PASS_NAMES:
+                names.append(text)
+        front_end, tail_first = names.index("shadowMap"), names.index("tire")
+        shadow_last = names.index("dropShadowBrake")
+    except ValueError:
+        return {}
+    blobs = [t for kind, t in shader_blob_samplers(data) if kind == "ps"]
+    front = names[:front_end]
+    count = sum(0 if n in RACE_SHARES_PREVIOUS else 2 if n in RACE_TWO_PASS else 1 for n in front)
+    tail = names[tail_first:]
+    if shadow_last + 1 != tail_first or count + 15 + len(tail) != len(blobs):
+        return {}
+    out, i = {}, 0
+    for n in front:
+        if n in RACE_SHARES_PREVIOUS:
+            out[n] = out[front[front.index(n) - 1]]
+        else:
+            k = 2 if n in RACE_TWO_PASS else 1
+            out[n] = blobs[i:i + k]
+            i += k
+    for n, t in zip(tail, blobs[len(blobs) - len(tail):]):
+        out[n] = [t]
+    return out
+
 
 class Materials:
     def __init__(self, media):
@@ -331,6 +389,7 @@ class Materials:
         lib = open(os.path.join(cars, "shaders_v16.fxobj"), "rb").read()
         self.library = set(m.group().decode() for m in re.finditer(
             rb"(?<=\x00)[A-Za-z_][A-Za-z0-9_]{1,63}(?=\x00)", lib))
+        self.race = race_library_samplers(lib)
         self.textures = {}
         shared = os.path.join(media, "cars", "Shared.zip")
         if os.path.exists(shared):
@@ -352,7 +411,11 @@ class Materials:
         tech = next((n for n in names if n in self.library), None)
         ui = next((n for n in names if n in self.custom), None)
         res = {"race_technique": ("shaders_v16.fxobj:" + tech) if tech else None,
-               "ui_effect": None, "samplers": {}}
+               "ui_effect": None, "samplers": {}, "race_samplers": {}}
+        for k, smp in enumerate(self.race.get(tech, [])):
+            for s, slot in smp.items():
+                res["race_samplers"]["%s%s (s%d)" % ("pass %d " % k if k else "", s, slot)] = \
+                    self.texture_for(s)
         if ui:
             path = os.path.join(self.cars, ui + ".fxobj")
             if os.path.exists(path):
@@ -473,6 +536,8 @@ def main():
                 r = mats.resolve(k, cockpit)
                 print("    %-26s x%-3d race: %s  ui: %s" % (
                     k, used[k], r["race_technique"] or "not found", r["ui_effect"] or "-"))
+                for smp, tex in sorted(r["race_samplers"].items(), key=lambda kv: kv[0].split("(s")[-1].rstrip(")").zfill(3)):
+                    print("      race %-34s %s" % (smp, tex))
                 for smp, tex in sorted(r["samplers"].items()):
                     print("        %-38s %s" % (smp, tex))
     if a.json:
