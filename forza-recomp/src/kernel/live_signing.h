@@ -4,7 +4,7 @@
 // clear in every HELLO and on every title service call, and the server kept its SHA-256. Now our
 // Live identity has an Ed25519 key pair too (the seed is in live_identity.txt, ed25519.h signs):
 // each title service call carries an Ed25519 signature (X-Forza-Auth) and the HELLO signs the
-// server's challenge the same way. The server keeps only the public key. server/forza_auth.py
+// server's challenge the same way. The server keeps only the public key. server/forza_live/core/auth.py
 // has the scheme and the server's side, live_auth.cpp our state.
 //
 // - Server name: the host the player configured, lowercased, without its port.

@@ -1,5 +1,5 @@
 // forza - head-to-head challenges between players in the Horizon World
-// (docs/online_vision.md, phase 3; the server side is server/forza_challenge.py).
+// (docs/online_vision.md, phase 3; the server side is server/forza_live/competition/challenge.py).
 //
 // In the world's free roam a player drives up behind another player and presses X. The
 // server finds the car close ahead of it in the same world and asks that player, who
@@ -54,7 +54,7 @@ REXCVAR_DEFINE_BOOL(world_challenges, true, "Network/Forza Live",
 namespace {
 constexpr uint32_t kCarRoot = FORZA_ADDR(0x832DF024);
 constexpr uint16_t kButtonB = 0x2000, kButtonX = 0x4000;
-// CHALLENGE ops (server/forza_challenge.py).
+// CHALLENGE ops (server/forza_live/competition/challenge.py).
 constexpr uint8_t kPos = 1, kRequest = 2, kAnswer = 3, kFinish = 4, kLeft = 5;
 constexpr uint8_t kNotice = 16, kPrompt = 17, kStart = 18, kEnd = 19, kConfig = 20;
 constexpr char kTitle[] = "HEAD-TO-HEAD";
@@ -443,7 +443,7 @@ uint16_t WorldChallengePad(uint16_t buttons) {
   return 0;
 }
 
-// CHALLENGE from the server (net.cpp, network thread); see server/forza_challenge.py.
+// CHALLENGE from the server (net.cpp, network thread); see server/forza_live/competition/challenge.py.
 void LiveChallenge(const uint8_t* p, size_t n) {
   if (n < 1) return;
   const int64_t now = NowMs();

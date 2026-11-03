@@ -9,7 +9,7 @@ and a few landmarks (the festival, the outposts, the dam, the airport, towns and
 
 x and z are the game's world axes in metres: x grows to the east, z to the north (the "East
 Rt. 27" trap lies east of the "West Rt. 27" one, "South Beaumont" south of Beaumont). Board
-ids are the ones server/forza_leaderboards.py uses (speed-trap-<scoreboard_id>,
+ids are the ones server/forza_live/competition/leaderboards.py uses (speed-trap-<scoreboard_id>,
 speed-zone-<scoreboard_id>, event-<Events.Id>).
 
 With --names it also writes the leaderboard names file the server reads from its data folder

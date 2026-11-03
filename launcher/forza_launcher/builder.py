@@ -133,6 +133,15 @@ def source_files(proj: Path):
         yield Path("generated") / "rexglue.cmake"
 
 
+def server_files(server: Path):
+    """The Forza Live server files a release ships, relative to server/ (the submodule): the
+    entry point and the forza_live package with its data, without tests or caches."""
+    yield Path("forza_live_server.py")
+    for f in sorted((server / "forza_live").rglob("*")):
+        if f.is_file() and f.suffix in (".py", ".xml") and "__pycache__" not in f.parts:
+            yield f.relative_to(server)
+
+
 _SOURCES_MEMO = {}
 
 

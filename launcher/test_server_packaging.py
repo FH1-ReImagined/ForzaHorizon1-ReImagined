@@ -8,6 +8,20 @@ import unittest
 from unittest.mock import patch
 
 REPO = Path(__file__).resolve().parent.parent
+SERVER = REPO / "server"
+
+
+def server_payload():
+    """What a release must ship of server/: the entry point and the forza_live package with its
+    data (no tests, no caches), by path relative to server/."""
+    files = [SERVER / "forza_live_server.py"]
+    files += [f for f in (SERVER / "forza_live").rglob("*")
+              if f.is_file() and f.suffix in (".py", ".xml") and "__pycache__" not in f.parts]
+    return {f.relative_to(SERVER).as_posix(): f.read_bytes() for f in files}
+
+
+def tree(root):
+    return {f.relative_to(root).as_posix(): f.read_bytes() for f in root.rglob("*") if f.is_file()}
 
 
 def load(name, path):
@@ -49,10 +63,8 @@ class ServerPackaging(unittest.TestCase):
         if state == "empty":
             (self.repo / "server").mkdir()
         elif state == "initialized":
-            (self.repo / "server").mkdir()
-            for path in (REPO / "server").glob("*.py"):
-                shutil.copy2(path, self.repo / "server" / path.name)
-            shutil.copy2(REPO / "server/playground_rounds.xml", self.repo / "server/playground_rounds.xml")
+            # the whole checkout of the submodule, tests included: they must stay out
+            shutil.copytree(SERVER, self.repo / "server", ignore=shutil.ignore_patterns(".git", "__pycache__"))
 
     def assemble(self, module):
         out = self.base / "out"
@@ -68,11 +80,10 @@ class ServerPackaging(unittest.TestCase):
         return stage
 
     def check_payload(self, stage):
-        expected = {p.name: p.read_bytes() for p in (REPO / "server").glob("*.py")
-                    if not p.name.startswith("test_")}
-        expected["playground_rounds.xml"] = (REPO / "server/playground_rounds.xml").read_bytes()
-        actual = {p.name: p.read_bytes() for p in (stage / "server").iterdir()}
-        self.assertEqual(actual, expected)
+        payload = server_payload()
+        self.assertIn("forza_live/server.py", payload)
+        self.assertIn("forza_live/title_services/playground_rounds.xml", payload)
+        self.assertEqual(tree(stage / "server"), payload)
 
     def test_package_initialized(self):
         self.server("initialized")
@@ -85,7 +96,7 @@ class ServerPackaging(unittest.TestCase):
             prefix = "ForzaHorizon1-ReImagined/server/"
             payload = {m.name[len(prefix):]: archive.extractfile(m).read() for m in archive.getmembers()
                        if m.isfile() and m.name.startswith(prefix)}
-        self.assertEqual(payload, {p.name: p.read_bytes() for p in (stage / "server").iterdir()})
+        self.assertEqual(payload, tree(stage / "server"))
 
     def test_flatpak_initialized(self):
         self.server("initialized")

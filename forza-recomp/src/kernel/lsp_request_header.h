@@ -4,7 +4,7 @@
 // game writes, which anyone can write. Our game signs each call with its Live identity's
 // friends key (X-Forza-Auth, live_signing.h; the launcher's shader list upload proves itself
 // the same way), so the server can tell the player's own calls from someone else's
-// (server/forza_live_lsp.py verify_caller) without the key ever being sent. The game's
+// (server/forza_live/title_services/lsp.py verify_caller) without the key ever being sent. The game's
 // requests are HTTP/1.1 with Content-Length over one kept-alive connection
 // (docs/title_services.md); each request is held until its head and body are complete (the
 // signature covers the body), the lines go in before the head's blank line, and the request

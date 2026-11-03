@@ -226,8 +226,8 @@ enum LiveType : uint8_t {
   kChallenge,    // client <-> server: head-to-head challenges (hooks/world_challenge.cpp)
   kStats,        // client -> server: Xbox LIVE stats written or read (live_xmsg.cpp)
   kStatsRows,    // server -> client: the rows of a read
-  kFriend,       // client <-> server: the friends list (live_friends.cpp, server/forza_friends.py)
-  kChat,         // client <-> server: text chat (live_friends.cpp, server/forza_chat.py)
+  kFriend,       // client <-> server: the friends list (live_friends.cpp, server/forza_live/social/friends.py)
+  kChat,         // client <-> server: text chat (live_friends.cpp, server/forza_live/social/chat.py)
 };
 // XNADDR.ina of a player on a Forza Live server: 0xF0000000 | the id the server gave
 // it. 240.0.0.0/8 is reserved, so it never collides with a LAN address.

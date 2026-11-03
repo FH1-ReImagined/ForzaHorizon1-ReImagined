@@ -243,8 +243,8 @@ class ExtractTests(unittest.TestCase):
         self.assertEqual(names["cars"], {"1398": "2012 Maker Synthetic GT"})
 
     def test_the_server_reads_the_names_file(self):
-        import forza_leaderboards as lb
-        import forza_scores as scores
+        from forza_live.competition import leaderboards as lb
+        from forza_live.competition import scores
         old = scores.DATA_DIR
         try:
             scores.DATA_DIR = self.root

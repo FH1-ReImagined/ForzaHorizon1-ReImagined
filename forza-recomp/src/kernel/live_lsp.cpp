@@ -14,7 +14,7 @@
 // without title services: "The Horizon server is currently unavailable"). The game then
 // calls Turn 10's services on it: HTTP/1.1 POST /Services.Horizon/o.xtsw to port 80,
 // Content-Type bin/xtsw, X-ClassName / X-Method / X-UserId headers (docs/title_services.md);
-// net.cpp sends the connection to the server's HTTP port, where server/forza_live_lsp.py
+// net.cpp sends the connection to the server's HTTP port, where server/forza_live/title_services/lsp.py
 // answers. The marketplace asset enumeration (0x58042) is empty. Every other enumerator
 // goes to the SDK.
 

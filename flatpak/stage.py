@@ -66,11 +66,8 @@ def main():
         copy(REPO / "tools" / name, out / "project" / "tools" / name)
     if not (REPO / "server" / "forza_live_server.py").is_file():
         sys.exit("server/ is empty: the Forza Live server is a git submodule (git submodule update --init server)")
-    for f in sorted((REPO / "server").glob("*.py")):
-        if not f.name.startswith("test_"):
-            copy(f, out / "server" / f.name)
-    if (REPO / "server" / "playground_rounds.xml").is_file():
-        copy(REPO / "server" / "playground_rounds.xml", out / "server" / "playground_rounds.xml")
+    for f in builder.server_files(REPO / "server"):
+        copy(REPO / "server" / f, out / "server" / f)
     copy(Path(a.overlay), out / "sdk-overlay" / "rexglue-overlay-linux-amd64.tar.gz")
     copy(REPO / "LICENSE", out / "licenses" / "ForzaHorizon1-ReImagined.txt")
     # The GPLv3 section 7 additional permission and the relicensing note travel with the license, and so

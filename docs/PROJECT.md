@@ -283,7 +283,7 @@ Leaderboard screens, Windows and Steam Deck are not scripted: a hand run in the 
       empty; the game reads its TrueSkill row (column 0 as an int64, two doubles: mu and
       sigma) through the empty view list right after creating the party session.
       `live_xmsg.cpp` now writes a row per player and view: the server's
-      (`server/forza_stats.py`, which also keeps and rates what `XSessionWriteStats`
+      (`server/forza_live/competition/stats.py`, which also keeps and rates what `XSessionWriteStats`
       writes at the end of an online game; `docs/title_services.md`, "Every
       leaderboard"), or a new player's defaults (skill 1, mu 3.0, sigma 1.0, other columns
       null).
@@ -308,7 +308,7 @@ Leaderboard screens, Windows and Steam Deck are not scripted: a hand run in the 
     HTTP/1.1 to it (`POST /Services/o.xtsw`, `Content-Type: bin/xtsw`, `X-TitleId`,
     `X-ClassName`, `X-Method`, `X-UserId`, `X-TransactionId` headers). Our title server
     is now described as `*`, so every service resolves to the Forza Live server, whose
-    `forza_live_lsp.py` logs the requests.
+    `forza_live/title_services/lsp.py` logs the requests.
   - MISSING CONTENT: not reproduced in the user's flow (main menu, Multiplayer) with all
     23 DLC packages installed. The license path was checked: each DLC's license mask
     comes from `XContentCreateEx` (`sub_825166xx`, the package header written by
@@ -435,7 +435,7 @@ Leaderboard screens, Windows and Steam Deck are not scripted: a hand run in the 
     the results, `sub_82A95910`). Packed big-endian, u32-length-prefixed strings, byte
     arrays and arrays; the 111-byte `Logon2` request decodes exactly. No hashes or
     signatures anywhere.
-  - `server/forza_xtsw.py` (codec, the message types used) and `forza_live_lsp.py`
+  - `server/forza_live/network/xtsw.py` (codec, the message types used) and `forza_live/title_services/lsp.py`
     answer `User.Logon2`, the profile uploads, the hopper calls (`GetList`,
     `GetSearchSettings`, `GetGameOptions`, `UserRegister`, `GetRaceMultipliers`, ...);
     any other method gets success and zero bytes, which reads as empty results. The HTTP
@@ -805,7 +805,7 @@ Leaderboard screens, Windows and Steam Deck are not scripted: a hand run in the 
     go only between games that send the new HELLO features byte (`FEATURE_INVITE_PICK`,
     after the gamertag; old servers ignore it), so v0.1.12 games neither send nor get any,
     and the public server can deliver invites again once it runs this version.
-    `server/test_forza_invites.py`.
+    `server/tests/server/test_invites.py`.
   - Test (Linux, TU4, three games DriverA/B/C from copies of one Xenia save, local server
     on UDP 21470): A in the party lobby, Invite Friends: the picker listed DriverB and
     DriverC; B cancelled it with nothing sent and the lobby stayed. A picked B and sent: only
@@ -818,7 +818,7 @@ Leaderboard screens, Windows and Steam Deck are not scripted: a hand run in the 
     scripted pad input), and the Y "INVITE Xbox LIVE Party" button, which calls none of
     these.
 - 2026-10-16: **Friends (#92, step 1)**: everyone online counted as a friend. The server
-  now keeps a friends list per player (`server/forza_friends.py`, `friends.json`), and the
+  now keeps a friends list per player (`server/forza_live/social/friends.py`, `friends.json`), and the
   game shows only those friends (`src/kernel/live_friends.cpp`):
   - Protocol: HELLO features byte `0x02` (`FEATURE_FRIENDS`), then the friends key (u8
     length + 16 bytes; old servers ignore it). New UDP kind 22 `FRIEND` (op byte): LIST
@@ -837,7 +837,7 @@ Leaderboard screens, Windows and Steam Deck are not scripted: a hand run in the 
     The friends screen (F8 / hold LS; `live_osk.h` has the pad reader and the on-screen
     keyboard) manages requests; notices show when nothing else is on screen. Before a server
     answers (an older server) everything stays as it was.
-  - Tests: `server/test_forza_friends.py` (16: request by gamertag, accept, request both
+  - Tests: `server/tests/social/test_friends.py` (16: request by gamertag, accept, request both
     ways, decline and take back, remove, block hides requests and drops invites, unknown
     players, rate limit, caps, 151 entries in parts and SAME, online first, sign-in push,
     key mismatch, old games, search, the file). Three games (Linux TU4, copies of one save,
@@ -848,7 +848,7 @@ Leaderboard screens, Windows and Steam Deck are not scripted: a hand run in the 
     with A and B online. A's Invite Friends picker listed "Friends: DriverB" then "Everyone
     online: DriverC". C typed "d" with the on-screen keyboard (DriverA, DriverB found), then
     blocked A; A's invite to C was dropped by the server ("dropped (blocked)").
-- 2026-10-16: **Text chat (#92, step 2)** (`server/forza_chat.py`, the friends screen's Chat
+- 2026-10-16: **Text chat (#92, step 2)** (`server/forza_live/social/chat.py`, the friends screen's Chat
   tab in `src/kernel/live_friends.cpp`):
   - Protocol: HELLO features `0x04`; UDP kind 23 `CHAT` (op byte): SESSIONS (the ids of
     the sessions the game hosts or joined, `LiveSessionIds`; sent on change and every 10 s;
@@ -861,7 +861,7 @@ Leaderboard screens, Windows and Steam Deck are not scripted: a hand run in the 
     blocks (either way) and the reader's mutes hide a message; admin mute and kick (ban)
     for N minutes at `/admin/mute`, `/admin/kick` (`moderation.json`), the last 200
     messages in memory at `/admin/chat`; nothing written about messages.
-  - Tests: `server/test_forza_chat.py` (9: session, world, direct only to friends and
+  - Tests: `server/tests/social/test_chat.py` (9: session, world, direct only to friends and
     online, cleaning and cap, rate limit, blocks and mutes, admin mute and kick with the
     file, the 200-message ring, old games). Three games (same setup as step 1; the friends
     from step 1 still there after restarting server and games): A sent B a direct message

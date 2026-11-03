@@ -41,7 +41,10 @@ else
     rm -f "$rpath_script"
 fi
 cp "$ROOT/tools/xcontent_extract.py" "$ROOT/tools/xiso_extract.py" "$ROOT/tools/install_dlc.py" "$DIST/"
-cp "$ROOT"/server/*.py "$DIST/server/"
+# The Forza Live server: its entry point and the forza_live package (no tests).
+cp "$ROOT/server/forza_live_server.py" "$DIST/server/"
+cp -r "$ROOT/server/forza_live" "$DIST/server/"
+find "$DIST/server" -name __pycache__ -prune -exec rm -rf {} +
 cp "$ROOT/LICENSE" "$DIST/licenses/ForzaHorizon1-ReImagined.txt"
 # The GPLv3 section 7 additional permission and the relicensing note, and the server's license.
 cp "$ROOT/NOTICE.md" "$DIST/licenses/NOTICE.txt"

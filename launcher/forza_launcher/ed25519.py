@@ -1,7 +1,7 @@
 """Ed25519 signatures (RFC 8032), pure Python with the standard library only (#515).
 
 The launcher signs its requests to the Forza Live server with it (live_auth.py). A copy of the
-server's forza_ed25519.py (FH1-ReImagined/forza-live), which verifies them: keep the two the
+server's forza_live/core/ed25519.py (FH1-ReImagined/forza-live), which verifies them: keep the two the
 same. The arithmetic is that of the reference implementation in RFC 8032, section 6, rearranged
 for speed:
 
