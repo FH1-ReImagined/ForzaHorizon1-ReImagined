@@ -47,11 +47,13 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # (#467, #468, ReIGlue PR #8), and 0409: the startup movies whole with the scene/HUD split
 # at a 1080p output (#539), and 0411: resolves into readback_resolve_wait_range copied back
 # with a GPU wait (photo mode's Big Shot, #552), and 0410: first-seen resolves of per-frame
-# render targets copied back without a GPU wait (#536, ReIGlue PR #15).
+# render targets copied back without a GPU wait (#536, ReIGlue PR #15), and 0421/0422: the log
+# file rolls over at log_file_max_mb (50 MB) and the lines that filled players' logs are rarer
+# (#609).
 # A reviewed full commit can be pinned before a maintainer publishes a tag.
 # When a tag is supplied, its target must still match this immutable commit.
 REIGLUE_TAG=
-REIGLUE_COMMIT=949141169ddae6bd2a3f41c7230dae08567c4c39  # ReIGlue #15 (0410), on top of merged #20-#25 (0413-0419)
+REIGLUE_COMMIT=b9a8894f9ea25f1eff79cc051574e9f1b23c1354  # 0421/0422 (#609), on top of #15 (0410) and merged #20-#25 (0413-0419)
 REIGLUE_URL="${REIGLUE_URL:-https://github.com/FH1-ReImagined/ReIGlue}"
 NIGHTLY="${REXSDK_NIGHTLY:-$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64}"
 SRC="${REXSDK_SRC:-$HOME/rexglue-sdk-src-forza/sdk}"

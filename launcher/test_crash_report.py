@@ -64,7 +64,7 @@ class ReportTests(unittest.TestCase):
 
     def test_missing_log_still_produces_usable_report(self):
         report = self.report()
-        self.assertIn("could not be read", report.body)
+        self.assertIn("wrote no log in this session", report.body)
         self.assertIn("Exit code: 134", report.body)
         self.assertIn("Not recorded", report.body)
 

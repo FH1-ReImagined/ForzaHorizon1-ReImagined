@@ -70,8 +70,9 @@ PERF: scene= src=<guest|present> t= fps= p50= p95= p99= max= low1= stutters= hit
   `stutters` = frames longer than 2x the window's p50; `hitches` = frames longer than
   100 ms; `ontarget` = % of frames within +-20% of the target frame time (33.3 ms, or
   16.7 ms with `frame_rate = 60`; two guest vblanks); `pipelines` = graphics pipelines
-  created in the window (the plugin's "Creating graphics pipeline state" log lines,
-  placeholders included).
+  created in the window (the GPU plugin's `vkCreateGraphicsPipelines` and
+  `vkCreateComputePipelines` calls, placeholders included; the plugin's "Creating graphics
+  pipeline state" log lines stop after the first 32 since ReIGlue 0422, #609).
 - `RECOMP_PERF_CSV=<file>` writes every frame; `RECOMP_PERF_SCENE` names the first scene;
   `SCENE:<name>` on the input FIFO starts a new one.
 

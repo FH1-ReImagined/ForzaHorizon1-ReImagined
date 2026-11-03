@@ -36,7 +36,9 @@
 # Environment: FORZA_BUILD (build dir under forza-recomp/out/build, default linux-tu4 when it
 # exists, else linux), FORZA_UPDATE (the update: folder of a TU4 build), REXSDK
 # (SDK prefix; default the patched overlay that tools/build_rexglue_sdk.sh makes),
-# FORZA_DATA (game files, default extracted/game). The log is ~/.local/share/forza/forza.log.
+# FORZA_DATA (game files, default extracted/game). The log is ~/.local/share/forza/forza.log,
+# this session only: the last one's becomes forza.previous.log (#609). At 50 MB the game rolls
+# it over to forza.1.log (log_file_max_mb).
 # Adapted from RecompiledHaloReach's tools/play.sh.
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -139,9 +141,21 @@ if [ "$offline" = 0 ] && [ -z "${FORZA_SERVER:-}" ] &&
 fi
 [ "$offline" = 1 ] && unset FORZA_SERVER
 
+# One session per log, as the launcher does (#609): the last session's (and its 50 MB roll,
+# forza.1.log) become forza.previous.log (forza.previous.1.log), replacing the older copy.
+log="$DATA_HOME/forza.log"
+if [ -e "$log" ]; then
+    mv -f -- "$log" "$DATA_HOME/forza.previous.log"
+    if [ -e "$DATA_HOME/forza.1.log" ]; then
+        mv -f -- "$DATA_HOME/forza.1.log" "$DATA_HOME/forza.previous.1.log"
+    else
+        rm -f -- "$DATA_HOME/forza.previous.1.log"
+    fi
+fi
+
 cd "$BUILD"
 LD_LIBRARY_PATH="$SDK/lib:$BUILD" ./forza --game_data_root="$DATA" \
-    --log_file="$DATA_HOME/forza.log" "${args[@]}"
+    --log_file="$log" "${args[@]}"
 status=$?
 [ -n "$server_pid" ] && kill "$server_pid" 2>/dev/null
 # Guest memory (/dev/shm/xenia_memory_*, 5 GB) is not unlinked when the game is killed.
