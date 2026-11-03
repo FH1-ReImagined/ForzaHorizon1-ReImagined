@@ -1185,7 +1185,10 @@ def stage_runtime(opts: Options, rep: Reporter, bdir: Path, sdk: Path) -> Path:
         shutil.copy2(tool, tmp)
         os.replace(tmp, rt / tool.name)
     if IS_WIN:
-        for f in [bdir / "forza.exe"] + sorted(bdir.glob("forza_*.dll")):
+        # rexgpu-regpu.dll and its d3dcompiler_47.dll: the optional ReGPU plugin (FORZA_REGPU_PLUGIN);
+        # its licenses come with licenses/ above.
+        plugin = [bdir / n for n in ("rexgpu-regpu.dll", "d3dcompiler_47.dll") if (bdir / n).is_file()]
+        for f in [bdir / "forza.exe"] + sorted(bdir.glob("forza_*.dll")) + plugin:
             shutil.copy2(f, rt / f.name)
         for dll in sorted((sdk / "bin").glob("*.dll")):
             if not dll.name.endswith(("d.dll", "rd.dll")):

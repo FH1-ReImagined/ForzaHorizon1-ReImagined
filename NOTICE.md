@@ -105,6 +105,8 @@ this project does not change them.
 | Where | What | License |
 | --- | --- | --- |
 | `forza-recomp/thirdparty/` | Discord RPC, RapidJSON, bc7enc_rdo, OpenXR headers (details in its `README.md` and the license files beside each) | MIT; MIT; MIT or public domain; Apache-2.0 or MIT |
+| `forza-recomp/thirdparty/ReGPU/` | ReGPU, the Direct3D 12 renderer of the optional ReGPU plugin (`forza-recomp/regpu-plugin/`, `rexgpu-regpu.dll`) | MIT |
+| `forza-recomp/thirdparty/fidelityfx-fsr1/` | FidelityFX SDK FSR 1 shader headers (Advanced Micro Devices) | MIT |
 | `forza-recomp/LICENSE-Pinyon-Shift` | notice for code adapted from Pinyon Shift (the ideas ReIGlue takes from it, such as the present step on the submission thread and the thread placement by name, are credited in ReIGlue's `NOTICE`) | BSD-3-Clause |
 | `launcher/forza_launcher/haptics/vendor/` | HorizonHaptics (Haritha Rathnayake) | MIT |
 | `launcher/forza_launcher/ui/controller_art/` | Gamepad Viewer artwork (Michaël Ferrand) | MIT |

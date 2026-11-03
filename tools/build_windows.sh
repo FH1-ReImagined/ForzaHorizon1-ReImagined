@@ -107,6 +107,7 @@ cp "$BUILD"/forza.exe "$BUILD"/forza_*.dll "$DIST/"
 cp "$BUILD/forza-telemetry.json" "$DIST/"
 if [ -f "$BUILD/rexgpu-regpu.dll" ]; then  # ReGPU plugin (--gpu_plugin=regpu)
     cp "$BUILD/rexgpu-regpu.dll" "$DIST/"
+    [ -f "$BUILD/d3dcompiler_47.dll" ] && cp "$BUILD/d3dcompiler_47.dll" "$DIST/"  # Wine and Proton lack it
     cp "$ROOT/forza-recomp/thirdparty/ReGPU/LICENSE" "$DIST/licenses/ReGPU.txt"
     cp "$ROOT/forza-recomp/thirdparty/fidelityfx-fsr1/LICENSE.txt" "$DIST/licenses/AMD-FidelityFX-FSR1.txt"
 fi

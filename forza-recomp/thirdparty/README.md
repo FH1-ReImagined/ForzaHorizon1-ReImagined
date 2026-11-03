@@ -18,6 +18,8 @@ local copies without downloading dependencies.
 time), unchanged, from [GPUOpen-LibrariesAndSDKs/FidelityFX-SDK v2.0.0](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/tree/v2.0.0)
 (`f4c1da8e`): `api/internal/gpu/ffx_*.h` without `ffx_core_cpu.h`, and
 `upscalers/fsr3/include/gpu/fsr1/ffx_fsr1.h`. MIT; `LICENSE.txt` is the notice from their headers.
+Source archive SHA-256 (`codeload.github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/tar.gz/f4c1da8e92f3fe563b5c28c44e6267ce6b6b8eb2`):
+`021313c076baf922982db0166de94024e82f9daf9eb578b4a34c75c8ec650a5f`.
 
 Not vendored: `src/kernel/ed25519.h` (Ed25519 signing and SHA-512 for signed requests to the
 Forza Live server, #515) is this project's code in the formulation of TweetNaCl (Bernstein et

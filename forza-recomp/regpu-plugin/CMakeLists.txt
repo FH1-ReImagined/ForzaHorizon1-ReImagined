@@ -60,6 +60,16 @@ target_include_directories(rexgpu-regpu PRIVATE "${_regpu_src}/src")
 set_target_properties(rexgpu-regpu PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+# ReGPU compiles its shaders with d3dcompiler_47.dll from beside the game when there is one; Wine and
+# Proton have none (a black screen). The Windows SDK's redistributable copy ships with the plugin.
+find_file(FORZA_D3DCOMPILER_47 d3dcompiler_47.dll
+    PATHS "$ENV{WindowsSdkDir}/Redist/D3D/x64" "C:/Program Files (x86)/Windows Kits/10/Redist/D3D/x64" NO_DEFAULT_PATH)
+if(FORZA_D3DCOMPILER_47)
+    add_custom_command(TARGET rexgpu-regpu POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${FORZA_D3DCOMPILER_47}" "${CMAKE_BINARY_DIR}/d3dcompiler_47.dll")
+else()
+    message(WARNING "d3dcompiler_47.dll (Windows SDK Redist/D3D/x64) not found: Wine and Proton players need it beside the plugin")
+endif()
 add_custom_command(TARGET rexgpu-regpu POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/licenses"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_regpu_src}/LICENSE" "${CMAKE_BINARY_DIR}/licenses/ReGPU.txt"
