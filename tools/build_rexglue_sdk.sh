@@ -46,11 +46,12 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # (ReIGlue PR #14), and 0403/0404: racing wheel vibration rate and H-shifter neutral
 # (#467, #468, ReIGlue PR #8), and 0409: the startup movies whole with the scene/HUD split
 # at a 1080p output (#539), and 0411: resolves into readback_resolve_wait_range copied back
-# with a GPU wait (photo mode's Big Shot, #552).
+# with a GPU wait (photo mode's Big Shot, #552), and 0410: first-seen resolves of per-frame
+# render targets copied back without a GPU wait (#536, ReIGlue PR #15).
 # A reviewed full commit can be pinned before a maintainer publishes a tag.
 # When a tag is supplied, its target must still match this immutable commit.
 REIGLUE_TAG=
-REIGLUE_COMMIT=f43e29b1a0a8782b84de153d6c24ed0eb63a483e  # 0419 (ReIGlue PR #25: the presenter keeps the nightly's layout), on top of merged #21-#24: 0414, 0415 (Steam Deck, off by default), 0405 (Windows 0xE0000000 view), 0416-0418 (vector math as on Xenon)
+REIGLUE_COMMIT=949141169ddae6bd2a3f41c7230dae08567c4c39  # ReIGlue #15 (0410), on top of merged #20-#25 (0413-0419)
 REIGLUE_URL="${REIGLUE_URL:-https://github.com/FH1-ReImagined/ReIGlue}"
 NIGHTLY="${REXSDK_NIGHTLY:-$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64}"
 SRC="${REXSDK_SRC:-$HOME/rexglue-sdk-src-forza/sdk}"
