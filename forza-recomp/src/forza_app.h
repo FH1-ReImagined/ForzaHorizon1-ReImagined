@@ -153,7 +153,9 @@ class ForzaApp : public rex::ReXApp {
   // frame statistics summary is written here, and where each guest thread is (a game that
   // loads forever is closed this way, #76).
   bool OnWindowCloseRequested() override {
-    auto_pause_.reset();
+    // Detach, do not destroy: the window is still notifying a snapshot of its listeners
+    // and would call the destroyed observer next (#598).
+    if (auto_pause_) auto_pause_->Detach();
     forza::native_quit::Cancel();
     // The SDK terminates guest threads immediately after accepting this request.
     // A retained XThread handle does not keep its guest stack alive.

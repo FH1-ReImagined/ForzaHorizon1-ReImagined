@@ -7,6 +7,9 @@ class WindowObserver {
  public:
   explicit WindowObserver(rex::ui::Window* window);
   ~WindowObserver();
+  // Stops watching the window but keeps the listener alive: the window may be in the
+  // middle of a notification pass that still holds a pointer to it.
+  void Detach();
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;
