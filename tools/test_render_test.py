@@ -98,6 +98,7 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(m.getpixel((319, 179)), 0)
         self.assertEqual(m.getpixel((320, 180)), 255)
 
+    @unittest.skipIf(os.name == "nt", "the render tests run on Linux; Windows takes the home folder from USERPROFILE")
     def test_default_folders_work_when_home_is_a_symlink(self):
         # /home is a symlink to var/home on some systems; plain_path refuses paths through one.
         with tempfile.TemporaryDirectory() as t:
