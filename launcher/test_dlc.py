@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from forza_launcher import datafolder as df, game  # noqa: E402
+from forza_launcher import datafolder as df, game, paths  # noqa: E402
 from forza_launcher.config import Config  # noqa: E402
 
 DLC = Path("0000000000000000") / "4D5309C9"
@@ -171,3 +171,31 @@ class Warnings(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LongPaths(unittest.TestCase):
+    """#586: a DLC car pack's files nest past Windows' 260-character MAX_PATH."""
+
+    def test_windows_drive_path(self):
+        self.assertEqual(str(paths.long_path("E:\\Games\\ForzaReImagined", windows=True)),
+                         "\\\\?\\E:\\Games\\ForzaReImagined")
+
+    def test_windows_unc_path(self):
+        self.assertEqual(str(paths.long_path("\\\\nas\\share\\forza", windows=True)),
+                         "\\\\?\\UNC\\nas\\share\\forza")
+
+    def test_already_long_and_other_systems_unchanged(self):
+        self.assertEqual(str(paths.long_path("\\\\?\\E:\\x", windows=True)), "\\\\?\\E:\\x")
+        self.assertEqual(paths.long_path("/home/a/b", windows=False), Path("/home/a/b"))
+
+    def test_mirror_and_carry_use_the_long_form(self):
+        seen = []
+        real = paths.long_path
+        with mock.patch.object(paths, "long_path", side_effect=lambda p, windows=None: seen.append(str(p)) or real(p)):
+            with tempfile.TemporaryDirectory() as t:
+                src, dst = Path(t) / "a", Path(t) / "b"
+                (src / "x").mkdir(parents=True)
+                (src / "x" / "f.bin").write_bytes(b"1")
+                self.assertEqual(game._mirror(src, dst), 1)
+        self.assertIn(str(src), seen)
+        self.assertIn(str(dst), seen)

@@ -213,7 +213,9 @@ def _remove_link(p: Path):
 
 def _mirror(src: Path, dst: Path) -> int:
     """Makes `dst` hold every file of `src` (hard links where the disk allows, else copies); files
-    already there with the same size are kept. Returns the number of files added."""
+    already there with the same size are kept. Returns the number of files added. On Windows the
+    paths take the long form: a DLC car pack's files nest past MAX_PATH (#586)."""
+    src, dst = paths.long_path(src), paths.long_path(dst)
     n = 0
     for dirpath, _dirs, files in os.walk(src):
         rel = os.path.relpath(dirpath, src)

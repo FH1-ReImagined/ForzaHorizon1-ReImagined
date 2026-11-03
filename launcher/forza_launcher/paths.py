@@ -15,6 +15,20 @@ LAUNCHER_ROOT = Path(getattr(sys, "_MEIPASS", PKG_DIR.parent))
 REPO_ROOT = PKG_DIR.parent.parent  # only meaningful in a source checkout
 
 
+def long_path(p, windows: bool | None = None) -> Path:
+    """`p` in Windows' extended-length form (\\\\?\\C:\\..., \\\\?\\UNC\\server\\share\\...), which file
+    calls accept past the 260-character MAX_PATH (#586: DLC car packs nest deep enough to pass it).
+    Elsewhere, and for a path already in that form, `p` unchanged."""
+    windows = IS_WINDOWS if windows is None else windows
+    s = str(p)
+    if not windows or s.startswith("\\\\?\\"):
+        return Path(p)
+    s = os.path.abspath(s) if IS_WINDOWS else s
+    if s.startswith("\\\\"):
+        return Path("\\\\?\\UNC\\" + s[2:])
+    return Path("\\\\?\\" + s)
+
+
 def app_dir() -> Path:
     """The directory the launcher executable is in (the game's dist layout)."""
     if FROZEN:
