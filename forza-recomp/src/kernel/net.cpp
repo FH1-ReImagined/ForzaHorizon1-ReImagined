@@ -26,7 +26,11 @@
 // in the same FORZA_ROOM on it, is on one virtual network: broadcasts go to all of
 // them through the server, and datagrams for one player go directly once UDP hole
 // punching opened a path (FORZA_SERVER_RELAY=1 disables that), through the server
-// until then. The XNADDR of a Live player carries the id the server gave it
+// until then. Where hole punching failed, the server may offer a volunteer relay nearer
+// both players (server/forza_live/network/relay_broker.py, #516): the datagrams for those
+// players go through it, with a ticket the server signed (we echo the relay's cookie from
+// our address first, which proves it is ours), and back through the server when
+// the offer is withdrawn or the ticket runs out. The XNADDR of a Live player carries the id the server gave it
 // (0xF0000000 | id) instead of a host address. FORZA_NET_PORT fixes the host UDP port,
 // for a port forward.
 //
@@ -228,6 +232,13 @@ enum LiveType : uint8_t {
   kStatsRows,    // server -> client: the rows of a read
   kFriend,       // client <-> server: the friends list (live_friends.cpp, server/forza_live/social/friends.py)
   kChat,         // client <-> server: text chat (live_friends.cpp, server/forza_live/social/chat.py)
+  // Volunteer relays (server/forza_live/network/relay_broker.py and relay_node.py, #516):
+  kRelayInfo = 27,  // server <-> client: the relays to ping (op 0), our pings (1), an offer (2)
+  kRelayBind,       // client -> relay: our ticket
+  kRelayBound,      // relay -> client: session u64, our id u32, seconds the ticket has left u32
+  kRelayPing,       // client -> relay
+  kRelayPong,       // relay -> client: the ping's bytes
+  kRelayChallenge,  // relay -> client: a cookie; we bind again with it, which proves our address
 };
 // XNADDR.ina of a player on a Forza Live server: 0xF0000000 | the id the server gave
 // it. 240.0.0.0/8 is reserved, so it never collides with a LAN address.
@@ -552,7 +563,7 @@ class VNet {
     }
     if (live_) {
       uint32_t id = 0;
-      Endpoint direct;
+      Endpoint direct, relay = server_;
       {
         std::lock_guard<std::mutex> lock(mutex_);
         auto it = live_id_by_vip_.find(vip);
@@ -560,6 +571,7 @@ class VNet {
           id = it->second;
           direct = live_peers_[id].direct;
           if (!direct.ip) StartPunchLocked(id);
+          if (VolunteerRelayReachesLocked(id)) relay = vrelay_.ep;
         }
       }
       if (id) {
@@ -576,7 +588,7 @@ class VNet {
           Store16(body.data() + 4, source_port);
           Store16(body.data() + 6, port);
           std::memcpy(body.data() + 8, data, size);
-          SendLive(server_, kRelay, body);
+          SendLive(relay, kRelay, body);  // the server's relay, or the volunteer relay it offered
         }
         return 0;
       }
@@ -904,6 +916,112 @@ class VNet {
     peer.next_punch = now;
   }
 
+  // Whether datagrams for player `id` go through the volunteer relay: the server offered it
+  // for that player, the relay took our ticket and the ticket has not run out. Needs mutex_.
+  bool VolunteerRelayReachesLocked(uint32_t id) const {
+    return vrelay_.bound && Clock::now() < vrelay_.expires &&
+           std::find(vrelay_.peers.begin(), vrelay_.peers.end(), id) != vrelay_.peers.end();
+  }
+
+  // RELAY_INFO from the server (server/forza_live/network/relay_broker.py).
+  void OnRelayInfo(const uint8_t* p, size_t n) {
+    if (n < 1) return;
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto now = Clock::now();
+    if (p[0] == 0 && n >= 4) {  // the relays to ping: version u16, count u8, (index, ip, port)
+      const uint16_t version = Load16(p + 1);
+      const size_t count = std::min<size_t>(p[3], (n - 4) / 7);
+      probes_.clear();
+      for (size_t i = 0; i < count; ++i) {
+        const uint8_t* e = p + 4 + 7 * i;
+        probes_.push_back({e[0], {Load32(e + 1), Load16(e + 5)}, {}, 0xFFFF, 0});
+      }
+      probe_version_ = version;
+      probe_report_ = now + std::chrono::seconds(2);
+      probe_reported_ = false;
+      return;
+    }
+    if (p[0] != 2 || n < 8) return;  // an offer: ip u32, port u16, ticket, count u8, peer ids
+    const Endpoint ep{Load32(p + 1), Load16(p + 5)};
+    const size_t ticket_size = p[7];
+    if (!ep.ip) {
+      if (vrelay_.ep.ip) {
+        REXLOG_INFO("FORZA_LIVE: the server withdrew the relay; its players go through the server");
+      }
+      vrelay_ = VolunteerRelay{};
+      return;
+    }
+    if (8 + ticket_size + 1 > n) return;
+    std::vector<uint8_t> ticket(p + 8, p + 8 + ticket_size);
+    const size_t count = std::min<size_t>(p[8 + ticket_size], (n - 9 - ticket_size) / 4);
+    std::vector<uint32_t> peers;
+    for (size_t i = 0; i < count; ++i) peers.push_back(Load32(p + 9 + ticket_size + 4 * i));
+    if (ep != vrelay_.ep) {
+      REXLOG_INFO("FORZA_LIVE: the server offers the relay {}:{} for {} player(s)",
+                  PeerIpForLog(ep.ip), ep.port, peers.size());
+      vrelay_ = VolunteerRelay{};
+      vrelay_.ep = ep;
+    }
+    if (ticket != vrelay_.ticket) {
+      vrelay_.ticket = std::move(ticket);
+      vrelay_.next_bind = now;  // bind with the new ticket now (a renewal keeps the slot)
+    }
+    vrelay_.peers = std::move(peers);
+  }
+
+  // Binds at the volunteer relay (and keeps the slot), pings the relays the server listed and
+  // reports the pings. From LiveLoop.
+  void RelayTick(Clock::time_point now) {
+    std::vector<std::pair<Endpoint, std::vector<uint8_t>>> out;
+    std::vector<uint8_t> report;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (vrelay_.ep.ip && vrelay_.bound && now >= vrelay_.expires) {
+        REXLOG_INFO("FORZA_LIVE: the relay ticket ran out; its players go through the server");
+        vrelay_.bound = false;
+      }
+      if (vrelay_.ep.ip && vrelay_.bound && now - vrelay_.last_bound > std::chrono::seconds(7)) {
+        // The relay stopped answering our binds: back to the server's relay before the
+        // game's session gives up on the other players (the server notices only after 30 s).
+        REXLOG_INFO("FORZA_LIVE: the relay stopped answering; its players go through the server");
+        vrelay_.bound = false;
+      }
+      if (vrelay_.ep.ip && !vrelay_.ticket.empty() && now >= vrelay_.next_bind) {
+        // A bind every 3 s keeps the slot (unused slots expire after 60 s at the relay) and
+        // shows the relay still answers; while unbound, every second.
+        vrelay_.next_bind = now + std::chrono::seconds(vrelay_.bound ? 3 : 1);
+        std::vector<uint8_t> bind = vrelay_.ticket;  // and the relay's last cookie, if any
+        bind.insert(bind.end(), vrelay_.cookie.begin(), vrelay_.cookie.end());
+        out.push_back({vrelay_.ep, std::move(bind)});
+      }
+      for (RelayProbe& probe : probes_) {
+        if (probe.sent_count < 2 && now >= probe.sent + std::chrono::milliseconds(500) &&
+            probe.ms == 0xFFFF && !probe_reported_) {
+          probe.sent = now;
+          probe.sent_count++;
+          std::vector<uint8_t> body(3);
+          Store16(body.data(), probe_version_);
+          body[2] = probe.index;
+          out.push_back({probe.ep, body});
+        }
+      }
+      if (!probes_.empty() && !probe_reported_ && now >= probe_report_) {
+        probe_reported_ = true;
+        report = {1, 0, 0, uint8_t(probes_.size())};
+        Store16(report.data() + 1, probe_version_);
+        for (const RelayProbe& probe : probes_) {
+          report.push_back(probe.index);
+          report.push_back(uint8_t(probe.ms >> 8));
+          report.push_back(uint8_t(probe.ms));
+        }
+      }
+    }
+    for (auto& [to, body] : out) {
+      SendLive(to, body.size() == 3 ? kRelayPing : kRelayBind, body);
+    }
+    if (!report.empty()) SendLive(server_, kRelayInfo, report);
+  }
+
   std::string ServerName() const { return server_host_ + ":" + std::to_string(server_port_); }
 
   // Host and port of FORZA_SERVER / live_server; set once, before LiveLoop starts.
@@ -971,8 +1089,9 @@ class VNet {
     // friends to. 0x04, text chat (#92). 0x08, the Co-op Festival playlist runs as a Horizon
     // World (world_drop_in.cpp, world_events.cpp, #309): the server lists it only to games
     // that say so. 0x10, our standby records follow the lobby (its game type, and as the
-    // game's host its own description; live_xmsg.cpp, #391).
-    body.push_back(0x1F);
+    // game's host its own description; live_xmsg.cpp, #391). 0x40, we ping the volunteer
+    // relays the server lists and take its offer of one (OnRelayInfo, #516).
+    body.push_back(0x5F);
     const std::vector<uint8_t> tail = forza::live_auth::HelloTail(body);
     body.insert(body.end(), tail.begin(), tail.end());
     SendLive(server_, kHello, body);
@@ -1080,6 +1199,7 @@ class VNet {
         }
       }
       for (auto& [to, body] : punches) SendLive(to, kPunch, body);
+      if (resolved) RelayTick(now);
       int roster_changed;
       {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -1099,12 +1219,74 @@ class VNet {
   }
 
   void OnLive(Endpoint from, uint8_t type, const uint8_t* p, size_t n) {
-    bool from_server;
+    bool from_server, from_relay;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       from_server = from == server_;
+      from_relay = !from_server && vrelay_.ep.ip && from == vrelay_.ep;
     }
     if (from_server) server_heard_ = true;
+    if (from_relay && type == kError) {
+      // 1: the relay has no slot for us (it restarted, or the slot expired): bind again.
+      // 7: it refused the ticket; the server's relay carries our datagrams meanwhile.
+      if (n < 3) return;
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (vrelay_.bound) {
+        const size_t size = std::min<size_t>(Load16(p + 1), n - 3);
+        REXLOG_INFO("FORZA_LIVE: the relay says {}: {}", p[0],
+                    std::string(reinterpret_cast<const char*>(p + 3), size));
+      }
+      vrelay_.bound = false;
+      vrelay_.next_bind = Clock::now() + std::chrono::seconds(p[0] == 1 ? 0 : 5);
+      return;
+    }
+    switch (type) {
+      case kRelayInfo:
+        if (from_server) OnRelayInfo(p, n);
+        return;
+      case kRelayChallenge: {
+        // The relay proves our address before it sends us anything (a forged bind cannot aim
+        // the session's traffic elsewhere): the same ticket back with its cookie, from here.
+        if (!from_relay || n != 16) return;
+        std::vector<uint8_t> bind;
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          if (vrelay_.ticket.empty()) return;
+          vrelay_.cookie.assign(p, p + n);
+          bind = vrelay_.ticket;
+          bind.insert(bind.end(), p, p + n);
+        }
+        SendLive(from, kRelayBind, bind);
+        return;
+      }
+      case kRelayBound: {
+        if (!from_relay || n < 16) return;
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!vrelay_.bound) {
+          REXLOG_INFO("FORZA_LIVE: relayed through {}:{} for {} player(s) the punch did not reach",
+                      PeerIpForLog(from.ip), from.port, vrelay_.peers.size());
+        }
+        vrelay_.bound = true;
+        vrelay_.last_bound = Clock::now();
+        vrelay_.expires = vrelay_.last_bound + std::chrono::seconds(Load32(p + 12));
+        return;
+      }
+      case kRelayPong: {
+        if (n < 3) return;
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (RelayProbe& probe : probes_) {
+          if (probe.ep == from && probe.index == p[2] && Load16(p) == probe_version_ &&
+              probe.ms == 0xFFFF) {
+            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                Clock::now() - probe.sent).count();
+            probe.ms = uint16_t(std::min<int64_t>(ms, 0xFFFE));
+          }
+        }
+        return;
+      }
+      default:
+        break;
+    }
     switch (type) {
       case kWelcome: {
         if (!from_server || n < 14) return;
@@ -1149,14 +1331,16 @@ class VNet {
         return;
       }
       case kForward: {
-        if (!from_server || n < 20) return;
+        if (!(from_server || from_relay) || n < 20) return;
         const uint32_t id = Load32(p);
         uint32_t vip;
         {
           std::lock_guard<std::mutex> lock(mutex_);
           LivePeer& peer = LivePeerLocked(id);
-          peer.public_ep = {Load32(p + 4), Load16(p + 8)};
-          peer.local_ep = {Load32(p + 10), Load16(p + 14)};
+          if (from_server) {  // a volunteer relay names no addresses
+            peer.public_ep = {Load32(p + 4), Load16(p + 8)};
+            peer.local_ep = {Load32(p + 10), Load16(p + 14)};
+          }
           vip = peer.vip;
           if (!peer.direct.ip) StartPunchLocked(id);
         }
@@ -1406,6 +1590,27 @@ class VNet {
   std::atomic<bool> server_heard_{false};  // any datagram from the server so far
   std::unordered_map<uint32_t, LivePeer> live_peers_;
   std::unordered_map<uint32_t, uint32_t> live_id_by_vip_;
+  // The volunteer relay the server offered (#516): where, our ticket, the players it reaches.
+  struct VolunteerRelay {
+    Endpoint ep;
+    std::vector<uint8_t> ticket;
+    std::vector<uint8_t> cookie;  // the relay's last challenge (sent with each bind)
+    std::vector<uint32_t> peers;
+    bool bound = false;  // the relay took the ticket
+    Clock::time_point next_bind{}, expires{}, last_bound{};
+  } vrelay_;
+  // The relays the server listed, pinged once per list (the server picks by our pings).
+  struct RelayProbe {
+    uint8_t index = 0;
+    Endpoint ep;
+    Clock::time_point sent{};
+    uint16_t ms = 0xFFFF;  // no answer yet
+    int sent_count = 0;
+  };
+  std::vector<RelayProbe> probes_;
+  uint16_t probe_version_ = 0;
+  Clock::time_point probe_report_{};
+  bool probe_reported_ = true;
   std::vector<uint8_t> presence_;  // body of our last presence message
   std::vector<uint8_t> match_record_, standby_record_;  // our last MATCH_PUBLISH bodies
   std::vector<forza::LiveFriend> roster_, roster_parts_;
