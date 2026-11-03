@@ -328,15 +328,30 @@ void Save(const std::vector<regpu::ScannedShader>& shaders, uint32_t signature)
 {
     std::error_code ec;
     std::filesystem::create_directories(g_saveDir, ec);
-    std::ofstream out(SavedPath(), std::ios::binary);
-    const uint32_t head[4] = { kMagic, kVersion, uint32_t(shaders.size()), signature };
-    out.write(reinterpret_cast<const char*>(head), sizeof(head));
-    for (const auto& s : shaders)
+    // Written under a temporary name and renamed into place, so a run killed mid-write leaves the old
+    // list (or none), not half of one.
+    auto tmp = SavedPath();
+    tmp += ".tmp";
     {
-        const uint32_t meta[2] = { s.pixel ? 1u : 0u, uint32_t(s.code.size()) };
-        out.write(reinterpret_cast<const char*>(meta), sizeof(meta));
-        out.write(reinterpret_cast<const char*>(s.code.data()), std::streamsize(s.code.size() * 4));
+        std::ofstream out(tmp, std::ios::binary);
+        const uint32_t head[4] = { kMagic, kVersion, uint32_t(shaders.size()), signature };
+        out.write(reinterpret_cast<const char*>(head), sizeof(head));
+        for (const auto& s : shaders)
+        {
+            const uint32_t meta[2] = { s.pixel ? 1u : 0u, uint32_t(s.code.size()) };
+            out.write(reinterpret_cast<const char*>(meta), sizeof(meta));
+            out.write(reinterpret_cast<const char*>(s.code.data()), std::streamsize(s.code.size() * 4));
+        }
+        out.close();
+        if (!out)
+        {
+            std::filesystem::remove(tmp, ec);
+            return;
+        }
     }
+    std::filesystem::rename(tmp, SavedPath(), ec);
+    if (ec)
+        std::filesystem::remove(tmp, ec);
 }
 
 // The loaded executable image (the engine's shaders), region by readable region.

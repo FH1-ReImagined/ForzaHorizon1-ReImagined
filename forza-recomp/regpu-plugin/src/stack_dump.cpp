@@ -12,6 +12,7 @@
 #include <tlhelp32.h>
 
 #include <rex/logging.h>
+#include <regpu/regpu.h>
 
 namespace glue2gpu
 {
@@ -139,8 +140,9 @@ void LogThreadStacks(const char* why)
         SymInitialize(GetCurrentProcess(), nullptr, TRUE);
     });
 
-    // Written to a file beside the executable too: the log may be the thing that's stuck.
-    std::FILE* file = std::fopen("regpu_stacks.txt", "a");
+    // Written to a file in ReGPU's user folder too (the cache root's regpu/, beside regpu.log): the log
+    // may be the thing that's stuck.
+    std::FILE* file = _wfopen((regpu::GetConfig().userDir / "regpu_stacks.txt").c_str(), L"a");
     auto emit = [&](const std::string& s) {
         REXLOG_ERROR("{}", s);
         if (file)
