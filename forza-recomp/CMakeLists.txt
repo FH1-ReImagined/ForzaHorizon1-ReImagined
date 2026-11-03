@@ -267,6 +267,14 @@ else()
 endif()
 
 rexglue_setup_target(forza GPU_PLUGINS xenos)
+
+# ReGPU's Direct3D 12 renderer as a GPU plugin beside forza.exe (--gpu_plugin=regpu), Windows only.
+if(WIN32)
+    option(FORZA_REGPU_PLUGIN "Build the ReGPU GPU plugin (rexgpu-regpu.dll)" ON)
+    if(FORZA_REGPU_PLUGIN)
+        add_subdirectory(regpu-plugin)
+    endif()
+endif()
 include(cmake/discord.cmake)
 
 # forza-texcompress: texture packs to BC7/BC1 DDS files, run by the launcher's Make HD pack and

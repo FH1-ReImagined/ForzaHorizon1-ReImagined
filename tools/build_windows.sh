@@ -105,6 +105,11 @@ rm -rf "$DIST"
 mkdir -p "$DIST/licenses"
 cp "$BUILD"/forza.exe "$BUILD"/forza_*.dll "$DIST/"
 cp "$BUILD/forza-telemetry.json" "$DIST/"
+if [ -f "$BUILD/rexgpu-regpu.dll" ]; then  # ReGPU plugin (--gpu_plugin=regpu)
+    cp "$BUILD/rexgpu-regpu.dll" "$DIST/"
+    cp "$ROOT/forza-recomp/thirdparty/ReGPU/LICENSE" "$DIST/licenses/ReGPU.txt"
+    cp "$ROOT/forza-recomp/thirdparty/fidelityfx-fsr1/LICENSE.txt" "$DIST/licenses/AMD-FidelityFX-FSR1.txt"
+fi
 for dll in "$PREFIX"/bin/*.dll; do
     case "$(basename "$dll")" in
         *d.dll | *rd.dll) ;;  # debug and RelWithDebInfo variants
