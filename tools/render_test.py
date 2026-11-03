@@ -45,7 +45,7 @@ except ImportError:
 
 ROOT = Path(__file__).resolve().parent.parent
 SCENES = ROOT / "tools" / "render_tests" / "scenes.toml"
-HOME = Path.home()
+HOME = Path.home().resolve()  # /home is a symlink on some systems, and plain_path refuses those
 DEFAULT_BASELINES = Path(os.environ.get("FORZA_RENDER_BASELINES")
                          or HOME / ".local/share/forza-render-baselines")
 DEFAULT_WORK = Path(os.environ.get("FORZA_RENDER_WORK")

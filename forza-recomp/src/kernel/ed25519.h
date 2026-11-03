@@ -2,7 +2,7 @@
 //
 // The game signs only: its public key from the 32-byte seed in live_identity.txt, and
 // signatures of title service calls and of the server's sign-in challenge (live_auth.cpp). The
-// server verifies (server/forza_ed25519.py); nothing secret is kept on it.
+// server verifies (server/forza_live/core/ed25519.py); nothing secret is kept on it.
 //
 // The arithmetic is TweetNaCl's (Bernstein, van Gastel, Janssen, Lange, Schwabe, Smetsers,
 // public domain): field elements as 16 limbs of 16 bits, extended coordinates, a constant-time

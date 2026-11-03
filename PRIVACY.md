@@ -36,6 +36,14 @@ Their privacy policies:
 
 ## What the launcher sends
 
+**Steam shortcut setup (Linux).** About > Add to Steam works locally. It lists account-directory
+numbers so you can choose one, checks whether Steam is running, and writes the selected account's
+shortcut file and bundled artwork only after you click the button. A backup stays beside the shortcut
+file until you remove it. No Steam credentials are read or sent and no Steam web API is contacted.
+The Flatpak opens manual instructions and does not write Steam files or run host commands.
+The Deck clock reminder only reads local sysfs information;
+it never changes clock settings. Opening the setup guide opens GitHub in your browser.
+
 ### Update check (on by default)
 
 - What: an HTTPS request to api.github.com that asks for this project's latest release. It names the launcher and its version in its User-Agent header and contains nothing else about you.

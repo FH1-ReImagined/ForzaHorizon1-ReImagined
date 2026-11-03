@@ -500,7 +500,7 @@ Data flow:
    server or the player's own server: never offline, never "This PC". Failures are silent and logged
    to the launcher log; entries that were not accepted are tried again after the next session; it
    never blocks Play.
-3. **Merge** (`server/forza_shader_lists.py`): every entry is validated against the list format
+3. **Merge** (`server/forza_live/content/shader_lists.py`): every entry is validated against the list format
    and its enum ranges, and counted by **distinct players**; an entry is published once at least 3
    players reported it. Caps: 1 MiB and 500 pipelines per request, 5000 pipelines per player and day.
    The recipe most players reported is published for each shader.
@@ -514,5 +514,5 @@ Data flow:
 Abuse: a fake player can add entries, never code. An entry costs only prebuild time, and only when
 the player's own files contain its shaders. Three accounts are needed to publish one.
 
-Tests: `launcher/test_shader_share.py`, `server/test_forza_shader_lists.py`, and an end-to-end run
+Tests: `launcher/test_shader_share.py`, `server/tests/content/test_shader_lists.py`, and an end-to-end run
 against a local server with three players (not part of CI).

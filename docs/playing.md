@@ -253,6 +253,42 @@ Console shadow and texture detail. The Deck is limited by its CPU (the GPU emula
 40 Hz, Battery saver (*Auto on battery*) starts it on the lightest settings off the charger, and the game carries
 on after a sleep, signed in to Forza Live again with the same player id.
 
+## Auto-pause (#328)
+
+The launcher's **Controls > Auto-pause** offers **Pause when window loses focus** and
+**Pause when controller disconnects**. Both are off by default; restart the game after changing them.
+The matching `forza.toml` settings are `forza_pause_on_focus_loss` and
+`forza_pause_on_controller_disconnect`.
+
+While driving, a selected event requests the game's normal pause menu. Resume manually; returning
+to the window or reconnecting a controller never resumes the game. The disconnect option watches
+the physical pad or wheel last used, including when keyboard emulation keeps player 1 connected.
+Keyboard-only play and unplugging an idle spare controller do not trigger it. Menus, loading,
+rewind, text/invite/friends dialogs and benchmark input do not request another pause.
+Online sessions keep the game's usual pause behavior: opening the menu does not stop other players.
+Focus-loss auto-pause is suppressed while an OpenXR session is running, including virtual-screen
+and cockpit modes; controller-disconnect auto-pause remains available.
+Controller detection needs the optional `ForzaInputDisconnectSequence` export. Its ReIGlue
+implementation is [change 0399, SDK PR #3](https://github.com/FH1-ReImagined/ReIGlue/pull/3).
+The current SDK pin `ff1db6f6ff64f237ec2dbd28f06680205a6b8b1a` includes the merged change.
+An older runtime without the export logs a warning once if disconnect detection is requested
+and still supports focus auto-pause.
+
+Validation (Windows x64, 2026-10-29): `tools/tests/auto-pause` passes all five tests against
+the pinned SDK. The production world-update hook publishes each new world to both auto-pause
+and the camera before forwarding the native update, exercised for disc and TU4. The production
+pause poller checks manual START, paused, loading, rewind and inaccessible-world guards.
+A separate process requires the actual SDK export through production symbol discovery;
+another injects its absence to test the older-runtime fallback. XR cases cancel a pending
+focus pulse and consume new focus events without deferring them until the session ends.
+Disconnect requests remain active in VR, including when both reasons were pending.
+
+The exact pinned SDK's device-assignment fixture also passes against the full CI-built SDK
+runtime, covering active pad loss with keyboard still connected, idle spare removal, reconnect
+and synthetic removal. Client input hooks compile for disc and TU4; five launcher auto-pause
+and camera-settings tests pass. These fixtures inject events/device lists. Live Alt-Tab,
+physical USB/Bluetooth unplug, wheel, multiplayer and headset checks remain pending.
+
 ## Keyboard and mouse
 
 `mnk_mode = true` makes the SDK present the keyboard (and mouse) as a controller on player 1.

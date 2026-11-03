@@ -167,7 +167,8 @@ change and lay out a file.
 Change files with a tool that keeps their format. A mod file is used as it is: the mod loader
 stores it uncompressed, and the game reads stored files as well as compressed ones. For
 `gamedb.slt` (SQLite) any SQLite editor works; leave the journal mode alone (no WAL, which the
-game's SQLite predates).
+game's SQLite predates). Car models (`.carbin`), their materials, textures and damage data are
+described in [modding/carbin-format.md](modding/carbin-format.md).
 
 ### Package it for others
 

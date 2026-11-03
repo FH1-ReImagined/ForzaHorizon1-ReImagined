@@ -121,7 +121,10 @@ if [ -f "$PREFIX/share/licenses/amd-fidelityfx-fsr3/LICENSE.txt" ]; then
 fi
 cp "$ROOT/tools/xcontent_extract.py" "$ROOT/tools/xiso_extract.py" "$ROOT/tools/install_dlc.py" "$DIST/"
 mkdir -p "$DIST/server"
-cp "$ROOT"/server/*.py "$DIST/server/"
+# The Forza Live server: its entry point and the forza_live package (no tests).
+cp "$ROOT/server/forza_live_server.py" "$DIST/server/"
+cp -r "$ROOT/server/forza_live" "$DIST/server/"
+find "$DIST/server" -name __pycache__ -prune -exec rm -rf {} +
 if [ -f "$PREFIX/share/licenses/openxr-loader/LICENSE.txt" ]; then
     cp "$PREFIX/share/licenses/openxr-loader/LICENSE.txt" "$DIST/licenses/OpenXR-loader.txt"
 fi

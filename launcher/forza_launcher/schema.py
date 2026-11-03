@@ -222,6 +222,14 @@ if IS_WINDOWS:
         choices=[("vulkan", "Vulkan"), ("d3d12", "Direct3D 12")], platform="windows",
         restart=True)
 
+add("forza_pause_on_focus_loss", "Pause when the window loses focus", "Controls", "bool", False,
+    "Open the game's pause menu when you switch away while driving. Resume manually after returning. "
+    "Multiplayer continues running while its pause menu is open.", "Auto-pause", restart=True)
+add("forza_pause_on_controller_disconnect", "Pause when the controller disconnects", "Controls", "bool", False,
+    "Open the game's pause menu when the physical controller or wheel you were using disconnects. "
+    "Keyboard-only play and unplugging an idle extra controller do not trigger it. Resume manually.",
+    "Auto-pause", restart=True)
+
 add("world_shadow_detail", "Shadow detail", "Display", "choice", "console",
     "How far away small objects (trees on a hillside, posts, rocks, bushes) still cast a shadow. "
     "Console is the game's own range; High casts them 3 times as far, Ultra 10 times. A few "

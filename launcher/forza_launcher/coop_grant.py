@@ -1,7 +1,7 @@
 """Co-op campaign results (#309, docs/coop_campaign.md "Milestone 1 progress" and "Milestone 2").
 
 A festival event raced in a Co-op Festival world is an online race: the game writes no career
-state for it. The Forza Live server keeps every player's result (server/forza_coop_ledger.py:
+state for it. The Forza Live server keeps every player's result (server/forza_live/world/coop_ledger.py:
 the host's, and each guest's once the host's game agrees with it), and after the session each
 player's launcher applies that player's own result to its save the way the career's own race end
 would have:

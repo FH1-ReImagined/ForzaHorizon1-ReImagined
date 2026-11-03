@@ -13,7 +13,7 @@ local copies without downloading dependencies.
 Not vendored: `src/kernel/ed25519.h` (Ed25519 signing and SHA-512 for signed requests to the
 Forza Live server, #515) is this project's code in the formulation of TweetNaCl (Bernstein et
 al., public domain), checked against the RFC 8032 vectors by `tools/test_live_signing.cpp`. The
-launcher's `forza_launcher/ed25519.py` and the server's `forza_ed25519.py` derive from RFC 8032's
+launcher's `forza_launcher/ed25519.py` and the server's `forza_live/core/ed25519.py` derive from RFC 8032's
 reference code (Simplified BSD License, `launcher/forza_launcher/RFC8032-LICENSE.txt`).
 
 The hashes refer to the upstream `codeload.github.com/<owner>/<repo>/tar.gz/<revision>`

@@ -1,5 +1,5 @@
 // forza - friends (#92): the friends list the Forza Live server keeps for us
-// (server/forza_friends.py), the friends screen over the game, and its notifications.
+// (server/forza_live/social/friends.py), the friends screen over the game, and its notifications.
 //
 // Games up to v0.1.14 counted every player in the server room as a friend. Now the server
 // keeps each player's friends (requests by gamertag, accept or decline, remove, block) and
@@ -20,7 +20,7 @@
 //   knows); with a controller, Y or A on the search line opens the on-screen keyboard
 //   (live_osk.h). The game gets no input while it shows.
 // - A friend request or an accepted one shows a short notification.
-// - Text chat (server/forza_chat.py), the screen's Chat tab (F9, live_chat_key, opens it
+// - Text chat (server/forza_live/social/chat.py), the screen's Chat tab (F9, live_chat_key, opens it
 //   there): Up/Down picks where a message goes (Session: the players in a session we host or
 //   joined, World: our Horizon World, Club: the members of our car club who are online (only
 //   when the server says we are in one: CLUBTAG), or a friend online), typing writes it and
@@ -77,7 +77,7 @@ constexpr int64_t kStatusMs = 5000;     // a server message on the screen
 constexpr int64_t kSearchDelayMs = 300; // typing pauses this long before a server search
 constexpr size_t kRows = 8;
 constexpr size_t kMaxSearch = 15 * 3;
-// Chat (server/forza_chat.py).
+// Chat (server/forza_live/social/chat.py).
 constexpr uint8_t kChatSessions = 1, kChatSay = 2, kChatMute = 3, kChatClub = 4, kChatContent = 5;
 constexpr uint8_t kChatRMessage = 16, kChatRNotice = 17, kChatRMuted = 18, kChatRClubTag = 19;
 // Where a message goes (the server's channel numbers); 0 in the log: a line from the server.
@@ -788,7 +788,7 @@ void LiveFriendsTick() {
   }
   {
     // The content manifest, so the server can tell the players of a session what they do not
-    // share (server/forza_chat.py op 5; a server without it ignores the message, #567).
+    // share (server/forza_live/social/chat.py op 5; a server without it ignores the message, #567).
     std::lock_guard<std::mutex> lock(mutex);
     if (next_sessions != 0 && now >= next_content) {
       const std::string text = CurrentContentManifest();

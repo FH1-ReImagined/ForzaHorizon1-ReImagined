@@ -18,9 +18,7 @@ stdlib = set(sys.stdlib_module_names)
 hidden = set()
 if not (repo / "server" / "forza_live_server.py").is_file():
     raise SystemExit("server/ is empty: the Forza Live server is a git submodule (git submodule update --init server)")
-for f in (repo / "server").glob("*.py"):
-    if f.name.startswith("test_"):
-        continue
+for f in [repo / "server" / "forza_live_server.py", *sorted((repo / "server" / "forza_live").rglob("*.py"))]:
     for node in ast.walk(ast.parse(f.read_text(encoding="utf-8"))):
         if isinstance(node, ast.Import):
             hidden.update(a.name.split(".")[0] for a in node.names)

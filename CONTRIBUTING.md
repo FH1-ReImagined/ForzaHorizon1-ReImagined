@@ -58,15 +58,16 @@ work gets in. The details live in `docs/` (start with `docs/PROJECT.md`).
   (`git clone --recurse-submodules`, or `git submodule update --init` in an existing clone).
   Server changes are pull requests there; then a pull request here moves `server/` to the
   new commit (`git -C server fetch && git -C server checkout <commit> && git add server`).
-  Tests: `cd server && python3 -m unittest discover -p 'test_*.py'`.
+  Tests: `cd server && python3 -m unittest discover -s tests -t .`.
 
 ## Testing
 
 - Launcher link-preservation tests require file and directory symlink support in the temporary
   folder. They skip when the filesystem or Windows account lacks it; copy-fallback tests still run.
 - `tools/prerelease.sh` runs the local checks in one go: SDK overlay, both builds, unit
-  tests, booting to the main menu with each upscaling filter, a local Forza Live server and
-  the launcher's disc check (`--only <check>`, `--skip-build`, `docs/PROJECT.md`).
+  tests, booting to the main menu with each upscaling filter, a local Forza Live server,
+  the render scenes against image baselines (`docs/render-tests.md`; skipped until you record
+  baselines) and the launcher's disc check (`--only <check>`, `--skip-build`, `docs/PROJECT.md`).
 - Test with a copy of a save, never your real profile, and against a local server, never the
   public one.
 - For rendering bugs, `docs/rendering.md` has the RenderDoc recipe and the driver checks

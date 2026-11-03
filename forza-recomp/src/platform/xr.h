@@ -42,6 +42,8 @@ void Shutdown();
 
 // Cockpit mode with a running session: the camera hook takes its pose from the headset.
 bool CockpitActive();
+// Any running OpenXR session, including the virtual screen and menus (input focus policy).
+bool SessionRunning();
 // Main loop thread, for each in-car view built: the head transform (recentred, with the seat
 // offset, turned to the drawn axis), the vertical field of view and the projection aspect to draw
 // with, and a new frame tag. False: no pose.

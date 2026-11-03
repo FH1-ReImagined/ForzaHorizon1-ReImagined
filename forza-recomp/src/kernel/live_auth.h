@@ -1,7 +1,7 @@
 // forza - signed requests to the Forza Live server (#515), the game's side (live_auth.cpp).
 //
 // No secret of ours is sent: the HELLO signs the server's challenge and every title service call
-// is signed with our Live identity's Ed25519 key (live_signing.h, ed25519.h; server/forza_auth.py
+// is signed with our Live identity's Ed25519 key (live_signing.h, ed25519.h; server/forza_live/core/auth.py
 // has the server's side), and servers keep only the public key. The server's WELCOME tells its
 // clock and how our XUID is bound there. The friends key goes out once, to the main server, to
 // move a binding a game before signed requests made with it; a server that does not know signed

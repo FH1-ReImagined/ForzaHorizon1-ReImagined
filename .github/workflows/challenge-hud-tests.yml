@@ -64,6 +64,11 @@ jobs:
           clang-cl /nologo /std:c++17 /EHsc /W4 /WX /DFORZA_CPU_TARGET_V3=1 forza-recomp/tests/cpu_target_test.cpp forza-recomp/src/platform/cpu_target.cpp user32.lib /Fe:cpu-target-test.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           .\cpu-target-test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          clang-cl /nologo /std:c++17 /EHsc /W4 /WX forza-recomp/tests/auto_pause_test.cpp /Fe:auto-pause-test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\auto-pause-test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - if: runner.os != 'Windows'
         run: |
           g++ -std=c++17 -pthread -Wall -Wextra -Werror forza-recomp/tests/challenge_hud_test.cpp -o challenge-hud-test
@@ -78,6 +83,8 @@ jobs:
           done
           g++ -std=c++17 -pthread -Wall -Wextra -Werror -Iforza-recomp/tests/stall-stubs forza-recomp/tests/stall_watch_test.cpp -o stall-watch-test
           ./stall-watch-test
+          g++ -std=c++17 -Wall -Wextra -Werror forza-recomp/tests/auto_pause_test.cpp -o auto-pause-test
+          ./auto-pause-test
       - if: runner.os == 'Linux'
         run: |
           g++ -std=c++17 -Wall -Wextra -Werror -DFORZA_CPU_TARGET_V3=1 forza-recomp/tests/cpu_target_test.cpp forza-recomp/src/platform/cpu_target.cpp -o cpu-target-test
