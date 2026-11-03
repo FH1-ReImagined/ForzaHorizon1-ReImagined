@@ -107,6 +107,8 @@ bool ZipIndex(const std::filesystem::path& path, std::vector<ZipEntry>& out)
         cdSize = Le64(z64 + 40);
         cdOffset = Le64(z64 + 48);
     }
+    if (cdSize > (64u << 20)) // a damaged directory: FH1's largest is under 1 MB
+        return false;
     std::vector<uint8_t> cd(cdSize);
     if (!ReadAt(f, cdOffset, cd.data(), cd.size()))
         return false;
@@ -147,7 +149,7 @@ bool ZipIndex(const std::filesystem::path& path, std::vector<ZipEntry>& out)
 // directory's offset points at the data itself.)
 bool ZipRead(std::ifstream& f, const ZipEntry& e, std::vector<uint8_t>& out)
 {
-    if ((e.method != 0 && e.method != 21) || e.size > (512u << 20))
+    if ((e.method != 0 && e.method != 21) || e.size > (512u << 20) || e.compressed > (512u << 20))
         return false;
     uint64_t at = e.offset;
     uint8_t local[30];
@@ -306,7 +308,7 @@ bool LoadSaved(std::vector<regpu::ScannedShader>& out, uint32_t signature)
 {
     std::ifstream in(SavedPath(), std::ios::binary);
     uint32_t head[4];
-    if (!ReadHeader(in, head) || head[3] != signature)
+    if (!ReadHeader(in, head) || head[3] != signature || head[2] > 0x10000) // (FH1: 1548 shaders)
         return false;
     out.resize(head[2]);
     for (auto& s : out)
