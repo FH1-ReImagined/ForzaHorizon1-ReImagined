@@ -1219,7 +1219,11 @@ void Tick(PPCContext& ctx, uint8_t* base) {
       success = CommitSettings();
       completed = true;
       message = success ? "Settings saved." : "Applied, but could not save settings.";
-    } else if (!rex::cvar::GetFlagInfo("fh1_graphics_request")) {  // a renderer that answers it
+    } else if ((rex::cvar::GetFlagByName("gpu_backend") != "vulkan" &&
+                rex::cvar::GetFlagByName("gpu_plugin") != "regpu") ||
+               !rex::cvar::GetFlagInfo("fh1_graphics_request")) {
+      // Only Vulkan and the ReGPU plugin answer it: rexgpu-xenos.dll registers the flag on
+      // Direct3D 12 too, where nothing would answer.
       completed = true;
       message = "Live graphics requires the updated Vulkan renderer.";
     } else {
