@@ -130,6 +130,12 @@ void TitleReady(uint32_t, uint32_t) { Unexpected(); }
 }
 // Tuning is a pause-only dependency of graphics_menu.cpp. Title selections must
 // never enter its runtime; fail immediately if this fixture reaches that path.
+namespace forza::online_photo {
+bool WantsPauseRow(const PPCContext&, uint8_t*, uint32_t) { return false; }  // offline here
+bool Active() { return false; }
+bool Enabled() { return false; }
+}  // namespace forza::online_photo
+
 namespace forza::car_tuning_menu {
 bool Available(const PPCContext&, uint8_t*, uint32_t) { Unexpected(); return false; }
 bool Open(const PPCContext&, uint8_t*, uint32_t) { Unexpected(); return false; }

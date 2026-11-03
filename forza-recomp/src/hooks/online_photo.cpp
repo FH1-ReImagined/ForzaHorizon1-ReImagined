@@ -32,6 +32,7 @@
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
+#include <rex/ppc/context.h>
 #include <rex/ppc/func.h>
 
 #include <atomic>
