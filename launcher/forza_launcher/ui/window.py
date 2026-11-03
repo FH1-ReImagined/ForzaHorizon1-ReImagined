@@ -294,7 +294,12 @@ class MainWindow(QMainWindow):
             button.setEnabled(not locked or self.navs.id(button) == RADIO_PAGE_ID)
 
     def closeEvent(self, e):
-        if self.radio.busy():
+        if self.about.steam is not None and self.about.steam.busy():
+            self.status("Finishing the Steam shortcut before closing. Keep Steam closed…")
+            QTimer.singleShot(100, self.close)
+            e.ignore()
+            return
+        if self.radio_busy():
             self._close_after_radio = True
             self.radio.cancel()
             self.status("Stopping the radio build before closing…")

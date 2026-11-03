@@ -26,14 +26,77 @@ C++ headers, and the launcher says so (#135). The Flatpak brings its own compile
    flatpak install flathub org.freedesktop.Sdk.Extension.llvm22//26.08
    ```
 
-4. Add it to Steam: open Steam in Desktop Mode, **Games**, **Add a Non-Steam Game to My Library**, tick
-   **Forza Horizon 1: ReImagined** and **Add Selected Programs**. Back in Game Mode it is in the
-   Library under **Non-Steam**.
+4. Open Steam in Desktop Mode, **Games > Add a Non-Steam Game to My Library**, choose
+   **Forza Horizon 1: ReImagined**, then **Add Selected Programs**. The launcher's
+   **About > Add to Steam manually** button links to these instructions. Back in Game Mode the
+   launcher is in the Library under **Non-Steam**.
 5. Start it, then in the launcher: **Setup** (your game files, Title Update 4 and DLC), **Build** (10 to 15
    minutes on a Deck; it can sit near 18% for several minutes, #135: let it run), **Prebuild shaders**, **Play**.
 
 The launcher updates itself (**About**, **Launcher updates**). Its data lives in
 `~/.var/app/io.github.dyotson.ForzaHorizon1ReImagined/`.
+
+## Add to Steam
+
+The native Linux packaged launcher offers **About > Add to Steam** (#508). It adds one shortcut
+with the project's bundled banner and logo to native Steam. It detects Steam account directories
+and asks which account to use when there is more than one. Sign in to Steam once first so its account
+directory exists. Run the launcher from the desktop menu after exiting Steam.
+
+The launcher checks for Steam and its web helper on the host before preparing files and immediately
+before replacing the account's config/shortcuts.vdf. It never stops or starts Steam. Steam does not
+honor the launcher's lock, so keep Steam closed throughout the operation. If the check is unavailable,
+denied or times out, setup refuses to write.
+
+Existing shortcut records stay byte-for-byte intact. A matching name or launch command leaves the
+existing shortcut and its artwork untouched, including a shortcut for an older installation: update
+that path in Steam manually. Unknown binary field types, ambiguous records, redirected configuration
+folders and app-ID collisions are refused. Artwork already present is preserved.
+
+Before changing an existing file, setup saves a complete, uniquely named
+shortcuts.vdf.forza-backup-ID beside it. It stages the replacement on the same filesystem, then
+atomically replaces shortcuts.vdf. A failure before replacement preserves the original and rolls
+back newly added artwork. Backups remain until you remove them. To restore one, exit Steam and the
+launcher, save a copy of the current file, then copy the chosen backup over shortcuts.vdf.
+If a crash leaves .forza-shortcut.lock, close both applications and inspect the files/backup before
+removing that lock and retrying. An existing lock is never automatically removed.
+
+**The launcher Flatpak uses manual setup.** Its isolated process list cannot establish whether
+host Steam is closed. Missing PID files or D-Bus names do not establish this either. Reading host
+processes through flatpak-spawn would require broad host-command permission, which the launcher
+does not grant. Steam userdata also remains read-only. The button opens this guide without attempting
+a write. See the [Flatpak command reference](https://docs.flatpak.org/en/latest/flatpak-command-reference.html#flatpak-spawn).
+
+**Flatpak Steam is detected but automatic edits are refused.** Launching a host program from its
+sandbox requires separate integration; writing a host executable path alone would produce a broken
+shortcut. Use the Steam Flatpak's own supported manual setup for external applications. We do not
+change Steam's permissions. Actual Flatpak Steam launch acceptance remains untested.
+
+Manual setup for the launcher Flatpak with SteamOS's native Steam, source checkouts or nonstandard
+installations: in Desktop Mode,
+open Steam, **Games > Add a Non-Steam Game to My Library**, choose **Forza Horizon 1: ReImagined**,
+then **Add Selected Programs**. Add custom artwork through Steam if desired. Do not force Proton
+compatibility for this Linux launcher.
+
+### Validation
+
+Binary-file transactions and failures, account selection, process-check failures and Qt task shutdown
+are tested with synthetic fixtures. Actual Steam library display, SteamOS/Deck launch, and hardware
+clock reporting still need a Deck owner to verify; no real Steam files or
+clock settings were changed during development.
+
+## Manual GPU Clock
+
+On a detected Deck, Play checks the APU's read-only power_dpm_force_performance_level and
+pp_dpm_sclk files. When the driver reports manual, it shows a reminder to check
+**... > Performance > Manual GPU Clock** if performance is low. Disable an unintended low limit
+there, then return to Play. The launcher never changes clock settings.
+
+A low sampled clock while idle does not establish a low configured limit. The warning depends on
+manual mode, not the sampled MHz, and does not claim Steam selected that mode: another utility can
+also select it. Missing files and other GPUs produce no warning. The check refreshes when Play
+refreshes, at most once every five seconds. These meanings follow the kernel's
+[AMDGPU power interfaces](https://docs.kernel.org/gpu/amdgpu/thermal.html#power-dpm-force-performance-level).
 
 ## Settings
 
