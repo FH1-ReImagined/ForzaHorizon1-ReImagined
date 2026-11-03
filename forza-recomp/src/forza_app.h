@@ -9,6 +9,7 @@
 #include "kernel/live.h"
 #include "platform/achievement_toast.h"
 #include "platform/discord_presence.h"
+#include "platform/data_out.h"
 #include "platform/cursor_idle.h"
 #include "platform/hud_overlay.h"
 #include "platform/resume.h"
@@ -133,6 +134,7 @@ class ForzaApp : public rex::ReXApp {
       override { return {}; }
 
   void OnShutdown() override {
+    forza::data_out::Stop();
     forza::xr::Shutdown();
     if(quit_lifetime_)quit_lifetime_->store(false);
     forza::native_quit::InstallHost({});
@@ -150,6 +152,7 @@ class ForzaApp : public rex::ReXApp {
   // frame statistics summary is written here, and where each guest thread is (a game that
   // loads forever is closed this way, #76).
   bool OnWindowCloseRequested() override {
+    forza::data_out::Stop();
     forza::native_quit::Cancel();
     // The SDK terminates guest threads immediately after accepting this request.
     // A retained XThread handle does not keep its guest stack alive.

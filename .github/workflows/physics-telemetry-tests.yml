@@ -23,7 +23,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           .\physics-test.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          clang-cl /nologo /std:c++20 /EHsc /W4 /WX /UNDEBUG forza-recomp/tests/data_out_test.cpp /Fe:data-out-test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\data-out-test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - if: runner.os != 'Windows'
         run: |
           c++ -std=c++20 -Wall -Wextra -Werror -UNDEBUG forza-recomp/tests/car_physics_test.cpp -o physics-test
           ./physics-test
+          c++ -std=c++20 -Wall -Wextra -Werror -UNDEBUG forza-recomp/tests/data_out_test.cpp -o data-out-test
+          ./data-out-test

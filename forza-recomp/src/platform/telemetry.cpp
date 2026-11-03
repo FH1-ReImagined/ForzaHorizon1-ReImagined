@@ -14,6 +14,8 @@
 #include "guest_addr.h"
 #include "guest_memory.h"
 #include "car_physics.h"
+#include "data_out.h"
+#include "data_out_temperature.h"
 #include <rex/memory/utils.h>
 #include <array>
 #include <algorithm>
@@ -213,7 +215,8 @@ void Rumble(uint16_t left, uint16_t right) {
 }
 void Physics(uint8_t* base) {
   auto& s = State();
-  if (!s.enabled) return;
+  const bool exporting = data_out::Enabled();
+  if (!s.enabled && !exporting) return;
   // Never wait behind another sampler/input call on a guest simulation thread.
   std::unique_lock lock(s.mutex, std::try_to_lock);
   if (!lock.owns_lock()) return;
@@ -222,7 +225,7 @@ void Physics(uint8_t* base) {
   uint32_t car = 0, flags = 0;
   std::array<float, 3> position{}, forward{}, velocity{}, acceleration{};
   const bool valid = LocalCar(base, car, position, forward);
-  const CarPhysics physics = valid && s.physics
+  const CarPhysics physics = valid && (s.physics || exporting)
       ? ReadCarPhysics(car, FORZA_TU4 != 0,
                        [base](uint32_t a, void* p, size_t n) { return Read(base, a, p, n); })
       : CarPhysics{};
@@ -249,6 +252,26 @@ void Physics(uint8_t* base) {
   }
   s.car = car; s.position = position; s.velocity = velocity;
   s.have_velocity = (flags & 4) != 0; s.last_time = now;
+  if (exporting) {
+    data_out::Sample sample;
+    sample.driving = physics.valid && Player().State() == Drive::kDriving;
+    sample.car = physics;
+    if (physics.valid) {
+      sample.temperature = data_out::ReadTireTemperatures(car, FORZA_TU4 != 0,
+          [base](uint32_t a, void* p, size_t n) { return Read(base, a, p, n); });
+    }
+    sample.position = position;
+    sample.acceleration = acceleration;
+    const float horizontal = std::hypot(forward[0], forward[2]);
+    if ((flags & 4) && horizontal > .1f) {
+      sample.velocity = {(velocity[0] * forward[2] - velocity[2] * forward[0]) / horizontal,
+                         velocity[1],
+                         (velocity[0] * forward[0] + velocity[2] * forward[2]) / horizontal};
+    }
+    sample.angles = {std::atan2(forward[0], forward[2]), -std::atan2(forward[1], horizontal), 0};
+    data_out::Publish(sample);
+  }
+  if (!s.enabled) return;
   std::array<uint8_t, 140> packet{};
   const uint16_t packet_size = s.physics ? 140 : 96;
   std::memcpy(packet.data(), "FH1T", 4);
@@ -256,7 +279,7 @@ void Physics(uint8_t* base) {
   Put(packet, offset, uint16_t(s.physics ? 2 : 1)); Put(packet, offset, packet_size);
   const uint32_t sequence = s.sequence++;
   s.sent[sequence % s.sent.size()] = {sequence, now};
-  if (physics.valid) flags |= 16;
+  if (s.physics && physics.valid) flags |= 16;
   Put(packet, offset, s.token); Put(packet, offset, sequence); Put(packet, offset, flags);
   Put(packet, offset, now); Put(packet, offset, car);
   // Driving: a local car, fresh input and the game's rumble running; not in menus.
