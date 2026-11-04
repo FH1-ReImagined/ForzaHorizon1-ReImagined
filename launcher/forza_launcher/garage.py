@@ -344,14 +344,14 @@ def repair_factory_paint(cfg, profile, cancelled=lambda: False, progress=lambda 
             supported = {cid for cid, _, _ in unicorns.CARS}
             candidates = [row for row in db.execute(
                 "SELECT Id, CarId FROM Career_Garage WHERE DefaultManufacturerColorIndex=0 "
-                "AND LiveryFileName='' AND OriginalOwner='ReImagined' AND NumOwners=1 AND Flags=73")
+                "AND OriginalOwner='ReImagined' AND NumOwners=1")
                 if row['CarId'] in supported]
             if not candidates:
                 return PaintRepairResult(())
             with closing(sqlite3.connect((cfg.game_files()/'media/db/gamedb.slt').resolve().as_uri()+'?mode=ro', uri=True)) as source:
                 for row in candidates:
                     saves._check(cancelled)
-                    db.execute('UPDATE Career_Garage SET DefaultManufacturerColorIndex=? WHERE Id=?',
+                    db.execute('UPDATE Career_Garage SET DefaultManufacturerColorIndex=?, LiveryFileName="" WHERE Id=?',
                                (_factory_colour(source, row['CarId']), row['Id']))
             db.commit()
             edited = encode(document, db.serialize())
