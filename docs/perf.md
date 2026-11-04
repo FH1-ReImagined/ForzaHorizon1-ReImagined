@@ -2906,7 +2906,8 @@ CPU samples in the PM4 packet loop and register write functions, and in the bind
   which merging could save part of the per-call overhead (under 0.1 ms a frame).
 - Correctness with it on: `tools/render_test.py` against baselines recorded with main, 6 of 6 scenes in 3 of 4 checks
   (one had `freeroam_dawn` out, with other traffic and light in the shot, and the two checks after it passed; off: 6
-  of 6); a 10-minute free roam (no hang, longest frame after the start 58 ms) and a 90-second race.
+  of 6); a 10-minute free roam (no hang, longest frame after the start 58 ms), a 90-second race, and the paint shop
+  (Design Creator, a vinyl layer placed; one 268 ms frame opening the editor, a load).
 
 ## Stutter in the first part of a drive (#614, 2026-11-03)
 
