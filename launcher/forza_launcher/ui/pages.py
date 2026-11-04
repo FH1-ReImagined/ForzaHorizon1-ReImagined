@@ -60,6 +60,12 @@ class PlayPage(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         sc, lay = scroll_page("Play", "")
+        # The banner's height follows the page's width (Hero.heightForWidth). With the page's
+        # content close to the window's height, a scroll bar that comes and goes changes that
+        # width, so the height, so whether the bar is needed: Qt's scroll area then recursed until
+        # the stack ran out (a crash on Windows with the Challenges card's height). A bar that is
+        # always there keeps the width the same.
+        sc.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
         outer.addWidget(sc)
         # the title is part of the banner; hide the text title on this page
         lay.itemAt(0).widget().hide()
