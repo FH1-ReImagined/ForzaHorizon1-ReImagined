@@ -196,9 +196,18 @@ level: Console 41 (a cold shader cache) and 13, High 13 and 25, Ultra 12 and 8; 
 ### Cost
 
 Under a 60 fps cap nothing measurable on an RX 9060 XT: the drives above hold 60 fps on every
-level (mean frame 16.67-16.68 ms, p99 18.8-20.1 ms). The uncapped cost (GPU and CPU time per
-frame at render scale 1 and 2, the levels switched live with `FORZA_CAR_DETAIL_FILE`) is still
-to be measured.
+level (mean frame 16.67-16.68 ms, p99 18.8-20.1 ms). Uncapped:
+
+Free roam spawn, the car standing, traffic passing; TU4, RX 9060 XT (RADV), uncapped (`--frame_rate=240 --vsync=false`), 1280x720 window; the levels switched live with `FORZA_CAR_DETAIL_FILE` in one session per render scale (Console, High, Ultra, Ultra, High, Console, Console, High, Ultra; 15 s each, the first 3 s skipped), BENCH lock held. GPU = the process's DRM engine time, CPU = the whole process's CPU time, per frame; the mean of the three phases of a level, the range of fps in brackets.
+
+| Render scale | Level | fps | GPU ms | GPU busy | CPU ms |
+| --- | --- | --- | --- | --- | --- |
+| 1 | Console | 196.2 (182.1-207.5) | 4.29 | 84% | 17.51 |
+| 1 | High | 188.2 (168.4-199.7) | 4.47 | 84% | 18.14 |
+| 1 | Ultra | 203.4 (193.6-216.2) | 4.13 | 84% | 16.58 |
+| 2 | Console | 79.8 (79.5-80.0) | 12.78 | 102% | 28.95 |
+| 2 | High | 79.2 (79.1-79.3) | 12.82 | 101% | 29.36 |
+| 2 | Ultra | 79.1 (78.9-79.2) | 12.85 | 102% | 29.37 |
 
 ### Screenshots
 
