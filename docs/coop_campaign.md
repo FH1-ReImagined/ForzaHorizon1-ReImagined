@@ -212,10 +212,9 @@ So the first scope is the 70 festival races.
 - **The pick.** The host has to choose the event. A WORLD chat command (`forza_live/social/chat.py`
   already relays the world channel), such as `/event FR05` or a short list from `/events`,
   is a server-only first version. It sends the existing `WORLD_EVENT` path with
-  `&event=<id>`. The in-world version, a prompt at the event's start marker like the
-  head-to-head challenge's, needs the activities' world positions. The `TriggerZone`s name
-  world objects (`FR05`), so the positions would have to be logged once from the single-player
-  activity manager.
+  `&event=<id>`. The in-world version turned out simpler than a prompt of our own: the
+  game's own event markers can be loaded into the online world, and their map card starts the
+  event (see "Milestone 4: events from the map").
 
 ## How the career records a result
 
@@ -467,7 +466,8 @@ About 8-12 days.
 - **M3:** the base game, then the in-game grant (option B) for instant credit (see "What
   milestone 3 needs" and "The base game").
 - **M4:** the event prompt at its world marker instead of the chat command; the named CPU
-  field if `AIFieldId` or a hook makes it possible.
+  field if `AIFieldId` or a hook makes it possible. The start from the map is done (TU4): see
+  "Milestone 4: events from the map".
 
 ## Milestone 1 progress
 
@@ -1273,6 +1273,104 @@ Seen along the way:
 - **Online level-ups add a car each** (the online driver level's reward, `Rewards_DriverLevelv3`,
   `Career_Garage` `Flags` 264): six cars in the four co-op sessions. Their rewards land in
   `Main/OnlineWinnings` too, so a round with a level-up pays a smaller prize (milestone 3).
+
+## Milestone 4: events from the map (2026-11-04)
+
+**The host of a Co-op Festival world starts an event from the map, as a single-player career
+picks one: the event's marker, its card (X DETAILS), then SELECT "START CO-OP EVENT".** It
+sends the server the same as typing `/event <id>` in World chat, so the round is the same:
+the event's class, restrictions, grid and CPU drivers at the event's skill, and the ledger's
+results. `/event` keeps working. Title Update 4 only (the card's hooks are TU4's, like Custom
+Race's); a base game world keeps `/event`.
+
+### How the map starts an event offline, and what an online world had
+
+- **The markers are activities.** Every festival event is an
+  `ActivityCareerEventActivation` of `career_event_activations.xml` (vtable `0x8200C104`, the
+  event id at `+404`). The career creates the activities of the events the save has unlocked
+  (88 in the test save), and each puts a marker on the map and the minimap
+  (`CMapEntityActivity`, vtable `0x82024460`, its activity at `+0x28`). The map shows
+  SET ROUTE (A), DETAILS (X), FAST TRAVEL ANYWHERE (Y, locked in the test save) on a marker.
+- **The card.** DETAILS opens `ForzaUI::CCareerEventDescription`, the same card the event's
+  start shows. On the map it has no career entry (`+376` is 0): its A sets a route, and its
+  footer reads SET ROUTE, BACK, RESTRICTIONS, LEADERBOARD. The event id is the race settings'
+  current event (`*(0x833CAACC)+0x388`), set by the map. **Offline the map never starts an
+  event:** the race starts at its sign-up zone (the `TriggerZone`, radius 25: SIGN ME UP, the
+  same card with its career entry, whose A runs `CLoadIntoCareerRace`).
+- **An online world had no markers.** The free roam loads its activity files by race type
+  (`sub_826A0AC0`, file ids of the resource table at `0x833930C8`). Race type 17, the
+  single-player free roam, loads ids 146-168. Type 18, the online free roam, leaves out 151
+  (paintshop), 156 (race activations), 160 (race encounters), 162 (multiplayer), 164
+  (career event activations), 166 (DLC center) and 168 (street race hubs). A census of the
+  map's markers found 853 records of career event markers in single player and none in a
+  Co-op Festival world.
+
+### What the client does (`forza-recomp/src/hooks/coop_map_event.cpp`)
+
+1. **The markers.** In a Co-op Festival world (Find Game's playlist 20, the round's free
+   roam), the hook on `sub_826A0AC0` also loads file 164 (`sub_8296EDD0(loader, 164)`) after
+   the others. The career creates the same activities as in single player.
+2. **Their info.** A career marker reads its event's entry in the career's event map info: a
+   component (`*(sub_8269B4F8())[*(0x833EDC58)]`) whose map at `+0xC034` is filled by
+   `sub_827445A0`'s SQL, with the markers themselves (96 bytes each from `+16`, their count at
+   `+0xC018`). Nothing fills it online. Without it, two things crashed in the test runs:
+   - the career activity's map filter (`sub_82505098`, vtable slot 25) read a missing
+     entry in the free roam's first seconds;
+   - the map's card under the cursor (`sub_828B6998`) read the marker's own copy (`+0x40`,
+     null) as soon as the cursor reached an event.
+   `sub_825CB940`, which `CTriggerEventUnlocks` runs after a career race, fills the map and
+   copies each marker's entry. The hook runs it before the file is loaded. It runs again once
+   the markers exist (they are made a frame or more later): the hook on `sub_825CB068` (the
+   map's test whether a marker shows) runs it when a career marker has no entry, once per
+   count of markers. With both, the map and the minimap show the events as in single player:
+   the won ones with a trophy, the new ones NEW, with name, class and prize under the cursor.
+3. **The card.** `custom_race.cpp`'s hooks on the card (bind `sub_82733A68`, input
+   `sub_82738948`, destructor `sub_82727530`) ask `coop_map_event.cpp` first. On a map card in
+   a Co-op Festival free roam it adds SELECT "START CO-OP EVENT" to the footer (slot 13, the
+   Custom Race slot; Custom Race is offline only). The map clears the card's footer after the
+   bind to add its own prompts, so the hook on `sub_8289A908` (a footer's clear) puts the
+   prompt back. SELECT sends the World chat command `/event <id>` (`LiveChatCommand`,
+   `live_friends.cpp`: World chat's SAY, not shown in the Chat tab). The server's notices
+   are shown as usual.
+4. **On a guest's console** the card offers the same prompt. The server refuses the command
+   from anyone but the world's host, and the guest gets the notice "Only the world's host
+   (DriverA) can start an event". The guest's map and minimap show its own career's events,
+   since each console loads them from its own save.
+5. **The sign-up zone.** Online the zone at an event's start shows SIGN ME UP too, but its X
+   does nothing there: driven to FR17 "Oakley Heat Wave" and stopped in the zone,
+   X opened no card. So no single-player race can be loaded out of the online world. Should a
+   sign-up card (with its career entry) open in a Co-op Festival free roam anyway, its A starts
+   the co-op event and its X (Rivals, a single-player time trial) does nothing (not seen: no
+   such card opened).
+
+The world's free roam ends into the event's lobby while the host is still on the map's card
+(`world_events.cpp` takes the event from the free roam's update, which runs under the map).
+Cvar `coop_map_events` (on) turns it all off; `FORZA_COOP_MAP_TRACE=1` logs the refreshes and
+every card.
+
+The server needs no change. Its Co-op Festival description in Find Game now names the map:
+"Its host starts festival events for everyone in it: an event's Details on the map, then
+SELECT, or /event FR05 in World chat."
+
+### The two-game check (2026-11-04)
+
+A TU4 build of this branch, the local server from `server/` with `--game-db`, DriverA (host)
+and DriverB (guest) on copies of the golden TU4 save, each on its own headless gamescope,
+`tools/autodrive.py` at the wheel.
+
+| Step | Result |
+| --- | --- |
+| The markers online | Both games logged `COOP MAP: the festival's events are on the map` on entering the world, and the refresh found 393 markers. The map showed the career's events as in single player (a trophy on the won ones, NEW on the new ones); under the cursor: "Chevron Sixties Speedway, A, 15,000 Cr" |
+| The card | X DETAILS opened the festival card (FR50, MUST BE 1960 - 1969, BEST FINISH 1ST) with SELECT START CO-OP EVENT next to SET ROUTE, BACK, RESTRICTIONS, LEADERBOARD; the card's event id read 231 (FR50) |
+| A guest's SELECT | B's card sent `/event 231`; B was told "Only the world's host (DriverA) can start an event" (the HUD notice) and nothing started |
+| The host's SELECT | A's card sent `/event 231`: "DriverA starts FR50: A class, 1960-1969, 7 CPU drivers, 1 lap, Dawn" on both, `next round is campaign event 231 (FR50), 2 human(s), AI Medium (skill 40, temperament 6)`, the free roam ended from under the map's card. Lobby on both: CO-OP FESTIVAL POINT-TO-POINT RACE, Main Stage Run 4.31 km, DriverA and DriverB and six CPU drivers in Ford GT40s (A 582) |
+| Both race | A finished 4th (driven to the end); B's car stuck at 15% and the race timer gave it 8th "finished 1" (as in the acceptance run). The host's write: relative scores 4 (A) and 0 (B). Ledger: `round 0e9171f81203a1c9 (FR50) closed with 2 result(s); DriverB place 8/8; DriverA place 4/8`; `GET /coop/results` offered each player its own result |
+| The grants | Both launcher grants (record_session, then after_session): "applied 0, unchanged 1" (FR50 is won at 1st in the test save), confirmed; the server had nothing left for either |
+| Back in the world | The markers loaded again in the world's next free roam (393), the card offered the start again, and `/event FR17` typed in World chat still started an event |
+
+Not done: the base game (the card's hooks are TU4 only, like Custom Race's; a base world
+keeps `/event`), a prompt at the event's start zone that starts the co-op event (its X does
+nothing online), and a check of the guest's garage against the event before the start.
 
 ## Open questions (measure first)
 
