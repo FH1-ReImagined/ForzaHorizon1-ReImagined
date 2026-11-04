@@ -113,8 +113,9 @@ int main() {
   assert(result() == Radians(70));
   xr_cockpit = false;
   assert(std::fabs(result() - Radians(88)) < 2e-6);
+  // A paused world keeps the chosen FOV too (#646: the pause menu and rewind showed the stock one).
   rex::memory::GuestPtr(memory.data(), kWorld)[0x0C] = 1;
-  assert(result() == Radians(70));
+  assert(std::fabs(result() - Radians(88)) < 2e-6);
   rex::memory::GuestPtr(memory.data(), kWorld)[0x0C] = 0;
   FLAGS_forza_cockpit_fov_storage_() = 0;
   assert(result() == Radians(70));
