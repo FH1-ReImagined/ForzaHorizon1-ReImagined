@@ -49,9 +49,15 @@ void ApplyMotionBlurScale(bool enabled) {
   auto* h = memory->LookupHeap(blur_scale_addr);
   if (!h) return;
   uint32_t old_protect = 0;
-  h->QueryProtect(blur_scale_addr, &old_protect);
-  h->Protect(blur_scale_addr & ~(kPage - 1), kPage,
-             rex::memory::kMemoryProtectRead | rex::memory::kMemoryProtectWrite);
+  // The page can't always be made writable later on (#638: on Windows the image page reads as
+  // uncommitted for this heap by the time the pause menu's toggle runs). Writing anyway faults;
+  // skip the change instead, and the setting takes effect at the next start.
+  if (!h->QueryProtect(blur_scale_addr, &old_protect) ||
+      !h->Protect(blur_scale_addr & ~(kPage - 1), kPage,
+                  rex::memory::kMemoryProtectRead | rex::memory::kMemoryProtectWrite)) {
+    REXLOG_WARN("motion blur: can't change it now (page not writable); it applies at the next start");
+    return;
+  }
   const uint32_t val = enabled ? 0x40A00000 : 0x00000000;
   const uint8_t bytes[4] = {
       uint8_t(val >> 24), uint8_t(val >> 16), uint8_t(val >> 8), uint8_t(val)};
@@ -118,13 +124,16 @@ void PatchMotionBlurStencilThreshold() {
       if (!env || std::strcmp(env, "0") != 0) {
         auto* h = memory->LookupHeap(addr);
         uint32_t old_protect = 0;
-        h->QueryProtect(addr, &old_protect);
-        h->Protect(addr & ~(kPage - 1), kPage,
-                   rex::memory::kMemoryProtectRead | rex::memory::kMemoryProtectWrite);
-        const uint8_t half[4] = {0x3F, 0x00, 0x00, 0x00};  // 0.5
-        std::memcpy(base + addr, half, 4);
-        h->Protect(addr & ~(kPage - 1), kPage, old_protect);
-        REXLOG_INFO("motion blur: stencil threshold at {:08X} set to 0.5", addr);
+        if (h && h->QueryProtect(addr, &old_protect) &&
+            h->Protect(addr & ~(kPage - 1), kPage,
+                       rex::memory::kMemoryProtectRead | rex::memory::kMemoryProtectWrite)) {
+          const uint8_t half[4] = {0x3F, 0x00, 0x00, 0x00};  // 0.5
+          std::memcpy(base + addr, half, 4);
+          h->Protect(addr & ~(kPage - 1), kPage, old_protect);
+          REXLOG_INFO("motion blur: stencil threshold at {:08X} set to 0.5", addr);
+        } else {
+          REXLOG_WARN("motion blur: stencil threshold at {:08X} left as is (page not writable)", addr);
+        }
       } else {
         REXLOG_INFO("motion blur: stencil threshold left as is (FORZA_BLUR_THRESHOLD=0)");
       }
