@@ -177,12 +177,21 @@ void ApplyRenderChoice(regpu::Config& config, uint32_t outW, uint32_t outH, int 
 void MenuRenderSettings(regpu::Config& config)
 {
     const auto saved = SavedGraphicsSettings();
-    const auto get = [&](const char* key, const char* fallback) {
+    // What the graphics screen saved wins; without it the launcher's settings (forza.toml, the command
+    // line: resolution, fh1_upscaler, resolution_scale) stay, not the console's 720p. The launcher's
+    // upscaler is a Vulkan one (DLSS, FSR 3) unless it is one of ReGPU's FSR 1 modes.
+    const auto get = [&](const char* key, const char* flag) {
         const auto it = saved.find(key);
-        return it != saved.end() && !it->second.empty() ? it->second : std::string(fallback);
+        return it != saved.end() && !it->second.empty() ? it->second : rex::cvar::GetFlagByName(flag);
     };
-    const std::string output = get("output", "720p"), upscaler = get("upscaler", "off"),
-                      scale = get("resolution_scale", "1");
+    std::string output = get("output", "resolution"), upscaler = get("upscaler", "fh1_upscaler"),
+                scale = get("resolution_scale", "resolution_scale");
+    if (output.empty())
+        output = "720p";
+    if (upscaler.rfind("fsr1_", 0) != 0)
+        upscaler = "off";
+    if (scale.empty())
+        scale = "1";
     for (const auto& [flag, value] : { std::pair{ "resolution", output == "720p" ? std::string() : output },
                                        std::pair{ "fh1_upscaler", upscaler }, std::pair{ "resolution_scale", scale } })
         rex::cvar::SetFlagByName(flag, value);
@@ -190,10 +199,13 @@ void MenuRenderSettings(regpu::Config& config)
         if (StartingFlag(flag).empty())
             if (const auto it = saved.find(flag); it != saved.end() && !it->second.empty())
                 rex::cvar::SetFlagByName(flag, it->second);
-    if (output == "720p")
+    uint32_t outW = output == "4k" ? 3840 : output == "1440p" ? 2560 : output == "1080p" ? 1920 : 0;
+    uint32_t outH = output == "4k" ? 2160 : output == "1440p" ? 1440 : output == "1080p" ? 1080 : 0;
+    if (!outW && (std::sscanf(output.c_str(), "%ux%u", &outW, &outH) != 2 || outW < 640 || outH < 360 ||
+                  outW > 7680 || outH > 4320))
+        outW = outH = 0;   // 720p, or a size the launcher wouldn't give
+    if (!outW || outW <= 1280)
         return;
-    const uint32_t outW = output == "4k" ? 3840 : output == "1440p" ? 2560 : 1920;
-    const uint32_t outH = output == "4k" ? 2160 : output == "1440p" ? 1440 : 1080;
     ApplyRenderChoice(config, outW, outH, std::atoi(scale.c_str()), upscaler);
     g_outputW = outW;
     g_outputH = outH;
