@@ -337,8 +337,10 @@ the event as done is the first thing to run (open questions).
   Base and TU4 games are kept apart by the server (`#TU4` room), so a co-op world is always
   one version.
 - **Saves:** the career tables and profile fields are the same. TU4 converts a save one way
-  (`VersionFlags`), so the launcher's grant has to work on both. Its codecs already do: the
-  key tables are read from both executables.
+  (`VersionFlags`), so the launcher's grant has to work on both. The key tables are read from
+  the installed executable, and a base profile is signed with another HMAC key than a TU4 one
+  (the 32 bytes before the table, not its second half): the launcher read only TU4 profiles
+  until the acceptance run of 2026-11-04 found it (see "The two-game acceptance test").
 
 ## Risks
 
@@ -1149,7 +1151,9 @@ Read again for this milestone, with both builds' code:
 
 ### The base game
 
-**Nothing in the co-op path is TU4 only; base players need a two-game run, not new code.**
+**Nothing in the game or server part of the co-op path is TU4 only.** The base pair of the
+acceptance run (2026-11-04) raced and got its results like the TU4 one; only the launcher had to
+learn the base game's profile key (below).
 
 | Part | Base game |
 | --- | --- |
@@ -1157,12 +1161,12 @@ Read again for this milestone, with both builds' code:
 | Friends-only placement, `/event`, the round's XML | server only, the same for both. The round's XML has no TU4-only element (TU4's `MultiStageSeriesOptions` is left out and defaults); the base `GameOptionPresets.xml` has the same `<Overrides>` with `ForceOnlyRentalCars="1"`, which the round replaces with 0, and the base image knows the attribute. The disc's 9 rental cars are the same (TU4 adds 9 more) |
 | CPU drivers and the event's skill | `src/hooks/world_events.cpp` is written against the base build's addresses (the online game `0x83305CC4`, the AI lookup `sub_82568BD8`, the round's hooks) and mapped to TU4's by `src/tu4_addresses.h`; its field offsets have both builds' values (`FORZA_TU4 ? ... : ...`). The Horizon World's CPU drivers were built on the base build first |
 | Places and online winnings | the server reads them from `XSessionWriteStats` and `WriteRaceStatsEx`, the same records in both builds (#12's four-human places were the base game's) |
-| The launcher's grant | the same `Career_*` tables and `Main/*` values, the disc's `gamedb.slt` for both (its 119 events are TU4's), the keys from the installed `default.xex` |
+| The launcher's grant | the same `Career_*` tables and `Main/*` values, the disc's `gamedb.slt` for both (its 119 events are TU4's), the keys from the installed `default.xex`. A base profile (`VersionFlags` 0) has the same AES key as a TU4 one but its HMAC key comes from the 32 bytes before the key table; the launcher knew only the TU4 key, so every base save failed its integrity check, fixed in `save_editor._keys` |
 
-What a base run must show, all of it untested so far (every co-op run used TU4): the Co-op
-Festival listed, the round's lobby with the event's cars, the log line `WORLD: campaign event ...
-CPU driver(s) at the event's skill`, a loaner where a save has no car that fits, both places in
-the ledger, and the grant decoded from the base saves. The acceptance test below has the steps.
+What a base run had to show, all of it seen in the acceptance run (step 8): the Co-op Festival
+listed, the round's lobby with the event's cars, the log line `WORLD: campaign event ... CPU
+driver(s) at the event's skill`, a loaner where a save has no car that fits, both places in the
+ledger, and the grant decoded from the base saves (after the launcher fix).
 
 **For the in-game grant (option B), the base addresses** (found with `tools/tu_address_map.py`
 and checked by the strings and calls each one makes):
@@ -1188,7 +1192,7 @@ and checked by the strings and calls each one makes):
 The career writer, the career component's post-race step (`+0x28` in the base game), the
 current event id and the online game object are in the "Evidence" table.
 
-### The two-game acceptance test (to run)
+### The two-game acceptance test (run 2026-11-04)
 
 For the guests' careers on today's server and launcher (signed requests #515, relays #516 and
 the servers page came after milestone 2's run), the loaner, and a base pair. Never on a real
@@ -1218,11 +1222,13 @@ Before and after each session, for both saves:
    that player's own place, its race too; `Main/XP` up by the event's points at that place (level
    6: 80 at 7th, 70 at 8th, as in milestone 2); `Main/Credits` up by the prize
    less what the race paid online (`Main/OnlineWinnings` before and after, the note names it);
-   `Main/WristbandLevel` unchanged; `CareerEventUnlocks` and `Career_Garage` unchanged, no new
-   `prize_cars`. Each save has one new backup, "Before co-op results". `GET /coop/results` has
+   `Main/WristbandLevel` unchanged; `CareerEventUnlocks` and `Career_Garage` unchanged by the grant,
+   no new `prize_cars` (the session itself adds a car at each online level-up: the online driver
+   level's reward, `Flags` 264, its owner the gamertag). Each save has one new backup, "Before co-op results". `GET /coop/results` has
    nothing left for either player.
 3. **A worse place changes nothing.** `/event FR69` again, both finish lower or equal: both
-   launchers say "unchanged", the saves' state is the same as after step 2, and no backup is added.
+   grants return "applied 0, unchanged 1" (the Play page shows no co-op note for an unchanged
+   result), the saves' state is the same as after step 2, and no backup is added.
 4. **The loaner.** `/event FR63` (no S-class Audi in the test save): both games lend a car
    (an Audi R8 GT), both race, both get a result; their garages (`Career_Garage`) are unchanged.
 5. **In the game.** Start each game from its granted save: the credits shown match
@@ -1236,6 +1242,37 @@ Before and after each session, for both saves:
    no reward car sequence, and `prize_cars` unchanged.
 8. **The base game.** Steps 1, 2 and 4 with two base builds and base saves. Also check in A's log
    `WORLD: campaign event 233 (...): 6 CPU driver(s) at the event's skill ...`.
+
+**The run (2026-11-04).** Main at `bf75fbd` (server `74affee`), the TU4 and base builds of that
+commit, a local server with `--game-db`, each game on its own headless gamescope (960x540, 30 fps),
+`tools/autodrive.py` at the wheel. The TU4 pair: two copies of the golden TU4 career save (630,931
+CR, XP 11,230, Gold wristband), B's with FR59 removed from `CareerEventUnlocks`; the base pair: two
+copies of the Xenia career save the golden save was converted from (`VersionFlags` 0, the same
+career). The grants ran as `window.py` runs them at a session's end (`record_session`, then
+`after_session` against the local server with each player's identity). Three TU4 sessions (FR69 and
+FR59; FR69 again; FR63), one base session (FR69 and FR63), then a single-player session on each
+build.
+
+| Step | Result |
+| --- | --- |
+| 1. Both race | Pass. B was placed into A's world (friends); `/event FR69` gave CO-OP FESTIVAL POINT-TO-POINT RACE, Red Rock Descent 6.61 km, DriverA, DriverB and six CPU drivers in R3 cars (Saleen S7, LP700-4, McLaren F1 GT). Both games logged `WORLD: campaign event 233 (round start): 6 CPU driver(s) at the event's skill 48 temperament 6`. Ledger: `round 91e56b8e2bc25e26 (FR69) closed with 2 result(s); DriverA place 8/8; DriverB place 4/8`, the host's write `relative score 4` for B and `0` for A. No unverified call. A's car stuck at a hairpin at 4% (autodrive), so A's 8th is a race not driven to the end: the game reports it "finished 1" when the race timer ends (phase A), and it counts |
+| 2. Each save its own result | Pass. A: "FR69 at place 8 (was not raced): +70 XP, +1,475 CR (the prize less the 625 CR the online race paid)" and "FR59 at place 7: +80 XP, +0 CR (the prize less the 5,000 CR ...)"; XP 11,230 -> 11,380, credits 636,556 -> 638,031, FR69 and race 169 at 8, FR59 at 7. B: "FR69 at place 4: +120 XP, +1,500 CR (the prize less the 9,500 CR ...)"; XP 11,230 -> 11,350, credits 645,431 -> 646,931, FR69 at 4. Both: `WristbandLevel` 6, `CareerEventUnlocks` and `Career_Garage` unchanged by the grant, `prize_cars` the same ten, one backup "Before co-op results"; `GET /coop/results`: nothing for A, B's locked FR59 only |
+| 3. Worse or equal place | Pass. A 8th (not driven) and B 4th again (`round 8ae1d18b7ea17ae1`): both grants "applied 0, unchanged 1", no note, no backup added, `career_state.py` identical before and after the grant |
+| 4. The loaner | Pass. `/event FR63`: "DriverA starts FR63: S class, Audi, 7 CPU drivers, 1 lap, Sunset"; both games and all six CPU drivers in Audi R8 GTs (S 648); A 7th, B 8th; grants +80 XP and +70 XP (+0 CR, the online race paid more than the prize). No R8 GT in either garage afterwards |
+| 5. In the game | Pass. The multiplayer lobby showed 638,031 CR (A) and 646,931 CR (B) after step 2, the `career_state.py` values. A in single player: the map's FR69 card "Advan Asphalt Attack R3 180 PTS" (250 less the 70 earned at 8th); GoPro Millennia Masters raced to the end (8th), and the save after it had `Main/NumRaces` 90 -> 91 and credits 643,031 -> 647,656 |
+| 6. The locked wait | Pass. B's FR59 (8th): "FR59 (8th in DriverA's world) waits: this career has not unlocked FR59 yet ... until 04 Dec 2026", kept by the server through B's second session; after FR59 was put back, B's third grant: "FR59 at place 8 (was not raced): +70 XP, +0 CR (the prize less the 5,000 CR the online race paid)", with the winnings bracket of B's next race (`[9500, 14500]`) |
+| 7. No festival prize car | Not run: the test driver trails the CPU drivers and does not win. `prize_cars` stayed the same ten through every session and grant above |
+| 8. The base game | Pass after a launcher fix. The base pair: Co-op Festival listed, B placed into A's world, FR69 with six CPU drivers in R3 cars and the log line above in A's log, `round e3594d3b2aa8926b (FR69) closed with 2 result(s); DriverA place 7/8; DriverB place 8/8`; FR63 with R8 GT loaners for both (`round 8e582ae1028dfe3c`: A 7th, B 8th). **The grant failed at first:** `career_state.py` and the launcher refused both base saves ("The profile integrity check failed"), and so would the grant, the profile editor and the design import. The garage decoded; the profile did not. A base profile is signed with another HMAC key: the AES key is the TU4 one, the HMAC key comes from the 32 bytes before the key table instead of its second half (found by trying the table's neighbourhood against the base save's MAC; the bytes are the same in the disc and TU4 images). With the fix (`save_editor._keys` offers both pairs, an edit keeps the pair the save decoded with): A "+80 XP ... +0 CR" for each event, XP 11,230 -> 11,390; B +70 each, 11,230 -> 11,370; `VersionFlags` still 0. The base game loaded A's granted save: 648,431 CR and the FR69 card "170 PTS" (250 less 80 at 7th) |
+
+Seen along the way:
+
+- **A race not driven to the end still counts.** A's car never left the first hairpin (4%), and
+  the race timer's end gave it 8th "finished 1", which the ledger, the host's write and the grant
+  all took: +70 XP and the prize less what the race paid. Last place is the least an event gives,
+  so this was left as it is; what a career race gives a player who stops was not measured.
+- **Online level-ups add a car each** (the online driver level's reward, `Rewards_DriverLevelv3`,
+  `Career_Garage` `Flags` 264): six cars in the four co-op sessions. Their rewards land in
+  `Main/OnlineWinnings` too, so a round with a level-up pays a smaller prize (milestone 3).
 
 ## Open questions (measure first)
 
