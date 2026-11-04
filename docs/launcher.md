@@ -33,6 +33,25 @@ copies, and imports selected FH1 package designs into an existing local profile 
 backing up its catalog. Apply the imported design to a matching car in-game. See
 [UGC preservation](ugc-preservation.md) for the workflow and recovery findings.
 
+**Website account (website #4):** Settings > Online > Website account, shown with the public
+server only, links the game to an optional account on forza.dyotson.dev (Discord, GitHub or an
+emailed code), the second factor the website's player features need. **Link to website account**
+signs `POST https://forza.dyotson.dev/api/game/link/start` with the game's key (`live_auth.py`,
+the `signing_seed` of `live_identity.txt`; the address is built in, never the server setting, and
+no friends key or key made from it is sent), opens the answer's `account.html#link=<token>` in the
+browser (`QDesktopServices.openUrl`, the OpenURI portal on Flatpak) and shows an 8-character code
+for another device (`forza.dyotson.dev/account.html`). It polls the request every 3 seconds in a
+`ui/workers.Task` thread. Once the browser's account claims it, the launcher asks "Link this game
+to website account K7Q2-XM4P (Discord, created 2 Nov 2026)?": **Link** confirms that account by
+its id, **Not me** (or closing the dialog) declines it. After a link the card shows the account
+and offers **Unlink** and **Sign out everywhere** (every browser of the linked account), which
+work even if someone else took over the web account. The launcher remembers that it made a link
+(`web_account.linked` in `launcher.json`) and only then asks the service for the link's state,
+once a session when the card is shown. The calls are in `web_account.py` (HTTPS through
+`fetch.urlopen`, the operating system's certificates on Windows), the card and the dialog in
+`ui/web_account.py`; `test_web_account.py` runs them against a fake service that checks every
+signature. The service is forza-live's `accounts/` (its README has the API and the rules).
+
 Discord status sharing is available under **Settings > Online > Discord** (off by
 default). See [Discord Rich Presence](discord.md) for the one-time public application
 ID setup, supported activities, privacy and local IPC tests.
