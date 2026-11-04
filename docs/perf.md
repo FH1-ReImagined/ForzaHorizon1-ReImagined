@@ -560,6 +560,13 @@ the `GPU slow frames` lines). Checked with 0426 on the golden save at render sca
 cache): the vinyl group thumbnail (MY VINYL GROUPS and the storefront preview), the paint job preview,
 the storefront livery texture, two saved photos with their thumbnails, and the car's thumbnail after
 an Auto Upgrade at a Horizon Outpost (`Thumbnail_N.xdc`, 768x288, the 3/4 and side views) are correct.
+
+**The reporter's A/B (#536, RX 6600, Linux).** The pairs came from a non-default kernel parameter,
+`amdgpu.vm_update_mode=3` (CPU page-table updates), set to work around another game. With it, each
+readback buffer free took about 25 ms; with the default (`-1`) 0.02-0.03 ms. With the parameter, 0426
+lifted the 1% low from 26.4 to 31.5-32.6 fps (12 of 20 frames over 33 ms held a free without it);
+without the parameter reuse makes no measurable difference. Players with that parameter set should
+keep `vulkan_readback_reuse_buffers` on, or remove the parameter.
 In the first check run, with an empty pipeline cache, the paint job preview came out black; that run
 logged resolves copied back while draws' pipelines were still being built (as in #74). The same flow
 with the cache warm is correct with and without 0426.
