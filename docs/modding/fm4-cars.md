@@ -66,8 +66,11 @@ Which cars: every `Data_Car` row of FM4's database whose id and `MediaName` FH1'
 the installed DLC's patches) does not have, that has a model in the given files, and that is not
 one of FH1's DLC cars (`FH1_DLC_CARS`: a DLC installed later must not meet a second copy). The
 two games share one car id registry: no id means two different cars. FM4 Disc 1 and the three
-Disc 2 car packs give 322 such cars; the Autovista pack (Disc 2, package 4) has only showroom
-models and is not used.
+Disc 2 car packs give 381 such cars (61 of them of the 30 makes FH1 lacks, such as Acura, Saab
+and Vauxhall: their `List_CarMake` row and names come along; FH1 already has every FM4 make's
+logo). Two cars have no model in those files and are left out. The Autovista pack (Disc 2,
+package 4) has only showroom models and is not used. All 381 convert (15 minutes on this PC
+from unpacked files; 5.6 GB of package, 10 MB of mod).
 
 | Part | From | Change |
 |---|---|---|
@@ -114,7 +117,9 @@ The rows come from FM4's database: the car's `Data_Car` row and the tables keyed
 body, drivetrain and motor rows those name (`Data_Engine`, `Data_CarBody`, `Data_Drivetrain`,
 `Data_Motor` and their `List_Upgrade<Part>*` tables), the torque curves and aero rows any of
 them names, and the make (`List_CarMake`) when FH1 has none. Rows whose key FH1 already has
-are left out (FH1's database still holds many FM4 rows, the same ones); the 9 columns FH1 added
+are left out (FH1's database still holds many FM4 rows, the same ones, and 16 that FH1 retuned:
+a camera override, a car exception, 13 piston and one gearbox upgrade; FH1's are kept); the 9
+columns FH1 added
 to `Data_Car` get the value most of FH1's cars have (`IsSelectable` 1).
 
 They go into a full copy of the player's own `gamedb.slt` (the title update's when there is
@@ -195,28 +200,37 @@ only decides where a car sits in the Autoshow's lists.
 
 ## Checked in the game
 
-Linux, the Title Update 4 build of main `adb878f`, a copied save, offline, audio muted;
-three cars converted from the owner's FM4 Disc 1: the 2009 Bugatti Veyron 16.4 (a road car),
-the 2008 #009 Aston Martin Racing DBR9 (a race car) and the 1957 Ford Thunderbird (an old car).
+Linux, the Title Update 4 build of main `adb878f`, copied saves (the TU4 golden save), offline,
+audio muted.
+
+Three cars converted by hand first, from the owner's FM4 Disc 1: the 2009 Bugatti Veyron 16.4
+(a road car), the 2008 #009 Aston Martin Racing DBR9 (a race car) and the 1957 Ford
+Thunderbird (an old car):
 
 | What | Result |
 |---|---|
-| Autoshow | the three are listed with their makes (Aston Martin, Bugatti, Ford), with name, year, picture, class and price; the Veyron's showroom shows the car and its stats |
-| Garage | added to the garage with the launcher's garage code: listed in Change Car with their pictures and stats ("Veyron 16.4, 2009 Bugatti, R2 818"; "Thunderbird, 1957 Ford, D 258") |
-| Drive | Veyron and Thunderbird driven in free roam (127 km/h, a guard rail hit and stopped by it, traffic around), chase, hood and cockpit views; the cockpits have their dials, steering wheel and the driver's hands |
+| Autoshow | the game counts them as installed (`IsCarInstalled` 1, `FORZA_DLC_LOG=1`) and lists them with their makes |
+| Garage | added with the launcher's garage code (the unicorn-car action's): listed in Change Car with their pictures and stats ("Veyron 16.4, 2009 Bugatti, R2 818"; "Thunderbird, 1957 Ford, D 258"; "#009 Aston Martin Racing DBR9, 2008 Aston Martin, R1 910") |
+| Drive | all three driven in free roam: chase, hood, bumper and cockpit views; the Veyron at 127 km/h and into a guard rail, which stopped it; the DBR9 sliding on its slicks on the outpost's dirt |
+| Interior | each cockpit has its dials or digital display, steering wheel, the driver's hands and, in the DBR9, its roll cage |
 | Upgrades | the Veyron's Custom Upgrade: Race Intake bought and installed (736 → 747 kW, R3 770 → 775), kept after a restart |
-| Paint | the Veyron's body painted green in the paint shop and saved; the garage picture was redrawn green |
-| Save | quit to the title screen (the game wrote the profile), restarted with the mod: the Veyron is the current car, green, with the intake. Without the mod the same save loads into free roam (the car shows as FH1's placeholder for missing content); with the mod again everything is back |
+| Paint | the Veyron's body painted green and saved; its garage picture was redrawn green |
+| Save | quit to the title screen, restarted: the Veyron is the current car, green, with the intake. Without the import the same save loads into free roam (the car is FH1's placeholder for missing content); imported again, everything is back |
 | Night | the Veyron's headlights light the road |
 | Sound | not heard (muted runs); the cars' tuning and banks are FH1's own files of the same names |
+
+Then all 381 cars (`--all`, the cars' files in the package): the Autoshow's makes include the
+ones FH1 lacked (Acura, listed with its RSX Type-S, TSX and Integra from the Disc 2 car packs);
+the RSX Type-S was bought with credits (colour, BUY CAR?), driven out of the Autoshow (a
+burnout scored) and the Veyron, DBR9 and Thunderbird loaded from the package zips as they did
+from the mod.
 
 ## Not done yet
 
 - The light list of `CCarModelData` (light sprites, indicators) is empty.
 - The physicsdefinition.bin rigid-body fields are a scaled stand-in, not decoded semantics.
-- The race car (DBR9) was bought and listed but only briefly driven; career events, online
-  (other players without the import see FH1's placeholder car, as for a car mod) and every car
-  one by one were not checked.
+- Career events, online (other players without the import see FH1's placeholder car, as for a
+  car mod) and the 381 cars one by one were not checked; the three above and the RSX were.
 - FM4's title updates and FM4 DLC car packs are not read.
 
 ## Credits

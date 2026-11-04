@@ -548,7 +548,11 @@ class ModsPage(FolderListPage):
         return mods.install(path, mods.mods_dir(self.cfg), replace=replace, media_of_game=mods.game_media(self.cfg))
 
     def remove_folder(self, folder):
-        mods.remove(self.cfg, folder)
+        if folder == fm4cars.MOD:  # the imported FM4 cars: the mod and the package of their files
+            fm4cars.remove(self.cfg)
+            self._fm4_state()
+        else:
+            mods.remove(self.cfg, folder)
 
     def row_texts(self, m):
         return [m.version, m.author, f"{m.files} ({_size(m.size)})"]

@@ -9,7 +9,6 @@ Nothing is downloaded and nothing leaves this PC. docs/modding/fm4-cars.md has t
 """
 import copy
 import json
-import os
 import shutil
 import tempfile
 from pathlib import Path

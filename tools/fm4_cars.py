@@ -5,12 +5,16 @@ Reads the player's own FM4 files (disc 1 unpacked, and optionally the disc 2 car
 their own FH1 files, and writes a mod folder (docs/modding.md) that adds the cars:
 
     <out>/mod.toml
+    <out>/media/db/gamedb.slt                  the player's FH1 database with the cars' rows
+    <out>/media/stringtables/<lang>/*.str      FH1's car (and make) names plus the new ones
     <out>/media/cars/<CAR>/...                 the car: converted models, its textures, a
                                                generated physicsdefinition.bin
     <out>/media/wheels/<WHEEL>/...             its stock wheel when FH1 has no files for it
     <out>/media/ui/textures/thumbnails/...     its picture for the car lists
-    <out>/media/db/patch/<n>_merge.slt         its database rows, as a DLC car pack's patch
-    <out>/media/stringtables/<lang>/data_car.str   FH1's car names plus the new ones
+
+With --package the car, wheel and picture files go into a DLC-style package folder instead
+(zips under Media/DLCZips, FM4's compressed members copied as they are): the mod overlay
+holds 4 GB at most, a full import is about 9 GB uncompressed and 5.6 GB in the package.
 
 Nothing of either game is in this tool; it only reads the files the player points it at.
 docs/modding/fm4-cars.md has the format notes and what was checked in the game.
@@ -27,7 +31,6 @@ installed FH1 DLC folder (.../4D5309C9/00000002), so their car names are kept an
 are not added twice. Standard library only (LZX through tools/fxobj_shaders.py).
 """
 import argparse
-import io
 import os
 import re
 import sqlite3
@@ -47,7 +50,6 @@ PACK_NAME = "464D3443415253000000000000000000000000004D"  # the package folder (
 PACK_STEM = "fm4cars"
 PACK_PRIORITY = 60    # FH1's DLC car zips are _pri_65
 PACK_OFFER = 64800    # a .puboffer no FH1 offer uses (theirs 1000-2800); no ContentOffers row
-PATCH_NAME = "6480000_merge.slt"  # a DB patch priority no DLC pack uses (theirs: <offer>000)
 SKIP_FILES = {"versiondata.xml"}
 # FH1's DLC cars (docs/dlc.md): not added from FM4 even when that DLC is not installed, so a
 # DLC installed later never meets a second copy of its car.
@@ -765,23 +767,6 @@ def write_full_db(source_path, fh1db, rows, path):
         raise ConvertError("the game's database must not be in WAL mode")
 
 
-def write_patch(fh1db, rows, path):
-    """A DB patch like a DLC pack's media/db/patch/<n>_merge.slt: each table with FH1's
-    columns, holding only the new rows."""
-    if os.path.exists(path):
-        os.unlink(path)
-    db = sqlite3.connect(path)
-    for table, data in sorted(rows.items()):
-        cols = columns(fh1db, table)
-        types = {r[1]: r[2] for r in fh1db.execute("pragma table_info([%s])" % table)}
-        db.execute("CREATE TABLE [%s] (%s)" % (table, ",".join("[%s] %s" % (c, types[c] or "") for c in cols)))
-        db.executemany("INSERT INTO [%s] VALUES (%s)" % (table, ",".join("?" * len(cols))),
-                       [[r[c] for c in cols] for r in data])
-    db.commit()
-    db.execute("PRAGMA journal_mode=DELETE")
-    db.close()
-
-
 # ============================================================================= car files
 
 def model_points(data):
@@ -1106,7 +1091,7 @@ class Converter:
             else:
                 log("converting %s (%d)" % (name, cid))
             try:
-                donor = self.convert_car(cid, name)
+                self.convert_car(cid, name)
                 row = [r for r in rows["Data_Car"] if r["Id"] == cid][0]
                 engines = [r[0] for r in self.fm4db.execute(
                     "select e.MediaName from List_UpgradeEngine u join Data_Engine e on "

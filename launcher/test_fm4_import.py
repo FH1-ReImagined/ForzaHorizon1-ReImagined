@@ -47,7 +47,7 @@ class FakeConverter:
         return {"cars": [(1119, "BUG_Veyron_09", 8, 872)], "skipped": [(1500, "XYZ_Thing_10: no model")]}
 
 
-class Fm4ImportTests(unittest.TestCase):
+class _Setup:
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -70,6 +70,9 @@ class Fm4ImportTests(unittest.TestCase):
 
     def build(self, **kw):
         return fm4cars.build(self.cfg, self.disc1, None, converter=FakeConverter, **kw)
+
+
+class Fm4ImportTests(_Setup, unittest.TestCase):
 
     def test_publishes_the_mod_enabled_last_and_removes_it(self):
         msg = self.build()
@@ -135,6 +138,36 @@ class Fm4ImportTests(unittest.TestCase):
         d = Path(self.cfg.data_home()) / "0000000000000000/4D5309C9/00000002/PACK"
         d.mkdir(parents=True)
         self.assertTrue(fm4cars.stale(self.cfg))
+
+
+try:
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from PySide6.QtWidgets import QApplication
+except ImportError:  # pragma: no cover
+    QApplication = None
+
+
+@unittest.skipIf(QApplication is None, "PySide6 is not installed")
+class Fm4CardTests(_Setup, unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_card_reports_and_removing_the_mod_removes_the_package(self):
+        from forza_launcher.ui.mods_page import ModsPage
+        self.build()
+        page = ModsPage(self.cfg, window=None)
+        try:
+            self.assertIn("1 FM4 car(s) imported", page.fm4_message.text())
+            self.assertTrue(page.fm4_remove.isEnabled())
+            page.remove_folder(fm4cars.MOD)
+            package, header = fm4cars._package(self.cfg)
+            self.assertFalse(package.exists())
+            self.assertFalse(header.exists())
+            self.assertFalse(page.fm4_remove.isEnabled())
+        finally:
+            page.deleteLater()
+            QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
 
 
 if __name__ == "__main__":
