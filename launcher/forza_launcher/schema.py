@@ -246,6 +246,15 @@ add("world_texture_detail", "Distant texture detail", "Display", "choice", "cons
     "Console 0, High -0.5, Ultra -1). Best with 8x or 16x anisotropic filtering; Ultra can "
     "shimmer slightly on fine patterns.", "World detail",
     choices=[("console", "Console"), ("high", "High"), ("ultra", "Ultra")], restart=True)
+add("world_car_detail", "Car detail", "Display", "choice", "console",
+    "How far other cars (traffic, rivals, drivatars) keep their detailed models before they switch "
+    "to simpler ones, and how many of them may: Console is the game's own (full detail only for "
+    "the two nearest cars, within 15 m); High keeps them twice as far and allows twice as many "
+    "cars, Ultra four times. The model switches then happen farther away (Ultra: none within 50 m "
+    "on a free roam drive); see docs/graphics-detail.md for the measured cost. Also in the "
+    "in-game Graphics screen, where it applies without a restart.",
+    "World detail",
+    choices=[("console", "Console"), ("high", "High"), ("ultra", "Ultra")])
 add("world_shadow_filter", "Shadow softness", "Display", "choice", "console",
     "Softer, smoother edges on the shadows of trees, cars and scenery: Soft filters each shadow "
     "over a 1.5 times wider area, Softer twice as wide with a wider blur. Measured on an RX 9060 XT: "

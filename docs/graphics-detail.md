@@ -8,6 +8,10 @@ and apply from the next start (the game reads them when it loads the track):
 | Shadow detail | `world_shadow_detail` | small objects cast shadows up to 60 m x their size factor | 3x as far (180) | 10x (600) |
 | Distant texture detail | `world_texture_detail` | the track's texture LOD bias, 0 | -0.5 | -1 |
 
+**Car detail** (`world_car_detail`) keeps other cars' detailed models farther away and on more
+cars (High 2x, Ultra 4x the game's distances and counts); it applies live and is also in the
+in-game Graphics screen, see [Car detail](#car-detail-361).
+
 A third option, **Shadow softness** (`world_shadow_filter`, #380), changes how the shadows
 are filtered rather than which objects cast them; it applies live and is also in the in-game
 Graphics screen. See [Shadow softness](#shadow-softness-380) below. A fourth,
@@ -51,19 +55,37 @@ Looked at and **not** made options:
   3,000 changed neither the culled count nor the draws. No visible gain.
 - **Shadow map size**: the shadow cascades are EDRAM render targets (1040x2528 and 520x1264
   per frame), so the render scale (Display > Picture) already sharpens them with the rest of
-  the frame. `ShadowEnds` (`InGameShadowEnd` 202, `TrackSegCamShadowEnd` 200) are not read
+  the frame. A separate, higher resolution for the shadow maps alone would be a per-render-target
+  scale in the GPU emulation (an SDK change to the EDRAM and resolve paths), not a game
+  setting. `ShadowEnds` (`InGameShadowEnd` 202, `TrackSegCamShadowEnd` 200) are not read
   in free roam (no access in a minute of driving, camera changes, pause and map); 15 changed
   nothing on screen. The command-line option `UseSmallShadowMap` only switches a
   512 to a 256-wide viewport of a smaller shadow pass.
+- **Shadow distance**: already long. The shadow renderer (TU4 `sub_824829D8`) fits nine
+  light-space boxes a frame (their corners from TU4 `sub_8241C100`, logged at the free roam
+  spawn): the three sun cascades of the mask are about 10, 36 and 92 m across, and the six
+  more of the outer passes 50, 68, 100, 255, 400 and about 1,300 m, the last reaching beyond
+  a kilometre. What ends a distant object's shadow is the caster cull above (Shadow detail),
+  not the cascades' reach; stretching the cascades would spread the same texels wider, so
+  blurrier shadows near the car.
+- **Track far distance**: the command-line option `trackfardistance` (TU4 `sub_82563570`
+  stores it at +4192 of the options object, 55 with `perfmode`): no load of that field was
+  found in Title Update 4's code.
 - **Grass**: `GrassFade*`, `GrassLOD*` and `GrassMin/MaxNumShells` are read every frame but
   Colorado's grass is meshes (`GrassMaxNumShells` 0); a 1-2 m fade or 0 and 8 shells changed
   nothing.
 - **Cube map (car reflections)** `<Cubemap MeshLimit FarDistance VisibilityThreshold>`,
   `screenAreaDistances cubeMap`: the reflections of the world in the cars. Cars already look
   right; left for later. `<CollidableDropDistance>` (300): no visible change at 5 m.
-- **Car and crowd LOD** (`media/renderscenarios.zip`: `CarLODTransDist`,
-  `CarLODTransDistTraffic`, `CrowdLODCountScales`; `TrackSettings <Crowds lod0-3>`): known
-  and cheap to raise, but lowest priority (#361).
+- **Crowd LOD** (`CrowdLODCountScales` and `CrowdSpriteDistScale` in the render settings,
+  `TrackSettings <Crowds lod0-3 SpriteDistance>`): only the festival sites have crowds; not
+  changed. The cars' LOD is an option, [Car detail](#car-detail-361) below.
+- **Density**: the game has no foliage or detail density setting (the grass above is meshes,
+  placed per zone like the trees). The density values it has are gameplay: traffic and festival
+  cars (`AI/Traffic/Density/*`, `AI/Spawning/Density/*` in `gametunablesettings/GlobalRegistry.xml`),
+  the festival crowd's size (`<Performance CrowdSize="1024">`), and the particles' rate
+  (`ParticleRateScale`, a render setting at 1). More traffic changes the game, and the
+  multiplayer sessions sync it; left alone.
 
 ## Cost
 
@@ -100,6 +122,110 @@ and return.
 
 These knobs could also sit in the in-game Graphics screen (#116): both values are read
 every frame, so a live change only needs the settings struct the hook already sees.
+
+## Car detail (#361)
+
+**Settings > Display > World detail > Car detail** and the in-game **Graphics** screen (Title
+Update 4) offer Console (default), High and Ultra (`world_car_detail`). It applies live (Save in
+the Graphics screen).
+
+### How the game picks a car's model
+
+Each car has up to five models, LOD0 (the full one) to LOD4. The game's render settings
+(`DynamicRenderSettings`: the defaults in the executable, scenario files in
+`media/renderscenarios.zip` on top, none of which set these) give two sets of distances and a
+count, each read through its own getter (TU4 addresses; disc in `src/hooks/car_detail.cpp`):
+
+- `CarLODTransDist` (getter `sub_8248CBD0`): `LODdist_Near` 15, `LODdist_Far` 25,
+  `LODdist_VeryFar` 50. The selection (`sub_824351D8`, per car each frame) takes the car's
+  distance to the camera, less its size, over the camera's zoom: LOD0 within 15 m, LOD1 to
+  25 m, LOD2 to 50 m, LOD3 beyond.
+- `CarLODTransDistTraffic` (`sub_82E99A08`), for traffic: `LODdist_T_LOD2`-`T_LOD5` 15, 25, 50,
+  100 (LOD4 beyond 100 m), `T_LOD4_Closest` 20, `T_LOD5_Closest` 80.
+- `CarLODThresholds` (`sub_8247C5C8`): 2, 4, 6. Before the selection, the cars are ranked by
+  distance (`sub_82477368`): only the two nearest cars other than the player's may use LOD0,
+  up to the fourth LOD1, the rest LOD2 at best; from six cars on, both counts drop by one.
+  The selection then clamps to that minimum and to the LODs the car has loaded.
+
+In free roam that leaves almost every other car on a simplified model: at the spawn and on the
+first two minutes of County Route 203, 92% of the picks were LOD3 or LOD4 (table below).
+
+### What the levels do
+
+| Level | Distances | Cars allowed LOD0, LOD1; one fewer each from |
+| --- | --- | --- |
+| Console | 15 / 25 / 50 m, traffic 15 / 25 / 50 / 100 m | 2, 4, 6 cars |
+| High | x2: 30 / 50 / 100 m, traffic up to 200 m | 4, 8, 12 |
+| Ultra | x4: 60 / 100 / 200 m, traffic up to 400 m | 8, 16, 24 |
+
+`src/hooks/car_detail.cpp` scales what the three getters return; the stored settings stay the
+game's, so Console calls them unchanged and a change applies at the next frame. The selection
+still clamps to the models the car has (its LOD count); no streaming stalls, missing models or
+extra hitches showed in the runs below.
+`tests/car_detail_test.cpp` checks the levels.
+
+### Pop-in
+
+`FORZA_CAR_LOD_STATS=1` logs, every 5 s, how many LOD picks the selection made, how many
+changed a car's LOD from its last pick (a model switch: the pop-in) and at what distance from
+the camera (to the car's centre, the selection's own measure before it takes the car's size
+off), and the share of each LOD. Title Update 4, a career save, chase camera, 1280x720, one run
+per level: two minutes of free roam from the spawn with `tools/autodrive.py` on a
+`tools/nav_route.py` loop (County Route 203 to Route 28, the same road each run; the traffic
+differs run to run; about 24 cars picked a frame, most of them traffic out of sight or far away):
+
+| Level | Model switches | within 25 m | 25-50 m | 50-100 m | 100-200 m | beyond 200 m | Picks at LOD0-2 | LOD3 | LOD4 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Console | 111 | 28 | 31 | 50 | 2 | 0 | 7.5% | 30.2% | 62.4% |
+| High | 120 | 0 | 33 | 34 | 53 | 0 | 13.1% | 30.2% | 56.7% |
+| Ultra | 140 | 0 | 0 | 36 | 32 | 72 | 26.2% | 37.2% | 36.6% |
+
+A car still goes through its models as it comes closer, so the count of switches stays about the
+same (it grows a little: the farther bands hold more cars); what changes is where they happen.
+On Console half of them are within 50 m, a quarter within 25 m of the camera; High has none
+within 25 m, Ultra none within 50 m. An earlier run of the same drive per level (without the
+distances) gave 93, 132 and 160 switches and the same shift of the picks.
+
+The race grid (GoPro Millennia Masters, the seven CPU cars standing 5 to about 60 m ahead during
+the countdown, 10 s): LOD0 in 36% of the picks on Console (the player's car and two more), 62%
+on High and 90% on Ultra; LOD3 15%, 0.2% and 0%.
+
+Frame times over the drives (60 fps cap): no level adds hitches (frames over 25 ms, two runs a
+level: Console 41 (a cold shader cache) and 13, High 13 and 25, Ultra 12 and 8; none over 50 ms).
+
+### Cost
+
+Under a 60 fps cap nothing measurable on an RX 9060 XT: the drives above hold 60 fps on every
+level (mean frame 16.67-16.68 ms, p99 18.8-20.1 ms). Uncapped:
+
+Free roam spawn, the car standing, traffic passing; TU4, RX 9060 XT (RADV), uncapped (`--frame_rate=240 --vsync=false`), 1280x720 window; the levels switched live with `FORZA_CAR_DETAIL_FILE` in one session per render scale (Console, High, Ultra, Ultra, High, Console, Console, High, Ultra; 15 s each, the first 3 s skipped), BENCH lock held. GPU = the process's DRM engine time, CPU = the whole process's CPU time, per frame; the mean of the three phases of a level, the range of fps in brackets.
+
+| Render scale | Level | fps | GPU ms | GPU busy | CPU ms |
+| --- | --- | --- | --- | --- | --- |
+| 1 | Console | 196.2 (182.1-207.5) | 4.29 | 84% | 17.51 |
+| 1 | High | 188.2 (168.4-199.7) | 4.47 | 84% | 18.14 |
+| 1 | Ultra | 203.4 (193.6-216.2) | 4.13 | 84% | 16.58 |
+| 2 | Console | 79.8 (79.5-80.0) | 12.78 | 102% | 28.95 |
+| 2 | High | 79.2 (79.1-79.3) | 12.82 | 101% | 29.36 |
+| 2 | Ultra | 79.1 (78.9-79.2) | 12.85 | 102% | 29.37 |
+
+Within the noise: at render scale 1 the phases spread by 20-40 fps with the traffic passing
+(the ranges of all three levels overlap, and Ultra came out fastest); at render scale 2, where
+the GPU is the limit, High and Ultra cost about 0.05 ms of GPU time a frame (under 1% fps). The
+spawn has few cars near enough for the levels to change their models; a busier scene (the race
+grid, traffic jams) costs more triangles, but the cars are a small part of a frame.
+
+### Screenshots
+
+Kept out of Git. At fixed points of the drive above (15, 30, 45, 60, 90 and 120 s from the
+spawn, 1280x720) the three levels give the same road with different traffic, so they compare the
+world, not the cars: no other change. On the race grid during the countdown, switched live
+(`FORZA_CAR_DETAIL_FILE`, the frames a second apart), the seven CPU cars 5 to 60 m ahead look
+the same on all three levels at 1280x720: those LODs differ in what a car of that size on screen
+does not show (the switch is a visible pop only when it happens near the camera, which is what
+the levels move away). The differences between the frames are the camera settling and the crowd.
+Photo mode cannot show it: the selection does not run while the world is paused there (no picks
+are logged), so the cars keep the models they had when it opened.
 
 ## Shadow softness (#380)
 

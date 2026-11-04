@@ -77,11 +77,26 @@ class WorldDetailTests(unittest.TestCase):
             with self.subTest(bad=bad):
                 self.assertEqual(schema.coerce(s, bad), "off")
 
+    def test_car_detail_defaults_to_the_console_and_applies_live(self):
+        s = self.setting("world_car_detail")
+        self.assertEqual((s.label, s.group, s.section), ("Car detail", "Display", "World detail"))
+        self.assertEqual(s.default, "console")
+        self.assertEqual([v for v, _ in s.choices], ["console", "high", "ultra"])
+        self.assertFalse(s.restart)  # the hook reads it at every LOD pick (in-game Graphics screen)
+        self.assertIn("world_car_detail", crash_report.SETTING_KEYS)
+        self.assertNotIn("world_car_detail", config.render_toml(self.cfg))
+        self.cfg.settings.update(world_car_detail="ultra")
+        values = config.parse_toml(config.render_toml(self.cfg))
+        self.assertEqual(values["world_car_detail"], "ultra")
+        for bad in ("Ultra", "max", 4, True):
+            with self.subTest(bad=bad):
+                self.assertEqual(schema.coerce(s, bad), "console")
+
     def test_the_section_is_one_card_after_picture(self):
         sections = [s.section for s in schema.S if s.group == "Display"]
         start = sections.index("World detail")
-        self.assertEqual(sections[start:start + 4], ["World detail"] * 4)
-        self.assertNotIn("World detail", sections[start + 4:])
+        self.assertEqual(sections[start:start + 5], ["World detail"] * 5)
+        self.assertNotIn("World detail", sections[start + 5:])
         self.assertNotIn("Picture", sections[start:])
 
 
