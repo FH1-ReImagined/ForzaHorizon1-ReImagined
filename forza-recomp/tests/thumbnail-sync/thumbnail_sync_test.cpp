@@ -38,6 +38,10 @@ extern "C" REX_FUNC(__imp__sub_82546460) {
   if (base != expected_base) std::abort();
   ++ctx;
 }
+extern "C" REX_FUNC(__imp__sub_824DDCE8) {
+  if (base != expected_base) std::abort();
+  ++ctx;
+}
 extern "C" REX_FUNC(__imp__sub_82C8FE60) {
   if (base != expected_base) std::abort();
   ++ctx;
@@ -78,8 +82,9 @@ int main(int argc,char**argv) {
     expected_base=base;
     int ctx=7;
     sub_82546460(ctx,base);
+    sub_824DDCE8(ctx,base);
     sub_82C8FE60(ctx,base);
-    require(ctx==9 && sync_on && timers.size()==2,"both hooks forward original context/base and hold sync");
+    require(ctx==10 && sync_on && timers.size()==3,"the hooks forward original context/base and hold sync");
   } else if(mode=="disabled") {
     #ifdef _WIN32
     _putenv_s("FORZA_PHOTO_SYNC","0");

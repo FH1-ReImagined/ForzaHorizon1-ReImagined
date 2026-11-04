@@ -547,6 +547,27 @@ new); a warm cache waits for nothing. `FORZA_THUMB_SYNC=0` switches the hook off
 (`--gpu_backend=d3d12`) is not covered.
 
 
+**The paint job preview (#632, 2026-11-03).** With an empty pipeline cache, the first paint job
+saved in the Paint Shop got a black preview: the 288x160 picture of its design (`thumb.xdc`,
+the preview the storefront shows, 248 bytes instead of about 21 KB), shown empty in Load
+Design's list. The livery save popup (`CPopupLoadSaveLivery`, `sub_826D6A38`) asks the car
+thumbnail manager for that picture through `sub_824DDCE8` (TU4 `sub_8254C450`), the same
+request the purchase's `sub_82546460` makes, but not through `sub_82546460`, so nothing held
+`sync_pipeline_creation`: the car was drawn into the 1280x720 target with about 70 pipelines
+still being built, its draws skipped, and the 288x160 copy read back without them. The log
+counted it among the resolves copied back for the CPU without draws. Fix:
+`src/hooks/thumbnail_sync.cpp` holds the same 8 s window from each `sub_824DDCE8` call (one per
+picture request; `FORZA_THUMB_SYNC=0` switches it off with the purchase hook).
+
+| Run (TU4, scale 2, RADV, test save, Paint Shop flow) | Paint job preview |
+| --- | --- |
+| cold cache, before | 248 bytes, mean 0: black, empty tile in Load Design |
+| cold cache, with the fix | 21,667 bytes, the blue Aventador |
+| warm cache (the same caches again), with the fix | the same 21,667 bytes, byte for byte |
+
+The vinyl group preview (256x128, its own `LivGroupThumb` target), the livery texture the
+storefront gets and two saved photos are unchanged in the same runs.
+
 ## Photo mode lights gone at render scale 2 (#77, 2026-10-16)
 
 At resolution scale 2 (240 fps, scale 2, AMD RX 9070 XT, Windows) the car's head and tail
