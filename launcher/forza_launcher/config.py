@@ -11,8 +11,8 @@ from . import OLD_PUBLIC_SERVERS, PUBLIC_SERVER, display, gpu, languages, paths,
 from .haptics.settings import DEFAULTS as HAPTICS_DEFAULTS, normalize as normalize_haptics
 
 # Settings of the launcher itself: not game cvars, never written to forza.toml.
-LAUNCHER_ONLY = ("share_shader_list", "coop_results", "battery_saver", "game_language", "vr_mode",
-                 "vr_picture", "vr_seat_height_cm")
+LAUNCHER_ONLY = ("share_shader_list", "coop_results", "challenges", "battery_saver", "game_language",
+                 "vr_mode", "vr_picture", "vr_seat_height_cm")
 ONLINE_MODES = ["public", "local", "custom", "offline"]
 # First-run values that differ from the game's own defaults.
 FIRST_RUN = {"frame_rate": 60, "present_effect": "fsr"}

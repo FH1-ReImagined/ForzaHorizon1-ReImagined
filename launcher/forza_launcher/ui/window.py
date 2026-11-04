@@ -686,6 +686,7 @@ class MainWindow(QMainWindow):
                 self._coop_timer.start()
         except Exception as e:
             paths.log_error("start applying co-op results", e)
+        self.play.challenges.refresh(force=True)  # the session's results are on the server now
         self._shader_warmup_status = None
         self.play.set_shader_warmup(None)
         plan = self.session_plan

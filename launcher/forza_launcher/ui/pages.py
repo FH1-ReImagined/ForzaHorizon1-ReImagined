@@ -14,6 +14,7 @@ from .. import (GITHUB_URL, PRIVACY_URL, PUBLIC_SERVER, __version__, build_env, 
                installer, paths, pins, shader_prebuild, vr)
 from ..config import Config
 from . import theme, workers
+from .challenges_card import ChallengesCard
 from .widgets import Disclosure, Hero, SpinBox, StatusRow, card, label
 
 
@@ -146,6 +147,8 @@ class PlayPage(QWidget):
         self.shader_progress.hide()
         lay.addWidget(self.shader_progress)
         lay.addWidget(c)
+        self.challenges = ChallengesCard(cfg)   # daily and weekly challenges (forza-live #1)
+        lay.addWidget(self.challenges)
         self.install_details = Disclosure("Installation details")
         self.install_paths = label("", "help")
         self.install_paths.setTextFormat(Qt.PlainText)
@@ -215,6 +218,7 @@ class PlayPage(QWidget):
         if mode == "public":
             details.append(f"Online server: {PUBLIC_SERVER}")
         self.install_paths.setText("\n".join(details))
+        self.challenges.refresh()
         ready = files_ok and install is not None
         save_page = getattr(self.window, 'saves', None)
         if self.window._crash_probe is not None:

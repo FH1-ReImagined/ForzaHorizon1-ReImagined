@@ -2,7 +2,7 @@
 
 This policy covers Forza Horizon 1: ReImagined: the Windows installer, the Linux packages, the launcher, the game the launcher builds on your PC, and the project's public Forza Live server. It says what is sent over the network, when, where it goes, what is stored and for how long, what is public, and how to turn each thing off.
 
-Last updated: 2026-11-02. Every change to this policy is a change to this file, so its history on GitHub lists them: https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/commits/main/PRIVACY.md
+Last updated: 2026-11-04. Every change to this policy is a change to this file, so its history on GitHub lists them: https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/commits/main/PRIVACY.md
 
 ## In short
 
@@ -10,6 +10,7 @@ Last updated: 2026-11-02. Every change to this policy is a change to this file, 
 - These features are on by default and send data over the network:
   - online play on the project's public Forza Live server;
   - after each session online: sharing shader lists with that server, and asking it for your co-op campaign results;
+  - asking the public server for your progress in its daily and weekly challenges, while the Play page is open;
   - a check for launcher updates on GitHub each time the launcher opens;
   - your activity in the game (with your car, the event and the area of Colorado), shown through the Discord desktop app if it is running.
 - One choice turns all of them off: "Online features" in the Windows installer, or the same question the launcher asks the first time it opens on Linux. You can also turn each one off later in the launcher; see "How to turn each thing off".
@@ -64,6 +65,13 @@ it never changes clock settings. Opening the setup guide opens GitHub in your br
 
 - What: after each session on "Public server" or "My own server", the launcher asks the server for your pending co-op campaign results, then confirms the ones it handled. It does this only when you have a save and a Forza Live identity on this PC. These requests carry your XUID and a signature made with your signing key (not the key itself) over plain HTTP. The answer can include the gamertag of the player who hosted the event.
 - Turn off: Settings > Online > "Co-op campaign results". "Offline" and "This PC" also stop it.
+
+### Daily and weekly challenges (on by default with "Public server")
+
+- What: the Play page's Challenges card asks the public server for its current daily and weekly challenges and your progress in them (`/challenges/progress`). The request carries your XUID and a signature made with your signing key (not the key itself) over plain HTTP. The answer contains the objectives, your progress and how many players finished each objective; no other player's name or ID.
+- When: a moment after the Play page shows, then at most every 5 minutes while it stays open, and after each game session. Only when Server is "Public server" and this PC has a Forza Live identity. Nothing is asked with "My own server", "This PC" or "Offline".
+- The server counts your progress from the results your game already sends it when you play signed in (races, speed traps and zones, 1000 Club medals, Big Shots). Turning the card off stops the launcher asking; it does not change what the game sends.
+- Turn off: Settings > Online > "Daily and weekly challenges". "Online features" off turns it off too.
 
 ### Servers page (only when you open it)
 
@@ -183,6 +191,7 @@ Records are kept by XUID.
 - Car clubs, auctions and gifts: club memberships, roles and history, shared cars, auction listings and bids, and gifts with their messages. No time limit. The server uses your club membership to deliver your Club chat messages, to show your clubmates (by gamertag, with `/club`) that you are online and, in the same room, whether you are in a Horizon World or Co-op Festival world and how many players it has, and to offer you a Horizon World with a clubmate first when you search. Players who have blocked each other don't see each other this way.
 - Message Center notifications: removed when you clear them. After 30 days they are no longer shown, but they are not deleted.
 - Co-op campaign results: removed once they are handled, or after 30 days.
+- Daily and weekly challenges: your progress on the objectives of the current and the previous day and week, with the game versions that sent the results that counted, and how many objectives you have finished. Older days' and weeks' progress is removed when a new day or week starts; the number finished has no time limit.
 - Shader lists: see "Shader-list sharing" above.
 - Community events, only if an organizer enrolled you: your XUID, your public key (or a hash of your friends key), attendance times and rewards. No time limit.
 - Content lists: the DLC pack numbers and car mod names your game reports are held in memory while you are online, to tell the players of a session what they do not share. They are not written to disk and are lost when the server restarts.
@@ -207,6 +216,7 @@ To have your records on the public server removed, see "Contact".
 - Community photos (Big Shots you upload): the 1920x1080 copy, your gamertag and the upload time, in the server's public gallery feed and on the project website's photo pages, for as long as the photo is kept.
   - in the car club invite list, the gamertag, XUID, career level and online XP of every player who has signed in to the server and is not in a club.
 - The published shader list, which contains no player IDs.
+- The daily and weekly challenges (/challenges on the same address): the objectives and how many players finished each, with no names or player IDs.
 - Your Discord activity, for your Discord contacts.
 - Anything you post in a GitHub issue.
 
@@ -219,6 +229,7 @@ To have your records on the public server removed, see "Contact".
 - Invites from others: Settings > Online > "Show game invites".
 - Shader-list sharing: Settings > Online > "Share shader list".
 - Co-op campaign results: Settings > Online > "Co-op campaign results".
+- The Play page's daily and weekly challenges: Settings > Online > "Daily and weekly challenges".
 - Update check: About > "Check for updates when the launcher opens".
 - Discord activity: Settings > Online > "Share activity on Discord". Only the car, event and area in it: Settings > Online > "Share car, event and area".
 - Your computer's login name as gamertag: set Settings > Profile > Gamertag.
