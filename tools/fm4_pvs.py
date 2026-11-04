@@ -51,9 +51,10 @@ tools/fm4_track_mod.py, and
   FORZA_FM4_COL=1 (the collision read whole from the converted .col files)
   FORZA_FM4_ZONE_POOL=4 (more live instance objects: the hex zones share few instances)
 and FM4_DISC=<FM4's disc folder> when converting, for the surface numbers (tools/fm4_col.py).
-Status: Suzuka renders (buildings, stands, crowds, trees, grass, fences, flags, the road)
-and drives (collision: tools/fm4_col.py); FM4's terrain and road-shoulder blend shaders still
-draw dark or not at all under FH1.
+Status: Suzuka renders (buildings, stands, crowds, trees, grass, fences, flags, the road,
+FM4's horizon landscape; tools/fm4_shaders.py makes the inputs FH1 does not give FM4's
+shaders neutral) and drives (collision: tools/fm4_col.py). FM4 has no ground where its sky
+dome's lower half stood in, so from above much of the infield is empty.
 """
 import os
 import struct
@@ -61,6 +62,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fm4_col  # noqa: E402
+import fm4_shaders  # noqa: E402
 
 FH1_VERSION = 50
 
@@ -364,7 +366,8 @@ def convert(F, files):
                      "matrix": [m["matrix"][r * 4 + c] for r in range(4) for c in range(3)],
                      "extent": m["extent"][:3]} for m in F["models"]],
          # FM4's always-drawn instances and the two model lists are its sky domes (one per
-         # time of day); FH1 draws its own sky, and its loader waits forever on them.
+         # time of day); FH1's loader waits forever on them there. The first dome goes into
+         # the zones instead.
          "always": [], "models_a": [], "models_b": [],
          "dynamic": [fh1_instance_of(i) for i in F["dynamic"]],
          "prefix": F["prefix"], "b184": F["b160"], "b216": F["b196"], "names": F["names"],
@@ -391,6 +394,14 @@ def convert(F, files):
         reach = (e[0] ** 2 + e[2] ** 2) ** 0.5
         for cell in grid.cells_near(*spots[i], reach):
             members[cell].append(i)
+    # The sky dome (FM4's first always-drawn instance) as an object of every zone: FH1 keeps
+    # its own sky above, the dome adds FM4's landscape round the horizon. Its model's extent
+    # is FM4's 0; FH1 gets the dome's size instead.
+    sky = [i for i in F["always"] if i not in (0xFFFF, 0xFFFFFFFF)][:1] if SKY else []
+    for i in sky:
+        P["models"][insts[i]["model"]]["extent"] = [SKY_EXTENT] * 3
+        for cell in grid.cells:
+            members[cell].append(i)
     zones = []
     for cell in grid.cells:
         zi = members[cell]
@@ -403,6 +414,11 @@ def convert(F, files):
                       "drawn": [1] * len(zi), "placements": [placement_of(insts[i]) for i in zi]})
     P["zones"] = [(len(z["instances"]), 0, len(z["models"])) for z in zones]
     return P, zones, grid
+
+
+# FM4_PVS_SKY=0 leaves FM4's sky dome out (see convert).
+SKY = os.environ.get("FM4_PVS_SKY", "1") == "1"
+SKY_EXTENT = 4200.0
 
 
 # Zone size: FH1's Colorado has 100 m hexes; its loader streams the camera's zone and the six
@@ -601,6 +617,11 @@ def convert_mod(mod, fh1_disc, loose):
     members = [(p, zones[p] if p in zones else open(stand_in, "rb").read()
                 if p.lower().endswith(".stx.bin") and stand_in
                 else open(os.path.join(bin_dir, p), "rb").read()) for p in order]
+    # FM4's track shaders with the inputs FH1 does not give them made neutral
+    # (tools/fm4_shaders.py; FM4_PVS_SHADER_PATCHES=0 leaves them as they are).
+    if os.environ.get("FM4_PVS_SHADER_PATCHES", "1") == "1":
+        members = [(p, fm4_shaders.patch_fxobj(p, d)[0] if p.lower().endswith(".fxobj") else d)
+                   for p, d in members]
     out_dir = os.path.join(loose, "media", "tracks", track)
     os.makedirs(out_dir, exist_ok=True)
     start, size, count = write_track_zip(members, os.path.join(out_dir, "bin.zip"))
