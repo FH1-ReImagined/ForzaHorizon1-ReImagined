@@ -2856,6 +2856,58 @@ yields (0.2-0.35 ms a frame, not on the chain), the GPU and readback waits (zero
 a setting, render scale or MSAA). The audio mixer is a fixed 11-13% of a core here, 2-2.5 times that on a Deck, where it
 competes for the four cores; worth a look after the three above.
 
+### Follow-up: unchanged shader constant writes (#607, ReIGlue 0426, 2026-11-03)
+
+PM4 decode and register writes are about a fifth of the command processor's chain above. The split command processor
+(#474) drops register writes that change no value on its decoder (`gpu_split_elide_unchanged_registers`, after Pinyon
+Shift's `9bf779f`); `--gpu_elide_unchanged_registers=true` (ReIGlue 0426, off by default, read at each frame start)
+tries the same without the split. Which writes it may drop comes from the write handlers: `CommandProcessor::WriteRegister`
+acts on the scratch registers (write-back to memory), `COHER_STATUS_HOST` and four gamma ramp registers; the packet
+handlers write the draw and event initiators and `VGT_DMA_BASE`/`SIZE` themselves; the Vulkan backend's handlers are the
+shader constant blocks (float and bool/loop constants invalidate their constant buffers, fetch constants the fetch
+buffer, the texture bindings and the vertex buffer residency), which depend on the values only. Every other register
+is a plain store (0360's list), where a write of the same value already changes nothing. So the elision covers the
+float and bool/loop constants (fetch constants already invalidated only for the dwords that change): a write that
+leaves every value as it was invalidates nothing, so the next draw does not upload that constant buffer and rewrite
+the constants descriptor set again.
+
+**Results.** Ryzen 7 7800X3D, RX 9060 XT (RADV), TU4 build of main 77a7c33 with ReIGlue 0426, the launcher's Steam
+Deck preset uncapped (`--frame_rate=240`), a hidden 1280x720 gamescope display, warm shader caches, the BENCH lock held,
+3 runs per state with the order alternating, the cvar on the command line. Benchmark: its measured minute; free roam:
+60 s of `tools/autodrive.py` on the County Route 203 loop of the section above. "4 cores" is `taskset -c 0-3`. The
+command processor's CPU and draws come from `fh1_frame_cost_csv`; "decode + register writes" and "bindings" are its
+CPU samples in the PM4 packet loop and register write functions, and in the binding, texture and sampler functions
+(the areas of the table above); the counts are the cvar's log line.
+
+| Scene | Elision | Runs | fps | 1% low fps | p99 ms | CP CPU ms/frame | decode + register writes ms/frame | bindings ms/frame | draws | CP us a draw | constant registers written / unchanged a frame | constant writes / unchanged a frame |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Benchmark, 4 cores | off | 3 | 154.3 [150.7-159.2] | 96.8 [92.8-99.6] | 9.1 [8.8-9.5] | 4.34 [4.17-4.50] | 1.03 [1.01-1.06] | 0.88 [0.84-0.93] | 3503 | 1.238 [1.227-1.256] | - | - |
+| Benchmark, 4 cores | on | 3 | 150.6 [145.9-153.9] | 97.5 [91.1-104.2] | 9.3 [8.7-9.9] | 4.57 [4.47-4.69] | 1.15 [1.10-1.18] | 0.90 [0.87-0.92] | 3666 | 1.247 [1.224-1.265] | 390k / 300k | 13.8k / 6.4k |
+| Benchmark, 4 cores | change | | **-2.4 %** (frame time +2.5 %) | | | | | | | +0.7 % | | |
+| Free roam, 4 cores | off | 3 | 181.4 [177.0-189.7] | 95.5 [86.3-104.1] | 8.8 [8.2-9.5] | 3.50 [3.46-3.55] | 0.78 [0.76-0.79] | 0.71 [0.70-0.73] | 2704 | 1.297 [1.273-1.313] | - | - |
+| Free roam, 4 cores | on | 3 | 175.7 [170.6-178.4] | 81.7 [59.0-93.5] | 9.7 [8.9-11.1] | 3.58 [3.50-3.72] | 0.86 [0.83-0.91] | 0.70 [0.68-0.73] | 2734 | 1.308 [1.295-1.323] | 232k / 189k | 7.7k / 3.7k |
+| Free roam, 4 cores | change | | **-3.1 %** (frame time +3.2 %) | | | | | | | +0.9 % | | |
+| Benchmark, 8 cores | off | 3 | 156.4 [151.2-162.0] | 102.9 [89.8-114.6] | 8.6 [8.5-9.0] | 4.25 [4.13-4.48] | 0.99 [0.94-1.04] | 0.85 [0.82-0.91] | 3321 | 1.280 [1.250-1.313] | - | - |
+| Benchmark, 8 cores | on | 3 | 151.5 [150.2-153.4] | 106.1 [103.1-107.6] | 8.5 [8.5-8.6] | 4.59 [4.39-4.69] | 1.25 [1.10-1.48] | 0.84 [0.74-0.93] | 3527 | 1.301 [1.279-1.314] | 383k / 294k | 13.3k / 6.2k |
+| Benchmark, 8 cores | change | | **-3.1 %** (frame time +3.2 %) | | | | | | | +1.6 % | | |
+| Free roam, 8 cores | off | 3 | 170.4 [169.8-171.2] | 95.8 [92.0-98.4] | 8.5 [8.5-8.6] | 3.69 [3.67-3.71] | 0.83 [0.82-0.84] | 0.76 [0.75-0.77] | 2793 | 1.320 [1.317-1.322] | - | - |
+| Free roam, 8 cores | on | 3 | 173.5 [167.6-177.0] | 97.1 [91.5-100.9] | 8.8 [8.4-9.5] | 3.65 [3.57-3.71] | 0.88 [0.87-0.89] | 0.72 [0.70-0.74] | 2724 | 1.340 [1.340-1.341] | 230k / 187k | 7.6k / 3.7k |
+| Free roam, 8 cores | change | | **+1.8 %** (frame time -1.8 %) | | | | | | | +1.5 % | | |
+
+- About three in four of the constant registers the game writes keep their value, and about half of its constant
+  writes change nothing. But the buffers this keeps were cheap: the decode and register writes grow by 0.05-0.26 ms a
+  frame (the compare) and nothing else shrinks measurably (bindings, `vkUpdateDescriptorSets`), so the command
+  processor spends 0.7-1.6 % more CPU per draw. The fps changes (-3 % to +2 %) follow the benchmark's draw count,
+  which varies from run to run (3,100-3,900 draws a frame), more than the cvar. A first version that compared one
+  register at a time cost 3-4 % per draw. The cvar stays off.
+- Merging consecutive float constant uploads (ShiftGlue `99f52ca`) is not worth a port here: it shortens the split's
+  recorded runs, and without the split each constant write is one call into the backend: 7.6-13.8 thousand a frame,
+  0.20-0.27 ms a frame in `WriteRegistersFromMem` and `copy_and_swap` together (5-6 % of the command processor), of
+  which merging could save part of the per-call overhead (under 0.1 ms a frame).
+- Correctness with it on: `tools/render_test.py` against baselines recorded with main, 6 of 6 scenes in 3 of 4 checks
+  (one had `freeroam_dawn` out, with other traffic and light in the shot, and the two checks after it passed; off: 6
+  of 6); a 10-minute free roam (no hang, longest frame after the start 58 ms) and a 90-second race.
+
 ## Stutter in the first part of a drive (#614, 2026-11-03)
 
 **The report.** A side-by-side video of the same replayed drive on one Windows PC: our Vulkan path showed tall
