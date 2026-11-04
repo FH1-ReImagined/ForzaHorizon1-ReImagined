@@ -24,7 +24,7 @@ class ChallengesCard(QWidget):
         self._probe = None
         self._fetched_at = None      # monotonic time of the last answer
         self._due = True
-        self.sets, self.note_text = [], ""
+        self.sets, self.note_text, self.gift_text = [], "", ""
         self.fetches = 0             # finished fetches (tests)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -38,11 +38,15 @@ class ChallengesCard(QWidget):
         self.grid.setVerticalSpacing(6)
         self.grid.setColumnStretch(0, 1)
         lay.addWidget(self.grid_host)
+        self.gift = label("", "muted")
+        self.gift.setTextFormat(Qt.PlainText)
+        lay.addWidget(self.gift)
         self.note = label("", "muted")
         lay.addWidget(self.note)
         self.help = label("Set by the main Forza Live server, the same for every player. Your "
                           "races, speed traps and zones, 1000 Club medals and Big Shots count when "
-                          "you play signed in on it.", "help")
+                          "you play signed in on it. A community server's challenges are its own.",
+                          "help")
         lay.addWidget(self.help)
         self.timer = QTimer(self)
         self.timer.setSingleShot(True)
@@ -90,6 +94,9 @@ class ChallengesCard(QWidget):
                 self.grid.addWidget(count, row, 1)
                 row += 1
         self.grid_host.setVisible(row > 0)
+        gift = self.gift_text if sets else ""
+        self.gift.setText(gift)
+        self.gift.setVisible(bool(gift))
         self.note.setText(note)
         self.note.setVisible(bool(note))
 
@@ -126,7 +133,8 @@ class ChallengesCard(QWidget):
         self.fetches += 1
         self._fetched_at = time.monotonic()
         if result is None:     # raised (logged)
-            self.sets, self.note_text = [], "Could not read the challenges. The launcher log has the details."
+            self.sets, self.note_text, self.gift_text = (
+                [], "Could not read the challenges. The launcher log has the details.", "")
         else:
-            self.sets, self.note_text = result
+            self.sets, self.note_text, self.gift_text = result
         self.show_state()

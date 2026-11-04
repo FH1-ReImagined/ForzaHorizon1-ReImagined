@@ -109,13 +109,13 @@ class WhenTests(Base):
             raise AssertionError("asked the server")
         for mode in ("offline", "local", "custom"):
             self.cfg.online["mode"] = mode
-            self.assertEqual(challenges.load(self.cfg, never), ([], ""))
+            self.assertEqual(challenges.load(self.cfg, never), ([], "", ""))
         self.cfg.online["mode"] = "public"
         self.cfg.settings["challenges"] = False
-        self.assertEqual(challenges.load(self.cfg, never), ([], ""))
+        self.assertEqual(challenges.load(self.cfg, never), ([], "", ""))
         self.cfg.settings["challenges"] = True
         with patch.object(challenges, "identity", return_value=None):
-            sets, note = challenges.load(self.cfg, never)
+            sets, note, gift = challenges.load(self.cfg, never)
         self.assertEqual(sets, [])
         self.assertIn("Play online once", note)
 
@@ -145,8 +145,8 @@ class FetchTests(Base):
         s = self.server()
         with patch.object(challenges, "base", return_value=s.url), \
                 patch.object(challenges, "identity", return_value=IDENTITY):
-            sets, note = challenges.load(self.cfg)
-        self.assertEqual(note, "")
+            sets, note, gift = challenges.load(self.cfg)
+        self.assertEqual((note, gift), ("", ""))
         self.assertEqual([x.kind for x in sets], ["daily", "weekly"])
         win, trap = sets[0].objectives
         self.assertEqual((win.title, win.progress, win.target, win.done, win.completed),
@@ -159,7 +159,7 @@ class FetchTests(Base):
             s = self.server(status=status, body={"error": "x"})
             with patch.object(challenges, "base", return_value=s.url), \
                     patch.object(challenges, "identity", return_value=IDENTITY):
-                sets, note = challenges.load(self.cfg)
+                sets, note, gift = challenges.load(self.cfg)
             self.assertEqual(sets, [])
             self.assertIn(words, note)
 
@@ -197,6 +197,21 @@ class ParseTests(unittest.TestCase):
         sets = challenges.parse(doc(progress=False))
         self.assertEqual([(o.progress, o.done) for o in sets[0].objectives], [(0, False), (0, False)])
 
+    def test_the_weekly_gift(self):
+        d = doc()
+        self.assertEqual(challenges.gift_text(d), "")   # a server without gifts
+        d["gift"] = {"credits": 10000, "after": 3}
+        d["player"] = {"completed": {"daily": 1}, "gift": {"week": "weekly-2026-W45", "finished": 1,
+                                                            "sent": None}}
+        self.assertEqual(challenges.gift_text(d), "Finish 3 challenges this week, daily or weekly, "
+                         "for a 10,000 CR gift in the Message Center: 1 of 3 so far.")
+        d["player"]["gift"].update(finished=4, sent=NOW)
+        self.assertEqual(challenges.gift_text(d), "This week's 10,000 CR gift was sent: collect it "
+                         "in the game's Message Center.")
+        for bad in ({"credits": "x", "after": 3}, {"credits": 10000}, None):
+            self.assertEqual(challenges.gift_text(dict(d, gift=bad)), "")
+        self.assertEqual(challenges.gift_text(dict(d, player=None)), "")
+
     def test_time_left(self):
         self.assertEqual(challenges.time_left(NOW + 5 * 3600 + 12 * 60, NOW), "5 h 12 min left")
         self.assertEqual(challenges.time_left(NOW + 5 * 86400, NOW), "5 days left")
@@ -212,14 +227,20 @@ class ParseTests(unittest.TestCase):
         from forza_live.competition import objectives, scores
         with tempfile.TemporaryDirectory() as d:
             scores.configure(d, "main-1")
-            objectives.configure(d)
+            was = objectives.ENABLED, objectives.GIFTS, objectives.SEED
+            objectives.configure(d, enabled=True, gifts=True)
             try:
                 published = json.loads(json.dumps(objectives.document(0x0009000000000A01, NOW)))
             finally:
                 objectives.STORE.__init__()
+                objectives.ENABLED, objectives.GIFTS, objectives.SEED = was
         sets = challenges.parse(published)
         self.assertEqual([s.kind for s in sets], ["daily", "weekly"])
         self.assertEqual([len(s.objectives) for s in sets], [objectives.PER_SET] * 2)
+        self.assertEqual(challenges.gift_text(published),
+                         f"Finish {objectives.GIFT_AFTER} challenges this week, daily or weekly, for a "
+                         f"{objectives.GIFT_CREDITS:,} CR gift in the Message Center: 0 of "
+                         f"{objectives.GIFT_AFTER} so far.")
 
 
 @unittest.skipIf(QApplication is None, "PySide6 is not installed")
@@ -235,7 +256,8 @@ class CardTests(Base):
 
         def load(cfg):
             self.calls.append(threading.current_thread())
-            return challenges.parse(doc(now=time.time())), ""
+            d = doc(now=time.time())
+            return challenges.parse(d), "", challenges.gift_text(d)
         patcher = patch.object(challenges_card, "FIRST_DELAY_MS", 10)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -261,6 +283,7 @@ class CardTests(Base):
         self.assertEqual(self.card.fetches, 1)
         self.assertNotIn(threading.main_thread(), self.calls)
         texts = self.texts()
+        self.assertFalse(self.card.gift.isVisibleTo(self.card))   # a server without gifts
         self.assertIn("✓ Win 2 races in a B class car", texts)
         self.assertIn("Done", texts)
         self.assertIn("1 / 3", texts)
@@ -272,6 +295,17 @@ class CardTests(Base):
         self.card.refresh(force=True)  # after a game session
         self.spin(5, lambda: self.card.fetches == 2)
         self.assertEqual(len(self.calls), 2)
+
+    def test_a_gift_line_on_the_card(self):
+        from forza_launcher.ui import challenges_card
+        card = challenges_card.ChallengesCard(
+            self.cfg, self.host, load=lambda cfg: (challenges.parse(doc(now=time.time())), "",
+                                                   "1 of 3 so far."))
+        self.host.show()
+        card.refresh()
+        self.spin(5, lambda: card.fetches)
+        self.assertEqual(card.gift.text(), "1 of 3 so far.")
+        self.assertTrue(card.gift.isVisibleTo(card))
 
     def test_a_card_not_on_screen_asks_nothing(self):
         self.card.refresh()
