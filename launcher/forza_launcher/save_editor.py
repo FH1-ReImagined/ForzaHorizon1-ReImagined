@@ -17,6 +17,7 @@ import uuid
 from . import TITLE_ID, game, paths, saves
 
 MAX_PROFILE = 16 * 1024**2
+TABLE_LEAD = 32  # key table windows (_tables) start this far before each table
 FORMATS = {0: '?', 1: 'B', 3: 'I', 4: 'Q', 7: 'i', 9: 'f'}
 # CareerWristbandLevels IDs in the supported game's database (not online ranks).
 WRISTBANDS = tuple(enumerate(('Yellow', 'Green', 'Blue', 'Pink', 'Orange', 'Purple', 'Gold')))
@@ -192,9 +193,12 @@ def _tables(path, size, modified):
         raise saves.SaveError('Could not read the profile key tables from this game executable.') from exc
     # Locations of the profile's AES/HMAC tables in the supported disc and TU4
     # images. These are addresses, not key material. A matching save MAC is required.
-    return tuple(bytes(image[address-xex.load_address:address-xex.load_address+64])
+    # Each window starts TABLE_LEAD bytes before its table: a profile the base game wrote
+    # (VersionFlags 0, before TU4 converts it) is signed with the 32 bytes before the table
+    # (the same in both images), a TU4 profile with the table's second half.
+    return tuple(bytes(image[address-xex.load_address-TABLE_LEAD:address-xex.load_address+64])
                  for address in (0x8200D634, 0x82013A04)
-                 if 0 <= address-xex.load_address <= len(image)-64)
+                 if TABLE_LEAD <= address-xex.load_address <= len(image)-64)
 
 
 def _owner(cfg):
@@ -218,9 +222,15 @@ def _keys(cfg):
         raise saves.SaveError('Choose your FH1 game files in Setup before opening the editor.') from exc
     owner = _owner(cfg)
     material = _tables(str(executable.resolve()), info.st_size, info.st_mtime_ns)
-    return tuple((bytes(((table[i] ^ owner[(i-2)%8])+2*i) % 256 for i in range(16)),
-                  bytes(((table[32+i] ^ owner[(i-4)%8])+2*i) % 256 for i in range(32)))
-                 for table in material)
+    keys = []
+    for window in material:
+        table = window[TABLE_LEAD:]
+        aes = bytes(((table[i] ^ owner[(i-2)%8])+2*i) % 256 for i in range(16))
+        # (aes, mac) of a TU4 profile, then of a base-game one: the same AES key, the HMAC
+        # key from the table's second half or from the 32 bytes before it
+        for mac_table in (table[32:64], window[:TABLE_LEAD]):
+            keys.append((aes, bytes(((mac_table[i] ^ owner[(i-4)%8])+2*i) % 256 for i in range(32))))
+    return tuple(keys)
 
 
 @dataclass(frozen=True)

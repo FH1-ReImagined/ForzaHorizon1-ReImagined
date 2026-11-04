@@ -522,7 +522,8 @@ XP only changes the stored total. An unfamiliar saved wristband value is shown a
 unchanged current value and preserved unless a supported tier is selected.
 The editor authenticates and decrypts `ForzaProfile/ForzaProfile` using the selected
 profile's XUID and key tables read from the player's own `default.xex` in the game-files
-folder. It supports the known disc and TU4 layouts; no game key bytes are bundled or
+folder. It supports the known disc and TU4 layouts, and both a profile the base game wrote and
+a TU4 one (TU4 signs its converted profile with another key); no game key bytes are bundled or
 written to the launcher config. First open may take a few seconds to decode the XEX.
 
 **Back up and apply** verifies the loaded file has not changed, edits only the allowed
