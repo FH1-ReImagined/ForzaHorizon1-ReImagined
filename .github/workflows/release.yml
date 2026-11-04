@@ -811,7 +811,11 @@ jobs:
           # unsigned-*: the files launcher-windows sent to SignPath; only their signed copies are released.
           rm -rf artifacts/unsigned-*
           mkdir assets
-          find artifacts -type f -exec mv -f -t assets {} +
+          # One file per name: the flatpak job's own artifact and flatpak-builder's carry the same
+          # bundle, and mv refuses two sources with the same name in one call.
+          find artifacts -type f -print0 | while IFS= read -r -d '' f; do
+            cp -f "$f" "assets/$(basename "$f")"
+          done
       - name: Release
         env:
           GH_TOKEN: ${{ github.token }}
