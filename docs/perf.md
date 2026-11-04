@@ -514,6 +514,56 @@ reporter's RX 6600 the first version, which waited for none of those, still had 
 they may not come from the waits at all: their run of this build with `vulkan_readback_log_misses`
 and `defer_skip` is the test.
 
+### The pairs that stayed: readback buffers reused (#536, 2026-11-03)
+
+With 0410 the reporter (RX 6600, 8 GB, RADV, render scale 2, `scene_msaa = off`, 60 fps cap) still
+had the pairs of 40-48 ms frames: 13-19 a minute with `some` (22 before 0410), 10 with
+`vulkan_readback_defer = false`, 4-5 with `none`, from their `frames.csv` files (two frames over
+30 ms within three frames). Their deferred misses do not wait, so the waits are not all of it.
+
+**Not reproduced here.** RX 9060 XT (16 GB), RADV, the same settings in a 1920x1080 window on a
+hidden gamescope (1920x1080 at 60 Hz), BENCH lock held, no other game: no pair in any mode, in the
+benchmark race at render scale 2 and 3 (scale 3 is GPU-bound at 43.6 fps; `some` 1% low 40.5 / p99
+24.2 ms, `none` 40.5 / 24.3) or in free roam (the golden save, `tools/autodrive.py` on a road loop
+for 60 s, 11-20 misses a minute). The race has no miss on this PC at either scale
+(`vulkan_readback_log_misses`), and the frame cost CSV's columns are the same in `some` and `none`
+there: `some` does nothing then that `none` does not. On the reporter's PC the misses do happen in
+the race (`fast` and `vulkan_readback_defer = false` show readback waits there), and on a miss
+`some` still does more than the wait: a dedicated host buffer created and mapped
+(`vkAllocateMemory`, `vkMapMemory`), the copy, the data written into guest memory, and the buffer
+freed again when its key is evicted, 60 frames (a second at 60 fps) after the car's last resolve.
+`none` does none of it.
+
+**The change (ReIGlue 0426, `vulkan_readback_reuse_buffers`, on).** `some` needs a key's buffer only
+until its copy is in guest memory: it goes back to a pool then (and when its key is evicted), and a
+miss takes a buffer of its size class from there. So misses and evictions no longer allocate or free
+memory on the command processor thread, and no buffer is kept for a key after its copy (before: a
+buffer for every key in use, 97 buffers and 62 MB in the long session of #45). Pooled buffers unused
+for 600 frames are freed, the pool keeps at most 64 MB. The frame cost CSV gains `readback_buffers_created`,
+`readback_buffers_freed` and `readback_free_ms`.
+
+| Scene (60 fps cap, scale 2) | Mode | 1% low (fps) | p99 (ms) | pairs a minute | buffers created / freed a minute |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Benchmark race | `some`, before (`reuse_buffers = false`) | 48.2, 50.6 | 18.4, 18.7 | 0, 0 | 0 / 0 |
+| Benchmark race | `some`, 0426 | 50.7, 46.2 | 18.5, 19.7 | 0, 0 | 0 / 0 |
+| Benchmark race | `none` | 50.9, 44.8 | 18.2, 19.0 | 0, 0 | 0 / 0 |
+| Free roam | `some`, before | 51.2, 52.8 | 17.4, 17.4 | 0, 0 | 16-20 / 17-20 |
+| Free roam | `some`, 0426 | 53.7, 55.3 | 17.2, 17.3 | 0, 0 | 2-6 / 2-4 |
+| Free roam | `none` | 57.3, 52.0 | 17.1, 17.5 | 0, 0 | 0 / 0 |
+
+(Two interleaved rounds; benchmark from its `frames.csv`, free roam from the cost CSV's frame times.)
+Here a created buffer costs about 0.04 ms and a free about 0.02 ms, so the difference is in the
+noise; whether these calls are what costs the reporter's GPU is their A/B to make:
+`vulkan_readback_reuse_buffers = false` against the default, and `vulkan_readback_defer_skip = true`
+(a deferred key not copied at all), each with `fh1_frame_cost_csv` (the pairs are under the 50 ms of
+the `GPU slow frames` lines). Checked with 0426 on the golden save at render scale 2 (warm pipeline
+cache): the vinyl group thumbnail (MY VINYL GROUPS and the storefront preview), the paint job preview,
+the storefront livery texture, two saved photos with their thumbnails, and the car's thumbnail after
+an Auto Upgrade at a Horizon Outpost (`Thumbnail_N.xdc`, 768x288, the 3/4 and side views) are correct.
+In the first check run, with an empty pipeline cache, the paint job preview came out black; that run
+logged resolves copied back while draws' pipelines were still being built (as in #74). The same flow
+with the cache warm is correct with and without 0426.
+
 ## Shader cache, cold and warm (#34, 2026-10-15)
 
 Where the pipeline cache lives: the SDK keeps no `VkPipelineCache` blob. It stores the

@@ -49,12 +49,14 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # with a GPU wait (photo mode's Big Shot, #552), and 0410: first-seen resolves of per-frame
 # render targets copied back without a GPU wait (#536, ReIGlue PR #15), and 0421/0422: the log
 # file rolls over at log_file_max_mb (50 MB) and the lines that filled players' logs are rarer
-# (#609), and 0424: the car paint's dirt map without a seam down the bonnet's centre line
-# (#164, ReIGlue PR #30).
+# (#609), and 0423: the frame cost CSV's pipelines on any thread, held frames and CPU write
+# faults (#614, ReIGlue PR #28), and 0424: the car paint's dirt map without a seam down the
+# bonnet's centre line (#164, ReIGlue PR #30), and 0426: resolve readback buffers reused instead
+# of allocated and freed on every miss and eviction (#536).
 # A reviewed full commit can be pinned before a maintainer publishes a tag.
 # When a tag is supplied, its target must still match this immutable commit.
 REIGLUE_TAG=
-REIGLUE_COMMIT=57bed63bb7e443c7fd82517cdd8a846229c5735e  # ReIGlue #30 (0424, #164), on top of merged 0421/0422 (#609), #15 (0410) and #20-#25 (0413-0419)
+REIGLUE_COMMIT=70c798295c6d39295ddae09c0357508f89934e6f  # 0426 (#536) on ReIGlue main: #30 (0424, #164), #28 (0423, #614), 0421/0422 (#609), #15 (0410), #20-#25 (0413-0419)
 REIGLUE_URL="${REIGLUE_URL:-https://github.com/FH1-ReImagined/ReIGlue}"
 NIGHTLY="${REXSDK_NIGHTLY:-$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64}"
 SRC="${REXSDK_SRC:-$HOME/rexglue-sdk-src-forza/sdk}"
