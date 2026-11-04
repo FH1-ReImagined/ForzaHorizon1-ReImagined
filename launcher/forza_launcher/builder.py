@@ -1022,10 +1022,13 @@ def compile_passes(opts: Options, rep: Reporter, tools, src: Path, bdir: Path, e
     for attempt in (1, 2):
         rep.status("Compiling" + (" (second pass)" if attempt == 2 else ": this takes a long time"))
         dirty = {"seen": False}
+        failed = []
 
         def on_line(line):
             if DIRTY_MANIFEST in line:
                 dirty["seen"] = True
+            if line.startswith("FAILED: "):
+                failed.append(line)
             m = NINJA_RE.match(line)
             if m:
                 n, total = int(m.group(1)), int(m.group(2))
@@ -1036,7 +1039,17 @@ def compile_passes(opts: Options, rep: Reporter, tools, src: Path, bdir: Path, e
                 low_priority=opts.low_priority, monitor=monitor)
         except BuildError as e:
             e.dirty_manifest = dirty["seen"]
+            e.failed = list(failed)
             raise
+
+
+def regpu_only_failure(failed) -> bool:
+    """Whether every ninja "FAILED: <output>" line is the ReGPU plugin's (regpu-plugin/, the DLL)."""
+    outputs = []
+    for line in failed:
+        rest = re.sub(r"^FAILED:\s*(?:\[code=\d+\]\s*)?", "", line).strip().replace("\\", "/")
+        outputs.append(rest.split(" ")[0])
+    return bool(outputs) and all(o.startswith("regpu-plugin/") or "rexgpu-regpu" in o for o in outputs)
 
 
 def run_build(opts: Options, rep: Reporter, game_files: Path) -> Path:
@@ -1129,9 +1142,15 @@ def _run_build(opts: Options, rep: Reporter, game_files: Path) -> Path:
     sdk_ident = sdk_identity(overlay, dev)
     stamp = configure_stamp(tools, sdk_ident, tu is not None)
 
+    # ReGPU, the experimental Direct3D 12 renderer (Settings > Graphics API, regpu.py), is built with
+    # every Windows build, so choosing it needs no new build. It is optional: when only its plugin
+    # fails to compile, the game is built without it.
+    regpu_plugin = IS_WIN
     # A tree CMake configured for another version of the launcher (a build that stopped, then an
     # update) is deleted, not resumed; so is one ninja cannot get clean (see compile_pass).
-    for attempt in (1, 2):
+    attempt = 0
+    while attempt < 2:
+        attempt += 1
         reset_stale_build_tree(bdir, stamp, rep)
         fixed = clamp_future_times([src, sdk, build_dir(root) / "toolchain", build_env.toolchain_dir(root),
                                     root / "xwin"])
@@ -1143,7 +1162,8 @@ def _run_build(opts: Options, rep: Reporter, game_files: Path) -> Path:
              f"-DCMAKE_PREFIX_PATH={sdk.as_posix()}", f"-Drexglue_DIR={(sdk / 'lib/cmake/rexglue').as_posix()}",
              f"-DFORZA_REXGLUE={rexglue.as_posix()}",
              f"-DCMAKE_MAKE_PROGRAM={Path(tools.ninja).as_posix()}"] +
-            ([f"-DFORZA_XENOS_PLUGIN={(sdk / 'lib/librexgpu-xenos.so').as_posix()}"] if not IS_WIN else []) +
+            ([f"-DFORZA_XENOS_PLUGIN={(sdk / 'lib/librexgpu-xenos.so').as_posix()}"] if not IS_WIN else
+             [f"-DFORZA_REGPU_PLUGIN={'ON' if regpu_plugin else 'OFF'}"]) +
             cmake_extra, src, env, rep, low_priority=opts.low_priority)
         write_configure_stamp(bdir, stamp)
         rep.progress(0.24)
@@ -1151,6 +1171,13 @@ def _run_build(opts: Options, rep: Reporter, game_files: Path) -> Path:
             compile_passes(opts, rep, tools, src, bdir, env, monitor)
             break
         except BuildError as e:
+            if regpu_plugin and regpu_only_failure(getattr(e, "failed", ())):
+                rep.log("Warning: the experimental ReGPU renderer did not compile (the lines above); building "
+                        "the game without it. Settings > Graphics API > ReGPU then plays with Vulkan.")
+                regpu_plugin = False
+                (bdir / "rexgpu-regpu.dll").unlink(missing_ok=True)
+                attempt -= 1
+                continue
             if not getattr(e, "dirty_manifest", False):
                 raise
             if attempt == 2:
@@ -1209,7 +1236,10 @@ def stage_runtime(opts: Options, rep: Reporter, bdir: Path, sdk: Path) -> Path:
     if IS_WIN:
         # rexgpu-regpu.dll and its d3dcompiler_47.dll: the optional ReGPU plugin (FORZA_REGPU_PLUGIN);
         # its licenses come with licenses/ above.
+        # A plugin from an earlier build is removed when this one has none (it would not match forza.exe).
         plugin = [bdir / n for n in ("rexgpu-regpu.dll", "d3dcompiler_47.dll") if (bdir / n).is_file()]
+        if not (bdir / "rexgpu-regpu.dll").is_file():
+            (rt / "rexgpu-regpu.dll").unlink(missing_ok=True)
         for f in [bdir / "forza.exe"] + sorted(bdir.glob("forza_*.dll")) + plugin:
             shutil.copy2(f, rt / f.name)
         for dll in sorted((sdk / "bin").glob("*.dll")):

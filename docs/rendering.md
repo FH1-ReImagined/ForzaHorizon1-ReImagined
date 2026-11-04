@@ -959,3 +959,45 @@ and time): Mercedes 300SL Gullwing, Aston Martin DB5 and Plymouth Cuda 426 HEMI 
 the setting on and dark without; the Cuda's tail lights and the rest of the picture unchanged;
 at dusk with the headlights on the gauges look as the game draws them. The Lamborghini
 Aventador's digital display (drawn from a UI texture) is lit either way.
+
+## ReGPU (Direct3D 12, experimental, Windows)
+
+ReGPU is a second Direct3D 12 renderer (FH1-ReImagined/ReGPU, `forza-recomp/thirdparty/ReGPU`), built as
+the GPU plugin `rexgpu-regpu.dll` (`forza-recomp/regpu-plugin`). The launcher's Windows build always
+compiles it (`-DFORZA_REGPU_PLUGIN=ON`). When only the plugin fails to compile, the build warns and
+builds the game without it. Players turn it on in Settings > Display > Picture > Graphics API >
+ReGPU (experimental) (`launcher/forza_launcher/regpu.py`). forza.toml then gets
+`gpu_backend = "d3d12"` and `gpu_plugin = "regpu"`. A build without the plugin plays with Vulkan
+and shows a note. The Vulkan-only features (DLSS, FSR 3, SMAA, HDR, VR, ultrawide, shader prebuild)
+are off with it, as on the SDK's own Direct3D 12 backend.
+
+- **GPU:** ReGPU uses the first adapter in DXGI's high-performance order. Laptops with an integrated
+  GPU and a GeForce (Optimus) otherwise drew on the integrated one: `forza.exe` exports no
+  `NvOptimusEnablement`, and a plugin DLL can't export it for the exe. `REGPU_ADAPTER=<n>` picks
+  another adapter. regpu.log (`<cache_root>/regpu/`) names the one in use.
+- **Resolution:** the output size, upscaler and MSAA scene size come from the in-game Graphics
+  screen's saved choices (`graphics-settings.json`), and otherwise from the launcher's settings.
+- **First start:** ReGPU compiles every shader in the game files (1,688) behind a boot screen, then
+  builds the 1,183 pipelines from its recorded seed. Both are stored, and later starts load them in
+  about 20 s. The first drives also compile the shaders the game makes in play (about 125). Until
+  they are ready, the ground they draw is plain white.
+
+Measured on 2026-11-04 on a GTX 1650 Ti laptop (Core i5-10300H, 8 GB, Windows 11, driver 555.97):
+- **First start:** shaders 488 s for 1,341 of them, plus seed pipelines 70 s, so about 10 minutes
+  on this 4-core CPU.
+- **Test drive:** a scripted free-roam drive from the 1000 Club save (full throttle for 90 s,
+  measured from 5 s to 80 s after the car moves, `FORZA_FRAMETIME_CSV`).
+- **Settings:** 1080p borderless, frame cap 240, vsync off, warm caches.
+
+| Renderer | fps | 1% low | p99 frame time |
+| --- | --- | --- | --- |
+| Vulkan (scene 1280x720, bilinear to 1080p), 2 runs | 54.9, 58.4 | 29.5, 41.6 | 28.8, 21.8 ms |
+| ReGPU, native 1920x1080 scene, 2 runs | 40.7, 39.8 | 19.7, 21.0 | 45.8, 42.3 ms |
+| ReGPU, FSR 1 Quality (1280x720 scene), 2 runs | 39.7, 39.2 | 21.3, 21.2 | 42.1, 41.7 ms |
+
+The GPU was 95-100% busy with ReGPU and 90-98% with Vulkan. ReGPU's frame rate didn't change when
+FSR 1 cut the scene to 1280x720, so on this card its cost is per frame or per draw, not per pixel.
+At the main menu the main loop's frame time was 18.8 ms on ReGPU and 7.3 ms on Vulkan. The Graphics
+screen applies changes live on ReGPU (a preset change to a 2560x1440 scene was saved). On the SDK's
+own Direct3D 12 backend it answers "Live graphics requires the updated Vulkan renderer." without
+hanging (#611's review).
