@@ -177,6 +177,19 @@ int main() {
   WriteFloat(world.data() + 0x28, 0); assert(!LiveCameraWorld(world.data()));
   WriteFloat(world.data() + 0x28, std::numeric_limits<float>::infinity());
   assert(!LiveCameraWorld(world.data()));
+  // The FOV hook's gate: any loaded world with a finite time scale (#646).
+  std::array<uint8_t, 0x2C> loaded{};
+  assert(!LoadedCameraWorld(nullptr) && !LoadedCameraWorld(loaded.data()));
+  loaded[0x0D] = 1; WriteFloat(loaded.data() + 0x28, 1);
+  assert(LoadedCameraWorld(loaded.data()));
+  loaded[0x0C] = 1; assert(LoadedCameraWorld(loaded.data()));  // paused
+  loaded[0x0C] = 0; WriteFloat(loaded.data() + 0x28, -1);
+  assert(LoadedCameraWorld(loaded.data()));  // rewinding
+  WriteFloat(loaded.data() + 0x28, 0); assert(LoadedCameraWorld(loaded.data()));
+  WriteFloat(loaded.data() + 0x28, std::numeric_limits<float>::quiet_NaN());
+  assert(!LoadedCameraWorld(loaded.data()));
+  WriteFloat(loaded.data() + 0x28, 1); loaded[0x0D] = 0;
+  assert(!LoadedCameraWorld(loaded.data()));  // loading
   assert(ValidBaseFov(0) && ValidBaseFov(40) && ValidBaseFov(90));
   assert(!ValidBaseFov(39) && !ValidBaseFov(91));
   Check({0x820755AC, 0x8207562C, 0x82075DD4, 0x82075D54, 0x82075E54, 0x82075444});

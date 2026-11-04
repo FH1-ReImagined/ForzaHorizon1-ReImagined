@@ -33,9 +33,11 @@ switch its whole adjustment on or off at the final frame. Nested blends are
 bounded to eight levels and 31 visited nodes, with cycle, pointer, numeric and
 layout checks; malformed graphs retain the original FOV.
 
-The current world's existing pause/replay flag, loaded flag and time scale
-exclude paused, replay, rewind and loading worlds. These are the same fields used
-by the existing wheel-driving gate, read directly without its debounce delay.
+Only the current world's loaded flag and a finite time scale gate the adjustment:
+loading worlds keep the original FOV. Paused, replay and rewinding worlds keep the
+selected base, as they still show the driving cameras (the pause menu is drawn over
+the frozen chase view). Excluding them made every pause and rewind jump back to the
+default view (#646).
 All adjustments are bypassed while vr_head_pose_test is enabled, even for an
 identity pose, or while the real OpenXR cockpit session is active
 (`forza::xr::CockpitActive()`). The headset retains ownership of its projection.
