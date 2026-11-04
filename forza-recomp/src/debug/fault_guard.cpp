@@ -236,8 +236,11 @@ bool OnUnhandledFault(rex::arch::Exception* ex, void* /*data*/) {
   } else {
     REXLOG_CRITICAL("Unhandled illegal instruction (trap) at pc {}", HostAddr(ex->pc()));
   }
-  LogStack();
+  // The guest state first: unwinding the host stack can fault again (an indirect call to a
+  // data address leaves a frame the unwinder cannot read), and then nothing more is logged.
   LogGuestState();
+  if (auto logger = rex::GetLogger()) logger->flush();
+  LogStack();
   if (Wait()) {
     REXLOG_CRITICAL("FORZA_FAULT=wait: thread parked for a debugger");
     for (;;) std::this_thread::sleep_for(std::chrono::hours(1));
