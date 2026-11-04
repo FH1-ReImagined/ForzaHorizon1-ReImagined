@@ -234,14 +234,27 @@ def _solve3(n1, n2, n3, d1, d2, d3):
 def hull_from_points(points, shrink=0.985):
     """A convex polytope around the points with the game's kind of shape (planar sides, at
     most 26 faces): the intersection of the half-spaces of _dirs() through the extreme
-    points. Returns (vertices, faces wound clockwise seen from outside)."""
+    points. Returns (vertices, faces wound clockwise seen from outside). When more than
+    three planes meet in one point (a symmetric body), the planes are moved by a few
+    millimetres, each by its own amount, until every vertex is a clean corner."""
     normals = _dirs()
-    planes = []
+    base = []
     for n in normals:
         d = max(p[0] * n[0] + p[1] * n[1] + p[2] * n[2] for p in points)
         if d > 0 and n != (0.0, -1.0, 0.0):
             d *= shrink
-        planes.append((n, d))
+        base.append((n, d))
+    for attempt in range(6):
+        nudge = 0.0015 * attempt
+        planes = [(n, d - nudge * ((k * 7) % len(base)) / len(base)) for k, (n, d) in enumerate(base)]
+        verts, faces = _polytope(planes)
+        edges = {tuple(sorted(e)) for f in faces for e in zip(f, f[1:] + f[:1])}
+        if len(verts) - len(edges) + len(faces) == 2 and all(len(f) >= 3 for f in faces):
+            return verts, faces
+    raise PhysdefError("no clean collision hull for this body")
+
+
+def _polytope(planes):
     eps = 1e-5
     verts = []
     for (a, da), (b, db), (c, dc) in itertools.combinations(planes, 3):
