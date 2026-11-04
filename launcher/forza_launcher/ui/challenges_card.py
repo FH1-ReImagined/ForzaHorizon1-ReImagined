@@ -2,18 +2,26 @@
 weekly objectives with this player's progress. Asked off the GUI thread a moment after the card
 is on screen, then at most every 5 minutes while the launcher is open, and again after each game
 session (the session's results are on the server then). Nothing is asked unless challenges.state
-is 'on'."""
+is 'on'.
+
+The request runs on a plain Python thread that touches no Qt object: it leaves its answer in a
+dict, and a timer on the GUI thread picks it up. No signal is emitted from that thread, so a card
+(or window) closed or deleted while the request runs is never reached from it. On a headless Qt
+platform (offscreen: the tests and CI) the real request is never started."""
+import threading
 import time
 
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QGridLayout, QLabel, QVBoxLayout, QWidget
 
-from .. import challenges
+from .. import challenges, paths
 from . import theme
 from .widgets import card, label
-from .workers import Probe
 
 FIRST_DELAY_MS = 2000   # after the card shows: opening the launcher is not held up
+POLL_MS = 100           # how often the GUI thread looks for the answer
+HEADLESS = ("offscreen", "minimal")
 
 
 class ChallengesCard(QWidget):
@@ -51,6 +59,10 @@ class ChallengesCard(QWidget):
         self.timer = QTimer(self)
         self.timer.setSingleShot(True)
         self.timer.timeout.connect(self._fetch_if_shown)
+        self.poll = QTimer(self)
+        self.poll.setInterval(POLL_MS)
+        self.poll.timeout.connect(self._poll)
+        self._shown = None           # what the card shows now: rebuilt only when it changes
         self.show_state()
 
     # ---- what the card says ------------------------------------------------------------------
@@ -71,6 +83,10 @@ class ChallengesCard(QWidget):
         return st
 
     def _fill(self, sets, note):
+        shown = (tuple(sets), note, self.gift_text, int(time.time() // 60))
+        if shown == self._shown:     # the Play page refreshes often: nothing to rebuild
+            return
+        self._shown = shown
         while self.grid.count():
             item = self.grid.takeAt(0)
             if item.widget() is not None:
@@ -118,15 +134,40 @@ class ChallengesCard(QWidget):
             self.timer.start(FIRST_DELAY_MS)
 
     def _fetch_if_shown(self):
-        """Only a card on screen asks: a window built and never shown (tests) sends nothing."""
+        """Only a card on screen asks: a window built and never shown sends nothing, and on a
+        headless platform (tests, CI) the real server is never asked."""
         if not self.isVisible() or self.busy() or challenges.state(self.cfg) != "on":
             return
+        if self._load is None and QGuiApplication.platformName() in HEADLESS:
+            return
         self._due = False
-        cfg, load = self.cfg, self._load or challenges.load
-        self._probe = Probe(lambda: load(cfg), "challenges", self)
-        self._probe.result.connect(self._fetched)
-        self._probe.start()
+        cfg, load, box = self.cfg, self._load or challenges.load, {}
+
+        def work():   # no Qt here: only the answer, in `box`
+            try:
+                box["result"] = load(cfg)
+            except BaseException as e:
+                paths.log_error(f"challenges: unexpected {type(e).__name__}", e)
+                box["result"] = None
+        thread = threading.Thread(target=work, name="challenges", daemon=True)
+        self._probe = (thread, box)
+        thread.start()
+        self.poll.start()
         self.show_state()
+
+    def _poll(self):
+        if self._probe is None:
+            self.poll.stop()
+            return
+        thread, box = self._probe
+        if thread.is_alive():
+            return
+        self.poll.stop()
+        self._fetched(box.get("result"))
+
+    def hideEvent(self, e):
+        self.timer.stop()   # the window closed or the page left: nothing is started meanwhile
+        super().hideEvent(e)
 
     def _fetched(self, result):
         self._probe = None

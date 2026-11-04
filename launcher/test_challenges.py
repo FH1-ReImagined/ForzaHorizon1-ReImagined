@@ -307,6 +307,39 @@ class CardTests(Base):
         self.assertEqual(card.gift.text(), "1 of 3 so far.")
         self.assertTrue(card.gift.isVisibleTo(card))
 
+    def test_headless_the_real_server_is_never_asked(self):
+        """The offscreen platform (tests, CI): the card's own loader never starts, even on screen."""
+        from forza_launcher.ui import challenges_card
+        with patch.object(challenges, "load", side_effect=AssertionError("asked")) as load:
+            card = challenges_card.ChallengesCard(self.cfg, self.host)
+            self.host.show()
+            card.refresh()
+            self.spin()
+            self.assertFalse(load.called)
+            self.assertFalse(card.busy())
+
+    def test_the_request_thread_touches_no_widget(self):
+        """The answer is picked up on the GUI thread, also when the card is closed meanwhile."""
+        gate = threading.Event()
+        seen = []
+
+        def load(cfg):
+            gate.wait(5)
+            seen.append(threading.current_thread() is threading.main_thread())
+            return challenges.parse(doc(now=time.time())), "", ""
+        from forza_launcher.ui import challenges_card
+        card = challenges_card.ChallengesCard(self.cfg, self.host, load=load)
+        self.host.show()
+        card.refresh()
+        self.spin(5, card.busy)
+        self.assertTrue(card.busy())
+        self.host.hide()            # the window closes while the request runs
+        gate.set()
+        self.spin(5, lambda: card.fetches)
+        self.assertEqual(seen, [False])
+        self.assertEqual(card.fetches, 1)
+        self.assertEqual(len(card.sets), 2)
+
     def test_a_card_not_on_screen_asks_nothing(self):
         self.card.refresh()
         self.spin()
