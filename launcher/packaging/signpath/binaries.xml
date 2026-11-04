@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SignPath artifact configuration "binaries" (#354): the first signing request of a Windows release.
+  The release workflow (launcher-windows job) uploads forza-launcher.exe and Inno Setup's uninstaller,
+  uninst-<Inno Setup version>-<hash>.e32 (launcher/packaging/build_installer.ps1 -PrepareUninstaller), as the GitHub
+  artifact unsigned-windows-binaries; actions/upload-artifact packs it as a ZIP file.
+  The copy kept here is for review: the configuration SignPath uses is the one entered in its web
+  interface under the project, and the two must stay the same.
+  Every signed file must say it is this project, in this version (SignPath Foundation's rules), so
+  product-name and product-version are enforced; the workflow passes the version as a parameter.
+-->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" required="true" />
+  </parameters>
+  <zip-file>
+    <pe-file path="forza-launcher.exe" product-name="Forza Horizon 1: ReImagined" product-version="${version}">
+      <authenticode-sign hash-algorithm="sha256" description="Forza Horizon 1: ReImagined launcher" description-url="https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined" />
+    </pe-file>
+    <pe-file path="uninst-*.e32" max-matches="1" product-name="Forza Horizon 1: ReImagined" product-version="${version}">
+      <authenticode-sign hash-algorithm="sha256" description="Forza Horizon 1: ReImagined Setup" description-url="https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined" />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>
