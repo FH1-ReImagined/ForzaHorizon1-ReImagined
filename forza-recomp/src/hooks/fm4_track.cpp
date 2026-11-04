@@ -6,20 +6,27 @@
 //   FORZA_PVS_TRACE=<file>    every read of the PVS reader, to <file>
 //   FORZA_INSECURE_FILES=a|b  files the secure file system lets open as plain files (a
 //                             changed zipmanifest.xml that mounts a converted track's archive)
+//   FORZA_FM4_COL=1           the track's collision is read whole from its .col files (a
+//                             converted FM4 track's, tools/fm4_col.py), not streamed as .fiz
+//   FORZA_FIZ_TRACE=1         log the track archive's depot reads (with their callers) and
+//                             the teleports' orientation
+//   FORZA_FM4_ZONE_POOL=n     n times the live instance objects (a converted track's zones)
 // tu_address_map: TU4 addresses
 //
 // tools/fm4_track_mod.py --free-roam makes FH1's free roam load an FM4 circuit in place of
 // Colorado. The car then starts at its saved Colorado position, in the void.
-// FORZA_TRACK_SPAWN=x,y,z (world metres, y up; Suzuka's flying start is 487.7,606,22.5)
-// moves the player car's teleports there (the spawn into free roam, a car reset), and logs
-// every vehicle teleport. Called from the teleport hook in teleport_velocity.cpp.
+// FORZA_TRACK_SPAWN=x,y,z[,fx,fz] (world metres, y up; Suzuka's flying start is
+// 487.7,606,22.5) moves the player car's teleports there (the spawn into free roam, a car
+// reset), facing (fx, 0, fz) when given, and logs every vehicle teleport. Called from the teleport hook in teleport_velocity.cpp.
 
 #include "../platform/guest_addr.h"
+#include "../platform/guest_memory.h"
 
 #include <rex/logging.h>
 #include <rex/ppc/context.h>
 
 #include <algorithm>
+#include <cmath>
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -27,21 +34,39 @@
 
 namespace forza::fm4_track {
 
-void OnTeleport(PPCContext& ctx) {
+void OnTeleport(PPCContext& ctx, uint8_t* base) {
 #if FORZA_TU4
   static const struct Spawn {
-    bool on = false;
-    float x = 0, y = 0, z = 0;
+    bool on = false, heading = false;
+    float x = 0, y = 0, z = 0, fx = 0, fz = 0;
   } spawn = [] {
     Spawn s;
     const char* p = std::getenv("FORZA_TRACK_SPAWN");
-    s.on = p && std::sscanf(p, "%f,%f,%f", &s.x, &s.y, &s.z) == 3;
+    const int n = p ? std::sscanf(p, "%f,%f,%f,%f,%f", &s.x, &s.y, &s.z, &s.fx, &s.fz) : 0;
+    s.on = n >= 3;
+    s.heading = n == 5;
+    if (s.heading) {
+      const float m = std::sqrt(s.fx * s.fx + s.fz * s.fz);
+      s.heading = m > 0;
+      if (s.heading) { s.fx /= m; s.fz /= m; }
+    }
     return s;
   }();
   if (!spawn.on) return;
   // lvx byte-reverses the vector: x is the top lane (world_challenge.cpp).
   REXLOG_INFO("FM4TRACK: teleport of vehicle {:08X} to {:.1f},{:.1f},{:.1f}", ctx.r3.u32,
               ctx.v1.f32[3], ctx.v1.f32[2], ctx.v1.f32[1]);
+  if (std::getenv("FORZA_FIZ_TRACE") && ctx.r4.u32 >= 0x40000000 && ctx.r4.u32 < 0x80000000) {
+    std::string o;
+    for (int i = 0; i < 16; ++i) {
+      const uint8_t* p = forza::GuestPtr(base, ctx.r4.u32 + 4 * i);
+      const uint32_t v = uint32_t(p[0]) << 24 | p[1] << 16 | p[2] << 8 | p[3];
+      float f;
+      std::memcpy(&f, &v, 4);
+      o += fmt::format(" {:.3f}", f);
+    }
+    REXLOG_INFO("FM4TRACK: teleport orientation at {:08X}:{}", ctx.r4.u32, o);
+  }
   // Only the player's car: the first car teleported (the spawn into free roam) is it. The
   // free-roam AI drivers are teleported too, to their own places.
   static std::atomic<uint32_t> player{0};
@@ -50,6 +75,17 @@ void OnTeleport(PPCContext& ctx) {
   ctx.v1.f32[3] = spawn.x;
   ctx.v1.f32[2] = spawn.y;
   ctx.v1.f32[1] = spawn.z;
+  // x,y,z,fx,fz: the car faces (fx, 0, fz). r4 is the orientation, rows of 4 floats (right,
+  // up, forward: right = (fz, 0, -fx), as in the game's own teleports).
+  if (spawn.heading && ctx.r4.u32 >= 0x40000000 && ctx.r4.u32 < 0x80000000) {
+    const float rows[12] = {spawn.fz, 0, -spawn.fx, 0, 0, 1, 0, 0, spawn.fx, 0, spawn.fz, 0};
+    for (int i = 0; i < 12; ++i) {
+      uint32_t v;
+      std::memcpy(&v, &rows[i], 4);
+      uint8_t* q = forza::GuestPtr(base, ctx.r4.u32 + 4 * i);
+      q[0] = uint8_t(v >> 24); q[1] = uint8_t(v >> 16); q[2] = uint8_t(v >> 8); q[3] = uint8_t(v);
+    }
+  }
 #else
   (void)ctx;
 #endif
@@ -241,6 +277,12 @@ extern "C" REX_FUNC(sub_82E1CA20) {
     }
     REXLOG_INFO("FM4TRACK: instance objects: {} null of {}, first {} last {}", nulls, n, first,
                 last);
+    const uint32_t pool = Load32(base, t + 0x50);
+    if (pool && GuestReadable(pool)) {
+      REXLOG_INFO("FM4TRACK: zone pool {:08X}: {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}", pool,
+                  Load32(base, pool), Load32(base, pool + 4), Load32(base, pool + 8),
+                  Load32(base, pool + 12), Load32(base, pool + 16), Load32(base, pool + 20));
+    }
     const uint32_t zones = Load32(base, t + 55332), id = Load32(base, z + 12);
     const uint32_t cell = zones ? Load32(base, zones + 20 * id) : 0;
     if (cell && GuestReadable(cell)) {
@@ -519,6 +561,58 @@ extern "C" REX_FUNC(sub_82D21528) {
   if (std::getenv("FORZA_TRACK_SPAWN") && logged.fetch_add(1) < 400) {
     REXLOG_INFO("FM4TRACK: depot file {}", ctx.r4.u32);
   }
+  static std::atomic<int> traced{0};
+  if (std::getenv("FORZA_FIZ_TRACE") && traced.fetch_add(1) < 600) {
+    std::string chain;
+    uint32_t frame = ctx.r1.u32;
+    for (int i = 0; i < 10 && Stack(frame) && GuestReadable(frame); ++i) {
+      const uint32_t parent = Load32(base, frame);
+      if (parent <= frame || parent - frame > 0x100000 || !GuestReadable(parent - 8)) break;
+      chain += fmt::format(" {:08X}", Load32(base, parent - 8));
+      frame = parent;
+    }
+    REXLOG_INFO("FM4TRACK: depot file {} r3 {:08X} r5 {:08X} r6 {:08X} from {:08X}{}", ctx.r4.u32,
+                ctx.r3.u32, ctx.r5.u32, ctx.r6.u32, uint32_t(ctx.lr), chain);
+  }
   __imp__sub_82D21528(ctx, base);
+}
+#endif
+
+
+#if FORZA_TU4
+// A ribbon's collision index given to the collision manager (sub_82E0B2A8: r3 the track, r4
+// the .col file, r5 0 to read every cell from the .col file now, sub_82DD8548; Colorado's
+// come with 1, its cells streamed as .fiz files with the zones). FORZA_FM4_COL=1 passes 0:
+// a converted FM4 track keeps its cells in the .col file (tools/fm4_col.py).
+extern "C" REX_FUNC(__imp__sub_82E0B2A8);
+extern "C" REX_FUNC(sub_82E0B2A8) {
+  if (std::getenv("FORZA_FIZ_TRACE") || std::getenv("FORZA_FM4_COL")) {
+    REXLOG_INFO("FM4TRACK: collision index: r5 {} r6 {}{}", ctx.r5.u32, ctx.r6.u32,
+                std::getenv("FORZA_FM4_COL") ? ", cells read whole (FORZA_FM4_COL)" : "");
+  }
+  if (std::getenv("FORZA_FM4_COL")) ctx.r5.u64 = 0;
+  __imp__sub_82E0B2A8(ctx, base);
+}
+#endif
+
+#if FORZA_TU4
+// The pool of live instance objects (sub_82E11B60: r6 the count, 224 bytes each), made by the
+// track presentation (sub_82E296C0) with 3 x (the largest zone's instance count + 128) + the
+// dynamic instances. The game makes up to 14 zones live around the car (sub_82E27480);
+// Colorado's zones each list everything visible from them, so the live zones share most
+// instances, where a converted FM4 track's hex zones hold only their own and 9 live ones can
+// need more objects than that (a null object written at +0x80, sub_82E2E750).
+// FORZA_FM4_ZONE_POOL=n makes the pool n times larger.
+extern "C" REX_FUNC(__imp__sub_82E11B60);
+extern "C" REX_FUNC(sub_82E11B60) {
+  if (const char* p = std::getenv("FORZA_FM4_ZONE_POOL")) {
+    const uint32_t lr = uint32_t(ctx.lr);
+    const int n = std::atoi(p);
+    if (lr > 0x82E296C0 && lr < 0x82E29A00 && n > 1) {
+      REXLOG_INFO("FM4TRACK: instance object pool {} -> {}", ctx.r6.u32, ctx.r6.u32 * n);
+      ctx.r6.u64 = uint64_t(ctx.r6.u32) * n;
+    }
+  }
+  __imp__sub_82E11B60(ctx, base);
 }
 #endif

@@ -47,14 +47,20 @@ To run it (dev): the loose files over a copy of the game folder, the mod from
 tools/fm4_track_mod.py, and
   FORZA_INSECURE_FILES='zipmanifest.xml|\\tracks\\<track>\\'
   FORZA_FM4_STX='<Track>|LOOSE_DIR/<track>_stx_numbers.bin'
-  FORZA_TRACK_SPAWN=x,y,z (Suzuka: 487.7,606,22.5)
-Status: Suzuka renders (buildings, stands, crowds, trees, grass, fences, flags, the road);
-FM4's terrain and road-shoulder blend shaders still draw dark or not at all under FH1, and
-the car is held still (no collision yet: FM4's .col is not FH1's streamed .fiz).
+  FORZA_TRACK_SPAWN=x,y,z[,fx,fz] (Suzuka's main straight: 478,604.5,14,0.57,-0.82)
+  FORZA_FM4_COL=1 (the collision read whole from the converted .col files)
+  FORZA_FM4_ZONE_POOL=4 (more live instance objects: the hex zones share few instances)
+and FM4_DISC=<FM4's disc folder> when converting, for the surface numbers (tools/fm4_col.py).
+Status: Suzuka renders (buildings, stands, crowds, trees, grass, fences, flags, the road)
+and drives (collision: tools/fm4_col.py); FM4's terrain and road-shoulder blend shaders still
+draw dark or not at all under FH1.
 """
 import os
 import struct
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fm4_col  # noqa: E402
 
 FH1_VERSION = 50
 
@@ -497,6 +503,21 @@ def archive_order(paths):
     return sorted(paths, key=lambda p: zlib.crc32(p.lower().encode("latin1")))
 
 
+def surfaces(fh1_disc):
+    """FM4 surface number -> FH1's (tools/fm4_col.py), from both games' surfaceTypes.xml:
+    FM4's in FM4_DISC/Media/physics (unset: FM4's numbers kept), FH1's in its physics.zip."""
+    if not os.environ.get("FM4_DISC"):
+        return None
+    import tempfile
+    import carbin_dump
+    fm4 = open(os.path.join(os.environ["FM4_DISC"], "Media", "physics", "surfaceTypes.xml"),
+               encoding="utf-8", errors="replace").read()
+    with tempfile.TemporaryDirectory() as tmp:
+        fh1 = carbin_dump.unxmem_member(os.path.join(fh1_disc, "media", "physics.zip"),
+                                        "surfaceTypes.xml", tmp).decode("utf-8", "replace")
+    return fm4_col.surface_map(fm4, fh1)
+
+
 def convert_mod(mod, fh1_disc, loose):
     tracks = os.path.join(mod, "media", "tracks")
     (track,) = [d for d in os.listdir(tracks) if os.path.isdir(os.path.join(tracks, d))]
@@ -524,6 +545,14 @@ def convert_mod(mod, fh1_disc, loose):
             print(f"{path}: not FM4's version 27, left alone")
             continue
         ribbons.append((ribbon, path, data, None))
+        # The ribbon's collision in FH1's cell layout, still read whole from the .col file
+        # (tools/fm4_col.py).
+        for f in os.listdir(os.path.join(root, ribbon)):
+            col = os.path.join(root, ribbon, f)
+            if f.lower().endswith(".col"):
+                cdata = open(col, "rb").read()
+                if struct.unpack_from(">I", cdata, 0x2C)[0] == 2:
+                    open(col, "wb").write(fm4_col.convert_col(cdata, surfaces(fh1_disc)))
     converted = []
     for ribbon, path, data, _ in ribbons:
         F = read_fm4(data)
