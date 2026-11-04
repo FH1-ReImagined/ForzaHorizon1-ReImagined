@@ -52,11 +52,12 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # (#609), and 0423: the frame cost CSV's pipelines on any thread, held frames and CPU write
 # faults (#614, ReIGlue PR #28), and 0424: the car paint's dirt map without a seam down the
 # bonnet's centre line (#164, ReIGlue PR #30), and 0426: resolve readback buffers reused instead
-# of allocated and freed on every miss and eviction (#536).
+# of allocated and freed on every miss and eviction (#536), and 0425: InputSystem thread safety,
+# non-blocking rumble I/O, and unchanged device refresh (#590, #420, #600, ReIGlue PR #31).
 # A reviewed full commit can be pinned before a maintainer publishes a tag.
 # When a tag is supplied, its target must still match this immutable commit.
 REIGLUE_TAG=
-REIGLUE_COMMIT=70c798295c6d39295ddae09c0357508f89934e6f  # 0426 (#536) on ReIGlue main: #30 (0424, #164), #28 (0423, #614), 0421/0422 (#609), #15 (0410), #20-#25 (0413-0419)
+REIGLUE_COMMIT=214c2600094ff3aea443609f1a6c866b09b6204b  # ReIGlue #31 (0425, #590, #420, #600), on top of ReIGlue main (0426, #536)
 REIGLUE_URL="${REIGLUE_URL:-https://github.com/FH1-ReImagined/ReIGlue}"
 NIGHTLY="${REXSDK_NIGHTLY:-$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64}"
 SRC="${REXSDK_SRC:-$HOME/rexglue-sdk-src-forza/sdk}"
