@@ -54,6 +54,9 @@ def _default():
         # The "Online features" choice (online_features.py, PRIVACY.md): on (None until made), the
         # first-run question still to ask, and the installer run whose choice was applied.
         "online_features": {"on": None, "ask": False, "installer": ""},
+        # Settings > Online > Website account (web_account.py): this launcher linked the game to a
+        # website account, so the card asks the service for the link's state.
+        "web_account": {"linked": False},
         # One-time fixes of values an older launcher saved: done once, so a later choice sticks.
         "migrated": {"discord_application_id": False},
     }

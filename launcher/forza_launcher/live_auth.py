@@ -69,10 +69,13 @@ def headers(identity, method, url, body=b"", when=None, nonce=None, old_server=F
     return out
 
 
-def urlopen(url, identity, body=None, timeout=8, content_type="application/json"):
+def urlopen(url, identity, body=None, timeout=8, content_type="application/json", opener=None):
     """urllib.request.urlopen of a signed request (POST with a body, else GET), raising
     HTTPError like it. Sent again once after a refusal (401/403): with the server's clock when
-    ours was off, or with this server's own key for a server before signed requests."""
+    ours was off, or with this server's own key for a server before signed requests.
+    `opener(request, timeout=...)` sends it: urllib.request.urlopen by default; fetch.urlopen
+    for HTTPS with the operating system's certificates (web_account.py)."""
+    opener = opener or urllib.request.urlopen
     method = "POST" if body is not None else "GET"
     name = server_name(urllib.parse.urlsplit(url).hostname or "")
     old_server = False
@@ -80,7 +83,7 @@ def urlopen(url, identity, body=None, timeout=8, content_type="application/json"
         req = urllib.request.Request(url, data=body, method=method, headers={
             "Content-Type": content_type, **headers(identity, method, url, body or b"", old_server=old_server)})
         try:
-            return urllib.request.urlopen(req, timeout=timeout)
+            return opener(req, timeout=timeout)
         except urllib.error.HTTPError as e:
             if attempt or e.code not in (401, 403):
                 raise
