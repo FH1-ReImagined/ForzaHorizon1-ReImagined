@@ -39,9 +39,17 @@ every PVS of both games back to its last byte.
 The track's files move from the mod's bin/ folder into an archive of the layout FH1's track
 archives have: stored members, no local headers, the data offset in extra field 0x1123.
 
-A converted layout is one zone holding the whole track (everything is loaded at once, as in
-FM4), one hex cell around it (<track>_NN.hex), its zone file, the filename index
-(FilenameMap_NN.dat) and the zone lookup (PVSZLookup_NN.dat).
+A converted layout is split into FH1's 100 m hex zones by where each instance stands
+(<track>_NN.hex, a zone file each with its instances, models, textures and the model files to
+stream, the filename index FilenameMap_NN.dat and the zone lookup PVSZLookup_NN.dat).
+
+To run it (dev): the loose files over a copy of the game folder, the mod from
+tools/fm4_track_mod.py, and
+  FORZA_INSECURE_FILES='zipmanifest.xml|\\tracks\\<track>\\'
+  FORZA_FM4_STX='<Track>|LOOSE_DIR/<track>_stx_numbers.bin'
+  FORZA_TRACK_SPAWN=x,y,z (Suzuka: 487.7,606,22.5)
+Status: Suzuka renders (buildings, stands, fences, flags; the road and the ground are
+black); the car is held still (no collision yet: FM4's .col is not FH1's streamed .fiz).
 """
 import os
 import struct
@@ -279,15 +287,19 @@ def placement_of(inst):
             "extra": None}
 
 
-LIGHTMAPS = os.environ.get("FM4_PVS_LIGHTMAPS", "0") == "1"
+LIGHTMAPS = os.environ.get("FM4_PVS_LIGHTMAPS", "1") == "1"
+# FM4's instance flags (0x0FFFxxxx) and FH1's (0x203Fxxxx, 0x0841xxxx) differ in meaning: with
+# FM4's FH1 draws none of the track. Until they are decoded every instance gets the flags of
+# a common Colorado instance (FM4_PVS_FLAGS=keep keeps FM4's, or give another value).
+FLAGS = os.environ.get("FM4_PVS_FLAGS", "0x203F0214")
 
 
 def fh1_instance_of(inst):
-    # idx/u12: an instance's own texture (FM4's baked lightmaps) and the model's texture slot it
-    # replaces. FH1 sizes its texture user lists from these and overflows them for FM4's data
-    # (FM4_PVS_LIGHTMAPS=1 keeps them, to work on that), so they are dropped by default.
+    # idx/u12: an instance's own texture (FM4's baked lightmaps) and the model's texture slot
+    # it replaces (FM4_PVS_LIGHTMAPS=0 drops them).
     idx, slot = (inst["idx"], inst["u12"]) if LIGHTMAPS else (0, 0xFFFFFFFF)
-    return {"model": inst["model"], "u16": 0xFFFF, "flags": inst["flags"], "idx": idx,
+    flags = inst["flags"] if FLAGS == "keep" else int(FLAGS, 0)
+    return {"model": inst["model"], "u16": 0xFFFF, "flags": flags, "idx": idx,
             "u8": slot, "u12": inst["u32"]}
 
 
@@ -317,31 +329,80 @@ def convert(F, files):
          "pairs": [], "b228": 1}
     P["always_placements"] = []
     P["dynamic_placements"] = [placement_of(i) for i in F["dynamic"]]
-    # One zone with the whole track. Every instance, model and texture of FM4's cells.
-    seen_i, seen_m, tex = [], set(), {}
-    for c in F["cells"]:
-        for i in c["instances"]:
-            if i not in seen_i:
-                seen_i.append(i)
-        seen_m.update(c["models"])
-        for t, f in zip(c["textures"], c["texture_flags"]):
-            tex.setdefault(t & 0xFFFFFF, f)
-    zone_i = sorted(set(seen_i))
-    zone = {"instances": [0x80000000 | i for i in zone_i], "models": sorted(seen_m),
-            "textures": sorted(tex), "texture_flags": [tex[t] for t in sorted(tex)],
-            "files": [], "drawn": [1] * len(zone_i),
-            "placements": [placement_of(insts[i]) for i in zone_i]}
-    P["zones"] = [(len(zone["instances"]), 0, len(zone["models"]))]
-    return P, zone
+    # Every instance of FM4's cells, placed in FH1's hex zones by where it is: its own
+    # position, or for a mesh placed by its model (FM4's instances at 0,0,0) the model's.
+    used = sorted({i for c in F["cells"] for i in c["instances"]})
+    def where(i):
+        pos = insts[i]["pos"]
+        if any(pos):
+            return pos[0], pos[2]
+        m = F["models"][insts[i]["model"]]["matrix"]
+        return m[12], m[14]
+    spots = {i: where(i) for i in used}
+    grid = HexGrid([spots[i] for i in used], HEX_RADIUS)
+    members = {cell: [] for cell in grid.cells}
+    for i in used:
+        members[grid.cell_of(*spots[i])].append(i)
+    zones = []
+    for cell in grid.cells:
+        zi = members[cell]
+        models = sorted({insts[i]["model"] for i in zi})
+        tex = sorted({t & 0xFFFFFF for m in models for t in F["models"][m]["textures"]} |
+                     ({insts[i]["idx"] & 0xFFFFFF for i in zi if insts[i]["u12"] != 0xFFFFFFFF}
+                      if LIGHTMAPS else set()))
+        zones.append({"instances": [0x80000000 | i for i in zi], "models": models,
+                      "textures": tex, "texture_flags": [0] * len(tex), "files": [],
+                      "drawn": [1] * len(zi), "placements": [placement_of(insts[i]) for i in zi]})
+    P["zones"] = [(len(z["instances"]), 0, len(z["models"])) for z in zones]
+    return P, zones, grid
 
 
-def write_hex(cx, cz, radius):
-    """One hex cell (zone 0) of the given radius centred on (cx, cz): HEXY version 101, as
-    the FH1 levels with one zone have it (cell size, origin, zones, columns, rows, the cell
-    grid, each zone's column and row, a neighbour mask per zone)."""
-    ox, oz = cx - 2.5 * radius, cz - 3 ** 0.5 * radius
-    return (b"HEXY" + struct.pack(">IfffIII", 101, radius, ox, oz, 1, 2, 1) +
-            struct.pack(">ii", -1, 0) + struct.pack(">II", 1, 0) + b"\x3f")
+# Zone size: FH1's Colorado has 100 m hexes; its loader streams the camera's zone and the six
+# around it through a 23 MB buffer, which 250 m zones of Suzuka overflow.
+HEX_RADIUS = float(os.environ.get("FM4_PVS_HEX", "100"))
+
+
+class HexGrid:
+    """FH1's zone grid (a <track>_NN.hex file, HEXY version 101): flat-topped hexes of a
+    radius, in columns 1.5 radii apart, odd columns half a hex lower; the centre of (col, row)
+    is origin + (2 + 1.5 col, sqrt3/2 + sqrt3 row + sqrt3/2 (col odd)) radii (fitted to
+    Colorado's zones and their contents). Every cell of the grid is a zone here."""
+
+    def __init__(self, points, radius):
+        self.r = radius
+        xs, zs = [p[0] for p in points], [p[1] for p in points]
+        h = 3 ** 0.5 * radius
+        self.ox = min(xs) - 2.75 * radius
+        self.oz = min(zs) - h
+        self.w = int((max(xs) - self.ox) / (1.5 * radius)) + 2
+        self.h = int((max(zs) - self.oz) / h) + 2
+        self.cells = [(c, r) for c in range(self.w) for r in range(self.h)]
+
+    def centre(self, c, r):
+        h = 3 ** 0.5 * self.r
+        return (self.ox + (2 + 1.5 * c) * self.r, self.oz + h / 2 + h * r + (h / 2 if c & 1 else 0))
+
+    def cell_of(self, x, z):
+        c0 = int((x - self.ox - 2 * self.r) / (1.5 * self.r))
+        r0 = int((z - self.oz) / (3 ** 0.5 * self.r))
+        best = None
+        for c in range(c0 - 1, c0 + 2):
+            for r in range(r0 - 1, r0 + 2):
+                if 0 <= c < self.w and 0 <= r < self.h:
+                    cx, cz = self.centre(c, r)
+                    d = (cx - x) ** 2 + (cz - z) ** 2
+                    if best is None or d < best[0]:
+                        best = (d, (c, r))
+        return best[1]
+
+    def write(self):
+        zone = {cell: k for k, cell in enumerate(self.cells)}
+        out = b"HEXY" + struct.pack(">IfffIII", 101, self.r, self.ox, self.oz, len(self.cells),
+                                    self.w, self.h)
+        out += struct.pack(f">{self.w * self.h}i",
+                           *[zone[(c, r)] for r in range(self.h) for c in range(self.w)])
+        out += b"".join(struct.pack(">II", c, r) for c, r in self.cells)
+        return out + b"\x3f" * len(self.cells)
 
 
 def write_filename_map(names):
@@ -390,10 +451,11 @@ def convert_mod(mod, fh1_disc, loose):
     root = os.path.join(tracks, track)
     bin_dir = os.path.join(root, "bin")
     # <track>.stx.bin, the always-resident textures, is a CAFF archive whose symbol layout FH1
-    # reads differently (FH1 ends it with a list of texture numbers, FM4 does not; read as
-    # FH1's, FM4's yields numbers far past the texture table and the loader writes past it).
-    # Left out for now (FM4_PVS_STX=1 keeps it): those textures are missing.
-    keep_stx = os.environ.get("FM4_PVS_STX", "0") == "1"
+    # reads differently: FH1 ends it with a list of texture record numbers, FM4's holds one
+    # texture per texture file (the records' file numbers) and no list. The game gets the
+    # list from LOOSE_DIR/<track>_stx_numbers.bin through FORZA_FM4_STX=<track>|<that file>
+    # (forza-recomp/src/hooks/fm4_track.cpp). FM4_PVS_STX=0 leaves the pack out instead.
+    keep_stx = os.environ.get("FM4_PVS_STX", "1") == "1"
     stand_in = os.environ.get("FM4_PVS_STX_FILE")  # dev test: another track's stx.bin in its place
     keep_stx = keep_stx or bool(stand_in)
     files = [os.path.relpath(os.path.join(dp, n), bin_dir).replace(os.sep, "/")
@@ -409,32 +471,52 @@ def convert_mod(mod, fh1_disc, loose):
         if data[4:8] != struct.pack(">I", 27):
             print(f"{path}: not FM4's version 27, left alone")
             continue
-        ribbons.append((ribbon, path, data, f"__R{int(ribbon[-2:]):02d}Z00000.pvsz"))
-    order = archive_order(files + [r[3] for r in ribbons])
+        ribbons.append((ribbon, path, data, None))
+    converted = []
+    for ribbon, path, data, _ in ribbons:
+        F = read_fm4(data)
+        P, cells, grid = convert(F, files)
+        nn = ribbon[-2:]
+        converted.append((ribbon, path, F, P, cells, grid,
+                          [f"__R{int(nn):02d}Z{k:05d}.pvsz" for k in range(len(cells))]))
+    order = archive_order(files + [zn for c in converted for zn in c[6]])
     index = {p: i for i, p in enumerate(order)}
     names = [p.split("/")[-1] for p in order]
     zones = {}
-    for ribbon, path, data, zone_name in ribbons:
+    for ribbon, path, F, P, cells, grid, zone_names in converted:
         nn = ribbon[-2:]
-        F = read_fm4(data)
-        P, zone = convert(F, names)
-        zone["files"] = [(0, 0, 1, index[zone_name])]  # the zone file itself, as FH1's
-        w = Writer()
-        write_cell(w, zone, P["g2"])
-        zones[zone_name] = bytes(w.b)
+        for k, (cell, zn) in enumerate(zip(cells, zone_names)):
+            # The zone file itself (as FH1's levels list theirs), then the files to stream
+            # with the zone: its models' <prefix>.NNNNN.rmb.bin (type 9, as Colorado's;
+            # resource number = file number).
+            cell["files"] = [(k, k, 1, index[zn])]
+            for m in cell["models"]:
+                f = f"{P['prefix']}.{m:05d}.rmb.bin"
+                if f in index:
+                    cell["files"].append((index[f], index[f], 9, index[f]))
+            w = Writer()
+            write_cell(w, cell, P["g2"])
+            zones[zn] = bytes(w.b)
         open(path, "wb").write(write_fh1(P))
-        xs = [p["pos"][0] for p in zone["placements"]]
-        zs = [p["pos"][2] for p in zone["placements"]]
-        cx, cz = (min(xs) + max(xs)) / 2, (min(zs) + max(zs)) / 2
-        radius = max(max(xs) - min(xs), max(zs) - min(zs)) * 0.75 + 500
-        open(os.path.join(root, ribbon, f"{track}_{nn}.hex"), "wb").write(write_hex(cx, cz, radius))
+        open(os.path.join(root, ribbon, f"{track}_{nn}.hex"), "wb").write(grid.write())
         open(os.path.join(root, ribbon, f"FilenameMap_{nn}.dat"), "wb").write(
             write_filename_map(names))
         open(os.path.join(root, ribbon, f"PVSZLookup_{nn}.dat"), "wb").write(
-            struct.pack(">II", index[zone_name], 0))
+            b"".join(struct.pack(">II", index[zn], k) for k, zn in enumerate(zone_names)))
         print(f"{ribbon}: {len(P['instances'])} instances, {len(P['models'])} models, "
-              f"{len(P['textures'])} textures; one zone of {len(zone['instances'])} instances "
-              f"(file {index[zone_name]}); hex radius {radius:.0f} m at {cx:.0f},{cz:.0f}")
+              f"{len(P['textures'])} textures; {len(cells)} zones ({grid.w}x{grid.h} hexes of "
+              f"{grid.r:.0f} m), the largest {max(len(c['instances']) for c in cells)} "
+              f"instances, {max(len(c['models']) for c in cells)} models, "
+              f"{max(len(c['textures']) for c in cells)} textures")
+    # The static pack's texture numbers: pack entry k is texture file k; its record is the
+    # first texture record of that file.
+    first = {}
+    for i, t in enumerate(F["textures"]):
+        first.setdefault(t[1], i)
+    numbers = [first.get(k, 0xFFFFFFFF) for k in range(max(first) + 1)]
+    os.makedirs(loose, exist_ok=True)
+    with open(os.path.join(loose, f"{track}_stx_numbers.bin"), "wb") as f:
+        f.write(struct.pack(f">{len(numbers)}I", *numbers))
     members = [(p, zones[p] if p in zones else open(stand_in, "rb").read()
                 if p.lower().endswith(".stx.bin") and stand_in
                 else open(os.path.join(bin_dir, p), "rb").read()) for p in order]

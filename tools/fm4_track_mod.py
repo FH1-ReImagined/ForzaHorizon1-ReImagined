@@ -31,13 +31,8 @@ What the mod holds, at the paths FH1 builds for a track (docs/modding.md):
 
 The files are the player's own and stay on their PC: never share the mod.
 
-Status (2026-11): with --free-roam 317 --fh1-disc --loose (the loose folder laid over a copy
-of the game folder) FH1 reads the circuit's files and starts loading it as its open world,
-then faults in CTrackPresentation::LoadWorkFunc (sub_82E28DE0) reading the PVS: FM4 writes
-PVS version 27, FH1's reader (sub_82CF2968) takes version 50 and reads fields of its own
-before the old ones without a version check, and its cell records differ. Its collision
-(.col version 2, the whole mesh inline) is not what FH1 streams either (version 4, an index
-of streamed .fiz pieces). A circuit needs both converted before it can be driven.
+Next: tools/fm4_pvs.py converts the circuit's visibility data and writes the track archive
+FH1 streams it from; see there for running it.
 """
 import argparse
 import os

@@ -376,25 +376,149 @@ extern "C" REX_FUNC(sub_82E2E890) {
   __imp__sub_82E2E890(ctx, base);
 }
 
-// A texture pack being parsed (sub_82E323A0: r5 the path, r7, r8): which one.
-extern "C" REX_FUNC(__imp__sub_82E323A0);
-extern "C" REX_FUNC(sub_82E323A0) {
-  if (std::getenv("FORZA_TRACK_SPAWN")) {
-    REXLOG_INFO("FM4TRACK: texture pack '{}' r7 {:08X} r8 {:08X}", CString(base, ctx.r5.u32),
-                ctx.r7.u32, ctx.r8.u32);
-  }
-  __imp__sub_82E323A0(ctx, base);
-}
+
 
 // A track archive file being streamed (sub_82EB6960: r5 its number in the archive): which.
 extern "C" REX_FUNC(__imp__sub_82EB6960);
 extern "C" REX_FUNC(sub_82EB6960) {
   static std::atomic<int> logged{0};
-  if (std::getenv("FORZA_TRACK_SPAWN") && logged.fetch_add(1) < 40) {
+  if (std::getenv("FORZA_TRACK_SPAWN") && GuestReadable(ctx.r7.u32) &&
+      Load32(base, ctx.r7.u32) == 0xBEBEBEBE) {
+    REXLOG_ERROR("FM4TRACK: stream file {} '{}' with an unset descriptor {:08X}", ctx.r5.u32,
+                 CString(base, ctx.r6.u32), ctx.r7.u32);
+  }
+  static std::atomic<int> totals[3];
+  if (std::getenv("FORZA_TRACK_SPAWN")) {
+    const std::string name = CString(base, ctx.r6.u32);
+    const int kind = name.find(".rmb.bin") != std::string::npos ? 0
+                     : name.find(".bix") != std::string::npos ? 1 : 2;
+    const int n = totals[kind].fetch_add(1) + 1;
+    if ((n & (n - 1)) == 0) {  // 1, 2, 4, 8...
+      REXLOG_INFO("FM4TRACK: streamed {} {} so far (last '{}')", n,
+                  kind == 0 ? "models" : kind == 1 ? "textures" : "other files", name);
+    }
+  }
+  if (std::getenv("FORZA_TRACK_SPAWN") && logged.fetch_add(1) < 5) {
     REXLOG_INFO("FM4TRACK: stream file {} r4 {:08X} r6 '{}' r7 {:08X} r8 {:08X} from {:08X}",
                 ctx.r5.u32, ctx.r4.u32, CString(base, ctx.r6.u32), ctx.r7.u32, ctx.r8.u32,
                 uint32_t(ctx.lr));
   }
   __imp__sub_82EB6960(ctx, base);
+}
+
+// FM4's static texture pack (<track>.stx.bin, a CAFF archive): FH1 takes its last texture-list
+// symbol as the texture numbers and the one before as the textures; FM4's pack has only the
+// textures, one per texture file of the track (the file numbers of the PVS's texture records).
+// FORZA_FM4_STX=<track>|<file> gives, while that pack is read (sub_82E323A0), the textures
+// (sub_82D09648) from FM4's last symbol and the numbers (sub_82D099E0) from <file>: a u32
+// texture record number per pack entry, -1 for none (tools/fm4_pvs.py writes it).
+extern "C" REX_FUNC(__imp__sub_82E323A0);
+extern "C" REX_FUNC(__imp__sub_82D099E0);
+extern "C" REX_FUNC(__imp__sub_82D09648);
+extern "C" REX_FUNC(__imp__sub_82D095C0);
+namespace {
+struct Fm4Stx {
+  std::string track;
+  std::vector<uint32_t> ids;
+};
+const Fm4Stx& Fm4StxConfig() {
+  static const Fm4Stx c = [] {
+    Fm4Stx c;
+    const char* p = std::getenv("FORZA_FM4_STX");
+    if (!p) return c;
+    const std::string v = p;
+    const auto bar = v.find('|');
+    if (bar == std::string::npos) return c;
+    for (char ch : v.substr(0, bar)) c.track += char(std::tolower(static_cast<unsigned char>(ch)));
+    if (std::FILE* f = std::fopen(v.substr(bar + 1).c_str(), "rb")) {
+      uint8_t b[4];
+      while (std::fread(b, 1, 4, f) == 4) {
+        c.ids.push_back(uint32_t(b[0]) << 24 | b[1] << 16 | b[2] << 8 | b[3]);
+      }
+      std::fclose(f);
+    }
+    REXLOG_INFO("FM4TRACK: {} static texture pack: {} texture numbers", c.track, c.ids.size());
+    return c;
+  }();
+  return c;
+}
+thread_local bool fm4_stx_active = false;
+thread_local uint32_t fm4_stx_last = 0, fm4_stx_ids = 0;
+}  // namespace
+
+// The pack's loop (in sub_82E323A0): n = sub_82D095C0, numbers = sub_82D099E0 (the last
+// data symbol), then n - 1 textures one symbol at a time from the end, sub_82D09648.
+extern "C" REX_FUNC(sub_82E323A0) {
+  const Fm4Stx& c = Fm4StxConfig();
+  std::string path = CString(base, ctx.r5.u32);
+  if (std::getenv("FORZA_TRACK_SPAWN")) {
+    REXLOG_INFO("FM4TRACK: texture pack '{}' r7 {:08X} r8 {:08X}", path, ctx.r7.u32, ctx.r8.u32);
+  }
+  for (auto& ch : path) ch = char(std::tolower(static_cast<unsigned char>(ch)));
+  fm4_stx_active =
+      !c.ids.empty() && path.find("\\" + c.track + ".stx.bin") != std::string::npos;
+  fm4_stx_last = fm4_stx_ids = 0;
+  __imp__sub_82E323A0(ctx, base);
+  fm4_stx_active = false;
+  if (fm4_stx_ids) REX_KERNEL_MEMORY()->SystemHeapFree(fm4_stx_ids);
+  fm4_stx_ids = 0;
+}
+
+void DumpCaff(uint8_t* base, uint32_t owner, const char* what) {
+  const uint32_t it = Load32(base, owner + 4);
+  if (!it || !GuestReadable(it)) return;
+  const uint32_t hdr = Load32(base, it), syms = Load32(base, it + 36);
+  REXLOG_INFO("FM4TRACK: CAFF {}: iterator {:08X} header {:08X} (+24 {} +28 {}) symbols {:08X} "
+              "+88 {:08X} +92 {} +100 {:08X} +104 {}", what, it, hdr, Load32(base, hdr + 24),
+              Load32(base, hdr + 28), syms, Load32(base, it + 88), Load32(base, it + 92),
+              Load32(base, it + 100), *forza::GuestPtr(base, it + 104));
+  const uint32_t n = Load32(base, hdr + 28);
+  for (uint32_t i = n > 6 ? n - 6 : 0; i < n; ++i) {
+    std::string b;
+    for (int k = 0; k < 14; ++k) b += fmt::format("{:02X}", *forza::GuestPtr(base, syms + 14 * i + k));
+    REXLOG_INFO("FM4TRACK: CAFF symbol {}: {}", i, b);
+  }
+}
+
+extern "C" REX_FUNC(sub_82D099E0) {
+  static std::atomic<int> dumps{0};
+  if (std::getenv("FORZA_TRACK_SPAWN") && dumps.fetch_add(1) < 2) {
+    DumpCaff(base, ctx.r3.u32, fm4_stx_active ? "FM4 pack" : "pack");
+  }
+  if (!fm4_stx_active) return __imp__sub_82D099E0(ctx, base);
+  __imp__sub_82D099E0(ctx, base);
+  // FM4's last data symbol is a 4-byte one (number 564 in Suzuka's pack) where FH1 has its
+  // numbers list; the textures are the 116-byte symbols before it, numbered from 1 (texture
+  // file k is symbol k + 1). It is dropped; the textures come from sub_82D09648 as for FH1.
+  const auto& ids = Fm4StxConfig().ids;
+  fm4_stx_ids = REX_KERNEL_MEMORY()->SystemHeapAlloc(uint32_t(4 * ids.size() + 4));
+  for (size_t i = 0; i < ids.size(); ++i) {
+    uint8_t* p = forza::GuestPtr(base, fm4_stx_ids + uint32_t(4 * i));
+    p[0] = uint8_t(ids[i] >> 24);
+    p[1] = uint8_t(ids[i] >> 16);
+    p[2] = uint8_t(ids[i] >> 8);
+    p[3] = uint8_t(ids[i]);
+  }
+  ctx.r3.u64 = fm4_stx_ids;
+}
+
+extern "C" REX_FUNC(sub_82D09648) { __imp__sub_82D09648(ctx, base); }
+
+extern "C" REX_FUNC(sub_82D095C0) {
+  __imp__sub_82D095C0(ctx, base);
+  if (fm4_stx_active) {
+    REXLOG_INFO("FM4TRACK: static texture pack holds {} textures; {} numbers given", ctx.r3.u32,
+                Fm4StxConfig().ids.size());
+  }
+}
+
+// A track archive file read into the file depot's cache (sub_82D21528: r4 its number).
+extern "C" REX_FUNC(__imp__sub_82D21528);
+extern "C" REX_FUNC(sub_82D21528) {
+  static std::atomic<int> logged{0};
+  if (std::getenv("FORZA_TRACK_SPAWN") && logged.fetch_add(1) < 400) {
+    REXLOG_INFO("FM4TRACK: depot file {}", ctx.r4.u32);
+  }
+  __imp__sub_82D21528(ctx, base);
 }
 #endif
