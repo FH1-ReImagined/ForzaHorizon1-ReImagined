@@ -550,6 +550,16 @@ the usual full backup, and changes nothing else. A save without that entry, or o
 entry does not parse exactly, shows nothing.
 
 Format reference: [Pinyon Shift's FH1 save research](https://arcanite24.github.io/pinyon-shift/game-saves/).
+The prefix parser uses an iterative stack and validates all fields before exposing
+editable offsets. It accepts names and nesting that fit explicit resource budgets:
+32,768 announced entries and 4 MiB of cumulative UTF-8 paths, within the existing
+16 MiB profile limit. These are launcher resource policies, not claimed limits of
+the file format. A minimum of 15 serialized bytes per entry also rejects counts
+that cannot fit the remaining input. Duplicate sibling names, ambiguous paths,
+invalid tags/types and noncanonical booleans are rejected; the opaque tail remains
+unchanged. The former depth-8/name-256 limits are no longer used. Synthetic tests
+cover 1,100 nested sections and 300-byte names without recursive calls.
+
 The editor's profile-table addresses and XUID derivation were checked against the local
 executables and a disposable game-generated profile. A no-edit round trip reproduced the
 entire file byte for byte; changing credits preserved every other body byte and companion

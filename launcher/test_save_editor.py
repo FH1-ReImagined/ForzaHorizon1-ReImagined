@@ -182,6 +182,45 @@ class EditorTests(unittest.TestCase):
         for data in (b'\xff'*4, struct.pack('>I',1)+field('Bad',1,0), body().replace(b'Credits', b'Creditx')):
             with self.assertRaises(saves.SaveError): editor.decode(self.profile, profile_bytes(data), (KEYS,))
 
+    def test_iterative_prefix_supports_deep_sections_and_long_names(self):
+        nested = struct.pack('>I', 1) + field('x'*300, 3, 1234)
+        for _ in range(1100):
+            nested = struct.pack('>I', 1) + field('n', 15, nested)
+        prefix = struct.pack('>I', 2) + body(b'')[4:] + field('Extra', 15, nested)
+        values = editor.fields(prefix + b'opaque tail remains uninterpreted')
+        leaf = values['Extra/'+'n/'*1100+'x'*300]
+        self.assertEqual(leaf.value, 1234)
+        self.assertEqual(prefix[leaf.offset:leaf.offset+4], struct.pack('>I', 1234))
+        self.assertEqual(values['Main/Credits'].offset, self.doc.values['Main/Credits'].offset)
+
+    def test_prefix_resource_budgets_are_independent_of_nesting_limit(self):
+        with patch.object(editor, 'MAX_PREFIX_ENTRIES', 6):
+            with self.assertRaisesRegex(saves.SaveError, 'entry budget'):
+                editor.fields(body())
+        with patch.object(editor, 'MAX_PREFIX_PATH_BYTES', 64):
+            with self.assertRaisesRegex(saves.SaveError, 'path budget'):
+                editor.fields(body())
+        with self.assertRaisesRegex(saves.SaveError, 'truncated'):
+            editor.fields(struct.pack('>I', 0xffffffff) + b'zero entries fit')
+
+    def test_prefix_rejects_every_truncated_prefix_and_duplicate_section(self):
+        prefix = body(b'')
+        for end in range(len(prefix)):
+            with self.subTest(end=end), self.assertRaises(saves.SaveError):
+                editor.fields(prefix[:end])
+        duplicate = struct.pack('>I', 2) + prefix[4:] + field('Main', 15, struct.pack('>I', 0))
+        with self.assertRaisesRegex(saves.SaveError, 'Duplicate'):
+            editor.fields(duplicate)
+
+    def test_prefix_rejects_ambiguous_names_bad_headers_and_noncanonical_boolean(self):
+        prefix = body(b'')
+        for extra in (field('a/b', 1, 0), field('a\0b', 1, 0),
+                      field('x', 1, 0).replace(b'x', b'\xff'),
+                      field('x', 1, 0).replace(struct.pack('>II', 0x20, 0), struct.pack('>II', 0x20, 1)),
+                      field('x', 0, True)[:-1]+b'\2'):
+            with self.subTest(extra=extra), self.assertRaises(saves.SaveError):
+                editor.fields(struct.pack('>I', 2)+prefix[4:]+extra)
+
     def test_edit_limits_and_unknown_fields_are_rejected(self):
         for path, value in (('Main/Credits', -1), ('Main/Credits', 1_000_000_000), ('Main/XP', 2**31),
                             ('Main/XP', True), ('Main/Level', 50), ('Main/Credits', 1.5),

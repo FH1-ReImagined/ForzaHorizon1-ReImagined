@@ -167,12 +167,11 @@ HUD placement. No NVIDIA runtime, reconstruction controls or general readback
 changes are required. Earlier screenshots came from the combined development
 build; the standalone split was rebuilt and checked separately at 3440x1440.
 
-Pinyon Shift attribution: `src/platform/ultrawide.cpp` and
-`src/hooks/ultrawide_projection.cpp` in forza-recomp carry the adapted view-state
-and projection strategy. In patch 0063, the presentation cvars and HUD viewport
-transforms in `src/graphics/flags.cpp`, the D3D12/Vulkan command processors and
-`src/ui/presenter.cpp` carry adapted presentation logic. The original BSD-3-Clause
-notice is retained in both the game source/package and the SDK patch directory.
+The earlier view-state and projection implementation was adapted from Pinyon
+Shift. The game now uses its own synchronized presentation policy and rectangle
+geometry; see [the implementation and provenance record](pinyon-replacement.md).
+The SDK and historical patch copies still contain covered material, so the
+Pinyon BSD-3-Clause notice remains in source and packaged builds.
 
 Standalone split validation (2026-10-16): the complete 47-patch stack applies to
 bd833a2, the Windows GPU plugin builds with Vulkan and D3D12 enabled, and the

@@ -6,21 +6,31 @@
 namespace forza::ultrawide {
 constexpr double kNativeAspect = 16.0 / 9.0;
 struct Layout { double aspect_scale, hud_scale_x, hud_scale_y, hud_offset_x, hud_offset_y, hud_edge_shift; };
+// Express HUD placement as a rectangle in a 720-line presentation canvas.
+// This derives the transform from rectangle bounds rather than from guest
+// projection state. Invalid hot-reload input selects neutral values.
 inline Layout ComputeLayout(uint32_t width, uint32_t height, double safe_width,
-                            double safe_height, double offset_x, double offset_y, bool edges = false) {
-  const double ratio = width && height ? double(width) / height : kNativeAspect;
-  const double aspect = std::clamp(ratio / kNativeAspect, 1.0, 4.0);
-  const double fit = std::clamp(std::min(safe_width, safe_height), 50.0, 100.0) / 100.0;
-  // Fit a 16:9 HUD rectangle into the requested safe area without stretching it.
-  const double sx = fit / aspect, sy = fit;
-  const double extent_x = edges ? fit : sx;
-  return {aspect, sx, sy, std::clamp(offset_x / 50.0, -(1.0-extent_x), 1.0-extent_x),
-          std::clamp(offset_y / 50.0, -(1.0-sy), 1.0-sy), edges ? fit-sx : 0.0};
-}
-inline bool GameplayLayoutActive(double aspect, bool was_wide, uint64_t now,
-                         uint64_t game, uint64_t map) {
-  if (aspect < 1.0 || !game || (map && now-map <= 3)) return false;
-  return now-game <= (was_wide ? 30u : 2u);
+                            double safe_height, double offset_x, double offset_y,
+                            bool edges = false) {
+  const double canvas = width && height
+      ? std::clamp(720.0 * width / height, 1280.0, 5120.0) : 1280.0;
+  const auto bounded = [](double value, double fallback, double low, double high) {
+    return std::isfinite(value) ? std::clamp(value, low, high) : fallback;
+  };
+  const double inset = std::min(bounded(safe_width, 100, 50, 100),
+                                bounded(safe_height, 100, 50, 100)) * 0.01;
+  const double hud_width = 1280 * inset;
+  const double hud_height = 720 * inset;
+  const double occupied_width = edges ? canvas * inset : hud_width;
+  const double x_room = (canvas - occupied_width) * 0.5;
+  const double y_room = (720 - hud_height) * 0.5;
+  const double x = std::clamp(bounded(offset_x, 0, -100, 100) * canvas * 0.01,
+                              -x_room, x_room);
+  const double y = std::clamp(bounded(offset_y, 0, -100, 100) * 7.2,
+                              -y_room, y_room);
+  return {canvas / 1280, hud_width / canvas, hud_height / 720,
+          2 * x / canvas, y / 360,
+          edges ? (occupied_width - hud_width) / canvas : 0};
 }
 // Resolve addresses use whole guest-height multiples. For fractional window
 // heights, draw into the next whole multiple and let presentation downsample.

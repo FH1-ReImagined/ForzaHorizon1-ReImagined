@@ -68,7 +68,10 @@ tools/run_forza.sh 120        # a two-minute test run; logs in ${XDG_RUNTIME_DIR
   Medium: skills 66-73, rows 8-9) with the player standing on the grid: Game kept every CPU
   driver in the torque cut (down to 0.19 of their torque) and the first reached the finish,
   about 5 km on, after 182 s; Off had no cut, and six of seven finished after 150-159 s.
-  Details in `src/hooks/ai_catchup.cpp`.
+  This branch replaces that config rewrite with comparison-target isolation;
+  the measurements above describe the earlier implementation. See
+  [AI comparison policy](ai-comparison-policy.md) for the new mechanism and
+  outstanding runtime qualification.
 - **VR headset (experimental, #333):** launcher Display, VR (experimental), VR headset (experimental): Virtual
   screen or Cockpit (`vr_mode = "screen"` / `"cockpit"`). Start the OpenXR runtime (WiVRn,
   Monado, SteamVR) and connect the headset first; Home or both sticks held for a second

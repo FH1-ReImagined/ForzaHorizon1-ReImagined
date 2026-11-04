@@ -23,20 +23,22 @@
 //   instead of a draw between its minimum and maximum; DistBehindForTorqueBoost > 0 (0 in the
 //   rows 1-80 that events and online races use) adds torque further behind.
 //
-// ai_rubber_banding=off (launcher: Gameplay, CPU drivers) rewrites the filled config of every
-// CPU driver in a single-player race (src/platform/ai_catchup.h): those distances out of reach
-// and the factors neutral, so each driver races at its own skill wherever the player is.
-// Online races (race type 6, and the online free roam, 18) keep the game's AI, so a Horizon
-// World event or a Co-op Festival round drives the same on every console. Kept as the game has
-// them: the skill and temperament rows (the difficulty), the boosts written into the code
-// (sub_82B6AC10, TU4 sub_82C293E8: by grid place at the start and for a Nemesis rival, as
-// Pinyon Shift reads it; not measured here) and the post-race skill adjustment
-// (DynamicDifficulty in GameTunableSettings.ini). The idea of rewriting the config at the
-// spawn, and the controller fields, come from Pinyon Shift's AI OPPONENTS option
-// (LICENSE-Pinyon-Shift); the offsets were checked against both executables here.
+// ai_rubber_banding=off isolates only the opponent-comparison queries called by
+// rubber-band, catch-up and relative-skill updates. Original query functions run
+// first; verified call sites receive no comparison target, so the game's own
+// no-reference branches select normal driving. Every config remains unchanged.
+// Online events and all other callers receive the original result. The setting
+// is fixed for the process, as before; it is not a mid-race toggle.
+//
+// The earlier config-rewrite implementation credited Pinyon Shift's AI OPPONENTS
+// research (LICENSE-Pinyon-Shift). This replacement uses the game's query control
+// flow, verified against both local XEX images; that research credit and the
+// project's existing notices remain while the overall provenance review proceeds.
+// docs/ai-comparison-policy.md records the new mechanism and qualification limits.
 //
 // FORZA_AI_TRACE=1 logs each config fill (its rows, distances and factors) and, once a second
-// per driver, its gap to the player, rubber band mode, torque scale and catch-up.
+// per driver, its comparison gap, rubber band mode, torque scale and catch-up.
+// In off mode the gap is the isolated comparison state, not actual player distance.
 // tu_address_map: TU4 addresses
 
 #include "../platform/ai_catchup.h"
@@ -65,6 +67,10 @@ REXCVAR_DEFINE_STRING(ai_rubber_banding, "game", "Gameplay",
 #define FillFreeRoamAiConfig sub_82A5E6B8
 #define OriginalFillFreeRoamAiConfig __imp__sub_82A5E6B8
 #define UpdateRubberBand sub_82C52060
+#define QueryLeadingHuman sub_82C31D60
+#define OriginalQueryLeadingHuman __imp__sub_82C31D60
+#define QueryTrailingHuman sub_82C31E00
+#define OriginalQueryTrailingHuman __imp__sub_82C31E00
 #define OriginalUpdateRubberBand __imp__sub_82C52060
 #else
 #define FillAiConfig sub_829ADAC0
@@ -72,6 +78,10 @@ REXCVAR_DEFINE_STRING(ai_rubber_banding, "game", "Gameplay",
 #define FillFreeRoamAiConfig sub_829AA1F0
 #define OriginalFillFreeRoamAiConfig __imp__sub_829AA1F0
 #define UpdateRubberBand sub_82B93A18
+#define QueryLeadingHuman sub_82B73600
+#define OriginalQueryLeadingHuman __imp__sub_82B73600
+#define QueryTrailingHuman sub_82B736A0
+#define OriginalQueryTrailingHuman __imp__sub_82B736A0
 #define OriginalUpdateRubberBand __imp__sub_82B93A18
 #endif
 
@@ -84,6 +94,8 @@ extern "C" REX_FUNC(OriginalFillFreeRoamAiConfig);
 // UpdateRubberBand(controller): a CPU driver's gap to the player and rubber band mode, once
 // an update.
 extern "C" REX_FUNC(OriginalUpdateRubberBand);
+extern "C" REX_FUNC(OriginalQueryLeadingHuman);
+extern "C" REX_FUNC(OriginalQueryTrailingHuman);
 
 namespace {
 namespace ac = forza::ai_catchup;
@@ -165,8 +177,26 @@ void Filled(uint8_t* base, uint32_t config, const char* path) {
         ac::LoadFloat(c, ac::kStartCatchUp), ac::LoadFloat(c, ac::kStopCatchUp),
         ac::LoadFloat(c, ac::kCatchUpGapPerPosition), ac::LoadFloat(c, ac::kCatchUpFactor),
         ac::LoadFloat(c, ac::kDistBehindForMaxPerformance),
-        ac::LoadFloat(c, ac::kDistBehindForTorqueBoost), apply ? "; removed" : "");
-  if (apply) ac::RemoveCatchUp(c);
+        ac::LoadFloat(c, ac::kDistBehindForTorqueBoost), apply ? "; comparison isolation enabled" : "");
+}
+
+void IsolateComparison(PPCContext& ctx, uint8_t* base, ac::Query query,
+                       uint32_t caller, uint32_t controller) {
+#if FORZA_TU4
+  constexpr bool tu4 = true;
+#else
+  constexpr bool tu4 = false;
+#endif
+  if (ac::ClassifyComparison(query, caller, tu4) == ac::Comparison::None ||
+      Mode() != ac::Mode::kOff) return;
+  const auto use = ac::IsolatedComparison(ac::Mode::kOff, RaceType(base), query, caller, tu4);
+  if (use == ac::Comparison::None) return;
+  if (use == ac::Comparison::CatchUp && controller) {
+    const uint32_t skill = Load32(base, controller + kSkillState);
+    ac::RetireCatchUpBlend({forza::GuestPtr(base, controller), 232},
+        skill ? std::span<uint8_t>(forza::GuestPtr(base, skill), 144) : std::span<uint8_t>{});
+  }
+  ctx.r3.u64 = 0;
 }
 
 // The trace's once-a-second sample per controller.
@@ -229,4 +259,16 @@ extern "C" REX_FUNC(UpdateRubberBand) {
       LoadFloat(base, controller + kTorqueCut), LoadFloat(base, controller + kTorqueScale),
       int(*forza::GuestPtr(base, controller + kCatchingUp)), LoadFloat(base, skill + 128),
       LoadFloat(base, skill + 132));
+}
+
+extern "C" REX_FUNC(QueryLeadingHuman) {
+  const uint32_t caller = uint32_t(ctx.lr), controller = ctx.r31.u32;
+  OriginalQueryLeadingHuman(ctx, base);
+  IsolateComparison(ctx, base, ac::Query::LeadingHuman, caller, controller);
+}
+
+extern "C" REX_FUNC(QueryTrailingHuman) {
+  const uint32_t caller = uint32_t(ctx.lr), controller = ctx.r31.u32;
+  OriginalQueryTrailingHuman(ctx, base);
+  IsolateComparison(ctx, base, ac::Query::TrailingHuman, caller, controller);
 }

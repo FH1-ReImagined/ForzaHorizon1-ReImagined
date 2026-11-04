@@ -1,3 +1,10 @@
+> Replacement branch: the current draft introduces a different HDR curve,
+> photometric calibration grid and overlay classifier. The measurements below
+> describe the earlier implementation. New readbacks identify `diffuse-exp-v1`;
+> `tools/check_hdr_capture.py` verifies that model and refuses older captures.
+> ReIGlue PR #5 documents the new design and outstanding rendering qualification.
+> Existing Pinyon notices remain; the scene-acquisition policy is still under review.
+
 # HDR output (#33)
 
 HDR output is opt-in under **Settings > Display > HDR**. It requires Vulkan,

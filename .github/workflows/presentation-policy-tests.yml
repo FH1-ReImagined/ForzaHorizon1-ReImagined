@@ -1,0 +1,26 @@
+name: Presentation policy
+on:
+  push:
+    paths: ['forza-recomp/src/platform/presentation_policy.h', 'forza-recomp/src/platform/ai_catchup.h', 'forza-recomp/src/hooks/ai_catchup.cpp', 'forza-recomp/tests/ai_catchup_test.cpp', 'tools/check_hdr_capture.py', 'tools/test_hdr_capture.py', 'forza-recomp/src/platform/ultrawide*', 'forza-recomp/tests/*presentation*', 'forza-recomp/tests/ultrawide_math_test.cpp', '.github/workflows/presentation-policy-tests.yml']
+  pull_request:
+    paths: ['forza-recomp/src/platform/presentation_policy.h', 'forza-recomp/src/platform/ai_catchup.h', 'forza-recomp/src/hooks/ai_catchup.cpp', 'forza-recomp/tests/ai_catchup_test.cpp', 'tools/check_hdr_capture.py', 'tools/test_hdr_capture.py', 'forza-recomp/src/platform/ultrawide*', 'forza-recomp/tests/*presentation*', 'forza-recomp/tests/ultrawide_math_test.cpp', '.github/workflows/presentation-policy-tests.yml']
+permissions:
+  contents: read
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check presentation transitions and rectangle geometry
+        run: |
+          for test in presentation_policy ultrawide_math ai_catchup; do
+            g++ -std=c++20 -Wall -Wextra -Werror -Iforza-recomp/src "forza-recomp/tests/${test}_test.cpp" -o "$RUNNER_TEMP/$test"
+            "$RUNNER_TEMP/$test"
+          done
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check the independent HDR capture verifier
+        run: |
+          python -m pip install numpy==2.3.5
+          python tools/test_hdr_capture.py

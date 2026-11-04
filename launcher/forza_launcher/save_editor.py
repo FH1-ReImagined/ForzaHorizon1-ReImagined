@@ -17,6 +17,10 @@ import uuid
 from . import TITLE_ID, game, paths, saves
 
 MAX_PROFILE = 16 * 1024**2
+# Independent resource budgets: bound Python objects and cumulative UTF-8 paths,
+# rather than recursion depth or field-name length. A scalar needs >=15 bytes.
+MAX_PREFIX_ENTRIES = 32768
+MAX_PREFIX_PATH_BYTES = 4 * 1024**2
 FORMATS = {0: '?', 1: 'B', 3: 'I', 4: 'Q', 7: 'i', 9: 'f'}
 # CareerWristbandLevels IDs in the supported game's database (not online ranks).
 WRISTBANDS = tuple(enumerate(('Yellow', 'Green', 'Blue', 'Pink', 'Orange', 'Purple', 'Gold')))
@@ -40,61 +44,77 @@ class Value:
 
 
 def fields(body):
-    """Parse the bounded prefix completely; retain the unknown trailing bytes unchanged."""
-    position, total, found = 0, 0, {}
+    """Walk the self-describing prefix iteratively, preserving exact scalar offsets."""
+    if not 4 <= len(body) <= MAX_PROFILE:
+        raise saves.SaveError('Invalid profile field section size.')
+    data = memoryview(body)
+    position, announced, path_bytes = 0, 0, 0
+    found = {}
 
-    def take(count):
+    def reserve(size):
         nonlocal position
-        if count < 0 or position + count > len(body):
+        if size > len(data) - position:
             raise saves.SaveError('The profile has a truncated field section.')
-        data = body[position:position+count]
-        position += count
-        return data
+        start = position
+        position += size
+        return start
 
-    def u32():
-        return struct.unpack('>I', take(4))[0]
+    def count_entries():
+        nonlocal announced
+        count = struct.unpack_from('>I', data, reserve(4))[0]
+        # Reject impossible counts before looping or allocating per-entry state.
+        if count > (len(data) - position) // 15:
+            raise saves.SaveError('The profile has a truncated field section.')
+        announced += count
+        if announced > MAX_PREFIX_ENTRIES:
+            raise saves.SaveError('The profile field section exceeds the entry budget.')
+        return count
 
-    def section(prefix='', depth=0):
-        nonlocal total
-        count = u32()
-        total += count
-        if depth > 8 or total > 10000:
-            raise saves.SaveError('The profile field section is too complex.')
-        for _ in range(count):
-            length = u32()
-            if not 0 < length <= 256:
-                raise saves.SaveError('Invalid profile field name.')
-            try:
-                name = take(length).decode('utf-8')
-            except UnicodeError as exc:
-                raise saves.SaveError('Invalid profile field name.') from exc
-            if '/' in name or '\0' in name:
-                raise saves.SaveError('Invalid profile field name.')
-            path = prefix + name
-            if path in found or take(8) != struct.pack('>II', 0x20, 0):
-                raise saves.SaveError('Duplicate or unsupported profile field.')
-            kind = take(1)[0]
-            found[path] = None
-            if kind == 15:
-                section(path+'/', depth+1)
-            elif kind in FORMATS:
-                offset = position
-                raw = take(struct.calcsize(FORMATS[kind]))
-                if kind == 0 and raw not in (b'\0', b'\1'):
-                    raise saves.SaveError('Invalid profile boolean.')
-                found[path] = Value(offset, kind, struct.unpack('>'+FORMATS[kind], raw)[0])
-            else:
-                raise saves.SaveError(f'Unsupported profile field type: {kind}.')
+    # A frame retains a prefix, its byte size, unvisited count and sibling names.
+    # Children are visited in stream order; completed frames are discarded.
+    stack = [['', 0, count_entries(), set()]]
+    while stack:
+        frame = stack[-1]
+        if frame[2] == 0:
+            stack.pop()
+            continue
+        frame[2] -= 1
+        length = struct.unpack_from('>I', data, reserve(4))[0]
+        if not length:
+            raise saves.SaveError('Invalid profile field name.')
+        path_size = frame[1] + length
+        path_bytes += path_size
+        if path_bytes > MAX_PREFIX_PATH_BYTES:
+            raise saves.SaveError('The profile field section exceeds the path budget.')
+        start = reserve(length)
+        try:
+            name = bytes(data[start:position]).decode('utf-8')
+        except UnicodeError as exc:
+            raise saves.SaveError('Invalid profile field name.') from exc
+        if '/' in name or '\0' in name or name in frame[3]:
+            raise saves.SaveError('Duplicate or invalid profile field name.')
+        frame[3].add(name)
+        tag, reserved, kind = struct.unpack_from('>IIB', data, reserve(9))
+        if (tag, reserved) != (0x20, 0):
+            raise saves.SaveError('Unsupported profile field header.')
+        path = frame[0] + name
+        if kind == 15:
+            stack.append([path+'/', path_size+1, count_entries(), set()])
+            continue
+        if kind not in FORMATS:
+            raise saves.SaveError(f'Unsupported profile field type: {kind}.')
+        offset = reserve(struct.calcsize(FORMATS[kind]))
+        if kind == 0 and data[offset] not in (0, 1):
+            raise saves.SaveError('Invalid profile boolean.')
+        found[path] = Value(offset, kind, struct.unpack_from('>'+FORMATS[kind], data, offset)[0])
 
-    section()
     for path, (kind, _low, _high) in EDITABLE.items():
-        if path not in found or found[path] is None or found[path].kind != kind:
+        if path not in found or found[path].kind != kind:
             raise saves.SaveError('This is not a supported FH1 career profile.')
-    values = {path: value for path, value in found.items() if value is not None}
     tutorial = car_challenge_tutorial(body, position)
     if tutorial is not None:
-        values[CAR_CHALLENGE_TUTORIAL] = tutorial
-    return values
+        found[CAR_CHALLENGE_TUTORIAL] = tutorial
+    return found
 
 
 def car_challenge_tutorial(body, start=0):

@@ -1,9 +1,11 @@
-// forza - the CPU drivers' rubber banding option (src/hooks/ai_catchup.cpp, #433).
-// The decisions and the AI config rewrite, without guest memory, so tests/ai_catchup_test.cpp
-// can check them.
+// Copyright (c) 2026 Forza Horizon 1: ReImagined contributors.
+// SPDX-License-Identifier: MIT
+// Comparison-target isolation for the optional single-player AI policy.
 #pragma once
 
+#include <array>
 #include <cstdint>
+#include <span>
 #include <cstring>
 #include <string_view>
 
@@ -45,10 +47,6 @@ constexpr uint32_t kCatchUpFactor = 444;             // braking/cornering pulled
 constexpr uint32_t kCatchUpGapPerPosition = 448;     // added to both per place behind
 constexpr uint32_t kConfigSize = 496;
 
-// Farther than any route: the rubber band, torque cut and catch-up never start. The factors
-// are also neutral (0), so neither would change anything if they did.
-constexpr float kOutOfReach = 1.0e6f;
-
 inline float LoadFloat(const uint8_t* config, uint32_t offset) {
   uint32_t v;
   std::memcpy(&v, config + offset, 4);
@@ -58,34 +56,43 @@ inline float LoadFloat(const uint8_t* config, uint32_t offset) {
   return f;
 }
 
-inline void StoreFloat(uint8_t* config, uint32_t offset, float f) {
-  uint32_t v;
-  std::memcpy(&v, &f, 4);
-  v = __builtin_bswap32(v);
-  std::memcpy(config + offset, &v, 4);
-}
-
 inline int32_t LoadInt(const uint8_t* config, uint32_t offset) {
   uint32_t v;
   std::memcpy(&v, config + offset, 4);
   return int32_t(__builtin_bswap32(v));
 }
 
-// Rewrites a filled config (host pointer to its first byte) so the driver races at its own
-// skill wherever the player is. Its skill (braking and cornering ranges, nominal torque),
-// temperament and rubber band row id stay.
-inline void RemoveCatchUp(uint8_t* config) {
-  StoreFloat(config, kDistBehindForMaxPerformance, 0.0f);
-  StoreFloat(config, kDistBehindForTorqueBoost, 0.0f);
-  StoreFloat(config, kStartRubberbanding, kOutOfReach);
-  StoreFloat(config, kMaxRubberbandingEffect, 2 * kOutOfReach);
-  StoreFloat(config, kStartTorqueCut, kOutOfReach);
-  StoreFloat(config, kMaxTorqueCut, 2 * kOutOfReach);
-  StoreFloat(config, kTorqueCutFactor, 0.0f);
-  StoreFloat(config, kStartCatchUp, kOutOfReach);
-  StoreFloat(config, kStopCatchUp, kOutOfReach);
-  StoreFloat(config, kCatchUpFactor, 0.0f);
-  StoreFloat(config, kCatchUpGapPerPosition, 0.0f);
+// These return addresses were read from branch-and-link instructions in both
+// supported XEX images. Other uses of the same queries (including steering and
+// race ordering) must receive the original result.
+enum class Query { LeadingHuman, TrailingHuman };
+enum class Comparison { None, RubberBand, CatchUp, RelativeSkill };
+struct ComparisonSite { uint32_t base, tu4; Query query; Comparison use; };
+inline constexpr std::array<ComparisonSite, 5> kComparisonSites{{
+    {0x82B93A84, 0x82C520CC, Query::LeadingHuman, Comparison::RubberBand},
+    {0x82B84384, 0x82C4297C, Query::LeadingHuman, Comparison::RubberBand},
+    {0x82B84654, 0x82C42C4C, Query::LeadingHuman, Comparison::CatchUp},
+    {0x82B90FA4, 0x82C4F5EC, Query::TrailingHuman, Comparison::RelativeSkill},
+    {0x82B910CC, 0x82C4F714, Query::TrailingHuman, Comparison::RelativeSkill}}};
+
+inline Comparison ClassifyComparison(Query query, uint32_t caller, bool tu4) {
+  for (const auto& site : kComparisonSites)
+    if (site.query == query && caller == (tu4 ? site.tu4 : site.base)) return site.use;
+  return Comparison::None;
+}
+
+inline Comparison IsolatedComparison(Mode mode, uint32_t race_type, Query query,
+                                      uint32_t caller, bool tu4) {
+  if (race_type == UINT32_MAX || !Applies(mode, race_type)) return Comparison::None;
+  return ClassifyComparison(query, caller, tu4);
+}
+
+// The game's no-opponent catch-up branch returns without clearing these live
+// fields. Retire any previously active blend before taking that branch. No AI
+// config, skill-range, temperament or torque field is rewritten.
+inline void RetireCatchUpBlend(std::span<uint8_t> controller, std::span<uint8_t> skill) {
+  if (controller.size() > 168) controller[168] = 0;
+  if (skill.size() >= 144) std::memset(skill.data() + 140, 0, 4);
 }
 
 }  // namespace forza::ai_catchup

@@ -1,14 +1,13 @@
-// View-state strategy adapted from Pinyon Shift contributors (BSD-3-Clause).
-// See patches/rexglue-sdk/LICENSE-Pinyon-Shift.
+// Copyright (c) 2026 Forza Horizon 1: ReImagined contributors.
+// SPDX-License-Identifier: MIT
 #include "ultrawide.h"
+#include "presentation_policy.h"
 #include "ultrawide_math.h"
 #include <rex/cvar.h>
 #include <rex/logging.h>
-#include <algorithm>
-#include <atomic>
-#include <cstdlib>
-#include <string>
 #include <mutex>
+#include <string>
+#include <utility>
 #ifdef _WIN32
 std::string ForzaGpuBackend();
 #endif
@@ -25,96 +24,123 @@ REXCVAR_DEFINE_DOUBLE(forza_hud_offset_y, 0.0, "Display", "HUD vertical offset, 
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 namespace forza::ultrawide {
 namespace {
-std::atomic<uint64_t> size{}, frame{}, gameplay_frame{}, map_frame{};
-std::atomic<uint64_t> drawing_size{};
-std::atomic<double> aspect_scale{1.0};
-std::atomic<bool> wide{}, ready{};
-Presentation present;
-std::mutex frame_mutex;
+// Publish dimensions, policy and projection as one state. Invoke the host
+// outside the lock: callbacks may synchronously query or resize the output.
+struct Session {
+  Extent output{}, drawing{};
+  Presentation notify;
+  PresentationPolicy policy;
+  double projection_ratio = 1;
+  bool enabled = false;
+};
+Session session;
+std::mutex session_mutex;
+bool HasSetting(const char* name) {
+  for (const auto& entry : rex::cvar::GetRegistry())
+    if (entry.name == name) return true;
+  return false;
 }
-void Resize(uint32_t width, uint32_t height) { size.store((uint64_t(width)<<32)|height); }
+void SetDimension(const char* name, uint32_t value) {
+  rex::cvar::SetFlagByName(name, std::to_string(value));
+}
+}  // namespace
+void Resize(uint32_t width, uint32_t height) {
+  std::lock_guard guard(session_mutex);
+  session.output = {width, height};
+}
 Extent OutputSize() {
-  const auto value = drawing_size.load() ? size.load() : 0;
-  return {uint32_t(value >> 32), uint32_t(value)};
+  std::lock_guard guard(session_mutex);
+  return session.drawing.width ? session.output : Extent{};
 }
 Extent DrawingSize() {
-  const auto value = drawing_size.load();
-  return {uint32_t(value >> 32), uint32_t(value)};
+  std::lock_guard guard(session_mutex);
+  return session.drawing;
 }
 void Prepare(uint32_t width, uint32_t height) {
-  drawing_size = 0;
-  Resize(width, height);
+  {
+    std::lock_guard guard(session_mutex);
+    session.output = {width, height};
+    session.drawing = {};
+  }
   if (!REXCVAR_GET(forza_ultrawide)) return;
-  bool supported = false;
-  for (const auto& flag : rex::cvar::GetRegistry()) supported |= flag.name == "forza_native_width";
+  bool usable = NativeSizeSupported(width, height) && HasSetting("forza_native_width");
 #ifdef _WIN32
-  supported &= ForzaGpuBackend() == "vulkan";
+  usable = usable && ForzaGpuBackend() == "vulkan";
 #endif
-  if (!supported || !NativeSizeSupported(width, height)) {
+  if (!usable) {
     rex::cvar::SetFlagByName("forza_ultrawide", "false");
-    REXLOG_WARN("Native ultrawide unavailable at {}x{}: requires the patched Vulkan renderer "
-                "and physical dimensions within 8960x5040. "
-                "Using ordinary 16:9 rendering; native resolution flags were not applied.", width, height);
+    REXLOG_WARN("Ultrawide cannot prepare {}x{}: native Vulkan drawing supports "
+                "positive dimensions up to 8960x5040", width, height);
     return;
   }
-  // Keep resolve rows at an integer vertical scale. Shrinking only viewports
-  // leaves EDRAM tile origins and resolve rows at different scales, producing
-  // bands. Presentation filters the complete backing image to the window.
-  const auto drawing_height = DrawingHeight(height);
-  const auto x = RenderScale(width, 1280, 1), y = RenderScale(height, 720, 1);
-  rex::cvar::SetFlagByName("draw_resolution_scale_x", std::to_string(x));
-  rex::cvar::SetFlagByName("draw_resolution_scale_y", std::to_string(y));
-  rex::cvar::SetFlagByName("forza_native_width", std::to_string(width));
-  rex::cvar::SetFlagByName("forza_native_height", std::to_string(drawing_height));
-  drawing_size = (uint64_t(width) << 32) | drawing_height;
-  REXLOG_INFO("Ultrawide output {}x{}; drawing {}x{}; tiled storage stride {}x{}",
-              width, height, width, drawing_height, 1280*x, 720*y);
-}
-void Initialize(uint32_t width, uint32_t height, Presentation callback) {
-  Resize(width,height);
-  present = std::move(callback);
-  bool supported = false;
-  for (const auto& flag : rex::cvar::GetRegistry()) supported |= flag.name == "forza_ultrawide_hud_x";
-  bool edges_supported = false;
-  for (const auto& flag : rex::cvar::GetRegistry())
-    edges_supported |= flag.name == "forza_ultrawide_hud_edge_shift";
-  if (REXCVAR_GET(forza_hud_edges) && !edges_supported) {
-    rex::cvar::SetFlagByName("forza_hud_edges", "false");
-    REXLOG_WARN("Expanded HUD requires the HUD edge-anchor SDK patch; retaining centered HUD");
+  const Extent backing{width, DrawingHeight(height)};
+  // EDRAM rows use whole guest-height multiples; filter the complete backing
+  // for fractional physical output heights.
+  SetDimension("draw_resolution_scale_x", RenderScale(width, 1280, 1));
+  SetDimension("draw_resolution_scale_y", RenderScale(height, 720, 1));
+  SetDimension("forza_native_width", backing.width);
+  SetDimension("forza_native_height", backing.height);
+  {
+    std::lock_guard guard(session_mutex);
+    session.drawing = backing;
   }
-  ready = (REXCVAR_GET(forza_ultrawide) || REXCVAR_GET(forza_hud_layout)) && supported;
-  if (ready.load()) {
+  REXLOG_INFO("Ultrawide physical output {}x{}, render backing {}x{}",
+              width, height, backing.width, backing.height);
+}
+void Initialize(uint32_t width, uint32_t height, Presentation presentation) {
+  const bool requested = REXCVAR_GET(forza_ultrawide) || REXCVAR_GET(forza_hud_layout);
+  const bool enabled = requested && HasSetting("forza_ultrawide_hud_x");
+  if (REXCVAR_GET(forza_hud_edges) && !HasSetting("forza_ultrawide_hud_edge_shift")) {
+    rex::cvar::SetFlagByName("forza_hud_edges", "false");
+    REXLOG_WARN("HUD edge anchors are unavailable in this GPU library");
+  }
+  if (enabled) {
     rex::cvar::SetFlagByName("forza_present_16_9", "true");
     rex::cvar::SetFlagByName("present_letterbox", "true");
+  } else if (requested) {
+    REXLOG_WARN("HUD layout requires a GPU library with FH1 presentation support");
   }
-  if ((REXCVAR_GET(forza_ultrawide) || REXCVAR_GET(forza_hud_layout)) && !supported)
-    REXLOG_WARN("Ultrawide disabled: rebuild with the ultrawide SDK patch");
+  std::lock_guard guard(session_mutex);
+  session.output = {width, height};
+  session.notify = std::move(presentation);
+  session.policy = {};
+  session.projection_ratio = 1;
+  session.enabled = enabled;
 }
 void Frame() {
-  if (!ready.load()) return;
-  std::lock_guard lock(frame_mutex);
-  const auto n = ++frame, game = gameplay_frame.load(), map = map_frame.load(), dimensions = size.load();
   const bool custom = REXCVAR_GET(forza_hud_layout);
-  const bool ultrawide = REXCVAR_GET(forza_ultrawide);
-  const auto layout = ComputeLayout(ultrawide ? uint32_t(dimensions>>32) : 1280,
-      ultrawide ? uint32_t(dimensions) : 720,
-      custom ? REXCVAR_GET(forza_hud_safe_width) : 100.0,
-      custom ? REXCVAR_GET(forza_hud_safe_height) : 100.0,
-      custom ? REXCVAR_GET(forza_hud_offset_x) : 0.0,
-      custom ? REXCVAR_GET(forza_hud_offset_y) : 0.0, REXCVAR_GET(forza_hud_edges));
-  const bool was = wide.load();
-  const bool active = GameplayLayoutActive(layout.aspect_scale, was, n, game, map);
-  aspect_scale = layout.aspect_scale;
-  wide = active;
-  // Callback coalesces unchanged values before dispatching to the UI thread.
-  present(!(active && ultrawide && layout.aspect_scale > 1.0), active ? layout.hud_scale_x : 1.0, active ? layout.hud_scale_y : 1.0,
-          active ? layout.hud_offset_x : 0.0, active ? layout.hud_offset_y : 0.0, active ? layout.hud_edge_shift : 0.0);
-  if (was != active) REXLOG_INFO("Ultrawide: {}", active ? "gameplay" : "protected 16:9 screen");
+  const bool panoramic = REXCVAR_GET(forza_ultrawide);
+  Presentation notify;
+  Layout layout{};
+  bool active, changed;
+  {
+    std::lock_guard guard(session_mutex);
+    if (!session.enabled) return;
+    layout = ComputeLayout(panoramic ? session.output.width : 1280,
+        panoramic ? session.output.height : 720,
+        custom ? REXCVAR_GET(forza_hud_safe_width) : 100,
+        custom ? REXCVAR_GET(forza_hud_safe_height) : 100,
+        custom ? REXCVAR_GET(forza_hud_offset_x) : 0,
+        custom ? REXCVAR_GET(forza_hud_offset_y) : 0, REXCVAR_GET(forza_hud_edges));
+    const bool previous = session.policy.active();
+    active = session.policy.Advance(layout.aspect_scale >= 1);
+    changed = previous != active;
+    session.projection_ratio = active ? layout.aspect_scale : 1;
+    notify = session.notify;
+  }
+  if (notify) {
+    const bool letterbox = !active || !panoramic || layout.aspect_scale <= 1;
+    notify(letterbox, active ? layout.hud_scale_x : 1, active ? layout.hud_scale_y : 1,
+           active ? layout.hud_offset_x : 0, active ? layout.hud_offset_y : 0,
+           active ? layout.hud_edge_shift : 0);
+  }
+  if (changed) REXLOG_INFO("HUD presentation: {}", active ? "gameplay" : "protected screen");
 }
 double Projection(bool gameplay, bool map, uint32_t width, uint32_t height, double aspect) {
-  if (!ready.load() || width != 1280 || height != 720) return aspect;
-  if (map) { map_frame = frame.load(); return aspect; }
-  if (gameplay) gameplay_frame = frame.load();
-  return wide.load() ? aspect * aspect_scale.load() : aspect;
+  if (width != 1280 || height != 720) return aspect;
+  std::lock_guard guard(session_mutex);
+  if (!session.enabled) return aspect;
+  session.policy.Observe(gameplay, map);
+  return map ? aspect : aspect * session.projection_ratio;
 }
-}
+}  // namespace forza::ultrawide

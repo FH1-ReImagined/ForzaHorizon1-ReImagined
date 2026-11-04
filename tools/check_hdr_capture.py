@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Check an opt-in Vulkan HDR attachment readback (see docs/hdr.md).
+"""Validate diffuse-exp-v1 HDR readbacks. Older policy captures are rejected.
 
-Requires NumPy. Does not open the game, change settings, or upload captures.
-The reference curve allows half an 8-bit source step for GPU sRGB sampler
-precision, plus RGBA16F rounding. Brightness bounds use a 0.5-nit margin.
+Requires NumPy; reads local files only. GPU sRGB sampling permits half an 8-bit
+source step, then half-float output rounding and a small numerical tolerance.
 """
 import argparse
 import json
@@ -11,81 +10,129 @@ from pathlib import Path
 
 import numpy as np
 
+MODEL = "diffuse-exp-v1"
+
+
+def validate_settings(settings):
+    if settings.get("hdr_model") != MODEL:
+        raise ValueError("Capture uses an older or unknown HDR policy; use its matching historical checker.")
+    if not 0 < settings["width"] <= 16384 or not 0 < settings["height"] <= 16384:
+        raise ValueError("Invalid capture dimensions.")
+    names = ("paper_white", "peak", "scene_ceiling", "diffuse_anchor", "curve_exponent",
+             "curve_denominator", "gamma")
+    if not all(np.isfinite(settings[name]) for name in names):
+        raise ValueError("Nonfinite HDR metadata.")
+    if not (80 <= settings["paper_white"] <= settings["peak"] <= 10000
+            and 1 <= settings["scene_ceiling"] <= settings["peak"] / settings["paper_white"] + 1e-5
+            and 0 < settings["diffuse_anchor"] < 1
+            and settings["curve_exponent"] >= 0 and settings["curve_denominator"] >= 0):
+        raise ValueError("HDR metadata violates the output bounds.")
+
+
+def calibration(settings):
+    height, width = settings["height"], settings["width"]
+    signal = np.full((height, width), -1.0)
+    mode = settings["pattern"]
+    if mode not in (1, 2, 3):
+        return signal
+    yy, xx = np.indices((height, width), dtype=float)
+    cell = min(width / 5, height / 4)
+    gx = (xx + .5 - width / 2) / cell + 2
+    gy = (yy + .5 - height / 2) / cell + 1.5
+    inside = (gx >= 0) & (gx < 4) & (gy >= 0) & (gy < 3)
+    column, row = np.floor(gx).astype(int), np.floor(gy).astype(int)
+    lx, ly = gx - column, gy - row
+    inset = (np.abs(lx - .5) < .32) & (np.abs(ly - .5) < .32)
+    index = row * 4 + column
+    if mode == 1:
+        nits = np.where(index == 0, 0, np.exp2(index - 11.0))
+        checker = ((lx * 8).astype(int) + (ly * 8).astype(int)) % 2 == 0
+        value = np.where(inset & checker, nits / 80, 0)
+    elif mode == 2:
+        level = np.select([column == 0, column == 1, column == 2], [.18, .5, .75], default=1)
+        surround = np.select([row == 0, row == 1], [0, .18], default=1)
+        value = settings["paper_white"] / 80 * np.where(inset, level, surround)
+    else:
+        value = settings["peak"] / 80 * np.where(inset, np.exp2((index - 11) / 6), 1)
+    signal[inside] = value[inside]
+    return signal
+
+
+def reference(settings, code, coverage):
+    linear = np.where(code <= .04045, code / 12.92, ((code + .055) / 1.055) ** 2.4)
+    decoded = code ** settings["gamma"] if settings["gamma"] > 0 else linear
+    intensity = decoded.max(axis=2)
+    anchor, ceiling = settings["diffuse_anchor"], settings["scene_ceiling"]
+    exponent, denominator = settings["curve_exponent"], settings["curve_denominator"]
+    target = intensity.copy()
+    if ceiling > 1 and exponent > .0001:
+        selected = intensity > anchor
+        u = (intensity[selected] - anchor) / (1 - anchor)
+        target[selected] = np.clip(anchor + (ceiling - anchor) * np.expm1(exponent * u) / denominator,
+                                   intensity[selected], ceiling)
+    gain = np.divide(target, intensity, out=np.ones_like(target), where=intensity > 0)
+    gain[coverage > 0] = 1
+    result = decoded * gain[:, :, None] * (settings["paper_white"] / 80)
+    if settings["compare"]:
+        result[:, :settings["width"] // 2] = linear[:, :settings["width"] // 2] * (settings["paper_white"] / 80)
+    pattern = calibration(settings)
+    selected = pattern >= 0
+    result[selected] = pattern[selected, None]
+    return result, selected
+
 
 def check(path, expect_scene=False):
     path = str(path)
     settings = json.loads(Path(path + ".json").read_text())
+    validate_settings(settings)
     height, width = settings["height"], settings["width"]
-    output = np.fromfile(path + ".rgba16f", dtype="<f2").reshape(height, width, 4).astype(np.float32)
-    stand_in = np.fromfile(path + ".bgra8", dtype=np.uint8).reshape(height, width, 4)
-    code = stand_in[:, :, [2, 1, 0]].astype(np.float32) / 255
-    coverage = stand_in[:, :, 3].astype(np.float32) / 255
-    white, peak, strength = settings["paper_white"], settings["peak"], settings["strength"]
-
-    def reference(source):
-        linear = np.where(source <= 0.04045, source / 12.92, ((source + 0.055) / 1.055) ** 2.4)
-        decoded = source ** settings["gamma"] if settings["gamma"] > 0 else linear
-        brightness = (0.25 * np.sum(decoded * np.array([0.2126, 0.7152, 0.0722]), axis=2)
-                      + 0.75 * decoded.max(axis=2))
-        knee = np.clip((brightness - 0.5) * 2, 0, 1)
-        boost = 1 + max(peak / white - 1, 0) * strength * knee * knee * (1 - coverage)
-        result = decoded * (white / 80) * boost[:, :, None]
-        if settings["compare"]:
-            result[:, :width // 2] = linear[:, :width // 2] * (white / 80)
-            result[:, width // 2 - 3:width // 2] = white / 80
-        return result
-
-    expected = reference(code)
-    lower = reference(np.clip(code - 0.5 / 255, 0, 1)).astype(np.float16).astype(np.float32)
-    upper = reference(np.clip(code + 0.5 / 255, 0, 1)).astype(np.float16).astype(np.float32)
-    hdr_half = np.ones((height, width), bool)
+    output = np.fromfile(path + ".rgba16f", dtype="<f2").reshape(height, width, 4).astype(float)
+    stored = np.fromfile(path + ".bgra8", dtype=np.uint8).reshape(height, width, 4)
+    code = stored[:, :, [2, 1, 0]].astype(float) / 255
+    coverage = stored[:, :, 3].astype(float) / 255
+    expected, pattern = reference(settings, code, coverage)
+    lower = reference(settings, np.clip(code - .5 / 255, 0, 1), coverage)[0].astype(np.float16).astype(float)
+    upper = reference(settings, np.clip(code + .5 / 255, 0, 1), coverage)[0].astype(np.float16).astype(float)
+    hdr = ~pattern
     if settings["compare"]:
-        hdr_half[:, :width // 2] = False
-    ordinary = np.ones((height, width), bool)
-    if settings["pattern"]:
-        ordinary[int(height * 0.62):int(height * 0.88) + 1] = False
-    hud = ordinary & hdr_half & (coverage == 1)
-    scene = ordinary & hdr_half & (coverage == 0)
-    error = np.abs(expected - output[:, :, :3])[ordinary]
-    outside = ((output[:, :, :3] < lower - 0.002) | (output[:, :, :3] > upper + 0.002))[ordinary]
-    max_nits = output[:, :, :3].max(axis=2) * 80
-    hud_max = float(max_nits[hud].max()) if hud.any() else None
-    expanded = int((scene & (max_nits > white + 0.5)).sum())
-    report = {
-        "width": width, "height": height, "settings": settings,
-        "finite": bool(np.isfinite(output).all()),
-        "peak_channel_nits": float(max_nits.max()),
-        "hud_pixels": int(hud.sum()), "hud_max_channel_nits": hud_max,
-        "scene_pixels": int(scene.sum()), "scene_pixels_above_paper_white": expanded,
-        "mean_curve_error_nits": float(error.mean() * 80),
-        "max_curve_error_nits": float(error.max() * 80),
-        "channels_outside_quantization_bounds": int(outside.sum()),
-    }
+        hdr[:, :width // 2] = False
+    hud, scene = hdr & (coverage > 0), hdr & (coverage == 0)
+    nits = output[:, :, :3].max(axis=2) * 80
+    outside = (output[:, :, :3] < lower - .002) | (output[:, :, :3] > upper + .002)
+    errors = np.abs(output[:, :, :3] - expected) * 80
+    hud_max = float(nits[hud].max()) if hud.any() else None
+    expanded = int((scene & (nits > settings["paper_white"] + .5)).sum())
     failures = []
-    if not report["finite"]:
+    if not np.isfinite(output).all():
         failures.append("non-finite output")
-    if report["channels_outside_quantization_bounds"]:
-        failures.append("output differs from reference curve")
-    if hud_max is not None and hud_max > white + 0.5:
-        failures.append("opaque HUD exceeds paper white")
-    limit = white + max(peak - white, 0) * strength
+    if outside.any():
+        failures.append("output differs from the independent curve or calibration grid")
+    if hud_max is not None and hud_max > settings["paper_white"] + .5:
+        failures.append("protected overlay exceeds paper white")
+    limit = settings["paper_white"] * settings["scene_ceiling"]
     if settings["pattern"] == 3:
-        limit = max(limit, peak)
-    if report["peak_channel_nits"] > limit + 0.5:
-        failures.append("output exceeds configured highlight limit")
+        limit = max(limit, settings["peak"])
+    if nits.max() > limit + .5:
+        failures.append("output exceeds configured luminance bound")
     if expect_scene and (not expanded or not hud.any()):
-        failures.append("capture does not demonstrate both HUD protection and scene expansion")
-    report["failures"] = failures
-    return report
+        failures.append("capture does not demonstrate both overlay protection and scene expansion")
+    return {"width": width, "height": height, "settings": settings,
+            "finite": bool(np.isfinite(output).all()), "peak_channel_nits": float(nits.max()),
+            "hud_pixels": int(hud.sum()), "hud_max_channel_nits": hud_max,
+            "scene_pixels": int(scene.sum()), "scene_pixels_above_paper_white": expanded,
+            "mean_curve_error_nits": float(errors.mean()), "max_curve_error_nits": float(errors.max()),
+            "channels_outside_quantization_bounds": int(outside.sum()), "failures": failures}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("trigger", type=Path)
-    parser.add_argument("--expect-scene", action="store_true",
-                        help="require HUD pixels and highlights above paper white")
+    parser.add_argument("--expect-scene", action="store_true")
     args = parser.parse_args()
-    report = check(args.trigger, args.expect_scene)
+    try:
+        report = check(args.trigger, args.expect_scene)
+    except (ValueError, KeyError, OSError) as error:
+        parser.error(str(error))
     print(json.dumps(report, indent=2))
     return bool(report["failures"])
 
