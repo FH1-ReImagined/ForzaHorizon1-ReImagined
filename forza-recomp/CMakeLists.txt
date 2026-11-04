@@ -133,6 +133,7 @@ set(FORZA_SOURCES
     src/hooks/compressed_stream_stall.cpp
     src/hooks/ffcb_wake.cpp
     src/hooks/database_query.cpp
+    src/hooks/fm4_track.cpp
     src/hooks/crowd_anim.cpp
     src/hooks/movie_texture.cpp
     src/hooks/movie_memory.cpp
