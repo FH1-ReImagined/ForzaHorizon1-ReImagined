@@ -3,9 +3,12 @@
 # (/ONLINE=no), uninstalls and checks that everything is gone. Used by the
 # installer-test job of .github/workflows/release.yml and by hand on a Windows VM:
 #   powershell -File test_installer.ps1 -Setup ForzaHorizon1-ReImagined-Setup-0.1.1.exe
+# -Signature release or test (a signed build, #354): the installer, the installed forza-launcher.exe and
+# unins000.exe must pass verify_signature.ps1 in that mode.
 param(
     [Parameter(Mandatory = $true)][string]$Setup,
-    [string]$ExpectVersion = ""
+    [string]$ExpectVersion = "",
+    [ValidateSet('none', 'test', 'release')][string]$Signature = 'none'
 )
 $ErrorActionPreference = "Stop"
 $Setup = (Resolve-Path $Setup).Path
@@ -60,6 +63,17 @@ if ((Test-Path $manifestPath) -and (Test-Path $exe)) {
     Check ($launcherFiles.Count -eq 1) "manifest identifies the launcher once"
     if ($launcherFiles.Count -eq 1) {
         Check ((Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash -eq $launcherFiles[0].sha256) "installed launcher matches payload manifest"
+    }
+}
+if ($Signature -ne 'none') {
+    foreach ($signedFile in @($Setup, $exe, (Join-Path $app "unins000.exe"))) {
+        $leaf = Split-Path -Leaf $signedFile
+        if (Test-Path -LiteralPath $signedFile) {
+            & (Join-Path $PSScriptRoot "verify_signature.ps1") -Mode $Signature $signedFile
+            Check ($LASTEXITCODE -eq 0) "$leaf is signed ($Signature)"
+        } else {
+            Check $false "$leaf is signed ($Signature): file missing"
+        }
     }
 }
 Check (Test-Path $start) "Start menu shortcut"

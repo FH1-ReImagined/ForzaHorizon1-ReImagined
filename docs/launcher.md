@@ -947,8 +947,8 @@ valid for the schema, warnings, the first-run / existing-settings / player-choic
   `ForzaHorizon1-ReImagined-windows-files-<version>.json` is published beside the
   installer and covered by `SHA256SUMS`. This lets maintainers identify an installed
   file even if antivirus has removed it. It covers the staged payload, not Inno's
-  generated uninstaller or the separately bundled Microsoft redistributable. If
-  payload signing is added, generate this manifest after signing. The installer
+  generated uninstaller or the separately bundled Microsoft redistributable. When
+  the release is signed, it is written after the launcher is signed. The installer
   smoke test verifies that the installed launcher matches its recorded hash.
   Against Defender's machine-learning detections of `forza-launcher.exe` (#482, #354), the
   `launcher-windows` job builds PyInstaller's bootloader from source and gives both executables a
@@ -963,10 +963,29 @@ valid for the schema, warnings, the first-run / existing-settings / player-choic
   copyright) from `forza_launcher/_version.py` when `forza-launcher.spec` runs, and a job step reads it
   back (`test_installer.ps1` reads both programs' resources from the installed files). `installer.iss` sets the installer's own (`VersionInfoVersion` from `/DVersionNumeric`, company,
   product, description, original file name). Linux is untouched: the spec only passes `version=` on
-  Windows, and the Linux job and the Flatpak build use the stock PyInstaller wheel or none. Marked
-  `TODO(code signing)` in the workflow are the two places a signature goes once a certificate is chosen
-  (SignPath Foundation or Certum): the launcher before the smoke test and packaging, so the manifest hashes
-  the signed file, and the installer before upload.
+  Windows, and the Linux job and the Flatpak build use the stock PyInstaller wheel or none.
+  Code signing (#354) goes through SignPath Foundation and is off until the repository variable
+  `SIGNPATH_ORGANIZATION_ID` and the secret `SIGNPATH_API_TOKEN` exist (`SIGNPATH_PROJECT_SLUG` if the
+  SignPath project is not `ForzaHorizon1-ReImagined`); it never runs on pull requests, so until then
+  releases are built unsigned as before. When it is on, `launcher-windows` makes two signing requests
+  with `signpath/github-action-submit-signing-request`, each on a GitHub artifact named `unsigned-*`
+  that the `publish` job drops:
+  1. after Package: the staged `forza-launcher.exe` and Inno Setup's uninstaller. Inno Setup can only
+     embed a signature in the uninstaller (which Setup's temporary self-copies also run) while
+     compiling, so `launcher/packaging/build_installer.ps1 -PrepareUninstaller` compiles once with
+     `SignedUninstaller=yes` and no SignTool: Inno writes `uninst-<Inno Setup version>-<hash>.e32` to
+     `signed-uninstaller/` and stops. The signed launcher goes back into the stage before the payload
+     manifest is written, and the signed `.e32` into `signed-uninstaller/`;
+  2. after the real compile (which finds the signed `.e32` and puts its signature into `unins000.exe`):
+     the installer.
+  The artifact configurations are `binaries` and `installer` in SignPath; reviewed copies are in
+  `launcher/packaging/signpath/`. Tags use the `release-signing` policy (a maintainer approves each
+  request in SignPath while the job waits, up to two hours); a run by hand uses `test-signing`.
+  `launcher/packaging/verify_signature.ps1` checks every signed file (valid, signed by SignPath
+  Foundation and timestamped; for test signing: signed, unchanged and timestamped), the signed launcher
+  must still print its version, and `installer-test` checks the installer, the installed launcher and
+  `unins000.exe` the same way (`test_installer.ps1 -Signature`). `launcher/test_code_signing.py`
+  covers the wiring.
   The VC++ redistributable comes from a versioned Microsoft URL pinned with its SHA-256 in
   `launcher/forza_launcher/pins.py` (`vc-redist-x64`, fetched by `launcher/packaging/ci_fetch.py`), and
   the job fails unless `Get-AuthenticodeSignature` says it is validly signed by Microsoft. When Microsoft

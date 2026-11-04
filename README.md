@@ -282,7 +282,7 @@ The launcher and the game have no analytics or telemetry. With the default setti
 
 Windows builds will be signed through [SignPath Foundation](https://signpath.org); until then they are unsigned.
 
-What we sign: the Windows launcher `forza-launcher.exe` and the installer `ForzaHorizon1-ReImagined-Setup-<version>.exe`. They are built by GitHub Actions from this repository ([release workflow](.github/workflows/release.yml)), and a maintainer approves each release by hand before it is signed.
+What we sign: the Windows launcher `forza-launcher.exe`, the installer `ForzaHorizon1-ReImagined-Setup-<version>.exe` and its uninstaller `unins000.exe`. They are built by GitHub Actions from this repository ([release workflow](.github/workflows/release.yml)), and a maintainer approves each release by hand before it is signed.
 
 What we don't sign: third-party files we ship (Python, Qt/PySide6, SDL2, the Microsoft Visual C++ runtime) are included as their publishers released them, with the publishers' own signatures where they have one. `forza.exe`, which the launcher builds on your PC from your own copy of the game, is never signed by us. The Linux packages are not code-signed; check them against `SHA256SUMS` (see [Install with the launcher](#install-with-the-launcher)).
 
