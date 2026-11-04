@@ -225,6 +225,12 @@ the RSX Type-S was bought with credits (colour, BUY CAR?), driven out of the Aut
 burnout scored) and the Veyron, DBR9 and Thunderbird loaded from the package zips as they did
 from the mod.
 
+Then the launcher's own path, headless (`fm4cars.build` with a scratch data folder) on the two
+FM4 disc images: Disc 1 and Disc 2 read, the three car packs unpacked, 381 cars converted and
+published in 911 s (the mod 9.8 MB, the package 5.6 GB in two zips, its header; the temporary
+folder removed). A game started on that data folder lists the new makes in the Autoshow
+(Mosler, Morgan, Acura...) and shows the 2010 Mosler MT900S in its showroom.
+
 ## Not done yet
 
 - The light list of `CCarModelData` (light sprites, indicators) is empty.
