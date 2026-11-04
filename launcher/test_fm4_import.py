@@ -133,6 +133,9 @@ class Fm4ImportTests(_Setup, unittest.TestCase):
             fm4cars.build(self.cfg, self.disc1, None, converter=Cancelling)
         self.assertEqual(fm4cars.status(self.cfg)["cars"], ["BUG_Veyron_09"])
 
+    def test_package_name_matches_the_tool(self):
+        self.assertEqual(fm4cars.PACKAGE, fm4cars._tools().PACK_NAME)
+
     def test_stale_after_dlc_changes(self):
         self.build()
         d = Path(self.cfg.data_home()) / "0000000000000000/4D5309C9/00000002/PACK"

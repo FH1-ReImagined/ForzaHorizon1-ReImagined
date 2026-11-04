@@ -17,6 +17,7 @@ from . import datafolder, mods, paths
 from .fetch import Cancelled
 
 MOD = "reimagined-fm4-cars"
+PACKAGE = "464D3443415253000000000000000000000000004D"  # tools/fm4_cars.py PACK_NAME
 MARKER = ".reimagined-fm4-cars.json"
 FM4_TITLE = 0x4D530910
 DISC1_PATHS = ("default.xex", "Media/cars", "Media/wheels", "Media/db", "Media/StringTables",
@@ -36,13 +37,11 @@ def _tools():
 def _package(cfg):
     """(the package folder, its header) in the user data folder the game reads DLC from."""
     root = Path(cfg.data_home()) / datafolder.DLC_DIR
-    name = _tools().PACK_NAME
-    return root / "00000002" / name, root / "Headers" / "00000002" / (name + ".header")
+    return root / "00000002" / PACKAGE, root / "Headers" / "00000002" / (PACKAGE + ".header")
 
 
 def _dlc(cfg):
-    name = _tools().PACK_NAME
-    return sorted(p for p in datafolder.dlc_packages(cfg.data_home()) if p != name)
+    return sorted(p for p in datafolder.dlc_packages(cfg.data_home()) if p != PACKAGE)
 
 
 def status(cfg):
