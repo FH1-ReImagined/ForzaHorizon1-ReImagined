@@ -83,6 +83,12 @@ PPCFunc* ResolveIndirectFunction(uint32_t address) {
   }
 }
 }
+namespace forza::coop_map_event {  // the Co-op Festival's start (coop_map_event.cpp)
+unsigned binds = 0;
+void CardBound(PPCContext&, uint8_t*, uint32_t, uint32_t, bool) { ++binds; }
+bool CardInput(PPCContext&, uint8_t*, uint32_t, uint32_t) { return false; }
+void CardDestroyed(uint32_t) {}
+}
 namespace forza {
 bool NetworkOn() { Check(false); return false; }
 bool LiveLocalActivity(uint32_t&, uint32_t&) { Check(false); return false; }
@@ -105,7 +111,7 @@ int main() {
   Setup(false);
   ctx.r3.u64 = screen;
   sub_82733A68(ctx, memory.data());
-  Check(native_binds == 1 && !card_eligible);
+  Check(native_binds == 1 && !card_eligible && forza::coop_map_event::binds == 1);
   Check(statements.size() == 5);
   for (const auto& sql : statements) Check(sql.starts_with("SELECT "));
   // Any attempt to add the Custom Race footer or query the profile/offline
