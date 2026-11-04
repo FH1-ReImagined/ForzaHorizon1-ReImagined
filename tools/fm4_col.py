@@ -26,7 +26,8 @@ pointers (sub_82DD20C8). What differs:
                                        caller's. In Colorado's, TT is 0x0E (or 0x0A) on
                                        ground and 0x08 (or 0x0C) on walls; given 0x0E, a
                                        wall throws the car. The last word is 0x00FFFFFF
-                                       in most of Colorado's, 0 in FM4's
+                                       in most of Colorado's, 0 in FM4's, kept 0 (see
+                                       EDGES)
 
 Usage: tools/fm4_col.py IN.col OUT.col
 """
@@ -37,6 +38,12 @@ import sys
 FH1_HEADER = 0x90
 # FM4_COL_SURFACE=n gives every triangle surface n (a test).
 SURFACE = os.environ.get("FM4_COL_SURFACE")
+# FM4_COL_WALL=n: the top flag byte of walls (a test; Colorado's are 0x08 or 0x0C).
+WALL = int(os.environ.get("FM4_COL_WALL", "0x08"), 0)
+# FM4_COL_EDGES=n: the triangles' last word (a test). Colorado's are mostly 0x00FFFFFF, but
+# with that a wall FM4 built throws the car off at speed (60 to 180 km/h on touching it);
+# FM4's own 0 gives a crash that slows the car, as in Colorado.
+EDGES = int(os.environ.get("FM4_COL_EDGES", "0"), 0)
 ALIGN = 0x800
 
 
@@ -75,6 +82,31 @@ def convert_cell(d, surfaces=None):
     goff = struct.unpack_from(">I", d, 0x38)[0]
     if hs != 0x40 or toff != hs + 32 * nv or goff != toff + 32 * nt:
         raise ValueError(f"not an FM4 cell: header {hs:#x}, triangles at {toff:#x}, grid at {goff:#x}")
+    tris = [struct.unpack_from(">IIIIfffI", d, toff + 32 * i) for i in range(nt)]
+    pos = [struct.unpack_from(">fff", d, hs + 32 * i) for i in range(nv)]
+    at = [[] for _ in range(nv)]
+    for t in tris:
+        for v in t[1:4]:
+            at[(v - hs) // 32].append(t[4:7])
+    # A corner's normal: the mean of the triangles at its vertex that face within 45 degrees
+    # of its own (smoothing groups), so a wall's foot does not lean the road beside it. A
+    # vertex shared by a wall and the road becomes two, as in Colorado's cells.
+    verts, index, corners = [], {}, []
+    for t in tris:
+        row = []
+        for v in t[1:4]:
+            k = (v - hs) // 32
+            n = [0.0, 0.0, 0.0]
+            for m in at[k]:
+                if m[0] * t[4] + m[1] * t[5] + m[2] * t[6] > 0.707:
+                    n[0] += m[0]; n[1] += m[1]; n[2] += m[2]
+            key = (k, pack_normal(*n) if any(n) else pack_normal(*t[4:7]))
+            if key not in index:
+                index[key] = len(verts)
+                verts.append(key)
+            row.append(index[key])
+        corners.append(row)
+    nv = len(verts)
     vbase = FH1_HEADER
     tbase = vbase + 16 * nv
     gbase = tbase + 32 * nt
@@ -85,27 +117,16 @@ def convert_cell(d, surfaces=None):
     struct.pack_into(">4I", head, 0, nv, nt, vbase, tbase)
     struct.pack_into(">I", head, 0x38, gbase)
     out[:0x3C] = head
-    tris = [struct.unpack_from(">IIIIfffI", d, toff + 32 * i) for i in range(nt)]
-    normal = [[0.0, 0.0, 0.0] for _ in range(nv)]
-    for _, a, b, c, nx, ny, nz, _ in tris:
-        for v in (a, b, c):
-            n = normal[(v - hs) // 32]
-            n[0] += nx; n[1] += ny; n[2] += nz
-    for i in range(nv):
-        x, y, z = struct.unpack_from(">fff", d, hs + 32 * i)
-        struct.pack_into(">fffI", out, vbase + 16 * i, x, y, z, pack_normal(*normal[i]))
-
-    def vtx(off):
-        return vbase + 16 * ((off - hs) // 32)
-
+    for i, (k, word) in enumerate(verts):
+        struct.pack_into(">fffI", out, vbase + 16 * i, *pos[k], word)
     for i, (fl, a, b, c, nx, ny, nz, _) in enumerate(tris):
         mat = (fl >> 16) & 0xFF
         if surfaces and mat < len(surfaces):
             mat = surfaces[mat]
         mat = (mat if SURFACE is None else int(SURFACE, 0)) << 16
-        fl = (0x0E000000 if ny > 0.5 else 0x08000000) | mat | 0x8000
-        struct.pack_into(">IIIIfffI", out, tbase + 32 * i, fl, vtx(a), vtx(b), vtx(c),
-                         nx, ny, nz, 0x00FFFFFF)
+        fl = (0x0E000000 if ny > 0.5 else WALL << 24) | mat | 0x8000
+        struct.pack_into(">IIIIfffI", out, tbase + 32 * i, fl,
+                         *[vbase + 16 * v for v in corners[i]], nx, ny, nz, EDGES)
     for k in range(gx * gz):
         o = struct.unpack_from(">I", d, goff + 4 * k)[0]
         struct.pack_into(">I", out, gbase + 4 * k, o - lists_old + lists_new if o else 0)
