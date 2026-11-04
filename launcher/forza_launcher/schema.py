@@ -694,6 +694,12 @@ add("coop_results", "Co-op campaign results", "Online", "bool", True,
     "ones you earned to the save you played with. The request carries your player ID and a signature "
     "made with your signing key (not the key itself). "
     "Nothing is asked offline or of a server on this PC.", "Co-op campaign")
+# Launcher only: see challenges.py, forza-live #1.
+add("challenges", "Daily and weekly challenges", "Online", "bool", True,
+    "Show the main server's daily and weekly challenges and your progress on the Play page. The "
+    "launcher asks the main server for them when the Play page is open (at most every 5 minutes) "
+    "and after a game session, only with Server set to Public server. The request carries your "
+    "player ID and a signature made with your signing key (not the key itself).", "Challenges"),
 # Discord status display is on by default; the "Online features" choice (PRIVACY.md) and this
 # switch turn it off. The application ID is public maintainer setup, separated from the
 # ordinary sharing switch. Never request a token or secret.
