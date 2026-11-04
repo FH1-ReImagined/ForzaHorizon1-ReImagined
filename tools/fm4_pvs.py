@@ -48,8 +48,9 @@ tools/fm4_track_mod.py, and
   FORZA_INSECURE_FILES='zipmanifest.xml|\\tracks\\<track>\\'
   FORZA_FM4_STX='<Track>|LOOSE_DIR/<track>_stx_numbers.bin'
   FORZA_TRACK_SPAWN=x,y,z (Suzuka: 487.7,606,22.5)
-Status: Suzuka renders (buildings, stands, fences, flags; the road and the ground are
-black); the car is held still (no collision yet: FM4's .col is not FH1's streamed .fiz).
+Status: Suzuka renders (buildings, stands, crowds, trees, grass, fences, flags, the road);
+FM4's terrain and road-shoulder blend shaders still draw dark or not at all under FH1, and
+the car is held still (no collision yet: FM4's .col is not FH1's streamed .fiz).
 """
 import os
 import struct
@@ -288,25 +289,59 @@ def placement_of(inst):
 
 
 LIGHTMAPS = os.environ.get("FM4_PVS_LIGHTMAPS", "1") == "1"
-# FM4's instance flags (0x0FFFxxxx) and FH1's (0x203Fxxxx, 0x0841xxxx) differ in meaning: with
-# FM4's FH1 draws none of the track. Until they are decoded every instance gets the flags of
-# a common Colorado instance (FM4_PVS_FLAGS=keep keeps FM4's, or give another value).
-FLAGS = os.environ.get("FM4_PVS_FLAGS", "0x203F0214")
+# FM4's instance flags (0x0FFFxxxx) in FH1's (0x083Fxxxx mostly): see fh1_flags.
+# FM4_PVS_FLAGS=keep keeps FM4's, a number gives every instance that value;
+# FM4_PVS_FLAGMASK the FM4 bits kept (a test).
+FLAGS = os.environ.get("FM4_PVS_FLAGS", "map")
+FLAG_LOW_MASK = int(os.environ.get("FM4_PVS_FLAGMASK", "0xFFFF"), 0)
+
+
+def fh1_flags(f):
+    """FM4's instance flags in FH1's layout. Bits 16-21 are set in every instance of both
+    games. FM4 also sets bits 22-27 in all of its instances; FH1 never sets 22, 23 and 26,
+    sets 24 and 25 in 2% (roads) and 27 in 77% of Colorado's, and with FM4's high bits it
+    draws nothing, so the high half is FH1's most common, 0x083F. FM4's bit 28 (60% of its
+    blend surfaces: road edges and lines) makes FH1's GPU read past its buffers (a fault in
+    the command processor while the track loads), so it is dropped. The low 16 bits are
+    kept: the same bits are in use in both games (2, 3, 4, 9, 11-13 together, 14), and
+    FM4's bit 5 (every road piece; FH1 has none) is harmless."""
+    return 0x083F0000 | (f & FLAG_LOW_MASK)
 
 
 def fh1_instance_of(inst):
     # idx/u12: an instance's own texture (FM4's baked lightmaps) and the model's texture slot
     # it replaces (FM4_PVS_LIGHTMAPS=0 drops them).
     idx, slot = (inst["idx"], inst["u12"]) if LIGHTMAPS else (0, 0xFFFFFFFF)
-    flags = inst["flags"] if FLAGS == "keep" else int(FLAGS, 0)
+    flags = (inst["flags"] if FLAGS == "keep" else fh1_flags(inst["flags"]) if FLAGS == "map"
+             else int(FLAGS, 0))
     return {"model": inst["model"], "u16": 0xFFFF, "flags": flags, "idx": idx,
             "u8": slot, "u12": inst["u32"]}
 
 
+# FM4_PVS_SHADERS=part:shader,... replaces the track shaders whose name holds part (a test).
+SHADER_MAP = [tuple(x.split(":", 1)) for x in os.environ.get("FM4_PVS_SHADERS", "").split(",")
+              if ":" in x]
+
+
+def shader_of(name):
+    for part, repl in SHADER_MAP:
+        if part in name.split("\\")[-1]:
+            return name.rsplit("\\", 1)[0] + "\\" + repl
+    return name
+
+
+# FM4_PVS_PROJLM=1 keeps FM4's flag 0x10 (a test): see fh1_texture_of.
+PROJECTED_LIGHTMAP = os.environ.get("FM4_PVS_PROJLM", "0") == "1"
+
+
 def fh1_texture_of(t):
     """FM4 packs many textures into one file (an atlas: the record's file index and UV
-    rectangle); FH1's records have flag 0x100 and never FM4's 0x8."""
-    return t[:6] + ((t[6] & ~0x8) | 0x100,)
+    rectangle); FH1's records have flag 0x100 and never FM4's 0x8. FH1 takes the first
+    record with a flag in 0xF0 as the track's projected lightmap (sub_82E23130 loads it at
+    once into its own slot). FM4 sets 0x10 on one texture, shared by every road piece; kept,
+    the road draws flat dark grey, so the flag is dropped."""
+    drop = 0x8 if PROJECTED_LIGHTMAP else 0xF8
+    return t[:6] + ((t[6] & ~drop) | 0x100,)
 
 
 def convert(F, files):
@@ -316,7 +351,8 @@ def convert(F, files):
          # The size of FH1's resource table: zone file records and texture files take ids in
          # it; too small, the loader writes past it (into the texture table).
          "resources": len(files) + len(F["textures"]) + 64, "rmodels": len(F["models"]), "list48": [], "g3": 0, "a2": 0x32,
-         "cells": [], "textures": [fh1_texture_of(t) for t in F["textures"]], "shaders": F["shaders"],
+         "cells": [], "textures": [fh1_texture_of(t) for t in F["textures"]],
+         "shaders": [shader_of(sh) for sh in F["shaders"]],
          "instances": [fh1_instance_of(i) for i in insts],
          "models": [{"textures": m["textures"], "shaders": m["shaders"],
                      "matrix": [m["matrix"][r * 4 + c] for r in range(4) for c in range(3)],
@@ -340,9 +376,15 @@ def convert(F, files):
         return m[12], m[14]
     spots = {i: where(i) for i in used}
     grid = HexGrid([spots[i] for i in used], HEX_RADIUS)
+    # An instance goes into every zone its model's extent reaches (FH1 counts the zones that
+    # hold an instance): a 400 m piece of road shows from all along it, not only from the
+    # hex of its centre.
     members = {cell: [] for cell in grid.cells}
     for i in used:
-        members[grid.cell_of(*spots[i])].append(i)
+        e = F["models"][insts[i]["model"]]["extent"]
+        reach = (e[0] ** 2 + e[2] ** 2) ** 0.5
+        for cell in grid.cells_near(*spots[i], reach):
+            members[cell].append(i)
     zones = []
     for cell in grid.cells:
         zi = members[cell]
@@ -394,6 +436,16 @@ class HexGrid:
                     if best is None or d < best[0]:
                         best = (d, (c, r))
         return best[1]
+
+    def cells_near(self, x, z, reach):
+        """The cell of (x, z) and every cell whose centre is within reach + one radius."""
+        out = {self.cell_of(x, z)}
+        lim = (reach + self.r) ** 2
+        for cell in self.cells:
+            cx, cz = self.centre(*cell)
+            if (cx - x) ** 2 + (cz - z) ** 2 <= lim:
+                out.add(cell)
+        return sorted(out)
 
     def write(self):
         zone = {cell: k for k, cell in enumerate(self.cells)}
