@@ -43,6 +43,10 @@ import fm4_physdef  # noqa: E402
 from fxobj_shaders import read_zip_member  # noqa: E402
 
 MOD_NAME = "FM4 cars"
+PACK_NAME = "464D3443415253000000000000000000000000004D"  # the package folder ("FM4CARS")
+PACK_STEM = "fm4cars"
+PACK_PRIORITY = 60    # FH1's DLC car zips are _pri_65
+PACK_OFFER = 64800    # a .puboffer no FH1 offer uses (theirs 1000-2800); no ContentOffers row
 PATCH_NAME = "6480000_merge.slt"  # a DB patch priority no DLC pack uses (theirs: <offer>000)
 SKIP_FILES = {"versiondata.xml"}
 # FH1's DLC cars (docs/dlc.md): not added from FM4 even when that DLC is not installed, so a
@@ -78,6 +82,10 @@ class ConvertError(Exception):
     pass
 
 
+class Cancelled(Exception):
+    pass
+
+
 def log(*a):
     print(*a, flush=True)
 
@@ -109,6 +117,83 @@ class Member:
         if len(data) != self.info.file_size:
             raise ConvertError("could not read %s from %s" % (self.info.filename, self.path))
         return data
+
+    def raw(self):
+        """(method, the member's stored bytes, CRC-32, size): copied as they are into a pack."""
+        i = self.info
+        with open(self.path, "rb") as f:
+            f.seek(i.header_offset)
+            h = f.read(30)
+            start = i.header_offset
+            if h[:4] == b"PK\x03\x04":
+                n, m = struct.unpack("<HH", h[26:30])
+                start += 30 + n + m
+            f.seek(start)
+            data = f.read(i.compress_size)
+        if len(data) != i.compress_size:
+            raise ConvertError("could not read %s from %s" % (i.filename, self.path))
+        return i.compress_type, data, i.CRC, i.file_size
+
+
+class PackWriter:
+    """Zips the way FH1's DLC packages hold them (Media/DLCZips/<name>_pri_<n>.zip, mounted at
+    game:\\): members stored or copied in their LZX form (method 21) from FM4's archives, each
+    central record with the 0x1123 extra field (the absolute offset of the member's data) the
+    game's zip reader uses. A new zip starts before one would pass the reader's 4 GB or
+    65,535-entry limits."""
+
+    LIMIT = 0xF0000000
+
+    def __init__(self, folder, stem, priority):
+        self.folder, self.stem, self.priority = folder, stem, priority
+        self.index = 0
+        self.f = None
+        self.names = set()
+        self.zips = []
+
+    def _open(self):
+        self.index += 1
+        os.makedirs(self.folder, exist_ok=True)
+        name = "%s%d_pri_%d.zip" % (self.stem, self.index, self.priority)
+        self.f = open(os.path.join(self.folder, name), "wb")
+        self.central = []
+        self.zips.append(name)
+
+    def add(self, rel, data=None, raw=None):
+        """rel: the path under game:\\ ("media/cars/X/x.carbin"); data: bytes to store, or
+        raw: Member.raw() of a member to copy."""
+        rel = rel.replace("\\", "/")
+        if rel.lower() in self.names:
+            return
+        self.names.add(rel.lower())
+        if raw is None:
+            method, payload, crc, size = 0, data, zlib.crc32(data) & 0xFFFFFFFF, len(data)
+        else:
+            method, payload, crc, size = raw
+        name = rel.encode("ascii")
+        if (self.f is None or self.f.tell() + 30 + len(name) + len(payload) + 64 * (len(self.central) + 1)
+                > self.LIMIT or len(self.central) >= 65000):
+            self.close()
+            self._open()
+        offset = self.f.tell()
+        self.f.write(struct.pack("<IHHHHHIIIHH", 0x04034B50, 10, 0, method, 0, 0x21, crc,
+                                 len(payload), size, len(name), 0) + name)
+        data_at = self.f.tell()
+        self.f.write(payload)
+        self.central.append(struct.pack("<IHHHHHHIIIHHHHHII", 0x02014B50, 10, 10, 0, method, 0, 0x21,
+                                        crc, len(payload), size, len(name), 8, 0, 0, 0, 0, offset)
+                            + name + struct.pack("<HHI", 0x1123, 4, data_at))
+
+    def close(self):
+        if self.f is None:
+            return
+        start = self.f.tell()
+        cd = b"".join(self.central)
+        self.f.write(cd)
+        self.f.write(struct.pack("<IHHHHIIH", 0x06054B50, 0, 0, len(self.central), len(self.central),
+                                 len(cd), start, 0))
+        self.f.close()
+        self.f = None
 
 
 class _Zips:
@@ -232,6 +317,8 @@ class FH1:
         self.dlc_zips = []  # (priority, path)
         if dlc and os.path.isdir(dlc):
             for root, _, files in os.walk(dlc):
+                if PACK_NAME.lower() in root.lower():
+                    continue  # this tool's own package (an earlier import)
                 for f in files:
                     m = re.match(r"(?i).+_pri_(\d+)\.zip$", f)
                     if m and "dlczips" in root.lower():
@@ -420,6 +507,12 @@ class StringTable:
 
 
 # ============================================================================= database
+
+# String tables the new rows need, and the (table, columns) whose "_&N" references are in them.
+STRING_TABLES = {
+    "Data_Car": [("Data_Car", ("DisplayName", "ModelShort"))],
+    "List_CarMake": [("List_CarMake", ("DisplayName", "Profile")), ("Data_Car", ("MakeName",))],
+}
 
 AUDIO_ZIPS = {"cmt": "audio/cars/CarModelTuning.zip", "et": "audio/cars/Engines/EngineTuning.zip",
               "ht": "audio/cars/Engines/HarmonicTuning.zip"}
@@ -611,6 +704,8 @@ class Database:
                             rows = self._select(table, col[0], keys)
                             self._add(table, rows)
                             level2 += rows
+        makes = {r["MakeID"] for r in first.get("Data_Car", []) if r.get("MakeID") is not None}
+        self._add("List_CarMake", self._select("List_CarMake", "ID", makes))
         all_rows = [r for rows in first.values() for r in rows] + level2
         for pat, table, col in REFS:
             keys = {v for r in all_rows for c, v in r.items() if pat.match(c) and v is not None}
@@ -750,18 +845,48 @@ def carattribs_v21(fm4_xml, donor_xml):
 
 
 class Converter:
-    def __init__(self, fm4, fh1, out):
+    """out: the mod folder (the database and the names). package: when given, the folder of a
+    DLC-style package (.../4D5309C9/00000002/<name>) that gets the cars' files instead of the
+    mod: the mod overlay holds at most 4 GB in all, and a full import is about 9 GB
+    uncompressed (3 GB with FM4's textures kept compressed, as a pack's zips can)."""
+
+    def __init__(self, fm4, fh1, out, package=None):
         self.fm4, self.fh1, self.out = fm4, fh1, out
         self.fm4db, self.fh1db = fm4.db(), fh1.db()
         self.donors = None
         self.donor_attribs = None
         self.wheels_done = set()
+        self.package = package
+        self.pack = PackWriter(os.path.join(package, "Media", "DLCZips"), PACK_STEM, PACK_PRIORITY) if package else None
 
     def write(self, rel, data):
         path = os.path.join(self.out, *rel.split("/"))
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "wb") as f:
             f.write(data)
+
+    def put(self, rel, data=None, member=None):
+        """A car file: into the pack when there is one (a member copied as it is), else into the
+        mod (read and stored)."""
+        if self.pack:
+            self.pack.add(rel, data, member.raw() if data is None else None)
+        else:
+            self.write(rel, data if data is not None else member.read())
+
+    def finish_package(self, report):
+        if not self.pack:
+            return
+        self.pack.close()
+        media = os.path.join(self.package, "Media")
+        with open(os.path.join(media, "%d.puboffer" % PACK_OFFER), "wb") as f:
+            f.write(b" \r\n")
+        name = os.path.basename(os.path.normpath(self.package))
+        headers = os.path.join(os.path.dirname(os.path.dirname(os.path.normpath(self.package))), "Headers", "00000002")
+        os.makedirs(headers, exist_ok=True)
+        import install_dlc
+        with open(os.path.join(headers, name + ".header"), "wb") as f:
+            f.write(install_dlc.header_bytes(name, "Forza Motorsport 4 cars", install_dlc.TITLE_ID))
+        report["zips"] = list(self.pack.zips)
 
     def load_donors(self):
         if self.donors is not None:
@@ -792,7 +917,6 @@ class Converter:
         fh_ids = {r[0] for r in self.fh1db.execute("select Id from Data_Car")}
         fh_names = {str(r[0]).lower() for r in self.fh1db.execute("select MediaName from Data_Car")}
         dlc_names, dlc_ids = self.fh1.dlc_car_names()
-        fh_makes = {r[0] for r in self.fh1db.execute("select ID from List_CarMake")}
         files = self.fm4.car_files()
         out = []
         for cid, name, make in self.fm4db.execute("select Id, MediaName, MakeID from Data_Car order by Id"):
@@ -804,8 +928,6 @@ class Converter:
                 reason = "an FH1 DLC car"
             elif low not in files:
                 reason = "no model in the FM4 files given"
-            elif make not in fh_makes:
-                reason = "its make is not in FH1"
             out.append((cid, name, reason))
         return out
 
@@ -819,10 +941,10 @@ class Converter:
             low = rel.lower()
             if low in SKIP_FILES:
                 continue
-            data = m.read()
             if low.endswith(".carbin"):
-                data = fm4_carbin.convert(data, "wheel/%s/%s" % (name, low))
-            self.write("media/wheels/%s/%s" % (name, rel), data)
+                self.put("media/wheels/%s/%s" % (name, rel), fm4_carbin.convert(m.read(), "wheel/%s/%s" % (name, low)))
+            else:
+                self.put("media/wheels/%s/%s" % (name, rel), member=m)
         self.wheels_done.add(name)
         return True
 
@@ -854,7 +976,7 @@ class Converter:
             if not src:
                 continue
             data = Member(ZIPS.get(src[0]), src[0], src[1]).read()
-            self.write("media/%s/%s" % (AUDIO_ZIPS[kind][:-4].lower(), fname), data)
+            self.put("media/%s/%s" % (AUDIO_ZIPS[kind][:-4].lower(), fname), data)
             added.append(fname)
             if kind == "et":
                 for ht in sorted(set(re.findall(r'"([^"]+_HT\.xml)"', data.decode("latin-1")))):
@@ -862,7 +984,7 @@ class Converter:
                         continue
                     hsrc = self._fm_audio["ht"].get(ht.lower())
                     if hsrc:
-                        self.write("media/audio/cars/engines/harmonictuning/" + ht,
+                        self.put("media/audio/cars/engines/harmonictuning/" + ht,
                                    Member(ZIPS.get(hsrc[0]), hsrc[0], hsrc[1]).read())
                         added.append(ht)
                     report.setdefault("audio_missing", []).append(ht) if not hsrc else None
@@ -884,62 +1006,76 @@ class Converter:
         for low, (rel, m) in sorted(names.items()):
             if low in SKIP_FILES:
                 continue
-            data = m.read()
             if low.endswith(".carbin"):
-                data = fm4_carbin.convert(data, "car/%s/%s" % (name, low))
-                self.write(base + "stripped_" + low, fm4_carbin.strip(data))
+                data = fm4_carbin.convert(m.read(), "car/%s/%s" % (name, low))
+                self.put(base + "stripped_" + low, fm4_carbin.strip(data))
                 if low == name.lower() + ".carbin":
                     main_fh1 = data
+                self.put(base + rel, data)
             elif low == "carattribs.xml":
-                data = carattribs_v21(data, self.donor_attribs)
-            self.write(base + rel, data)
+                self.put(base + rel, carattribs_v21(m.read(), self.donor_attribs))
+            else:
+                self.put(base + rel, member=m)
         pts = model_points(main_fh1)
         phys, donor = fm4_physdef.build(maxdata[1].read(), pts, self.donors)
-        self.write(base + "physicsdefinition.bin", phys)
+        self.put(base + "physicsdefinition.bin", phys)
         thumb = self.fm4.thumbnail(cid)
         if thumb:
-            self.write("media/ui/textures/thumbnails/thumbnail_%d.xds" % cid, thumb)
+            self.put("media/ui/textures/thumbnails/thumbnail_%d.xds" % cid, thumb)
         return donor
 
     def strings(self, rows, report):
-        """data_car.str for each of FH1's languages: FH1's names (with the DLC's) plus the
-        new cars'. Rewrites the rows' references when a key had to move."""
+        """<table>.str for each of FH1's languages: FH1's strings (with the DLC's) plus the new
+        rows'. Rewrites the rows' references when a key had to move (another string of FH1's
+        table has it)."""
         fm_langs = self.fm4.languages()
-        refcols = ("DisplayName", "ModelShort", "MakeName")
-        cars = rows.get("Data_Car", [])
         langs = sorted(l for l in self.fh1.languages() if l not in ("dev", "loc"))
-        en = self.fm4.strings("Data_Car", "en")
-        moved = {}
-        for lang in langs:
-            _, table = self.fh1.strings_raw("Data_Car", lang)
-            if not table.entries:
+        moved_total = 0
+        for table_name, users in STRING_TABLES.items():
+            refs = []
+            for t, cols in users:
+                for r in rows.get(t, []):
+                    for c in cols:
+                        ref = r.get(c)
+                        if isinstance(ref, str) and re.match(r"_&\d+$", ref):
+                            refs.append(int(ref[2:]))
+            if not refs:
                 continue
-            src = self.fm4.strings("Data_Car", lang) if lang in fm_langs else en
-            for r in cars:
-                for c in refcols:
-                    ref = r.get(c)
-                    if not isinstance(ref, str) or not re.match(r"_&\d+$", ref):
-                        continue
-                    n = int(ref[2:])
+            en = self.fm4.strings(table_name, "en")
+            moved = {}
+            for lang in langs:
+                _, table = self.fh1.strings_raw(table_name, lang)
+                if not table.entries:
+                    continue
+                src = self.fm4.strings(table_name, lang) if lang in fm_langs else en
+                added = False
+                for n in dict.fromkeys(refs):
                     key = n & 0xFFFF
                     e = src.entries.get(key) or en.entries.get(key)
                     if not e:
                         continue
-                    if table.text(ref) is not None and table.entries[key][1] == e[1]:
-                        continue  # FH1 has it (a make name, say)
+                    have = table.entries.get(moved.get(n, key))
+                    if have is not None and have[1] == e[1]:
+                        continue  # FH1 has it
                     new = table.add(e[1] or "IDS_FM4_%d" % key, e[0], e[3], moved.get(n, key))
+                    added = True
                     if new != key:
                         moved[n] = new
-            self.write("media/stringtables/%s/data_car.str" % lang, table.encode())
-        for r in cars:
-            for c in refcols:
-                ref = r.get(c)
-                if isinstance(ref, str) and re.match(r"_&\d+$", ref) and int(ref[2:]) in moved:
-                    n = int(ref[2:])
-                    r[c] = "_&%d" % ((n & ~0xFFFF) | moved[n])
-        report["moved_string_keys"] = len(moved)
+                if added:
+                    self.write("media/stringtables/%s/%s.str" % (lang, table_name.lower()), table.encode())
+            for t, cols in users:
+                for r in rows.get(t, []):
+                    for c in cols:
+                        ref = r.get(c)
+                        if isinstance(ref, str) and re.match(r"_&\d+$", ref) and int(ref[2:]) in moved:
+                            n = int(ref[2:])
+                            r[c] = "_&%d" % ((n & ~0xFFFF) | moved[n])
+            moved_total += len(moved)
+        report["moved_string_keys"] = moved_total
 
-    def run(self, car_ids):
+    def run(self, car_ids, progress=None, cancelled=lambda: False):
+        """Convert the cars into self.out. progress(done, total, text) is called before each
+        car; cancelled() is polled between cars (raises Cancelled)."""
         report = {"cars": [], "skipped": []}
         cand = {cid: (name, reason) for cid, name, reason in self.candidates()}
         chosen = []
@@ -962,8 +1098,13 @@ class Converter:
             if r:
                 wheel_names[wid] = r[0]
         done = []
-        for cid, name in chosen:
-            log("converting %s (%d)" % (name, cid))
+        for k, (cid, name) in enumerate(chosen):
+            if cancelled():
+                raise Cancelled()
+            if progress:
+                progress(k, len(chosen), name)
+            else:
+                log("converting %s (%d)" % (name, cid))
             try:
                 donor = self.convert_car(cid, name)
                 row = [r for r in rows["Data_Car"] if r["Id"] == cid][0]
@@ -983,6 +1124,7 @@ class Converter:
         keep = set(done)
         rows = {t: [r for r in rs if t not in dict(CAR_TABLES) or r.get(dict(CAR_TABLES)[t]) in keep]
                 for t, rs in rows.items()}
+        self.finish_package(report)
         self.strings(rows, report)
         dbdir = os.path.join(self.out, "media", "db")
         os.makedirs(dbdir, exist_ok=True)
@@ -1002,6 +1144,8 @@ def main(argv=None):
     ap.add_argument("--update")
     ap.add_argument("--dlc")
     ap.add_argument("--out")
+    ap.add_argument("--package", help="put the cars' files into this DLC-style package folder "
+                    "(USER_DATA/0000000000000000/4D5309C9/00000002/%s) instead of the mod" % PACK_NAME)
     ap.add_argument("--cars", help="MediaNames or ids, comma-separated")
     ap.add_argument("--all", action="store_true")
     a = ap.parse_args(argv)
@@ -1015,7 +1159,7 @@ def main(argv=None):
             return 0
         if not a.out:
             ap.error("--out is required")
-        c = Converter(fm4, fh1, a.out)
+        c = Converter(fm4, fh1, a.out, a.package)
         cand = c.candidates()
         if a.all:
             ids = [cid for cid, _, reason in cand if not reason]
