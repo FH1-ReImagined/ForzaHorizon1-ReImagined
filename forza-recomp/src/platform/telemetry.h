@@ -9,4 +9,6 @@ void Rumble(uint16_t left, uint16_t right);
 void Physics(uint8_t* base);
 // The player's car in the world (x east, z as the track files store it), when one is loaded.
 bool LocalCarPosition(uint8_t* base, float& x, float& z);
+// The player's car position and forward vector (world, y up).
+bool LocalCarPose(uint8_t* base, float position[3], float forward[3]);
 }

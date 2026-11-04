@@ -406,6 +406,10 @@ bool RoutedUser(uint32_t user_index, uint32_t flags, uint32_t& user) {
 }  // namespace
 
 // DWORD XamInputGetState(DWORD user_index, DWORD flags, X_INPUT_STATE* state)
+namespace forza::autopilot {
+bool Drive(uint8_t* base, int16_t& steer, uint8_t& brake, uint8_t& throttle);
+}
+
 extern "C" REX_FUNC(__imp__XamInputGetState) {
   static GuestFunc sdk = Sdk("__imp__XamInputGetState");
   InitScripting();
@@ -442,6 +446,15 @@ extern "C" REX_FUNC(__imp__XamInputGetState) {
                    state.triggers[0], state.triggers[1], state.sticks[0], state.sticks[1],
                    state.sticks[2], state.sticks[3]);
       std::fflush(record_file);
+    }
+  }
+  if (user == 0 && connected) {  // the dev autopilot (src/debug/autopilot.cpp)
+    int16_t steer;
+    uint8_t lt, rt;
+    if (forza::autopilot::Drive(base, steer, lt, rt)) {
+      state.sticks[0] = steer;
+      state.triggers[0] = lt;
+      state.triggers[1] = rt;
     }
   }
   if (user == 0 && forza::benchmark::WantsPad()) connected = true;

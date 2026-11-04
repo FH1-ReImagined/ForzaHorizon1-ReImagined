@@ -208,6 +208,16 @@ bool LocalCarPosition(uint8_t* base, float& x, float& z) {
   z = position[2];
   return true;
 }
+bool LocalCarPose(uint8_t* base, float position_out[3], float forward_out[3]) {
+  uint32_t car;
+  std::array<float, 3> position{}, forward{};
+  if (!LocalCar(base, car, position, forward)) return false;
+  for (int i = 0; i < 3; ++i) {
+    position_out[i] = position[i];
+    forward_out[i] = forward[i];
+  }
+  return true;
+}
 void Rumble(uint16_t left, uint16_t right) {
   Gate().Rumble(left, right, Now());  // always: the wheel reads it without the bridge
 }
