@@ -983,7 +983,8 @@ def msvc_environment(opts: Options, rep: Reporter, tools, lo, hi):
     if env:
         return env
     xdir = opts.root / "xwin"
-    if not (xdir / "crt" / "include").is_dir():
+    # All of it: a splat that failed half way leaves the CRT without the SDK.
+    if not all((xdir / p).is_dir() for p in ("crt/include", "sdk/include/ucrt", "sdk/lib/um/x86_64")):
         if not opts.accept_ms_license:
             raise BuildError("The Microsoft C++ runtime and Windows SDK are needed and are not installed. "
                              "Accept Microsoft's license in the setup page to download them, or install "
@@ -993,8 +994,11 @@ def msvc_environment(opts: Options, rep: Reporter, tools, lo, hi):
         fetch.unpack("xwin-windows", arc, tooldir, strip=1)
         exe = next(tooldir.rglob("xwin.exe"))
         rep.status("Downloading the Microsoft C++ runtime and Windows SDK")
+        # --disable-symlinks: xwin links the SDK's versioned folders and case aliases, and Windows
+        # lets a normal user make symlinks only with Developer Mode on (os error 1314). Its file
+        # system ignores case, and the paths below need no links.
         run([exe, "--accept-license", "--cache-dir", opts.root / "downloads" / "xwin-cache", "splat",
-             "--output", xdir], opts.root, cleanenv.clean_environment(), rep)
+             "--disable-symlinks", "--output", xdir], opts.root, cleanenv.clean_environment(), rep)
     inc = [xdir / "crt" / "include", xdir / "sdk" / "include" / "ucrt", xdir / "sdk" / "include" / "um",
            xdir / "sdk" / "include" / "shared", xdir / "sdk" / "include" / "winrt"]
     lib = [xdir / "crt" / "lib" / "x86_64", xdir / "sdk" / "lib" / "um" / "x86_64",
