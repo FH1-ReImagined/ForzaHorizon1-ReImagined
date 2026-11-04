@@ -209,6 +209,12 @@ Free roam spawn, the car standing, traffic passing; TU4, RX 9060 XT (RADV), unca
 | 2 | High | 79.2 (79.1-79.3) | 12.82 | 101% | 29.36 |
 | 2 | Ultra | 79.1 (78.9-79.2) | 12.85 | 102% | 29.37 |
 
+Within the noise: at render scale 1 the phases spread by 20-40 fps with the traffic passing
+(the ranges of all three levels overlap, and Ultra came out fastest); at render scale 2, where
+the GPU is the limit, High and Ultra cost about 0.05 ms of GPU time a frame (under 1% fps). The
+spawn has few cars near enough for the levels to change their models; a busier scene (the race
+grid, traffic jams) costs more triangles, but the cars are a small part of a frame.
+
 ### Screenshots
 
 Kept out of Git. At fixed points of the drive above (15, 30, 45, 60, 90 and 120 s from the
