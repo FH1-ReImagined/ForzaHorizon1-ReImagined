@@ -328,7 +328,8 @@ for build in "$ROOT"/forza-recomp/out/build/*/; do
     # Some build dirs have the plugin but no CMakeCache.txt (copies made for tests);
     # under set -e the sed would end the script before it reached the others.
     [ -f "$build/librexgpu-xenos.so" ] && [ -f "$build/CMakeCache.txt" ] || continue
-    sdk_dir="$(sed -n 's/^rexglue_DIR:PATH=//p' "$build/CMakeCache.txt")"
+    # Any entry type: -Drexglue_DIR=... without ":PATH" leaves it UNINITIALIZED in the cache.
+    sdk_dir="$(sed -n 's/^rexglue_DIR:[A-Z]*=//p' "$build/CMakeCache.txt" | head -1)"
     case "$sdk_dir" in
         "$NIGHTLY"/*|"$OVERLAY"/*)
             # Rename over it: running instances may have the old file mapped.
