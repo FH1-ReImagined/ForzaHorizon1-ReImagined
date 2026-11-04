@@ -194,4 +194,13 @@ namespace forza {
 // a confirmed Custom Race waits for the career title card, and only while that card is the
 // active screen, it adds the A press that enters the event.
 uint16_t CustomRacePad(uint16_t buttons);
+
+// The career title card for other features (the Co-op Festival's start from an event's map
+// card, hooks/coop_map_event.cpp); Title Update 4 only, no-ops on the disc build.
+// Shows `text` with the SELECT icon in the card's footer (slot 13) unless it shows something.
+void CardSelectPrompt(PPCContext& ctx, uint8_t* base, uint32_t card, const std::string& text);
+// A SELECT press (CustomRacePad) within the last 400 ms that nobody took yet; takes it.
+bool CardSelectPressed();
+// Whether the card's input event `input` is `code` (0x5D A, 0x60 B, 0x99 X, 0x9C Y).
+bool CardInputIs(PPCContext& ctx, uint8_t* base, uint32_t card, uint32_t input, uint32_t code);
 }  // namespace forza

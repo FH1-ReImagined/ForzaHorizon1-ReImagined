@@ -178,6 +178,7 @@ set(FORZA_SOURCES
     src/hooks/ambient_leaderboard.cpp
     src/hooks/teleport_velocity.cpp
     src/hooks/custom_race.cpp
+    src/hooks/coop_map_event.cpp
     src/hooks/smashables_lookup.cpp
     src/hooks/challenge_hud.cpp
     src/hooks/car_placeholder.cpp

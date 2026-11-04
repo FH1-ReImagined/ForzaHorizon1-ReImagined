@@ -2968,3 +2968,125 @@ be built, 1148 of 1190 before), the game's part of the prebuild takes 3.0-3.4 s 
 instead of 26-27; the race minute and the free-roam drive have no spike from pipelines left. What remains on this PC
 is the game's own frames while it loads. Not changed: on NVIDIA every start still compiles what its driver cache does
 not keep (#406), at the warm-up, before the title screen, not in play.
+
+## Memory: what the game takes in RAM and VRAM, for 8 GB PCs (#640, 2026-11-04)
+
+**Measured** on the RX 9060 XT PC (Linux, RADV, 30 GB): TU4, the golden save, offline, audio muted (the XMA decoder
+still decodes), the launcher's defaults (60 fps, AMD FSR 1, the game's 4x scene MSAA), render scale 1, a 1280x720
+window, a warm shader cache. Two scenes: free roam after a 4-minute drive (throttle and steering on the roads
+around the festival) and the GoPro Millennia Masters race after 2 minutes (`tools/autodrive.py`). Each number is
+the process's own (`tools/memory_snapshot.py`: `/proc/PID/smaps`, the guest memory file's pages, the DRM client's
+VRAM and GTT), so other games on the PC do not change it.
+
+| MB | Free roam, after the drive | Race, 2 minutes in |
+| --- | --- | --- |
+| RSS (PSS) | 1,186 (933) | 1,204 (942) |
+| Guest memory: pages written (of the 4.5 GB file) | 488 | 491 |
+| Guest memory: host commit (Windows: commit charge), in use now | 704, 528 | 704, 529 |
+| Heaps and other private memory (anon) | 343 | 350 |
+| The game's code (forza, file-backed, evictable) | 64 | 63 |
+| SDK, driver and system libraries: RSS (PSS) | 77 (36) | 77 (36) |
+| GTT (system RAM the GPU driver holds for us, not in RSS) | 59 | 79 |
+| VRAM (device-local) | 1,094 | 1,106 |
+
+The guest's pages are mapped twice (virtual and physical views), so RSS counts them twice and PSS once. Over a
+60-minute soak (#45, above) RSS grows another 90 MB, flat after 20-30 minutes, as the texture cache fills.
+
+**The heaps**, by allocation site (an `LD_PRELOAD` heap tracker, allocations of 4 KB and more, free roam after the
+drive; 297 MB tracked):
+
+| MB | What |
+| --- | --- |
+| 143 | XMA decoder: an FFmpeg codec context for each of the 320 contexts, 450 KB each, set up at start (the game uses 48 in free roam, 70 after the drive) |
+| 40 | XMA decoder: a 128 KB packet buffer for each of the 320 contexts, never used |
+| 11 | XMA decoder: the decoders in use (MDCT tables) |
+| 18.6 + 18 | shader translations: our SPIR-V (473 translations) and the driver's copy in the shader modules |
+| 20 | glslang's built-in symbol tables, kept after the startup compiles |
+| 12 | three descriptor set allocators |
+| 9.5 | the guest heaps' page tables |
+| 4.5 | the audio system |
+| 3.4 | the driver pipeline cache's entries (RADV: 10 KB a pipeline) |
+
+**On Windows** the guest memory is a page-file-backed section (`CreateFileMappingW` with `SEC_RESERVE`, 4.5 GB
+reserved, nothing committed). `Memory::Initialize` then commits the whole physical memory (512 MB) at start, and
+every guest allocation commits its pages; guest releases never give them back (a mapped view cannot be decommitted),
+so the guest's commit charge is the high-water mark: 576 MB at the title screen, 642 MB in free roam, 704 MB after a
+drive (ReIGlue 0427 logs it: `Guest memory: N MB committed on the host`). Committed pages the game never wrote cost
+no RAM; the ones it wrote stay in RAM or the page file. On top come the heaps (all committed, also what Linux never
+touched, like the 128 KB packet buffers), the driver's own memory (not measured here) and the driver pipeline cache
+below. An estimate for NVIDIA, from the code and #406's sizes: guest 0.7 GB, heaps 0.35 GB, the driver pipeline
+cache 1-1.6 GB in a long session: 2-2.7 GB of commit plus the driver's; after the fixes here 0.7 + 0.2 + at most 0.5:
+1.4 GB plus the driver's. An 8 GB PC's commit limit is its RAM plus the page file (system-managed: a few GB that
+grows on demand), so the limit is not the risk; the working set is: what the game wrote stays in RAM or goes to the
+page file, next to Windows' own 3-4 GB, and VRAM that overflows a 4 GB card goes to system RAM too.
+
+**What fits in 4 GB of VRAM** (the race, device-local, the GPU minute lines' split):
+
+| | VRAM MB | Render targets | Textures |
+| --- | --- | --- | --- |
+| Render scale 1, scene MSAA 4x (default) | 1,106 | 38, 540 MB | 211 MB |
+| Render scale 1, `scene_msaa = off` | 1,044 | 35, 494 MB | 186 MB |
+| Render scale 2, scene MSAA 4x | 3,129 | 38, 2,020 MB | 372 MB |
+| Render scale 2, `scene_msaa = off` | 2,942 | 35, 1,839 MB | 369 MB |
+
+Every host render target covers the whole EDRAM's worth of rows for its pitch, whatever the MSAA, so MSAA off saves
+little; render scale 2 multiplies them by four. The texture cache then grows to its 384 MB limit in 20 minutes
+(`texture_cache_memory_limit_soft`), and the guest memory's GPU copy holds the 360 MB of physical memory in use.
+At render scale 1 a 4 GB card has room (1.1 GB, 1.4 GB after an hour); at render scale 2 the game alone takes 3.1 GB
+two minutes into the race and more as the texture cache grows toward its hard limit (768 MB), so with the desktop
+on the same card there is little or no room left, and the driver moves memory to system RAM (Windows: "shared GPU
+memory"), which an 8 GB PC does not have to spare either.
+
+**Fixed** (ReIGlue 0428-0430; before and after, the same runs):
+
+| MB | Free roam after the drive | Race |
+| --- | --- | --- |
+| RSS | 1,186 -> 1,035 (0428 only) | 1,204 -> 1,037 (0428-0430) |
+| PSS | 933 -> 785 | 942 -> 781 |
+| Heaps (anon) | 343 -> 205 | 350 -> 194 |
+| Private writable mappings (the closest Linux has to commit) | 1,339 -> 1,163 | 1,378 -> 1,184 |
+
+- 0428, the XMA decoder: FFmpeg's state is made on a context's first decode and freed when the game releases it,
+  and the packet's buffer reference wraps the frame array the data was already in. Decoding is the same: with a hash
+  of every decoded frame (the input frame and the PCM it gave) over a 150 s drive, 39 of the 31,006 input frames
+  both builds decoded gave no output in common, and 30 of 30,662 between two runs of the unchanged build (frames
+  whose output depends on the frame before).
+- 0429, the driver pipeline cache: every pipeline's driver data stayed in memory until exit, to be saved, though a
+  save keeps 512 MB. NVIDIA's data is about 2 MB a pipeline (#406): a session of 800 pipelines held about 1.6 GB.
+  Now new data is kept only while the total fits what a save keeps. Nothing changes on RADV (10 KB a pipeline);
+  with the bound lowered to 2 MB for the test (`vulkan_store_pipeline_cache_memory_mb`), the save stays within it and
+  the next start creates the pipelines it holds from it. Not measured on NVIDIA here (the laptop was offline): on
+  the 8 GB GTX 1650 Ti it should be the largest of the three, up to about 1 GB less in a long session.
+- 0430: a shader translation's SPIR-V is freed once its shader module exists (18.6 MB after the drive, twice that in
+  a long session).
+- The render tests: baselines recorded from the unchanged build (`tools/render_test.py record`, 3 runs; the stored
+  October baselines no longer match main in 4 scenes, fixes or not), then `check` with 0427-0430: 6 of 6 scenes
+  pass, each within its run-to-run noise (dssim title 0.0000, free roam 0.0016 and 0.0007, cockpit 0.0006, photo
+  mode 0.0084, race 0.0035).
+
+**Not done, with estimates:**
+
+- Render targets sized to the rows the game draws instead of the whole EDRAM: each of the 38 is a full EDRAM's rows
+  for its pitch (`GetRenderTargetHeight`), 540 MB at render scale 1 and 2 GB at render scale 2. If a 720p scene
+  uses about half of those rows (not measured), half of that: 250 MB and 1 GB. A change to the EDRAM emulation's
+  aliasing, so a careful one; the biggest VRAM saving for 4 GB cards.
+- A smaller texture cache on 4 GB cards (`texture_cache_memory_limit_soft = 192`): 190 MB of VRAM late in a session,
+  at the cost of reloading textures unused for 30 s. A launcher setting for a Low preset.
+- The driver pipeline cache on NVIDIA still holds up to 512 MB: reading entries from the file when a pipeline needs
+  them (or a smaller bound on 8 GB PCs) would keep it to the entries in use. Windows cannot replace a mapped file,
+  so mapping it needs the save to write elsewhere first.
+- Texture packs: up to 256 MB of decoded textures wait for upload (`kMaxPendingDecodedBytes`), at 32 MB a frame;
+  64 MB would keep two frames' worth queued: up to 190 MB less RAM while a pack streams. Not measured (no pack here).
+- The physical memory committed whole at start (Windows): 512 MB of commit for about 360 MB used, 150 MB of commit
+  but no RAM. Committing it on demand changes what the GPU may read of released memory; little to gain.
+- glslang's built-in tables (20 MB) after the startup compiles; the guest heaps' page tables and descriptor pools
+  (22 MB): small.
+
+**To repeat on Windows** (the 8 GB laptop): start the game from the launcher at its defaults, then in a PowerShell
+window `powershell -ExecutionPolicy Bypass -File tools\memory_snapshot.ps1` (a CSV row every 30 s on the desktop:
+working set, private bytes, the GPU process memory's dedicated and shared usage, the system's commit and its limit,
+free RAM, pages read from the disk a second). Play to free roam, drive 4 minutes, note the time, start the GoPro
+Millennia Masters race and drive 2 minutes, note the time, quit. The `forza.log` adds the guest's commit (`Guest
+memory:`) and a line a minute with the textures, render targets, GPU memory and resident memory (`GPU minute`).
+Then the same at render scale 2. Paging shows as `hard_faults_s` above a few hundred while driving, and as private
+bytes close to the commit limit.

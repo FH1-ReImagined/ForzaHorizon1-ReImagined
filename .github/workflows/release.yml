@@ -28,6 +28,16 @@ concurrency:
 permissions:
   contents: read
 
+# Code signing of the Windows launcher, uninstaller and installer through SignPath Foundation (#354; the
+# "Code signing policy" in README.md). Off until the repository variable SIGNPATH_ORGANIZATION_ID is set,
+# with the secret SIGNPATH_API_TOKEN (and SIGNPATH_PROJECT_SLUG if the project is not called
+# ForzaHorizon1-ReImagined there), and never on pull requests: the release is then built unsigned, as before.
+# A tag uses the release-signing policy (a maintainer approves each request in SignPath, while the job waits);
+# a run by hand uses test-signing (SignPath's untrusted test certificate, no approval) to try the pipeline.
+env:
+  SIGN: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' && github.event_name != 'pull_request' }}
+  SIGN_MODE: ${{ github.ref_type == 'tag' && 'release' || 'test' }}
+
 jobs:
   launcher-tests:
     runs-on: ${{ matrix.os }}
@@ -548,6 +558,9 @@ jobs:
   launcher-windows:
     needs: sdk-windows
     runs-on: windows-2022
+    permissions:
+      contents: read
+      actions: read   # the SignPath action reads this run's jobs and downloads the artifacts to sign
     steps:
       - uses: actions/checkout@v4
         with:
@@ -601,14 +614,6 @@ jobs:
           if (-not $info.CompanyName -or -not $info.FileDescription -or $info.OriginalFilename -ne 'forza-launcher.exe' -or $info.ProductVersion -ne $env:VERSION -or $info.FileVersion -ne $numeric) {
             throw 'forza-launcher.exe has no (or the wrong) version resource'
           }
-      # TODO(code signing, #482, #354): sign launcher/dist/forza-launcher/forza-launcher.exe here, before the
-      # smoke test and the Package step copy it, so the payload manifest below hashes the signed file. Needs a
-      # code-signing certificate (SignPath Foundation or Certum, still to be chosen) and its secrets, for
-      # example:
-      #   - name: Sign the launcher
-      #     shell: pwsh
-      #     run: <signtool sign /fd SHA256 /tr <timestamp server> /td SHA256 ...> launcher/dist/forza-launcher/forza-launcher.exe
-      # then the signature is verified: (Get-AuthenticodeSignature <file>).Status -eq 'Valid'.
       - name: Smoke test the packaged window
         shell: bash
         run: python launcher/packaging/smoke_gui.py launcher/dist/forza-launcher/forza-launcher.exe
@@ -618,6 +623,62 @@ jobs:
           python launcher/packaging/make_package.py --platform windows \
             --pyinstaller-dist launcher/dist/forza-launcher \
             --overlay overlay/rexglue-overlay-windows-amd64.tar.gz --out out --version "$VERSION"
+      # Code signing, part 1 (#354; off unless SIGN, see env above): the staged forza-launcher.exe and Inno
+      # Setup's uninstaller, in one SignPath request. The uninstaller is also what Setup's temporary self-copies
+      # run, and only Inno Setup can embed its signature: build_installer.ps1 -PrepareUninstaller has it write
+      # the unsigned file and stop. The signed launcher replaces the staged one before the Installer step
+      # writes the payload manifest, so the manifest and the installer hold the signed file.
+      - name: Files to sign (the launcher and the uninstaller)
+        if: env.SIGN == 'true'
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; }
+          New-Item -ItemType Directory -Force -Path to-sign | Out-Null
+          Copy-Item -LiteralPath out/ForzaHorizon1-ReImagined/forza-launcher.exe -Destination to-sign/
+          $uninstaller = launcher/packaging/build_installer.ps1 -PrepareUninstaller -Version $env:VERSION `
+            -Stage out/ForzaHorizon1-ReImagined -Out installer -SignedUninstallerDir signed-uninstaller
+          Copy-Item -LiteralPath $uninstaller -Destination to-sign/
+          Get-ChildItem to-sign | Format-Table Name, Length
+      - name: Upload the launcher and the uninstaller to sign
+        if: env.SIGN == 'true'
+        id: unsigned-binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-windows-binaries   # unsigned-*: never published (the publish job drops them)
+          path: to-sign/
+          if-no-files-found: error
+          retention-days: 1
+      - name: Sign the launcher and the uninstaller (SignPath)
+        if: env.SIGN == 'true'
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'ForzaHorizon1-ReImagined' }}
+          signing-policy-slug: ${{ env.SIGN_MODE }}-signing
+          artifact-configuration-slug: binaries   # launcher/packaging/signpath/binaries.xml
+          github-artifact-id: ${{ steps.unsigned-binaries.outputs.artifact-id }}
+          parameters: |
+            version: "${{ env.VERSION }}"
+          wait-for-completion: true
+          # release-signing waits for a maintainer's approval in SignPath
+          wait-for-completion-timeout-in-seconds: 7200
+          output-artifact-directory: signed-binaries
+      - name: Put the signed launcher and uninstaller in place
+        if: env.SIGN == 'true'
+        shell: pwsh
+        run: |
+          $launcher = 'signed-binaries/forza-launcher.exe'
+          $uninstaller = @(Get-ChildItem signed-binaries -Filter 'uninst-*.e*' -File)
+          if (-not (Test-Path -LiteralPath $launcher) -or $uninstaller.Count -ne 1) { throw 'SignPath did not return forza-launcher.exe and one uninst-*.e32' }
+          launcher/packaging/verify_signature.ps1 -Mode $env:SIGN_MODE $launcher $uninstaller[0].FullName
+          if ($LASTEXITCODE -ne 0) { throw 'The signed launcher or uninstaller failed the signature check' }
+          Copy-Item -LiteralPath $launcher -Destination out/ForzaHorizon1-ReImagined/forza-launcher.exe -Force
+          Copy-Item -LiteralPath $uninstaller[0].FullName -Destination signed-uninstaller/ -Force
+          # The signed launcher still starts: PyInstaller finds its archive behind the signature.
+          $v = (& out/ForzaHorizon1-ReImagined/forza-launcher.exe --version | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $v -ne $env:VERSION) { throw "The signed launcher's --version printed '$v' (exit code $LASTEXITCODE)" }
       - name: Installer (Inno Setup, with the Visual C++ 2015-2022 x64 redistributable)
         shell: pwsh
         run: |
@@ -636,15 +697,45 @@ jobs:
           # outside the installer so a quarantined file can still be identified.
           python launcher/packaging/windows_build_manifest.py out/ForzaHorizon1-ReImagined --version "$env:VERSION" --commit "$env:GITHUB_SHA" --run-url "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
           if ($LASTEXITCODE -ne 0) { throw 'Could not generate the Windows payload manifest' }
-          # The installer's own version resource needs a four-part number (installer.iss: VersionNumeric).
-          $numeric = (python launcher/packaging/windows_version_info.py "$env:VERSION").Trim()
-          if ($LASTEXITCODE -ne 0) { throw 'Could not compute the numeric version' }
-          & $iscc "/DAppVersion=$env:VERSION" "/DVersionNumeric=$numeric" "/DStage=$PWD\out\ForzaHorizon1-ReImagined" "/DRedist=$PWD\vc_redist.x64.exe" "/DOut=$PWD\installer" launcher\packaging\installer.iss
-          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup failed' }
+          # Signed: compile with the signed uninstaller of "Put the signed launcher and uninstaller in place".
+          $signed = @{}
+          if ($env:SIGN -eq 'true') { $signed.SignedUninstallerDir = 'signed-uninstaller' }
+          launcher/packaging/build_installer.ps1 -Version $env:VERSION -Stage out/ForzaHorizon1-ReImagined `
+            -Redist vc_redist.x64.exe -Out installer @signed
           Copy-Item -LiteralPath out/ForzaHorizon1-ReImagined/windows-build-manifest.json -Destination "installer/ForzaHorizon1-ReImagined-windows-files-$env:VERSION.json"
-      # TODO(code signing, #482, #354): sign installer/*.exe here (the Setup program), the same way as the
-      # launcher above, before it is uploaded. Inno Setup can also sign the installer and its uninstaller while
-      # compiling (a SignTool entry in [Setup] plus iscc /S...), which also covers unins000.exe.
+      # Code signing, part 2 (#354): the installer, which now holds the signed launcher and uninstaller.
+      - name: Upload the installer to sign
+        if: env.SIGN == 'true'
+        id: unsigned-installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-windows-installer   # never published (the publish job drops unsigned-*)
+          path: installer/ForzaHorizon1-ReImagined-Setup-${{ env.VERSION }}.exe
+          if-no-files-found: error
+          retention-days: 1
+      - name: Sign the installer (SignPath)
+        if: env.SIGN == 'true'
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'ForzaHorizon1-ReImagined' }}
+          signing-policy-slug: ${{ env.SIGN_MODE }}-signing
+          artifact-configuration-slug: installer   # launcher/packaging/signpath/installer.xml
+          github-artifact-id: ${{ steps.unsigned-installer.outputs.artifact-id }}
+          parameters: |
+            version: "${{ env.VERSION }}"
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 7200
+          output-artifact-directory: signed-installer
+      - name: Put the signed installer in place
+        if: env.SIGN == 'true'
+        shell: pwsh
+        run: |
+          $name = "ForzaHorizon1-ReImagined-Setup-$env:VERSION.exe"
+          launcher/packaging/verify_signature.ps1 -Mode $env:SIGN_MODE "signed-installer/$name"
+          if ($LASTEXITCODE -ne 0) { throw 'The signed installer failed the signature check' }
+          Copy-Item -LiteralPath "signed-installer/$name" -Destination "installer/$name" -Force
       - uses: actions/upload-artifact@v4
         with:
           name: launcher-windows
@@ -666,7 +757,9 @@ jobs:
       - shell: pwsh
         run: |
           $exe = (Get-ChildItem installer\*Setup*.exe | Select-Object -First 1).FullName
-          launcher\packaging\test_installer.ps1 -Setup $exe
+          # Signed builds: the installer, the installed launcher and the uninstaller pass verify_signature.ps1 too.
+          $signature = if ($env:SIGN -eq 'true') { $env:SIGN_MODE } else { 'none' }
+          launcher\packaging\test_installer.ps1 -Setup $exe -Signature $signature
 
   # The Linux Flatpak: the launcher run by the freedesktop SDK 26.08 (which also builds the game on
   # the player's machine, with the SDK's LLVM extension), the project sources and the patched SDK
@@ -712,8 +805,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          path: assets
-          merge-multiple: true
+          path: artifacts
+      - name: Collect the release files
+        run: |
+          # unsigned-*: the files launcher-windows sent to SignPath; only their signed copies are released.
+          rm -rf artifacts/unsigned-*
+          mkdir assets
+          find artifacts -type f -exec mv -f -t assets {} +
       - name: Release
         env:
           GH_TOKEN: ${{ github.token }}

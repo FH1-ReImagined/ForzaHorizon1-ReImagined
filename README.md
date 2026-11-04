@@ -186,7 +186,7 @@ Other open reports include a lobby that stops taking joins after time in a club 
 ## What you can play
 
 - **Single player, Title Update 4 and DLC.** TU4 is the default when you give the launcher your update; Horizon Rally and the 1000 Club need it. All 23 DLC packages count as installed. [`docs/dlc.md`](docs/dlc.md)
-- **Co-op Festival** (Multiplayer > Find Game). The host types `/event FR05` in chat and everyone races that event. Start through the launcher: it applies eligible career results after the game closes. A loaner car is lent if you have none that fits. [`docs/coop_campaign.md`](docs/coop_campaign.md)
+- **Co-op Festival** (Multiplayer > Find Game). The host picks an event on the map (Title Update 4: Details, then Select, START CO-OP EVENT) or types `/event FR05` in chat, and everyone races that event. Start through the launcher: it applies eligible career results after the game closes. A loaner car is lent if you have none that fits. [`docs/coop_campaign.md`](docs/coop_campaign.md)
 - **Mods.** The **Mods** page: **Add mod...**, on or off, load order. [`docs/modding.md`](docs/modding.md)
 - **HD texture packs** (Vulkan). Add a community pack, or **Make HD pack** with a local AI upscaler. Packs are compressed. [`docs/texture_packs.md`](docs/texture_packs.md)
 - **Controls.** Keyboard and mouse, gamepad, or a wheel with force feedback (Logitech G29, G920 and G923 tested). DualSense adaptive triggers are optional. [`docs/playing.md`](docs/playing.md)
@@ -282,7 +282,7 @@ The launcher and the game have no analytics or telemetry. With the default setti
 
 Windows builds will be signed through [SignPath Foundation](https://signpath.org); until then they are unsigned.
 
-What we sign: the Windows launcher `forza-launcher.exe` and the installer `ForzaHorizon1-ReImagined-Setup-<version>.exe`. They are built by GitHub Actions from this repository ([release workflow](.github/workflows/release.yml)), and a maintainer approves each release by hand before it is signed.
+What we sign: the Windows launcher `forza-launcher.exe`, the installer `ForzaHorizon1-ReImagined-Setup-<version>.exe` and its uninstaller `unins000.exe`. They are built by GitHub Actions from this repository ([release workflow](.github/workflows/release.yml)), and a maintainer approves each release by hand before it is signed.
 
 What we don't sign: third-party files we ship (Python, Qt/PySide6, SDL2, the Microsoft Visual C++ runtime) are included as their publishers released them, with the publishers' own signatures where they have one. `forza.exe`, which the launcher builds on your PC from your own copy of the game, is never signed by us. The Linux packages are not code-signed; check them against `SHA256SUMS` (see [Install with the launcher](#install-with-the-launcher)).
 

@@ -53,11 +53,14 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # faults (#614, ReIGlue PR #28), and 0424: the car paint's dirt map without a seam down the
 # bonnet's centre line (#164, ReIGlue PR #30), and 0426: resolve readback buffers reused instead
 # of allocated and freed on every miss and eviction (#536), and 0425: InputSystem thread safety,
-# non-blocking rumble I/O, and unchanged device refresh (#590, #420, #600, ReIGlue PR #31).
+# non-blocking rumble I/O, and unchanged device refresh (#590, #420, #600, ReIGlue PR #31), and
+# 0427-0430: the guest memory's host commit in the log, the XMA decoder's FFmpeg state only for
+# the contexts in use, the driver pipeline cache held in memory up to what a save keeps, and
+# translations' SPIR-V freed once their shader module exists (#640).
 # A reviewed full commit can be pinned before a maintainer publishes a tag.
 # When a tag is supplied, its target must still match this immutable commit.
 REIGLUE_TAG=
-REIGLUE_COMMIT=214c2600094ff3aea443609f1a6c866b09b6204b  # ReIGlue #31 (0425, #590, #420, #600), on top of ReIGlue main (0426, #536)
+REIGLUE_COMMIT=641a19cb64cc1c56cabf17c010056d9b544f0338  # 0427-0430 (#640), on top of ReIGlue main (0425, 0426)
 REIGLUE_URL="${REIGLUE_URL:-https://github.com/FH1-ReImagined/ReIGlue}"
 NIGHTLY="${REXSDK_NIGHTLY:-$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64}"
 SRC="${REXSDK_SRC:-$HOME/rexglue-sdk-src-forza/sdk}"

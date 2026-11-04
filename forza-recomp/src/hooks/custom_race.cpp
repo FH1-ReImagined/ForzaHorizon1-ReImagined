@@ -46,6 +46,7 @@
 // Gameplay > Custom Race). docs/custom-race.md describes it for players.
 
 #include "../platform/custom_race.h"
+#include "coop_map_event.h"
 #include "../platform/guest_addr.h"
 
 #include <rex/cvar.h>
@@ -395,17 +396,21 @@ bool Eligible(Ui& ui, uint32_t id) {
   return found && place == 1;
 }
 
-void CardFooter(Ui& ui) {
-  if (!card || !card_eligible) return;
-  const uint32_t footer = ui.Call(0x82746638, {card});
+// `text` with the SELECT icon in a title card's footer.
+void SelectPrompt(Ui& ui, uint32_t screen, const std::string& text) {
+  const uint32_t footer = ui.Call(0x82746638, {screen});
   if (!footer) return;
   // Already shown (sub_8289A960: the slot is visible). Setting it again adds another prompt.
   if (ui.Call(0x8289A960, {footer, kFooterSlotSelect}) & 0xFF) return;
-  if (const uint32_t text = ui.Text("CUSTOM RACE")) {
-    ui.Call(0x8289E2B0, {footer, kFooterSlotSelect, text});
-    ui.Release(text);
+  if (const uint32_t label = ui.Text(text)) {
+    ui.Call(0x8289E2B0, {footer, kFooterSlotSelect, label});
+    ui.Release(label);
   }
   ui.Virtual(footer + 0x6C, 0x28, {footer + 0x6C});
+}
+
+void CardFooter(Ui& ui) {
+  if (card && card_eligible) SelectPrompt(ui, card, "CUSTOM RACE");
 }
 
 // ---- The Custom Race page ---------------------------------------------------------------
@@ -706,6 +711,11 @@ extern "C" REX_FUNC(sub_82733A68) {
     }
   }
   __imp__sub_82733A68(ctx, base);
+  if (IsCard(base, screen)) {  // the Co-op Festival's start (coop_map_event.cpp)
+    const uint32_t globals = Read(base, kCareerGlobals);
+    forza::coop_map_event::CardBound(ctx, base, screen, globals ? Read(base, globals + 0x388) : 0,
+                                     HasCareerEntry(base, screen));
+  }
   if (!ours) return;
   Ui ui(ctx, base);
   if (!ui) return;
@@ -731,6 +741,10 @@ extern "C" REX_FUNC(sub_82733A68) {
 // card is ours).
 extern "C" REX_FUNC(sub_82738948) {
   const uint32_t screen = ctx.r3.u32;
+  if (IsCard(base, screen) && forza::coop_map_event::CardInput(ctx, base, screen, ctx.r4.u32)) {
+    ctx.r3.u64 = 1;
+    return;
+  }
   if (screen == card && IsCard(base, screen) && !HasCareerEntry(base, screen)) {
     card_eligible = false;
     StopInjecting();
@@ -799,6 +813,7 @@ extern "C" REX_FUNC(sub_82735FD0) {
 
 // CCareerEventDescription destructor.
 extern "C" REX_FUNC(sub_82727530) {
+  forza::coop_map_event::CardDestroyed(ctx.r3.u32);
   if (ctx.r3.u32 && ctx.r3.u32 == card) {
     card = 0;
     card_eligible = false;
@@ -817,6 +832,21 @@ uint16_t forza::CustomRacePad(uint16_t buttons) {
   return buttons;
 }
 
+void forza::CardSelectPrompt(PPCContext& ctx, uint8_t* base, uint32_t screen,
+                             const std::string& text) {
+  if (!IsCard(base, screen)) return;
+  Ui ui(ctx, base);
+  if (ui) SelectPrompt(ui, screen, text);
+}
+
+bool forza::CardSelectPressed() { return TakeSelectPress(); }
+
+bool forza::CardInputIs(PPCContext& ctx, uint8_t* base, uint32_t screen, uint32_t input,
+                        uint32_t code) {
+  Ui ui(ctx, base);
+  return ui && ui.Event(screen, input, {code}) == code;
+}
+
 #else  // the disc build has no Custom Race (its screens' addresses differ)
 
 namespace forza::custom_race {
@@ -827,5 +857,8 @@ bool TryInput(PPCContext&, uint8_t*) { return false; }
 void Tick(PPCContext&, uint8_t*) {}
 }  // namespace forza::custom_race
 uint16_t forza::CustomRacePad(uint16_t buttons) { return buttons; }
+void forza::CardSelectPrompt(PPCContext&, uint8_t*, uint32_t, const std::string&) {}
+bool forza::CardSelectPressed() { return false; }
+bool forza::CardInputIs(PPCContext&, uint8_t*, uint32_t, uint32_t, uint32_t) { return false; }
 
 #endif  // FORZA_TU4

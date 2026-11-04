@@ -354,6 +354,12 @@ existing safe area. FH1's layer nodes are render boundaries, so the shared
 matrix is composed onto their drawable children rather than the layer itself;
 camera and light nodes retain their authored transforms.
 
+The map preview takes FH1's compressed UI heap only while the pause has its done
+callback (+0x1DC). Back from Photo Mode the game releases that heap and gives the
+pause its callbacks again once the release is done; a preview taking the heap in
+between left Resume without its callback, so B and START did nothing on Home until
+another page released the heap (#646).
+
 The four tab donors now form a scrolling window over up to 64 logical pages.
 Shoulder navigation keeps the current window until selection crosses its edge,
 then reveals the next tab. Edge arrows indicate hidden pages; wraparound brings
