@@ -37,6 +37,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -139,6 +140,14 @@ class OverlayFile : public rex::filesystem::File {
           if (source < 0) return;
           auto& s = *sources.list[size_t(source)];
           if (!s.read_logged.exchange(true)) REXLOG_INFO("Mods: the game reads {}", s.label);
+          static const bool trace = [] {
+            const char* p = std::getenv("FORZA_MODS_READ_TRACE");
+            return p && *p && *p != '0';
+          }();
+          static std::atomic<int> traced{0};
+          if (trace && traced.fetch_add(1) < 100000) {
+            REXLOG_INFO("Mods: read {} bytes at {}: {}", buffer.size(), byte_offset, s.label);
+          }
         },
         [&](int32_t source) {
           auto& s = *sources.list[size_t(source)];
