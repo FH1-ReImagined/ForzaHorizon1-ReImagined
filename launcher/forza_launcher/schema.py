@@ -256,11 +256,12 @@ add("world_car_detail", "Car detail", "Display", "choice", "console",
     "World detail",
     choices=[("console", "Console"), ("high", "High"), ("ultra", "Ultra")])
 add("livery_bake_scale", "Paint job detail", "Display", "choice", 1,
-    "Sharper vinyls and decals on cars in free roam, races and photos. The Paint Shop shows your "
+    "Sharper vinyls and decals on cars in free roam and races. The Paint Shop shows your "
     "design at full detail, but for driving the game draws it into a 1024x1024 texture per car, "
     "where small decals and text blur. 2x draws it at 2048x2048. It costs about 50 MB more of the "
     "game's memory and some graphics memory for each car with a paint job (in single player only "
-    "yours); cars without one cost nothing. See docs/graphics-detail.md.",
+    "yours); cars without one cost nothing. Photos keep the game's size (photo mode draws the paint "
+    "job uncompressed). See docs/graphics-detail.md.",
     "World detail",
     choices=[(1, "Console"), (2, "2x")], restart=True)
 add("world_shadow_filter", "Shadow softness", "Display", "choice", "console",

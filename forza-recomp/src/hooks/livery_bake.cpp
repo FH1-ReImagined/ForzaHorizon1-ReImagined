@@ -1,4 +1,4 @@
-// forza - livery bake scale: sharper vinyls and decals on cars in free roam, races and photos
+// forza - livery bake scale: sharper vinyls and decals on cars in free roam and races
 // (livery_bake_scale, #659, docs/graphics-detail.md "Paint job detail").
 //
 // A car's paint job is drawn once, when the car loads, through a chain of render textures, all
@@ -24,8 +24,9 @@
 // livery_bake_scale = 2 makes every 1024x1024 texture of that chain 2048x2048 (one more mip
 // level where it has mips, so the smallest stays 32x32), the +60 size, the sides' rectangles
 // (for the blit) and the compression's scratch textures with it; the draws, strips, mips and
-// the compression follow the sizes. While the Paint Shop's editor is open (its own 2048x2048
-// layout, +236 -1) nothing is scaled: its sides already have their places in that layout.
+// the compression follow the sizes. Only a driving car's paint job (mode 6 or 8) is scaled:
+// the Paint Shop's editor has its own 2048x2048 layout (+236 -1), and photo mode's paint job
+// (mode 7, 8:8:8:8 final textures) has no room at 2048 (see Scaled below).
 // The scale is read once. 4096 is not offered: the game's memory for render textures has no
 // room for them (the first 4096x4096 texture is not made and the game stops on the missing
 // livery). Memory: src/platform/livery_bake.h, docs/graphics-detail.md.
@@ -48,7 +49,7 @@
 
 REXCVAR_DEFINE_INT32(livery_bake_scale, 1, "Display",
                      "Resolution of the textures each car's paint job (vinyls and decals) is drawn "
-                     "into for driving and photos: 1 (the game's 1024x1024) or 2 (2048x2048: "
+                     "into for driving: 1 (the game's 1024x1024) or 2 (2048x2048: "
                      "sharper small decals, more memory per car with a paint job)");
 
 #if FORZA_TU4
@@ -102,6 +103,8 @@ namespace lb = forza::livery_bake;
 constexpr uint32_t kLayoutSizeOffset = 60;
 // -1 in the Paint Shop.
 constexpr uint32_t kPaintShopOffset = 236;
+// What the paint job is drawn for (sub_82D5B3D0 picks its final textures by it).
+constexpr uint32_t kModeOffset = 232;
 // Each side's rectangle in the layout (in the paint job the blit gets): 4 floats a side.
 constexpr uint32_t kSideRectOffset = 284;
 constexpr uint32_t kSides = 5;
@@ -109,10 +112,10 @@ constexpr uint32_t kSides = 5;
 // Set while a step of a paint job outside the Paint Shop makes its textures.
 thread_local bool g_in_livery = false;
 thread_local bool g_in_scratch = false;
-// The Paint Shop's editor is open: from its layout's reset (+236 -1) to the next layout texture
-// of a car outside it. The sides' blits and the compression's scratch textures are left as they
-// are meanwhile (its layout is 2048x2048 already).
-std::atomic<bool> g_paint_shop{false};
+// The last layout made or reset is not scaled (the Paint Shop's editor, photo mode): the sides'
+// blits into it and the compression's scratch textures are left as they are until the next
+// layout of a scaled paint job.
+std::atomic<bool> g_unscaled_layout{false};
 
 std::atomic<uint32_t> g_logged{0};
 
@@ -125,7 +128,7 @@ uint32_t Scale() {
   return scale;
 }
 
-bool Active() { return Scale() > 1 && !g_paint_shop.load(std::memory_order_relaxed); }
+bool Active() { return Scale() > 1 && !g_unscaled_layout.load(std::memory_order_relaxed); }
 
 uint32_t Load32(uint8_t* base, uint32_t address) {
   const auto* p = forza::GuestPtr(base, address);
@@ -139,15 +142,22 @@ void Store32(uint8_t* base, uint32_t address, uint32_t value) {
   p[3] = uint8_t(value);
 }
 
-// The paint job (setup) is not the Paint Shop's (whose +236 is -1).
-bool OutsidePaintShop(uint8_t* base, uint32_t setup) {
-  return setup && Load32(base, setup + kPaintShopOffset) != 0xFFFFFFFFu;
+// Whether a paint job (setup) is drawn at the scale: not the Paint Shop's (whose +236 is -1),
+// and one whose final textures are the DXT5 pair (its mode at +232 is 6 or 8, a car driving).
+// Other modes keep the game's size: photo mode's paint job (mode 7) ends in two 8:8:8:8
+// textures instead (the jump table of sub_82D5B3D0: modes 2, 5, 7 and 9), and at 2048x2048 it
+// did not fit the game's memory for render textures next to the car's own (the texture was not
+// made and Take Photo crashed).
+bool Scaled(uint8_t* base, uint32_t setup) {
+  if (!setup || Load32(base, setup + kPaintShopOffset) == 0xFFFFFFFFu) return false;
+  const uint32_t mode = Load32(base, setup + kModeOffset);
+  return mode == 6 || mode == 8;
 }
 
 // The layout size follows its texture: scaled where the game picked 1024.
 void ScaleLayoutSize(uint8_t* base, uint32_t setup) {
   const uint32_t scale = Scale();
-  if (scale <= 1 || !OutsidePaintShop(base, setup)) return;
+  if (scale <= 1 || !Scaled(base, setup)) return;
   const uint32_t at = setup + kLayoutSizeOffset;
   if (Load32(base, at) == lb::kGameSize) Store32(base, at, lb::ScaledSize(lb::kGameSize, scale));
 }
@@ -156,7 +166,7 @@ void ScaleLayoutSize(uint8_t* base, uint32_t setup) {
 
 // One step of a car livery's setup: makes at most one of LivRenderPristineN/DamageN (or 0).
 extern "C" REX_FUNC(RenderSetupStep) {
-  g_in_livery = OutsidePaintShop(base, ctx.r3.u32);
+  g_in_livery = Scaled(base, ctx.r3.u32);
   OriginalRenderSetupStep(ctx, base);
   g_in_livery = false;
 }
@@ -164,7 +174,7 @@ extern "C" REX_FUNC(RenderSetupStep) {
 // One step of the compressed side: makes LivPristineN/DamageN (or 0). It runs before the
 // layout texture of the same paint job is made.
 extern "C" REX_FUNC(CompressedSetupStep) {
-  g_in_livery = OutsidePaintShop(base, ctx.r3.u32);
+  g_in_livery = Scaled(base, ctx.r3.u32);
   OriginalCompressedSetupStep(ctx, base);
   g_in_livery = false;
 }
@@ -172,22 +182,30 @@ extern "C" REX_FUNC(CompressedSetupStep) {
 // Makes LivRenderTexture and sets the layout size (+60) the draws into it use.
 extern "C" REX_FUNC(MakeLayoutTexture) {
   const uint32_t setup = ctx.r3.u32;
-  const bool paint_shop = !OutsidePaintShop(base, setup);
-  g_paint_shop = paint_shop;
-  g_in_livery = !paint_shop;
+  const bool scaled = Scaled(base, setup);
+  if (Scale() > 1) {
+    static std::atomic<uint32_t> logged{0};
+    if (logged.fetch_add(1, std::memory_order_relaxed) < 16) {
+      REXLOG_INFO("livery_bake_scale: paint job mode {}{}: {}", Load32(base, setup + kModeOffset),
+                  Load32(base, setup + kPaintShopOffset) == 0xFFFFFFFFu ? " (Paint Shop)" : "",
+                  scaled ? "scaled" : "the game's size");
+    }
+  }
+  g_unscaled_layout = !scaled;
+  g_in_livery = scaled;
   OriginalMakeLayoutTexture(ctx, base);
   g_in_livery = false;
-  if (!paint_shop) ScaleLayoutSize(base, setup);
+  if (scaled) ScaleLayoutSize(base, setup);
 }
 
 // Sets the layout size again (1024, or 2048 in the Paint Shop).
 extern "C" REX_FUNC(ResetLayoutSize) {
   const uint32_t setup = ctx.r3.u32;
   OriginalResetLayoutSize(ctx, base);
-  if (OutsidePaintShop(base, setup)) {
+  if (Scaled(base, setup)) {
     ScaleLayoutSize(base, setup);
   } else {
-    g_paint_shop = true;
+    g_unscaled_layout = true;
   }
 }
 
