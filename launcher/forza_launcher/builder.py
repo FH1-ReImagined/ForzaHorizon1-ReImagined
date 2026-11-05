@@ -9,6 +9,7 @@ Layout under the data root (default ~/.local/share/forza, %LOCALAPPDATA%\\ForzaR
   build/       the project sources, generated code and the build tree
   runtime/     what Play runs: the program, its libraries, forza.toml
 """
+import dataclasses
 import hashlib
 import json
 import os
@@ -104,6 +105,79 @@ def build_dir(root: Path) -> Path:
 
 def runtime_dir(root: Path) -> Path:
     return root / "runtime"
+
+
+# CMake cannot build in a folder whose path has one of these (#691). [ and ] (and * and ?, which
+# Windows does not allow) are patterns to file(GLOB), with which CMake finds its own compiler
+# identification files (the downloaded CMake lives in toolchain/) and the SDK's per-configuration
+# target files ("IMPORTED_LOCATION or IMPORTED_IMPLIB not set for imported target rex::runtime");
+# ; separates the items of CMake lists (and of INCLUDE and LIB); and on Windows %NAME% expands in
+# the commands ninja runs through cmd.exe.
+CMAKE_UNSAFE = "[]*?;" + ("%" if IS_WIN else "")
+
+
+def cmake_unsafe_chars(path) -> str:
+    """The characters of `path` CMake cannot build under (CMAKE_UNSAFE), each once."""
+    return "".join(dict.fromkeys(c for c in str(path) if c in CMAKE_UNSAFE))
+
+
+def link_home() -> Path:
+    """Where build_root puts its links: a folder of the launcher's own, outside every data folder."""
+    if IS_WIN:
+        d = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "ForzaReImagined-links"
+    else:
+        d = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "forza-reimagined" / "links"
+    return d if not cmake_unsafe_chars(d) else Path(tempfile.gettempdir()) / "forza-reimagined-links"
+
+
+def _is_link(p: Path) -> bool:
+    isjunction = getattr(os.path, "isjunction", None)   # Python 3.12
+    return os.path.islink(p) or bool(IS_WIN and isjunction and isjunction(p))
+
+
+def _make_link(target: Path, link: Path):
+    if IS_WIN:
+        import _winapi   # a junction: no administrator rights or Developer Mode needed, unlike a symlink
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        os.symlink(target, link, target_is_directory=True)
+
+
+def _remove_link(link: Path):
+    """Removes the link `link`, never what it points to."""
+    if IS_WIN:
+        os.rmdir(link)   # a junction
+    else:
+        os.unlink(link)
+
+
+def build_root(root: Path, rep: Reporter) -> Path:
+    """`root`, or when its path has characters CMake cannot build under (CMAKE_UNSAFE), a link to it
+    whose path has none: the build then runs through the link, on the folder's own files. The link
+    is kept for the next build (CMake's cache names it), and remade when it points elsewhere."""
+    bad = cmake_unsafe_chars(root)
+    if not bad:
+        return root
+    real = os.path.normcase(os.path.realpath(root))
+    home = link_home()
+    link = home / hashlib.sha1(real.encode("utf-8", "surrogateescape")).hexdigest()[:12]
+    try:
+        if not _is_link(link) and os.path.lexists(link):
+            raise OSError(f"{link} is in the way and is not a link")
+        if _is_link(link) and os.path.normcase(os.path.realpath(link)) != real:
+            _remove_link(link)
+        if not _is_link(link):
+            home.mkdir(parents=True, exist_ok=True)
+            _make_link(root, link)
+    except OSError as e:
+        raise BuildError(
+            f"The path of the folder the game is built in, {root}, has {' '.join(bad)} in it, which CMake "
+            f"cannot build under, and the launcher could not make a link to it without them ({e}). Choose "
+            "a folder without these characters in Setup (\"Where the game is built\"), then press Build "
+            "again.") from e
+    rep.log(f"The folder {root} has {' '.join(bad)} in its path, which CMake cannot build under: "
+            f"building through {link}, a link to it.")
+    return link
 
 
 EXCLUDE_DIRS = {"out", "__pycache__", ".git"}
@@ -542,13 +616,16 @@ def clamp_future_times(roots, now: float | None = None, slack: float = 2.0) -> i
 STAMP_NAME = ".forza-configure-stamp"
 
 
-def configure_stamp(tools, sdk_ident: str, tu: bool) -> str:
+def configure_stamp(tools, sdk_ident: str, tu: bool, root: Path | None = None) -> str:
     """What the CMake build tree was configured with: the launcher version (its project sources,
-    toolchain file and options), the SDK, the compilers and whether a title update is used. A tree
-    configured with anything else is deleted and configured again, not resumed."""
+    toolchain file and options), the SDK, the compilers, whether a title update is used, and the
+    path CMake saw the folder by when that was a link to it (build_root). A tree configured with
+    anything else is deleted and configured again, not resumed."""
     return hashlib.sha1("|".join([__version__, PLAT, pins.SDK_TAG, sdk_ident, str(bool(tu)),
                                   tools.cc, tools.cxx, tools.cmake, tools.ninja,
-                                  json.dumps(tools.source, sort_keys=True)]).encode()).hexdigest()
+                                  json.dumps(tools.source, sort_keys=True)] +
+                                 ([str(root)] if root is not None and root.parent == link_home() else [])
+                                 ).encode()).hexdigest()
 
 
 def reset_stale_build_tree(bdir: Path, stamp: str, rep: Reporter):
@@ -1065,7 +1142,12 @@ def run_build(opts: Options, rep: Reporter, game_files: Path) -> Path:
             if lvl == "warn":
                 rep.log("Warning: " + text)
     try:
-        return _run_build(opts, rep, game_files)
+        # A folder CMake cannot build under (#691) is built through a link to it; messages that name
+        # the folder (CURRENT_ROOT) keep its own path.
+        root = build_root(opts.root, rep)
+        if root == opts.root:
+            return _run_build(opts, rep, game_files)
+        return opts.root / _run_build(dataclasses.replace(opts, root=root), rep, game_files).relative_to(root)
     except OSError as e:
         if IS_WIN and datafolder.is_access_denied_error(e):
             paths.log_error("build: access denied", e)
@@ -1140,7 +1222,7 @@ def _run_build(opts: Options, rep: Reporter, game_files: Path) -> Path:
     overlay = sdk_overlay_archive()
     dev = dev_sdk_overlay()
     sdk_ident = sdk_identity(overlay, dev)
-    stamp = configure_stamp(tools, sdk_ident, tu is not None)
+    stamp = configure_stamp(tools, sdk_ident, tu is not None, root)
 
     # ReGPU, the experimental Direct3D 12 renderer (Settings > Graphics API, regpu.py), is built with
     # every Windows build, so choosing it needs no new build. It is optional: when only its plugin
