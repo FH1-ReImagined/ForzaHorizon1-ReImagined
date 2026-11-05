@@ -459,7 +459,7 @@ def convert(F, files):
     if GROUND:
         g = ground_instance(F, used)
         if g is not None:
-            if GROUND_MASK is not None:
+            if GROUND_LAYER in ("A", "B"):
                 g["model"] = ground_model_copy(F, P, files, g["model"])
             insts = insts + [g]
             P["instances"].append(fh1_instance_of(g))
@@ -496,46 +496,90 @@ def convert(F, files):
 GROUND = os.environ.get("FM4_PVS_GROUND", "1") == "1"
 GROUND_SCALE = float(os.environ.get("FM4_PVS_GROUND_SCALE", "15"))
 GROUND_BELOW = float(os.environ.get("FM4_PVS_GROUND_BELOW", "4"))
-# The ground's blend mask: a terrain piece blends its two layers (grass, sand or gravel) by a
-# mask texture of its own (the record after its lightmap's atlas tile), and stretched 15
-# times the ground took one corner of that mask everywhere: pale sand where the holes past
-# the circuit's edges were filled. The ground is drawn instead with a copy of its model
-# (<prefix>.NNNNN.rmb.bin, NNNNN the next model number) whose mask is texture
-# FM4_PVS_GROUND_MASK (a test, off by default): Suzuka's 621 made the ground green at spot 9,
-# 3 white, but with the 25 m visible set 621 left a hole at the grid's verge (the horizon
-# showing through, also after 60 s): 621 is likely not a flat texture. A track without the
-# texture keeps the model's own mask.
-_mask = os.environ.get("FM4_PVS_GROUND_MASK", "off")
-GROUND_MASK = None if _mask == "off" else int(_mask)
-GROUND_COPIES = {}  # new model file: the file it is a copy of (made by convert_mod)
+# The ground's layers: a terrain piece blends its two layers (Blend_A, tinted by the
+# material's c0, and Blend_B) by the green channel of a mask texture of its own, and
+# stretched 15 times the ground took one corner of that mask everywhere: pale sand and
+# patches where it fills the holes past the circuit's edges. The ground is drawn instead with
+# a copy of its model (<prefix>.NNNNN.rmb.bin, NNNNN the next model number) whose blend shader
+# is a copy too (its name's last letter made "g": terr_blnd_spec_g) with the mask read as 0
+# (FM4_PVS_GROUND_LAYER=A) or 1 (B): one layer everywhere. "off" keeps the piece as it is.
+# (Pointing the mask at another texture, Suzuka's 621, left a hole at the grid's verge.)
+GROUND_LAYER = os.environ.get("FM4_PVS_GROUND_LAYER", "off")
+GROUND_COPIES = {}  # new file in the track's bin folder: (the file it is a copy of, renames)
+
+
+# FH1 streams a zone's model files into a pool of 1028-byte blocks (22440 of them, 23 MB),
+# and holds the camera's zone and the six around it. A converted circuit's zones hold more
+# than Colorado's: the pool runs dry. The game (forza-recomp/src/hooks/fm4_track.cpp) adds
+# blocks when the track starts streaming, as many as media/tracks/<track>/fm4_stream_blocks.txt
+# asks for: the largest union of a zone's and its six neighbours' model files (in KB, the
+# blocks' payload), STREAM_MARGIN times over. For Suzuka the union came within 2% of the
+# blocks in use measured on a lap (24454 for 24037 at the 120 m visible set, 34225 for 34518
+# at 25 m).
+STREAM_MARGIN = float(os.environ.get("FM4_PVS_STREAM_MARGIN", "1.25"))
+
+
+def stream_blocks(F, cells, grid, bin_dir):
+    """Blocks the zones of one ribbon need at most (see STREAM_MARGIN), without the margin."""
+    size = {}
+    def file_size(m):
+        if m not in size:
+            p = os.path.join(bin_dir, f"{F['prefix']}.{m:05d}.rmb.bin")
+            size[m] = os.path.getsize(p) if os.path.exists(p) else 0
+        return size[m]
+    index = {c: k for k, c in enumerate(grid.cells)}
+    best = 0
+    for (col, row), k in index.items():
+        # Odd columns sit half a hex lower (HexGrid): their side neighbours are rows row, row+1.
+        side = (0, 1) if col % 2 else (-1, 0)
+        near = [(col, row - 1), (col, row + 1)] + [(col + dc, row + dr) for dc in (-1, 1) for dr in side]
+        models = set(cells[k]["models"])
+        for c in near:
+            if c in index:
+                models.update(cells[index[c]]["models"])
+        best = max(best, sum(file_size(m) for m in models))
+    return (best + 1023) // 1024
 
 
 def ground_model_copy(F, P, files, model):
-    """The number of a copy of model whose blend mask is texture GROUND_MASK (see there), or
-    model itself if that cannot be done."""
+    """The number of a copy of model drawn with one blend layer (see GROUND_LAYER), or model
+    itself if that cannot be done."""
     M = F["models"][model]
-    recs = F["textures"]
-    lists = M["textures"]
-    lm = [k for k, t in enumerate(lists) if recs[t & 0xFFFFFF][6] & 8]
-    flat = next((i for i, t in enumerate(recs) if t[0] == GROUND_MASK), None)
-    if len(lm) != 1 or flat is None:
-        return model
-    mask_no = recs[lists[lm[0]] & 0xFFFFFF][0] + 1
-    mask = [k for k, t in enumerate(lists) if recs[t & 0xFFFFFF][0] == mask_no]
-    if len(mask) != 1:
-        return model
     new = len(F["models"])
     src, dst = f"{F['prefix']}.{model:05d}.rmb.bin", f"{F['prefix']}.{new:05d}.rmb.bin"
-    if src not in files or GROUND_COPIES.get(dst, src) != src:
+    if src not in files or GROUND_COPIES.get(dst, (src,))[0] != src:
         return model
-    textures = list(lists)
-    textures[mask[0]] = (lists[mask[0]] & ~0xFFFFFF) | flat
-    F["models"].append(dict(M, textures=textures))
-    P["models"].append(dict(P["models"][model], textures=textures))
+    shaders, renames = list(M["shaders"]), []
+    for k, si in enumerate(shaders):
+        name = F["shaders"][si]
+        base = name.split("\\")[-1]
+        if "terr_blnd" not in base.lower() or base[-1].lower() == "g":
+            continue
+        variant = name[:-1] + "g"
+        fx_src = f"shaders/track/{base.upper()}.fxobj"
+        fx_dst = f"shaders/track/{variant.split(chr(92))[-1].upper()}.fxobj"
+        if fx_src not in files:
+            continue
+        if variant not in F["shaders"]:
+            F["shaders"].append(variant)
+            P["shaders"].append(shader_of(variant))
+        shaders[k] = F["shaders"].index(variant)
+        renames.append((base.lower().encode(), variant.split(chr(92))[-1].lower().encode()))
+        GROUND_COPIES[fx_dst] = (fx_src, [])
+        if fx_dst not in files:
+            files.append(fx_dst)
+    if not renames:
+        return model
+    F["models"].append(dict(M, shaders=shaders))
+    # FH1 culls an instance by its model's extent, which does not grow with the placement's
+    # 15x scale: the ground was culled wherever the piece's own sphere was out of view (holes
+    # at the grid and behind the fence at spot 9, with any model but the one placed nearby).
+    # The copy, the ground's alone, gets the sky dome's extent (never culled).
+    P["models"].append(dict(P["models"][model], shaders=shaders, extent=[SKY_EXTENT] * 3))
     P["rmodels"] = len(P["models"])
     if dst not in files:
         files.append(dst)
-    GROUND_COPIES[dst] = src
+    GROUND_COPIES[dst] = (src, renames)
     return new
 
 
@@ -961,8 +1005,13 @@ def convert_mod(mod, fh1_disc, loose):
         nn = ribbon[-2:]
         converted.append((ribbon, path, F, P, cells, grid,
                           [f"__R{int(nn):02d}Z{k:05d}.pvsz" for k in range(len(cells))]))
-    for dst, src in GROUND_COPIES.items():
-        shutil.copyfile(os.path.join(bin_dir, src), os.path.join(bin_dir, dst))
+    for dst, (src, renames) in GROUND_COPIES.items():
+        data = open(os.path.join(bin_dir, src), "rb").read()
+        for a, b in renames:  # the shader names in the model's material table
+            data = data.replace(a, b)
+        os.makedirs(os.path.dirname(os.path.join(bin_dir, dst)), exist_ok=True)
+        open(os.path.join(bin_dir, dst), "wb").write(data)
+    need = max(stream_blocks(c[2], c[4], c[5], bin_dir) for c in converted) if converted else 0
     order = archive_order(files + [zn for c in converted for zn in c[6]])
     index = {p: i for i, p in enumerate(order)}
     names = [p.split("/")[-1] for p in order]
@@ -1009,8 +1058,16 @@ def convert_mod(mod, fh1_disc, loose):
     if os.environ.get("FM4_PVS_SHADER_PATCHES", "1") == "1":
         members = [(p, fm4_shaders.patch_fxobj(p, d)[0] if p.lower().endswith(".fxobj") else d)
                    for p, d in members]
+    # The ground's blend shader copies: the mask read as the one layer (see GROUND_LAYER).
+    members = [(p, fm4_shaders.one_layer(d, GROUND_LAYER == "B")
+                if p in GROUND_COPIES and p.lower().endswith(".fxobj") else d) for p, d in members]
     out_dir = os.path.join(loose, "media", "tracks", track)
     os.makedirs(out_dir, exist_ok=True)
+    if need:
+        blocks = int(need * STREAM_MARGIN + 0.5)
+        with open(os.path.join(out_dir, "fm4_stream_blocks.txt"), "w") as f:
+            f.write(f"{blocks}\n")
+        print(f"{track}: streaming blocks {need} at most, {blocks} asked for (fm4_stream_blocks.txt)")
     start, size, count = write_track_zip(members, os.path.join(out_dir, "bin.zip"))
     shutil.rmtree(bin_dir)
     manifest = open(os.path.join(fh1_disc, "media", "zipmanifest.xml"), "rb").read().decode("utf-8-sig")

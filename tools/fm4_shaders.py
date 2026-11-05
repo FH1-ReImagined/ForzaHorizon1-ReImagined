@@ -263,6 +263,25 @@ def material_tints(data, start, ins, alus):
     return done
 
 
+def one_layer(data, second):
+    """The shader file with every pixel shader's Blend_ValueSampler fetch read as 0 (the first
+    blend layer) or 1 (second): a terrain blend drawn with one layer (the ground, fm4_pvs.py)."""
+    data = bytearray(data)
+    for start, size, samplers, _, _ in blobs(bytes(data)):
+        if "Blend_ValueSampler" not in samplers:
+            continue
+        reg = samplers["Blend_ValueSampler"]
+        for s, kind, w in instructions(bytes(data), start, size):
+            if kind == "fetch" and (w[0] & 0x1F) == 1 and ((w[0] >> 20) & 0x1F) == reg:
+                swz = w[1] & 0xFFF
+                out = 0
+                for c in range(4):
+                    sel = (swz >> (3 * c)) & 7
+                    out |= (7 if sel == 7 else (5 if second else 4)) << (3 * c)
+                struct.pack_into(">3I", data, start + 12 * s, w[0], (w[1] & ~0xFFF) | out, w[2])
+    return bytes(data)
+
+
 def patch_fxobj(name, data):
     """The patched file and a list of what was done."""
     data = bytearray(data)

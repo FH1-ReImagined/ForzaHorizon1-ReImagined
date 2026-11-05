@@ -42,7 +42,6 @@ converted files next to a copy of the game folder. Nothing from either game is i
 | `FORZA_FM4_STX='<Track>\|LOOSE/<track>_stx_numbers.bin'` | FM4's static texture pack read as FH1's |
 | `FORZA_TRACK_SPAWN=x,y,z[,fx,fz]` | the player's teleports go there (facing fx,fz); FM4TRACK diagnostics on. Suzuka's grid: `605.6,598.5,-134.1,0.61,-0.79` (15 m behind FM4's first AI waypoint, `media/AI/Tracks/suzuka_00.geo`) |
 | `FORZA_FM4_COL=1` | the collision manager reads every cell from the `.col` (no `.fiz` streaming) |
-| `FORZA_FM4_STREAM_POOL=1` | more streaming file blocks when the 23 MB pool runs dry |
 | `FORZA_FM4_ZONE_POOL=n` | n x the live-instance and placement pools (not needed with the padding zone) |
 | `FORZA_TRACK_NO_TRAFFIC=1` | the other cars go far below the circuit |
 | `FORZA_AUTOPILOT=LINE[,scale]` | drives the line (pure pursuit, speed from the line x scale) |
@@ -55,7 +54,7 @@ Converter test switches: `FM4_PVS_FLAGS`, `FM4_PVS_FLAGMASK`, `FM4_PVS_SHADERS`,
 `FM4_PVS_PROJLM`, `FM4_PVS_SKY`, `FM4_PVS_SHADER_PATCHES`, `FM4_PVS_LIGHTMAPS`, `FM4_PVS_HEX`,
 `FM4_PVS_EXTENT`, `FM4_PVS_VISIBLE`, `FM4_PVS_VISIBLE_NEAR`, `FM4_PVS_VISIBLE_CELLS`, `FM4_PVS_VISIBLE_SIZE`,
 `FM4_PVS_TOD`, `FM4_PVS_TRACKSETTINGS`, `FM4_PVS_TRACKSETTINGS_FM4`, `FM4_SHADERS_LIGHTMAP`,
-`FM4_SHADERS_LIGHTMAP_COLOURS`, `FM4_SHADERS_SHADOW_COLOUR`, `FM4_SHADERS_SHADOW_CLIP`, `FM4_SHADERS_TINTS`, `FM4_PVS_PASS_GROUPS`, `FM4_PVS_PASS_GROUP_DROP`, `FM4_PVS_GROUND`, `FM4_PVS_GROUND_SCALE`, `FM4_PVS_GROUND_BELOW`, `FM4_PVS_GROUND_MODEL`,
+`FM4_SHADERS_LIGHTMAP_COLOURS`, `FM4_SHADERS_SHADOW_COLOUR`, `FM4_SHADERS_SHADOW_CLIP`, `FM4_SHADERS_TINTS`, `FM4_PVS_PASS_GROUPS`, `FM4_PVS_PASS_GROUP_DROP`, `FM4_PVS_GROUND`, `FM4_PVS_GROUND_SCALE`, `FM4_PVS_GROUND_BELOW`, `FM4_PVS_GROUND_MODEL`, `FM4_PVS_GROUND_LAYER`, `FM4_PVS_STREAM_MARGIN`,
 `FM4_COL_NORMALS`, `FM4_COL_WALL`, `FM4_COL_EDGES`, `FM4_COL_REMAP`, `FM4_COL_GRID`,
 `FM4_COL_SURFACE`, `FM4_COL_KEEP_DEGENERATE`; `FM4_DISC` (FM4's disc folder) for the
 surface map.
@@ -214,6 +213,43 @@ surface map.
 - Shots for comparisons: a shared shader cache for one's own runs and 25 s after loading;
   with a fresh cache, draws are skipped while pipelines build and pieces go missing.
 
+## Towards players: a plan
+
+What a player would need, beyond the spike (none of this is built yet):
+
+1. **Launcher: Mods -> Forza Motorsport 4 tracks -> Import FM4 tracks...**, next to the cars
+   import (#654) and built the same way: it reads FM4 Disc 1 (an image or a folder), lists the
+   circuits FH1 lacks, and for each runs what reconvert.sh runs now: `fm4_track_mod.py` (the
+   track's files, the database row, the game modes), `fm4_pvs.py convert` (layouts, zones,
+   collision, shaders, the archive, `fm4_stream_blocks.txt`). No driving line is needed for
+   players (`fm4_line.py` is the dev autopilot's). Output: the track's loose files and
+   `bin.zip` must be loose files of the game (the mod overlay only adds members to the update's
+   media.zip, and FH1 opens a track's ribbons, sound banks and zipmanifest by path), so the
+   import writes them into a package in the user data folder that the game mounts at
+   game:\media\tracks\<track>\ (as the cars' DLC-style package is), plus a zipmanifest entry.
+   Remove deletes both. Time: Suzuka converts in about 5 s once its files are read.
+2. **The game side by default, not by variable**: what the dev switches do must happen for a
+   converted track whenever one is loaded (a track folder with fm4_stream_blocks.txt is the
+   marker the streaming pool already uses): the plain-file opening of the track's files and
+   its zipmanifest (`FORZA_INSECURE_FILES`), the collision read whole from the .col
+   (`FORZA_FM4_COL`), the static texture pack numbers (`FORZA_FM4_STX`, its file next to the
+   track), no traffic (`FORZA_TRACK_NO_TRAFFIC`), and a start position on the circuit
+   (`FORZA_TRACK_SPAWN`: from the track's own data, FM4's grid or AI path, written by the
+   converter).
+3. **How a player gets there**: today `--free-roam` replaces Colorado with the circuit, which
+   no player wants. Proposed: FH1's airfield (the festival site's flights) gets a "fly to
+   <circuit>" choice that loads the circuit's ribbon as a free-roam world of its own (the same
+   world load with another Tracks row and layout), and a way back to Colorado (the pause menu
+   or the airfield's own spot on the circuit). First version: free driving and the car's own
+   lap time; then events.
+4. **Still missing for that**: events and timing (start/finish and sectors from FM4's
+   TrackSegCams / AI files; FH1's race events are Colorado routes), AI and traffic on the
+   circuit (FM4's AI paths are in media/AI/Tracks/<track>_NN.geo, not read), shadows (above:
+   the shader rewrite), the minimap/GPS (FH1's map is Colorado's), ribbons 01 and 02 and other
+   circuits tried, the airfield menu and world switch, the package mount and the Windows
+   launcher, and a frame-time check on low-end PCs. The car import's rule holds: only from the
+   player's own discs, nothing of either game in the repo or the release.
+
 ## Open
 
 - (c) The road, terrain and buildings draw with FM4's own shaders, at 13:00, over a ground.
@@ -232,30 +268,49 @@ surface map.
     FM4's own shadow colour is TrackSettings ShadowColor (0.389, 0.460, 0.565); with the
     shadow term at 1 it changes no pixel, so shad_color stays 1 until there is a shadow source.
 - Ground: a pass with `FM4_PVS_GROUND=0` showed where the ground is seen: the holes past the
-  circuit's edge, as at spot 9 (behind the fence); the pale areas at spots 4, 6 and 7 are FM4's
-  own horizon landscape and run-off, the same with the ground off. The stretched piece took a
-  corner of its blend mask everywhere (pale sand and patches) whichever flat terr_blnd piece
-  it was (900, 866, 855, 272, 230, 503 tried). `FM4_PVS_GROUND_MASK=n` (a test, off) draws it
-  with a copy of its model whose mask (the texture record after its lightmap's atlas tile)
-  is texture n: at 120 m, 621 made the ground green at spot 9 and changed nothing else in a
-  9-spot pass, 3 made it white (the other layer). But with the 25 m visible set, 621 left a
-  hole at the grid's left verge (the horizon showing through, still after 60 s), where the
-  ground without it draws pale green and white: 621 is likely not a flat texture (it looks
-  bluish and clouded there). Not the default. Next: find (decode) a really flat texture in the
-  static pack, or point the mask at the grass layer's own texture and check which channel the
-  TERR_BLND shaders blend by. The copy is <prefix>.NNNNN.rmb.bin with the next model number
-  (Ribbon_00 and 02; 01 picks another ground model and keeps it as it is). Sheets (trk-spike,
-  not in the repo): shots/suzuka-spots-ground-mask.png (default, 621, 3 at 120 m) and
-  shots/suzuka-spots-25m-mask-off-on.png.
+  circuit's edge, as at the grid's left verge and behind the fence at spot 9; the pale areas
+  at spots 4, 6 and 7 are FM4's own horizon landscape and run-off, the same with the ground
+  off. The ground (model 900, TERR_SZKA_014, stretched 15x) fills them, but in a corner of its
+  blend mask: pale sand and green patches. Not solved; what was tried:
+  - Another flat terr_blnd piece as the ground (`FM4_PVS_GROUND_MODEL`: 866, 855, 272, 230,
+    503): at 25 m none of them is drawn at spots 1 and 9 (the holes come back), only 900 is
+    (shots/suzuka-ground-models-25m.png).
+  - A copy of 900 for the ground alone (<prefix>.NNNNN.rmb.bin, the next model number;
+    `ground_model_copy`): with its mask record pointed at another texture
+    (`FM4_PVS_GROUND_MASK`, removed again: 621 drew green at spot 9 at 120 m, but left the grid's
+    verge empty at 25 m), or with its own copy of the blend shader that reads the mask as 0
+    or 1 (`FM4_PVS_GROUND_LAYER=A|B`, `fm4_shaders.one_layer`; TERR_BLND_SPEC_3 blends Blend_A,
+    tinted by c0, and Blend_B by the mask's green channel, fetched at slot 7 into r0.w): not
+    drawn at spots 1 and 9 at all, also with the copy given the sky dome's extent (never culled).
+    So a model that is not also placed in the zone, or a model drawn with a shader name the
+    track did not have, is not drawn there; why (the zone's file list, the material table's
+    shader reference) is the next thing to trace, with FORZA_ZONE_TRACE and the model loads.
+    `FM4_PVS_GROUND_LAYER` stays, off. Sheets (trk-spike, not in the repo):
+    shots/suzuka-ground-mask.png, suzuka-spots-25m-mask-off-on.png,
+    suzuka-ground-layer-unculled.png.
 - The visible set's 25 m default (`FM4_PVS_VISIBLE_SIZE`, 120 before): two autopilot runs from
   the grid (`lap.sh NAME 450 0.5` in trk-spike, 5.1 km of the 5.8 km lap, 30 fps cap, frame cost
   CSV and zone trace; `lap_cmp.py`) at 120 m and 25 m: the cap held in both (frame p99 33.8 ms,
   no GPU wait), command processor CPU 2.24 -> 2.39 ms a frame, draws 1385 -> 1443 on average;
   streaming blocks in use at most 24037 -> 34518, the pool topped up once -> three times (4096
-  blocks, 4 MB of guest heap, each; `FORZA_FM4_STREAM_POOL`, needed at 120 m as well).
+  blocks, 4 MB of guest heap, each, by the dev switch that is gone now: see the pool below).
   No crash. So 25 m is the default; the largest zone holds 504 instances (404 at 120 m). Two
   9-spot passes at 25 m drew the same and right (shots/suzuka-spots-vis25-run1-run2.png); it
   also brings in geometry the 120 m set left out, such as the dark back of the grandstand at
   spot 3.
-- The streaming block pool still needs `FORZA_FM4_STREAM_POOL`.
+- The streaming block pool, sized from the track (no dev switch any more): FH1's pool is made
+  on the first streamed file (sub_82E3A208: 22440 blocks of 1028 bytes, 23 MB, a free list at
+  0x835A0B40), and made again when a world loads. `fm4_pvs.py` writes
+  media/tracks/<track>/fm4_stream_blocks.txt: the largest union of a zone's and its six
+  neighbours' model files in KB (34226 for Suzuka at 25 m), times `FM4_PVS_STREAM_MARGIN` (1.25):
+  42783. When the pool is made, the game (hooks/fm4_track.cpp) reads that file of every folder
+  in game:\media\tracks\ and links that many blocks in all, up to 65536 (64 MB); when the
+  pool is made again, the same blocks are linked again (none allocated twice). A track
+  without the file (Colorado) keeps the game's pool. Should a converted track still empty
+  it, 4096 more are added, up to the cap, with a warning naming the file to raise. The union
+  matched the blocks measured on a lap within 2% (24454 for 24037 at 120 m, 34225 for
+  34518 at 25 m). A full lap at 25 m (6.4 km, past the start line again, 30 fps cap): 42823
+  blocks, at most 34630 in use, no top-up, no crash, frame p99 33.7 ms, CPU 2.23 ms a frame.
+  For players the file must be a loose file of the track's folder (as it is now): mods'
+  files are archive members, which ResolvePath does not list.
 - AI, the airport entry, ribbons 01 and 02, other circuits.
