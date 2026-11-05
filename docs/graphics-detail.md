@@ -290,6 +290,18 @@ has no room for 16 MB more (the layout was not made and the game stopped); the c
 made from the heap the driving paint job's render copies came from (`0x83393FFC`; the layout's
 is `0x83393FF8`).
 
+The CPU compresses the render copies (`LivRenderPristineN`/`DamageN`) from guest memory, which
+the GPU's resolves write. With `readback_resolve = some` (the default) a resolve is copied back
+only when its key is new; at 2x the damage copy's was not, so `LivDamageN` came out the same as
+`LivPristineN` (one texture, one fingerprint in a texture dump) and the car showed no scratches
+when driving (#680), while photo mode, which draws its own uncompressed damage copy, had them.
+With `readback_resolve = full` the 2048x2048 `LivDamageN` has the scratches. While a paint job is
+drawn at 2x, from its first render copy until 2 s after its last compression, the hook puts all
+of physical memory in `readback_resolve_wait_range` (`src/platform/readback_wait.h`, owner
+`kLiveryBake`), the way the online photo does at its shutter: those resolves wait for the GPU
+and are copied back. That is a car loading with a paint job at 2x, about a second; Console
+never asks for it.
+
 ### Memory
 
 | Texture (per car with a paint job) | Console | 2x |
@@ -328,6 +340,13 @@ before the fix the save was 16 MB and the copy's layout a cut-up quarter of it (
 in four bands at the bottom of the layout, the side decal missing); after it the copy loads all
 16 MB, byte for byte the save, with the decals where the Console layout has them. Take Photo at
 2x with the decal pack ran without errors.
+
+Scratches (#680), same save, a texture dump of free roam: at Console `LivPristineN` and
+`LivDamageN` are two 1024x1024 DXT5 textures, the damage one with scratches over the body. At 2x
+before the fix the dump held a single 2048x2048 DXT5, the pristine one (the damage texture had
+the same picture); with `readback_resolve = full`, and after the fix with the default `some`, it
+holds both, the damage one with the same scratches as at Console (the same fingerprint in both
+runs).
 
 ### The decals themselves
 

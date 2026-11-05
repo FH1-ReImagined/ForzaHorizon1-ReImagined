@@ -34,16 +34,24 @@
 // from: photo mode's own heap has no room for it), and the photo's final textures stay
 // 1024x1024 (#680: read into a 1024x1024 layout, a quarter of the save came out cut into bands
 // and shifted, the decals gone or in the wrong place).
+// The CPU compresses the render copies' levels from guest memory, which the GPU's resolves
+// write. With readback_resolve = some a resolve is copied back only when its key is new, and at
+// 2x the damage copy's was not: LivDamageN came out the same as LivPristineN, so the car showed
+// no scratches when driving (#680; with readback_resolve = full it has them). While a paint job
+// is drawn at 2x, from its first render copy until 2 s after its last compression, all of
+// physical memory is in readback_resolve_wait_range (src/platform/readback_wait.h).
 // The scale is read once. 4096 is not offered: the game's memory for render textures has no
 // room for them (the first 4096x4096 texture is not made and the game stops on the missing
 // livery). Memory: src/platform/livery_bake.h, docs/graphics-detail.md.
 // Disc build: sub_82C92390, sub_82C9A2D8, sub_82C8B028, sub_82C8D750, sub_82C38828,
-// sub_8252CC60, sub_82A40CB0, sub_82C90178 and sub_82C8D7D8; heap ids at 0x832A85C8/CC.
+// sub_8252CC60, sub_82A40CB0, sub_82C90178, sub_82C8D7D8 and sub_8253C9D0; heap ids at
+// 0x832A85C8/CC.
 // tu_address_map: TU4 addresses
 
 #include "../platform/guest_addr.h"
 #include "../platform/guest_memory.h"
 #include "../platform/livery_bake.h"
+#include "../platform/readback_wait.h"
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
@@ -51,9 +59,11 @@
 #include <rex/ppc/func.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
+#include <thread>
 #include <unordered_map>
 
 REXCVAR_DEFINE_INT32(livery_bake_scale, 1, "Display",
@@ -84,6 +94,8 @@ constexpr uint32_t kRenderHeap = 0x83393FFC;
 #define OriginalBlitSection __imp__sub_82D511B8
 #define SaveLayout sub_82D4E7D0
 #define OriginalSaveLayout __imp__sub_82D4E7D0
+#define CompressTexture sub_825AC118
+#define OriginalCompressTexture __imp__sub_825AC118
 #else
 constexpr uint32_t kLayoutHeap = 0x832A85C8;
 constexpr uint32_t kRenderHeap = 0x832A85CC;
@@ -105,6 +117,8 @@ constexpr uint32_t kRenderHeap = 0x832A85CC;
 #define OriginalBlitSection __imp__sub_82C90178
 #define SaveLayout sub_82C8D7D8
 #define OriginalSaveLayout __imp__sub_82C8D7D8
+#define CompressTexture sub_8253C9D0
+#define OriginalCompressTexture __imp__sub_8253C9D0
 #endif
 extern "C" REX_FUNC(OriginalRenderSetupStep);
 extern "C" REX_FUNC(OriginalCompressedSetupStep);
@@ -115,6 +129,7 @@ extern "C" REX_FUNC(OriginalMakeScratchTextures);
 extern "C" REX_FUNC(OriginalTextureHeaderCore);
 extern "C" REX_FUNC(OriginalBlitSection);
 extern "C" REX_FUNC(OriginalSaveLayout);
+extern "C" REX_FUNC(OriginalCompressTexture);
 
 namespace {
 namespace lb = forza::livery_bake;
@@ -152,6 +167,44 @@ uint32_t SavedSize(uint32_t data) {
   std::lock_guard lock(g_saved_mutex);
   const auto it = g_saved.find(data);
   return it == g_saved.end() ? 0 : it->second;
+}
+
+// All of physical memory in readback_resolve_wait_range while a paint job is drawn at the
+// scale: from its first render copy until kHoldAfter after the last of its steps.
+using Clock = std::chrono::steady_clock;
+constexpr uint64_t kAllPhysical = 0x20000000;  // start 0, length 512 MB
+constexpr auto kHoldAfter = std::chrono::seconds(2);
+std::mutex g_hold_mutex;  // the three below
+bool g_held = false;
+uint64_t g_hold_generation = 0;
+Clock::time_point g_hold_last;
+
+// Starts the hold (start) or keeps a running one going.
+void HoldReadback(bool start) {
+  std::lock_guard lock(g_hold_mutex);
+  if (!g_held && !start) return;
+  g_hold_last = Clock::now();
+  if (g_held) return;
+  if (!forza::readback_wait::Request(forza::readback_wait::Owner::kLiveryBake, kAllPhysical)) {
+    static bool warned = false;
+    if (!warned) REXLOG_WARN("livery_bake_scale: the SDK has no readback_resolve_wait_range; cars may show no scratches");
+    warned = true;
+    return;
+  }
+  g_held = true;
+  const uint64_t generation = ++g_hold_generation;
+  std::thread([generation] {
+    for (;;) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      std::lock_guard lock(g_hold_mutex);
+      if (!g_held || g_hold_generation != generation) return;
+      if (Clock::now() - g_hold_last > kHoldAfter) {
+        forza::readback_wait::Request(forza::readback_wait::Owner::kLiveryBake, 0);
+        g_held = false;
+        return;
+      }
+    }
+  }).detach();
 }
 
 uint32_t Scale() {
@@ -211,7 +264,10 @@ uint32_t CopyLayoutSize(uint8_t* base, uint32_t setup) {
 // One step of a car livery's setup: makes at most one of LivRenderPristineN/DamageN (or 0).
 extern "C" REX_FUNC(RenderSetupStep) {
   g_in_livery = Scaled(base, ctx.r3.u32);
-  if (g_in_livery && Scale() > 1) g_render_heap = Load32(base, kRenderHeap);
+  if (g_in_livery && Scale() > 1) {
+    g_render_heap = Load32(base, kRenderHeap);
+    HoldReadback(true);
+  }
   OriginalRenderSetupStep(ctx, base);
   g_in_livery = false;
 }
@@ -306,9 +362,17 @@ extern "C" REX_FUNC(MakeRenderTexture) {
 // Makes the compression's two 1024x1024 scratch textures (once, until the compression frees
 // them): their headers and memory sizes come from sub_82AFE400.
 extern "C" REX_FUNC(MakeScratchTextures) {
+  HoldReadback(false);
   g_in_scratch = true;
   OriginalMakeScratchTextures(ctx, base);
   g_in_scratch = false;
+}
+
+// Compresses one render copy into its DXT5 texture, on the CPU from guest memory.
+extern "C" REX_FUNC(CompressTexture) {
+  HoldReadback(false);
+  OriginalCompressTexture(ctx, base);
+  HoldReadback(false);
 }
 
 // A texture header: r3 width, r4 height, r5 depth, r6 levels; returns the memory size.
