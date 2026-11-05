@@ -79,6 +79,8 @@ jobs:
         run: python tools/test_dpi_manifest.py -v
       - name: Livery codec tests
         run: python -m unittest discover -s tools -p 'test_livery_codec.py' -v
+      - name: Trigger effect decoder tests (the virtual DualSense parts skip without /dev/uhid, #692)
+        run: python -m unittest discover -s tools -p 'test_trigger_harness.py' -v
       - name: FM4 car converter tests (synthetic models, no game files, #648)
         run: python -m unittest discover -s tools -p 'test_fm4_cars.py' -v
       - name: Resource hook audit tests (synthetic images)

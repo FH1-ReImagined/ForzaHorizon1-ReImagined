@@ -62,3 +62,10 @@ def vibration_wall(amp, freq, wall_zones):
     amp = max(1, min(8, int(amp)))
     zones = [amp] * (10 - wall) + [8] * wall
     return (_PULSE_AB, _pack_zones(zones) + (_clamp(freq), 0, 0, 0))
+
+
+def zone_vibration(zones, freq):
+    """Vibration (mode 0x26) with a per-zone amplitude (0-8 each, 10 zones) at `freq` Hz: the
+    controller runs it by itself where the trigger is in an active zone. Frequency byte at
+    parameter 8, as in Nielk1's trigger effect factory."""
+    return (_PULSE_AB, _pack_zones(zones) + (0, 0, _clamp(freq), 0))
