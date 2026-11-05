@@ -2913,6 +2913,85 @@ yields (0.2-0.35 ms a frame, not on the chain), the GPU and readback waits (zero
 a setting, render scale or MSAA). The audio mixer is a fixed 11-13% of a core here, 2-2.5 times that on a Deck, where it
 competes for the four cores; worth a look after the three above.
 
+### Step 2: the hottest instruction of the command processor (#607, ReIGlue 0435, 2026-11-04)
+
+After the cuts above (present without the replay wait #613, binding reuse #179/#192, the split #474) and the
+dropped register elision (ReIGlue #32), what is left on the command processor that none of them covers?
+
+**Method.** TU4 game of main f95b52c (`-DFORZA_CPU_TARGET=x86-64-v3`), ReIGlue 641a19c (the pin) built with
+`-gline-tables-only` (same code; samples resolve to inlined functions), the golden TU4 save in a scratch
+`--user_data_root`, scratch XDG dirs, offline, audio muted, the launcher's Steam Deck preset with
+`--frame_rate=240` (uncapped: the frame waits on the command processor), BENCH lock held, no other game running
+(checked every 10 s). Free roam (60 s of `tools/autodrive.py` on the County Route loop) and the race (GoPro
+Millennia Masters, 60 s from the start); 8 cores, or CPUs 0-3 with `taskset`. `PERF_CPUPROF` samples (1 ms of CPU
+time, self time) symbolized with their inline chains (`llvm-symbolizer --inlining`) and attributed to the physical
+function; `eu-stack` call stacks of the command processor (264 in a race) for the waits. perf is still not
+installed.
+
+**Where the command processor's time goes** (free roam, ms of CPU a frame; 4 cores: 3.50 ms, 2,755 draws,
+188 fps; 8 cores: 3.70 ms, 2,808 draws, 181 fps):
+
+| Area | 4 cores | 8 cores | Covered by |
+| --- | --- | --- | --- |
+| Bindings, textures, samplers, `vkUpdateDescriptorSets` | 0.99 (28 %) | 1.04 (28 %) | #179, #192 (Sean's drafts) |
+| PM4 decode, register writes and their copies | 0.86 (25 %) | 0.90 (24 %) | #474 (ReIGlue #26), ReIGlue #32 dropped |
+| Guest memory: `RequestRanges`, `mprotect`, `EnableAccessCallbacks`, watches, lock wakes | 0.34 (10 %) | 0.32 (9 %) | |
+| Shaders and pipelines (`IM_LOAD` memo, translation and pipeline lookups) | 0.21 (6 %) | 0.23 (6 %) | |
+| System constants, viewport, dynamic state | 0.21 (6 %) | 0.22 (6 %) | |
+| `memcmp` | 0.08 (2 %) | 0.07 (2 %) | |
+| Yields in `WAIT_REG_MEM` (waiting for the game) | 0.05 (1 %) | 0.10 (3 %) | |
+| `IssueDraw`, primitives, render targets, uploads, the rest | 0.77 (22 %) | 0.81 (22 %) | |
+
+Wall clock (call stacks, race, 8 cores): 47 % in `IssueDraw`, 16 % waiting for the submission thread at the swap
+(#613), 13 % waiting for the game (`WAIT_REG_MEM`). Off the chain: the render thread 2.8 ms a frame (83 % guest
+code, 7 % `sched_yield`), the main loop 2.2 ms (93 % guest code), the submission thread 1.0 ms (78 % RADV).
+
+Outside the covered areas the profile is flat: no function above 2 % of the thread. But one instruction stands
+out: **3.6-3.9 % of all the command processor's samples land right after the `xchg` in
+`TextureCache::RequestTextures`**, `texture_became_outdated_.exchange(false)` on every draw. A locked instruction
+waits for the store buffer to drain, and at that point it holds the draw's register, constant and command
+stores. The flag is only set by memory watch callbacks. The next was `ExecutePacket`'s division of the packet's
+start offset (for the VR stereo log, 0396), 1.2 % of the thread, about 24 times a draw.
+
+**Change: ReIGlue 0435.** The flag is loaded first and exchanged only when set (a callback that sets it after the
+load is seen by the next draw, as before after the exchange); `ExecutePacket` keeps the read offset and divides
+only when it logs the packet. No setting: the behaviour is the same. In the profiles `RequestTextures` falls from
+4.7 % to 0.9 % of the thread and `ExecutePacket` from 6.3 % to 5.4 %.
+
+**Measured.** One game build, the two plugins (A = the pin, B = 0435; the same runtime), 3 runs each, A and B
+alternating which ran first, 24 runs, no other game. Mean [min-max]; fps, 1 % low and p99 from the command
+processor's frame intervals over the 60 s:
+
+| Scene | Build | fps | 1 % low fps | p99 ms | CP CPU ms a frame | CP us a draw | Draws |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Race, 8 cores | A | 186.5 [185.2-187.7] | 115.2 [114.0-116.9] | 8.45 [8.45-8.45] | 3.70 [3.67-3.73] | 1.258 [1.255-1.263] | 2,942 |
+| Race, 8 cores | B | 191.5 [190.5-192.3] | 116.0 [114.5-116.8] | 8.42 [8.40-8.44] | 3.54 [3.53-3.56] | 1.204 [1.202-1.204] | 2,943 |
+| Race, 8 cores | change | **+2.7 %** | +0.7 % | -0.4 % | -4.3 % | -4.3 % | |
+| Race, 4 cores | A | 183.7 [181.1-185.4] | 108.6 [106.6-110.2] | 8.51 [8.47-8.54] | 3.67 [3.62-3.72] | 1.237 [1.236-1.238] | 2,964 |
+| Race, 4 cores | B | 186.1 [184.1-187.6] | 111.9 [111.2-112.4] | 8.45 [8.44-8.45] | 3.57 [3.53-3.58] | 1.186 [1.176-1.195] | 3,005 |
+| Race, 4 cores | change | **+1.3 %** | +3.0 % | -0.8 % | -2.8 % | -4.1 % | |
+| Free roam, 8 cores | A | 186.5 [181.7-189.6] | 113.6 [107.8-123.6] | 7.35 [6.64-8.02] | 3.60 [3.54-3.67] | 1.311 [1.310-1.312] | 2,742 |
+| Free roam, 8 cores | B | 193.0 [181.7-202.1] | 118.6 [117.6-119.6] | 6.92 [6.50-7.21] | 3.42 [3.28-3.60] | 1.251 [1.236-1.264] | 2,735 |
+| Free roam, 8 cores | change | **+3.5 %** | +4.3 % | -5.8 % | -4.8 % | -4.6 % | |
+| Free roam, 4 cores | A | 190.7 [183.2-195.6] | 103.5 [103.1-104.4] | 8.22 [7.94-8.46] | 3.47 [3.38-3.54] | 1.277 [1.267-1.289] | 2,716 |
+| Free roam, 4 cores | B | 186.0 [182.1-191.9] | 98.7 [87.6-106.4] | 8.40 [7.75-9.11] | 3.46 [3.35-3.61] | 1.235 [1.214-1.256] | 2,804 |
+| Free roam, 4 cores | change | **-2.4 %** | -4.7 % | +2.2 % | -0.2 % | -3.3 % | |
+
+- The command processor's CPU per draw falls 4.3-4.6 % on 8 cores and 3.3-4.1 % on 4, every run of one build
+  outside the other's range: about 0.05-0.06 us a draw, 0.15-0.2 ms of a 3,000-draw frame.
+- The frame rate follows on 8 cores (race +2.7 %, the runs apart; free roam +3.5 %, inside its spread). On 4 cores
+  the race gains 1.3 % (the ranges overlap) and free roam shows no gain: its runs differ by 3 % in draws a frame and
+  by 7 % in fps within a build. With four cores the command processor is not the only thing the frame waits for
+  (run-queue waits, the render thread), so part of the saving becomes waiting.
+- Same output: the change keeps the behaviour. `ExecutePacketType3 overflow` / `INDIRECT RINGBUFFER` errors came
+  in 1 of 12 A runs and 2 of 12 B runs (once with draws failing in the same burst); they are not new, and neither
+  change touches the packet parsing.
+
+**Left** (this round, not built): the guest memory area (9-10 %: three `mprotect` calls per protected range, one
+for each of the physical memory's views, under the global lock the game's write faults take; 88 texture loads
+a frame in free roam), the `IM_LOAD` memo's `memcmp`, `Fh1DirtSeamInterpolator`'s per-draw binary search
+(0.6-0.9 %).
+
 ## Stutter in the first part of a drive (#614, 2026-11-03)
 
 **The report.** A side-by-side video of the same replayed drive on one Windows PC: our Vulkan path showed tall
