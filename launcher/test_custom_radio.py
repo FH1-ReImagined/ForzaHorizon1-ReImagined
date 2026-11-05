@@ -1,5 +1,9 @@
 import copy
+import json
 import os
+import re
+import subprocess
+import time
 import struct
 import sys
 import tempfile
@@ -214,7 +218,7 @@ class RadioTests(unittest.TestCase):
         cfg.d["custom_radio"] = {"ffmpeg": str(encoder), "stations": {
             "Radio1": {"name": "Test", "mode": "replace", "songs": [str(song)]}}}
         cfg.save()
-        def encoded(source, output, ffmpeg, cancelled):
+        def encoded(source, output, ffmpeg, cancelled, level=True):
             output.write_bytes(b"\xff\xfb\xa4\x00" + bytes(476))
             return 1152
         return cfg, encoded
@@ -249,6 +253,176 @@ class RadioTests(unittest.TestCase):
                     radio.build(cfg)
         self.assertEqual((target / ".reimagined-radio.json").read_bytes(), old)
         self.assertFalse(target.with_name("." + radio.MOD + ".previous").exists())
+
+    # --- Leveling to the game's loudness (#662) ---
+
+    def test_level_gain_targets_game_loudness_under_the_peak_ceiling(self):
+        # A modern master is turned down to the stock radio loudness.
+        self.assertEqual(radio.level_gain(-7.0, 0.8), radio.LEVEL_TARGET + 7.0)
+        # A quiet, dynamic song is raised only while its true peak stays under the ceiling.
+        self.assertEqual(radio.level_gain(-24.0, -14.0), radio.LEVEL_TARGET + 24.0)
+        self.assertEqual(radio.level_gain(-20.9, -3.2), round(radio.LEVEL_CEILING + 3.2, 2))
+        self.assertLessEqual(radio.level_gain(-20.9, -3.2), 0)
+        # Silence is left alone.
+        self.assertEqual(radio.level_gain(-70.0, float("-inf")), 0.0)
+        self.assertEqual(radio.level_gain(float("-inf"), float("-inf")), 0.0)
+
+    def _encode_commands(self, level, summary):
+        song = self.root / "song.flac"
+        song.touch()
+        commands = []
+        def run(cmd, source, cancelled, verb="encode"):
+            commands.append(cmd)
+            return summary if "-f" in cmd and cmd[cmd.index("-f") + 1] == "null" else b""
+        with patch.object(radio, "_run", side_effect=run), patch.object(radio, "mp3_samples", return_value=1152):
+            self.assertEqual(radio.encode(song, self.root / "out.mp3", "ffmpeg", level=level), 1152)
+        return commands
+
+    SUMMARY = (b"[Parsed_ebur128_0 @ 0x1] Summary:\n\n  Integrated loudness:\n    I:          -7.0 LUFS\n"
+               b"    Threshold: -17.0 LUFS\n\n  True peak:\n    Peak:        0.8 dBFS\n")
+
+    def test_leveling_on_measures_then_applies_one_linear_gain(self):
+        measure, encode = self._encode_commands(True, self.SUMMARY)
+        self.assertIn("ebur128=peak=true:metadata=1", measure)
+        self.assertEqual(encode[encode.index("-af") + 1], f"volume={radio.LEVEL_TARGET + 7.0:.2f}dB")
+        self.assertEqual(encode[-1], str(self.root / "out.mp3"))
+        # Both passes read the same audio: first stream, 30 minutes, stereo 48 kHz.
+        for cmd in (measure, encode):
+            self.assertEqual(cmd[cmd.index("-t") + 1], "1800")
+            self.assertEqual(cmd[cmd.index("-map") + 1], "0:a:0")
+
+    def test_leveling_off_keeps_the_original_level(self):
+        (encode,) = self._encode_commands(False, self.SUMMARY)
+        self.assertNotIn("-af", encode)
+        self.assertIn("libmp3lame", encode)
+
+    def test_unreadable_measurement_is_an_error(self):
+        with self.assertRaises(radio.RadioError):
+            self._encode_commands(True, b"no summary here")
+
+    def test_cancel_stops_a_running_pass(self):
+        cmd = [sys.executable, "-c", "import time; time.sleep(30)"]
+        start = time.monotonic()
+        with self.assertRaisesRegex(radio.RadioError, "cancelled"):
+            radio._run(cmd, Path("song.flac"), lambda: time.monotonic() - start > .2)
+        self.assertLess(time.monotonic() - start, 10)
+
+    def test_level_setting_defaults_on_survives_restart_and_rejects_non_bool(self):
+        cfg = Config(self.root / "launcher.json")
+        self.assertTrue(radio.settings(cfg)["level"])
+        cfg.d["custom_radio"]["level"] = False
+        cfg.save()
+        self.assertFalse(radio.settings(Config(cfg.path))["level"])
+        cfg.d["custom_radio"]["level"] = "yes"
+        with self.assertRaises(radio.RadioError):
+            radio.settings(cfg)
+
+    def test_stations_built_before_leveling_need_one_rebuild(self):
+        cfg, encoded = self._build_fixture()
+        marker = radio.mods.mods_dir(cfg) / radio.MOD / radio.MARKER
+        self.assertFalse(radio.stale(cfg))  # nothing built yet
+        marker.parent.mkdir(parents=True)
+        marker.write_text(json.dumps({"format": 1, "settings": radio.settings(cfg)}))
+        self.assertTrue(radio.stale(cfg))
+        levels = []
+        def record(source, output, ffmpeg, cancelled, level=True):
+            levels.append(level)
+            return encoded(source, output, ffmpeg, cancelled, level)
+        with patch.object(radio, "encode", side_effect=record):
+            radio.build(cfg)
+            self.assertFalse(radio.stale(cfg))
+            self.assertEqual(json.loads(marker.read_text())["leveling"], radio.LEVELING)
+            cfg.d["custom_radio"]["level"] = False
+            self.assertTrue(radio.stale(cfg))
+            radio.build(cfg)
+        self.assertFalse(radio.stale(cfg))
+        self.assertIsNone(json.loads(marker.read_text())["leveling"])
+        self.assertEqual(levels, [True, False])
+
+    def test_page_checkbox_saves_leveling(self):
+        from PySide6.QtWidgets import QApplication
+        from forza_launcher.ui.radio_page import RadioPage
+        app = QApplication.instance() or QApplication([])
+        cfg = Config(self.root / "launcher.json")
+        class Window:
+            def running(self):
+                return False
+        page = RadioPage(cfg, Window())
+        self.assertTrue(page.level.isChecked())
+        page.level.setChecked(False)
+        self.assertFalse(radio.settings(Config(cfg.path))["level"])
+        page.close()
+        import shiboken6
+        shiboken6.delete(page)
+        app.processEvents()
+
+
+def _ffmpeg_with_lame():
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return None
+    try:
+        out = subprocess.run([ffmpeg, "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=30).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return ffmpeg if "libmp3lame" in out else None
+
+
+@unittest.skipUnless(_ffmpeg_with_lame(), "FFmpeg with libmp3lame is not installed")
+class RadioLevelingFFmpegTests(unittest.TestCase):
+    """Real encodes of generated test audio; no music or game audio is used."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.ffmpeg = _ffmpeg_with_lame()
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def _make(self, name, graph):
+        path = self.root / name
+        subprocess.run([self.ffmpeg, "-nostdin", "-v", "error", "-filter_complex", graph,
+                        "-c:a", "pcm_s16le", str(path)], check=True, timeout=120)
+        return path
+
+    def _loud(self):
+        # Limited pink noise like a modern master: about -7 LUFS, sample peaks at 0 dBFS.
+        return self._make("loud.wav", "anoisesrc=color=pink:sample_rate=48000:duration=20:seed=7:amplitude=0.5,"
+                          "aformat=channel_layouts=stereo,volume=14dB,alimiter=limit=1:level=false:attack=1:release=20")
+
+    def test_loud_master_is_turned_down_to_the_game_loudness(self):
+        song = self._loud()
+        loudness, peak = radio.measure(song, self.ffmpeg)
+        self.assertGreater(loudness, -8.5)
+        self.assertGreater(peak, -0.5)
+        out = self.root / "on.mp3"
+        radio.encode(song, out, self.ffmpeg, level=True)
+        loudness, peak = radio.measure(out, self.ffmpeg)
+        self.assertAlmostEqual(loudness, radio.LEVEL_TARGET, delta=1.5)
+        self.assertLessEqual(peak, radio.LEVEL_CEILING + .5)
+
+    def test_leveling_off_keeps_the_loud_master(self):
+        out = self.root / "off.mp3"
+        radio.encode(self._loud(), out, self.ffmpeg, level=False)
+        loudness, peak = radio.measure(out, self.ffmpeg)
+        self.assertGreater(loudness, -9)
+        self.assertGreater(peak, -1)
+
+    def test_quiet_song_with_loud_peaks_is_not_boosted_into_clipping(self):
+        # About -21 LUFS with -3 dBTP bursts: reaching -14.5 LUFS would need +6 dB.
+        song = self._make("quiet.wav",
+                          "anoisesrc=color=pink:sample_rate=48000:duration=20:seed=3:amplitude=0.2,"
+                          "aformat=channel_layouts=stereo[n];"
+                          "sine=f=220:sample_rate=48000:duration=20,volume=6.5,aformat=channel_layouts=stereo,"
+                          "volume='if(lt(mod(t,4),0.1),1,0)':eval=frame[s];[n][s]amix=inputs=2:normalize=0")
+        before, _ = radio.measure(song, self.ffmpeg)
+        out = self.root / "quiet.mp3"
+        radio.encode(song, out, self.ffmpeg, level=True)
+        loudness, peak = radio.measure(out, self.ffmpeg)
+        self.assertLessEqual(peak, radio.LEVEL_CEILING + .5)
+        self.assertLess(loudness, radio.LEVEL_TARGET - 3)
+        self.assertLessEqual(loudness, before + .5)
 
 
 if __name__ == "__main__":

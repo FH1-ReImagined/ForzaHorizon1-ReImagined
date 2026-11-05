@@ -4,7 +4,7 @@ import copy
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import (QComboBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
                                QLineEdit, QListWidget, QProgressBar, QPushButton,
                                QScrollArea, QVBoxLayout, QWidget)
 
@@ -25,7 +25,7 @@ class RadioPage(QWidget):
         try:
             self.spec = radio.settings(cfg)
         except radio.RadioError as exc:
-            self.spec = {"version": 1, "ffmpeg": "", "stations": {}}
+            self.spec = {"version": 1, "ffmpeg": "", "level": True, "stations": {}}
             load_error = str(exc)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 16)
@@ -81,6 +81,13 @@ class RadioPage(QWidget):
         locate.clicked.connect(self._ffmpeg)
         tools.addWidget(locate)
         form.addRow("Encoder", tools)
+        self.level = QCheckBox("Level songs to the game's loudness")
+        self.level.setChecked(self.spec["level"])
+        self.level.setToolTip("Turns each song down (or up) to the level of the game's own soundtrack, "
+                              "so loud songs don't distort at a high radio volume. "
+                              "Off keeps every song at its original level.")
+        self.level.toggled.connect(self._level)
+        form.addRow("Loudness", self.level)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(self.editor)
@@ -103,6 +110,8 @@ class RadioPage(QWidget):
         self._load()
         if load_error:
             self.message.setText(load_error)
+        else:
+            self._stale_notice()
 
     def busy(self):
         return self.task is not None
@@ -144,6 +153,7 @@ class RadioPage(QWidget):
             return True
         previous = self.cfg.d.get("custom_radio")
         self.spec["ffmpeg"] = self.ffmpeg.text().strip()
+        self.spec["level"] = self.level.isChecked()
         # Visiting a stock slot alone does not create a custom station.
         if (self.songs.count() or self._slot in self.spec["stations"] or self._logo_path
                 or self.mode.currentData() == "add"
@@ -220,6 +230,21 @@ class RadioPage(QWidget):
         self._load()
         self.message.setText("This slot will use its original music, name and logo after the next build. "
                              "To restore every station immediately, disable Custom radio on the Mods page.")
+
+    def _level(self, checked):
+        if self._save():
+            self._stale_notice()
+        else:
+            self.level.blockSignals(True)
+            self.level.setChecked(not checked)
+            self.level.blockSignals(False)
+
+    def _stale_notice(self):
+        # Stations built before leveling (#662), or with the other setting, need one rebuild.
+        if radio.stale(self.cfg):
+            self.message.setText("Build stations again to " + (
+                "level your songs to the game's loudness." if self.spec["level"]
+                else "keep your songs at their original level."))
 
     def _ffmpeg(self):
         path, _ = QFileDialog.getOpenFileName(self, "Locate FFmpeg executable", str(Path.home()))

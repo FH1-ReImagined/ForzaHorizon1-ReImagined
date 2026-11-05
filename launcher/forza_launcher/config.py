@@ -27,7 +27,7 @@ def _default():
         "mods": {"order": [], "disabled": []},
         # Texture packs (#384, texture_packs.py): the same for the folders in <data>/textures.
         "texture_packs": {"order": [], "disabled": []},
-        "custom_radio": {"version": 1, "ffmpeg": "", "stations": {}},
+        "custom_radio": {"version": 1, "ffmpeg": "", "level": True, "stations": {}},
         "check_updates": True,    # one background check per packaged launcher session
         "game_package": "",       # the Games on Demand package (file)
         "tu_package": "",         # the player's title update package (TU4)
