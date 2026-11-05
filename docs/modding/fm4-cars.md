@@ -54,7 +54,8 @@ Anything else is named instead of converted: another game's disc or Games on Dem
 title id), a content package (DLC, title update, save and so on, with its title), FM4's demo or
 a title update chosen as a disc, a lone XEX, Disc 2 chosen as Disc 1 and the other way round, a
 Games on Demand package without its `.data` folder (or the other way round) or with parts
-missing, a truncated image, a damaged or unsafe archive, an archive bigger than the free space,
+missing, a truncated image, a damaged or unsafe archive (links, devices or paths leading out of
+its folder), an archive bigger than the free space,
 and an archive with no program here to unpack it. A file named like `4D5309C900003061` is an
 Xbox 360 content package of that title (here Forza Horizon's), and renaming one to `.iso` does
 not make it a disc image (#681).

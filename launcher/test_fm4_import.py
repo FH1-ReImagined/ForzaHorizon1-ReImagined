@@ -587,6 +587,43 @@ class Fm4FormTests(unittest.TestCase):
         (self.t / "split.7z.001").unlink()
         self.assertIn("its first part (split.7z.001) is not next to it", self.refused(self.t / "split.7z.002"))
 
+    def test_links_an_extractor_makes_are_refused(self):
+        if not fm4cars._tool_paths("tar") or sys.platform == "win32":
+            self.skipTest("no 7-Zip or bsdtar here (on Windows they write links as plain files)")
+        import io
+        import tarfile
+        for kind, extra in (("link", dict(type=tarfile.SYMTYPE, linkname="/etc/hostname")),
+                            ("hard", dict(type=tarfile.LNKTYPE, linkname="fm4.iso"))):
+            tar = self.t / f"{kind}.tar"
+            with tarfile.open(tar, "w") as t:
+                data = iso(self.t / "a.iso", DISC1).read_bytes()
+                info = tarfile.TarInfo("fm4.iso")
+                info.size = len(data)
+                t.addfile(info, io.BytesIO(data))
+                t.addfile(self._tarinfo("evil", extra))
+            out = self.t / f"out-{kind}"
+            with self.assertRaises(fm4cars.Fm4Error) as e:  # the tool path, as for .7z and .rar
+                fm4cars.unpack_archive(tar, "tar", True, out, lambda *a: None, lambda: False)
+            self.assertIn(f"{kind}.tar holds an unsafe entry (", str(e.exception))
+            self.assertFalse(out.exists())
+        # nothing but plain files and folders passes
+        (self.t / "ok").mkdir()
+        (self.t / "ok/a").write_bytes(b"x")
+        self.assertIsNone(fm4cars.unsafe_entry(self.t / "ok"))
+        try:
+            os.symlink(self.t / "a.iso", self.t / "ok/l")
+        except OSError:
+            return
+        self.assertEqual(fm4cars.unsafe_entry(self.t / "ok"), ("l", "a link"))
+
+    @staticmethod
+    def _tarinfo(name, extra):
+        import tarfile
+        info = tarfile.TarInfo(name)
+        for k, v in extra.items():
+            setattr(info, k, v)
+        return info
+
     def test_an_archive_without_a_program_to_unpack_it(self):
         (self.t / "fm4.rar").write_bytes(b"Rar!\x1a\x07\x01\x00" + b"\0" * 64)
         with patch.object(fm4cars, "_tool_paths", lambda kind: []):

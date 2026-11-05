@@ -169,7 +169,8 @@ ARCHIVE_MAGIC = ((b"PK\x03\x04", "zip"), (b"PK\x05\x06", "zip"), (b"PK\x07\x08",
 ARCHIVE_NAMES = {"zip": "zip", "7z": "7z", "rar": "RAR", "tar": "tar"}
 ARCHIVE_TOOLS = {"7z": ("7zz", "7z", "7za", "7zr", "bsdtar"),
                  "rar": ("7zz", "7z", "unrar", "unar", "bsdtar"),
-                 "zip": ("7zz", "7z", "7za", "bsdtar", "unar")}
+                 "zip": ("7zz", "7z", "7za", "bsdtar", "unar"),
+                 "tar": ("7zz", "7z", "7za", "bsdtar")}
 
 
 def _first_volume(p: Path):
@@ -297,11 +298,43 @@ def _tool_command(exe, p: Path, out: Path):
     stem = Path(exe).name.lower().removesuffix(".exe")
     if stem in ("7zz", "7z", "7za", "7zr"):
         return [exe, "x", "-y", "-bso0", "-bsp1", f"-o{out}", str(p)]
-    if stem == "unrar":
-        return [exe, "x", "-y", "-o+", "-idq", str(p), str(out) + "/"]
+    if stem == "unrar":  # -ol-: links are not made (unsafe_entry refuses them anyway)
+        return [exe, "x", "-y", "-o+", "-idq", "-ol-", str(p), str(out) + "/"]
     if stem == "unar":
         return [exe, "-q", "-f", "-o", str(out), str(p)]
-    return [exe, "-x", "-f", str(p), "-C", str(out)]  # bsdtar, Windows' tar.exe
+    # bsdtar, Windows' tar.exe: refuses absolute and .. paths by default (no -P)
+    return [exe, "-x", "--no-same-owner", "--no-same-permissions", "-f", str(p), "-C", str(out)]
+
+
+def unsafe_entry(out: Path):
+    """(path, why) of the first thing an extractor made that is not a plain file or folder
+    inside out (a link, a hard link, a device or pipe, or a path leading outside), or None.
+    The extractors are trusted to refuse absolute and .. names; this checks what they did."""
+    import os
+    import stat
+    root = os.path.realpath(out)
+    for folder, dirs, files in os.walk(out, followlinks=False):
+        for name in dirs + files:
+            path = os.path.join(folder, name)
+            rel = os.path.relpath(path, out)
+            try:
+                st = os.lstat(path)
+            except OSError as e:
+                return rel, str(e)
+            if stat.S_ISLNK(st.st_mode) or getattr(st, "st_reparse_tag", 0):
+                return rel, "a link"
+            if not (stat.S_ISDIR(st.st_mode) or stat.S_ISREG(st.st_mode)):
+                return rel, "a device or pipe"
+            if stat.S_ISREG(st.st_mode) and st.st_nlink > 1:
+                return rel, "a hard link"
+            real = os.path.realpath(path)
+            try:
+                inside = os.path.normcase(os.path.commonpath((root, real))) == os.path.normcase(root)
+            except ValueError:
+                inside = False
+            if not inside:
+                return rel, "outside the folder it was unpacked to"
+    return None
 
 
 def _tool_size(exe, p: Path):
@@ -396,6 +429,11 @@ def unpack_archive(p: Path, kind, split, out: Path, progress, cancelled):
     for exe in tools:
         err = _run_tool(exe, p, out, progress, cancelled)
         if err is None:
+            bad = unsafe_entry(out)
+            if bad:
+                shutil.rmtree(out, ignore_errors=True)
+                raise Fm4Error(f"{p.name} holds an unsafe entry ({bad[0]}: {bad[1]}), which the import "
+                               "does not unpack. Extract it yourself and choose what it holds.")
             return out
         errors.append(f"{Path(exe).name}: {err}")
         shutil.rmtree(out, ignore_errors=True)
