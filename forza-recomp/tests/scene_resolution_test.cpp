@@ -86,6 +86,25 @@ int main() {
   CHECK(!r::ScaleQuadRect(other, 256, 160, {960, 540}));
   CHECK(other.right == 1280);
 
+  // The sun's shadow mask (#682): its 1280x720 viewport and screen size are the scene's.
+  r::Viewport mask{0, 0, 1280, 720};
+  CHECK(r::ScaleMaskViewport(mask, {960, 540}));
+  CHECK(mask.x == 0 && mask.y == 0 && mask.width == 960 && mask.height == 540);
+  r::Viewport cascade{0, 0, 1024, 1024};  // a shadow map, a mirror, a corner: unchanged
+  CHECK(!r::ScaleMaskViewport(cascade, {960, 540}));
+  CHECK(cascade.width == 1024 && cascade.height == 1024);
+  r::Viewport offset{0, 360, 1280, 720};
+  CHECK(!r::ScaleMaskViewport(offset, {960, 540}));
+  r::Viewport native{0, 0, 1280, 720};
+  CHECK(!r::ScaleMaskViewport(native, {1280, 720}));
+  CHECK(native.width == 1280);
+  r::Size taps{1280, 720};
+  CHECK(r::ScaleMaskScreenSize(taps, {960, 540}));
+  CHECK(taps.width == 960 && taps.height == 540);
+  r::Size half{640, 360};
+  CHECK(!r::ScaleMaskScreenSize(half, {960, 540}));
+  CHECK(half.width == 640);
+
   std::puts("scene resolution: all checks passed");
   return 0;
 }
