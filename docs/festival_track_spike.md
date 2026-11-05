@@ -65,10 +65,15 @@ surface map.
   spots and launched the car; upright ground normals fixed it (bank no longer felt).
 - A triangle's last word 0x00FFFFFF made walls throw the car; FM4's 0 is kept.
 - Zone pools are sized 3 x (largest zone + 128) + dynamic instances; hex zones need more.
+- Meshes placed by their model (road, terrain, kerbs, buildings: placement at 0, 0, 0) hold
+  their vertices with z negated, and their placement's rotation (1, 1, -1) turns them round;
+  FH1 applies it, as for Colorado's. The converter zones them by the rotated centre: zoned by
+  the stored one, most of the road near the camera was never loaded.
+- FM4's `clr_0` shader draws nothing under FH1, so it can't be used as a flat-colour test.
 
 ## Open
 
-- (c) The road, terrain, kerbs and shoulders draw dark or not at all: FM4's materials need
-  FH1's own shaders (the models' baked GPU packets and texture slots rewritten).
+- (c) The road, terrain and buildings now draw with FM4's own shaders; how close they look to
+  FM4 (lighting, the projected lightmap) is not checked yet.
 - The streaming block pool still needs `FORZA_FM4_STREAM_POOL`.
 - AI, the airport entry, ribbons 01 and 02, other circuits.

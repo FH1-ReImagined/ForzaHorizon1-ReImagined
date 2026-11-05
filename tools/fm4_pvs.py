@@ -291,6 +291,10 @@ def write_fh1(P):
 
 # ---- FM4 to FH1 ----
 
+def half(v):
+    return struct.unpack(">e", struct.pack(">H", v))[0]
+
+
 def placement_of(inst):
     return {"lod": inst["lod"], "pos": inst["pos"], "rot": inst["rot"], "v": inst["v16"],
             "extra": None}
@@ -342,6 +346,14 @@ def shader_of(name):
 PROJECTED_LIGHTMAP = os.environ.get("FM4_PVS_PROJLM", "0") == "1"
 
 
+# FM4_PVS_EXTENT=n: every model's extent n m in each axis (a culling test).
+EXTENT = os.environ.get("FM4_PVS_EXTENT")
+
+
+def extent_of(m):
+    return [float(EXTENT)] * 3 if EXTENT else m["extent"][:3]
+
+
 def fh1_texture_of(t):
     """FM4 packs many textures into one file (an atlas: the record's file index and UV
     rectangle); FH1's records have flag 0x100 and never FM4's 0x8. FH1 takes the first
@@ -364,7 +376,7 @@ def convert(F, files):
          "instances": [fh1_instance_of(i) for i in insts],
          "models": [{"textures": m["textures"], "shaders": m["shaders"],
                      "matrix": [m["matrix"][r * 4 + c] for r in range(4) for c in range(3)],
-                     "extent": m["extent"][:3]} for m in F["models"]],
+                     "extent": extent_of(m)} for m in F["models"]],
          # FM4's always-drawn instances and the two model lists are its sky domes (one per
          # time of day); FH1's loader waits forever on them there. The first dome goes into
          # the zones instead.
@@ -377,12 +389,20 @@ def convert(F, files):
     # Every instance of FM4's cells, placed in FH1's hex zones by where it is: its own
     # position, or for a mesh placed by its model (FM4's instances at 0,0,0) the model's.
     used = sorted({i for c in F["cells"] for i in c["instances"]})
+    # A mesh placed by its model (the road, the terrain) has its vertices and its model's
+    # matrix in the mirror of the world (z negated), and its placement turns it round
+    # (FM4's rotation 1, 1, -1, which FH1 applies too). Its zones are those of where it is
+    # drawn: the model's centre through that rotation. Zoned by the centre as stored, the
+    # road near the camera stayed in the zones of its mirror and was never loaded.
     def where(i):
         pos = insts[i]["pos"]
         if any(pos):
             return pos[0], pos[2]
         m = F["models"][insts[i]["model"]]["matrix"]
-        return m[12], m[14]
+        rot = [half(v) for v in insts[i]["rot"]]
+        c = m[12:15]
+        return (sum(c[k] * rot[3 * k] for k in range(3)),
+                sum(c[k] * rot[3 * k + 2] for k in range(3)))
     spots = {i: where(i) for i in used}
     grid = HexGrid([spots[i] for i in used], HEX_RADIUS)
     # An instance goes into every zone its model's extent reaches (FH1 counts the zones that
