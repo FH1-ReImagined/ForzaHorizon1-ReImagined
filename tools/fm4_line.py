@@ -119,7 +119,9 @@ def main(argv):
     cams = sorted(tuple(map(float, m.groups())) for m in re.finditer(
         r'<Cam [^>]*StartCut="([\d.]+)".*?<Key Time="[\d.]+" PosX="([-\d.]+)" '
         r'PosY="([-\d.]+)" PosZ="([-\d.]+)"', xml, re.S))
-    cams = [c for c in cams if c[2] > 100]  # in-car cameras have local positions
+    # In-car cameras have local positions (within metres of 0, 0); the trackside ones are
+    # placed in the world. (A height test, over 100 m, held for Suzuka at 600 m only.)
+    cams = [c for c in cams if math.hypot(c[1], c[3]) > 20]
     anchors = []
     for _, x, y, z in cams:
         k = min((i for i in range(len(cen)) if graph.cost[i] == 1.0),

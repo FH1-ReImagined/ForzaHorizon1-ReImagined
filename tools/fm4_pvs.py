@@ -520,6 +520,24 @@ GROUND_COPIES = {}  # new file in the track's bin folder: (the file it is a copy
 STREAM_MARGIN = float(os.environ.get("FM4_PVS_STREAM_MARGIN", "1.25"))
 
 
+def atlas_mask_shaders(F):
+    """The blend shaders (upper-case names) most of whose models have a texture record from
+    an FM4 atlas (flag 0x8) that is not a lightmap (0x4): fm4_shaders.ATLAS_MASK_SHADERS. The
+    patch is the shader's, shared by every model drawn with it: on a shader most of whose
+    models have a plain mask it would take the blend from more models than it gives back
+    (Suzuka: 1 of 66 RDEDG, 9 of 34 SHLDR_BLND_SKIDSPEC; Laguna Seca: 58 of 104
+    ROAD_BLND_TRILIN_2, 58 of 98 RDLINE)."""
+    count = {}
+    for M in F["models"]:
+        names = {F["shaders"][s].split("\\")[-1].upper() for s in M["shaders"]}
+        atlas = any(F["textures"][t & 0xFFFFFF][6] & 0xC == 0x8 for t in M["textures"])
+        for n in names:
+            if "BLND" in n:
+                c = count.setdefault(n, [0, 0])
+                c[atlas] += 1
+    return {n for n, (plain, atlas) in count.items() if atlas > plain}
+
+
 def stream_blocks(F, cells, grid, bin_dir):
     """Blocks the zones of one ribbon need at most (see STREAM_MARGIN), without the margin."""
     size = {}
@@ -1063,6 +1081,11 @@ def convert_mod(mod, fh1_disc, loose):
     # FM4's track shaders with the inputs FH1 does not give them made neutral
     # (tools/fm4_shaders.py; FM4_PVS_SHADER_PATCHES=0 leaves them as they are).
     if os.environ.get("FM4_PVS_SHADER_PATCHES", "1") == "1":
+        fm4_shaders.ATLAS_MASK_SHADERS.clear()
+        for c in converted:
+            fm4_shaders.ATLAS_MASK_SHADERS.update(atlas_mask_shaders(c[2]))
+        if fm4_shaders.ATLAS_MASK_SHADERS:
+            print(f"{track}: blend masks from an atlas in {sorted(fm4_shaders.ATLAS_MASK_SHADERS)}")
         members = [(p, fm4_shaders.patch_fxobj(p, d)[0] if p.lower().endswith(".fxobj") else d)
                    for p, d in members]
     # The ground's blend shader copies: the mask read as the one layer (see GROUND_LAYER).

@@ -213,6 +213,38 @@ surface map.
 - Shots for comparisons: a shared shader cache for one's own runs and 25 s after loading;
   with a fresh cache, draws are skipped while pipelines build and pieces go missing.
 
+## A second circuit: Laguna Seca
+
+To check the tools are not Suzuka's alone: Laguna Seca (one layout, 3.6 km, 0 to 53 m above
+sea level, the Corkscrew) went through the same steps (in trk-spike: `reconvert_track.sh
+LagunaSeca`, `spots_track.sh LagunaSeca TAG`, `pstrace_track.sh`, and the mod from
+`fm4_track_mod.py <disc1>/Media/tracks/LagunaSeca <tu4 media.zip> mods/FM4LagunaSecaFinal
+--fm4-db <disc1>/Media/db/gamedb.slt --free-roam 317 --fh1-disc <FH1 disc> --loose loose`).
+The mod and the conversion ran unchanged (5238 instances, 224 zones, the largest 710
+instances; 33446 streaming blocks asked for). Suzuka-specific assumptions found and removed:
+
+- `fm4_line.py` told the trackside cameras from the in-car ones by height (over 100 m): true at
+  Suzuka (600 m), none left at Laguna Seca. In-car cameras are the ones within 20 m of 0, 0
+  now. Line: 916 points, 3574 m; Suzuka's line comes out the same as before.
+- The grid spawn was found by hand. `tools/fm4_spawn.py` reads FM4's AI line
+  (media/AI/Tracks/<track>_NN.geo, MLPData arrays: in FH1's terms a waypoint is (X, Z + 1, Y))
+  and gives the grid (15 m behind the start line) and test spots round the lap; it
+  reproduces Suzuka's hand-found grid (605.6, 598.6, -134.0, 0.612, -0.791).
+- Blend masks from an FM4 atlas: FM4 packs small textures into one (a record with flag 0x8 and
+  a rectangle; Laguna's road masks are 1/128 of a 1024 texture, 8 x 8 texels). FH1's records
+  have no such flag, so FH1 binds the whole texture, and the road's pixel shader, which samples
+  its mask with no offset and scale of its own, read another part of it: the road drew black
+  at 6 of the 7 spots shot (the trace showed the road's own constants right and nothing stale:
+  layer A x c0 = 0 where the mask is 0). Suzuka's road masks are plain (its atlases are the
+  lightmaps, flag 0xC, which do get their rectangle as Light_Map_uvOS). Now a blend shader most
+  of whose models take an atlas mask reads the mask as 1, its asphalt layer
+  (`fm4_shaders.ATLAS_MASK_SHADERS`, from `fm4_pvs.atlas_mask_shaders`): at Laguna Seca
+  ROAD_BLND_TRILIN_2 and RDLINE_BLND_SPEC_OPAC_3, at Suzuka none. The real fix would cut the
+  tiles out into textures of their own, or point FH1's fetch at the tile.
+- Still one converted track at a time: the converter writes FH1's zipmanifest.xml with one
+  line for its track, so the last converted circuit is the one mounted
+  (`reconvert_track.sh` copies it into the game folder).
+
 ## Towards players: a plan
 
 What a player would need, beyond the spike (none of this is built yet):

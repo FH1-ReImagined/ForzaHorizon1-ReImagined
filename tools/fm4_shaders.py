@@ -263,6 +263,25 @@ def material_tints(data, start, ins, alus):
     return done
 
 
+def atlas_mask_one(data):
+    """The file with the Blend_ValueSampler fetch read as 1 in each pixel shader that has no
+    Blend_Value_uvOS (see ATLAS_MASK_SHADERS)."""
+    data = bytearray(data)
+    for start, size, samplers, floats, _ in blobs(bytes(data)):
+        if "Blend_ValueSampler" not in samplers or "Blend_Value_uvOS" in floats:
+            continue
+        reg = samplers["Blend_ValueSampler"]
+        for s, kind, w in instructions(bytes(data), start, size):
+            if kind == "fetch" and (w[0] & 0x1F) == 1 and ((w[0] >> 20) & 0x1F) == reg:
+                swz = w[1] & 0xFFF
+                out = 0
+                for c in range(4):
+                    sel = (swz >> (3 * c)) & 7
+                    out |= (7 if sel == 7 else 5) << (3 * c)
+                struct.pack_into(">3I", data, start + 12 * s, w[0], (w[1] & ~0xFFF) | out, w[2])
+    return bytes(data)
+
+
 def one_layer(data, second):
     """The shader file with every pixel shader's Blend_ValueSampler fetch read as 0 (the first
     blend layer) or 1 (second): a terrain blend drawn with one layer (the ground, fm4_pvs.py)."""
@@ -282,11 +301,26 @@ def one_layer(data, second):
     return bytes(data)
 
 
+# Blend shaders (upper-case file names, no .fxobj) whose models take their blend mask from an
+# FM4 atlas (a texture record with flag 0x8: a rectangle of a bigger texture), set by
+# tools/fm4_pvs.py before it patches the track's shaders. FH1 has no atlas records: it binds
+# the whole texture, and a pixel shader that samples the mask without a UV offset and scale of
+# its own (no Blend_Value_uvOS) reads another part of it, mostly 0. Laguna Seca's road
+# (ROAD_BLND_TRILIN_2) drew black that way. Those pixel shaders read the mask as 1 (the
+# second blend layer, the asphalt) instead: no blend patches on that road, no black. The
+# atlas tiles are 1/128 of their texture (8 x 8 texels of a 1024 one); FM4 must point the
+# fetch at the tile itself, which FH1's records cannot say.
+ATLAS_MASK_SHADERS = set()
+
+
 def patch_fxobj(name, data):
     """The patched file and a list of what was done."""
     data = bytearray(data)
     done = []
     base = name.split("/")[-1].split("\\")[-1].upper()
+    if base.endswith(".FXOBJ") and base[:-6] in ATLAS_MASK_SHADERS:
+        data = bytearray(atlas_mask_one(bytes(data)))
+        done.append("atlas blend mask -> 1")
     for start, size, samplers, floats, literals in blobs(bytes(data)):
         shadow = {r for n, r in samplers.items() if n in SHADOW_SAMPLERS}
         ins = instructions(bytes(data), start, size)
