@@ -44,7 +44,8 @@ def _default():
                      "data_root_asked": False},  # the player answered the offer to leave Documents\\forza
         "settings": {**schema.defaults(), **FIRST_RUN},
         # The graphics card the player has (#52): '' until detected; the player can change it.
-        "gpu": {"vendor": "", "detected": "", "name": "", "checked": False},
+        # vulkan: its Vulkan devices and their driver's API version (gpu.vulkan_devices, #672); None: unknown.
+        "gpu": {"vendor": "", "detected": "", "name": "", "checked": False, "vulkan": None},
         # The PC's CPU, RAM and card (#206): the detected specs plus what the player already answered.
         "specs": {"checked": False, "fingerprint": "", "dismissed": "", "values": None},
         # Battery saver (#140): the settings it forced at the last start (power.py); None: none.
@@ -169,6 +170,45 @@ class Config:
         if found.vendor and not self.loaded:
             gpu.apply_preset(self.settings, found.vendor)
         return found.vendor
+
+    # --- the Vulkan driver (#672) ---
+    def detect_vulkan(self, devices=None) -> bool:
+        """Ask the Vulkan driver which API version it has (each launcher start: a driver update changes it).
+        A new launcher.json on Windows whose Intel iGPU has a driver below Vulkan 1.3 gets Direct3D 12;
+        an existing one keeps its Graphics API (Setup and Play warn and offer "Use Direct3D 12").
+        Returns True when what is known changed."""
+        found = gpu.vulkan_devices() if devices is None else devices
+        if not found:
+            return False   # unknown: keep what was known
+        first = self.gpu.get("vulkan") is None
+        changed = self.gpu.get("vulkan") != found
+        self.gpu["vulkan"] = found
+        if first and not self.loaded and gpu.IS_WINDOWS and self.old_intel_vulkan() is not None:
+            self.settings["gpu_backend"] = "d3d12"
+        return changed
+
+    def old_intel_vulkan(self):
+        """The game's Vulkan device when it is an Intel iGPU on a driver below Vulkan 1.3, else None."""
+        devices = self.gpu.get("vulkan")
+        if not isinstance(devices, list):
+            return None
+        try:
+            index = int(self.settings.get("vulkan_device", -1))
+        except (TypeError, ValueError):
+            index = -1
+        return gpu.old_intel_vulkan(devices, self.gpu_vendor(), index)
+
+    def intel_vulkan_warning(self) -> str:
+        """The warning for Setup and Play: '' when the driver is fine or unknown, or when the game already
+        uses Direct3D 12 (Windows)."""
+        device = self.old_intel_vulkan()
+        if device is None or (gpu.IS_WINDOWS and self.settings.get("gpu_backend", "vulkan") == "d3d12"):
+            return ""
+        return gpu.old_intel_vulkan_text(device, gpu.IS_WINDOWS)
+
+    def intel_vulkan_fix(self) -> dict:
+        """What "Use Direct3D 12" sets ({} where it does not apply: Linux, or nothing to warn about)."""
+        return {"gpu_backend": "d3d12"} if gpu.IS_WINDOWS and self.intel_vulkan_warning() else {}
 
     # --- PC specs (#206) ---
     def pc_specs(self) -> specs.Specs:

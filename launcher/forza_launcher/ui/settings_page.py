@@ -737,8 +737,13 @@ class SettingsPage(QWidget):
             # The 3x allocation belongs to the native UI; these modes render
             # the scene at 2x, so the ordinary 3x-scene warning does not apply.
             warning_settings["resolution_scale"] = 2
+        old_intel = self.cfg.old_intel_vulkan() is not None   # Direct3D 12 is the advice there (#672)
         for key, text, issue in gpu.warnings(vendor, warning_settings):
-            found.setdefault(key, []).append(text + gpu.issue_text(issue))
+            if not (old_intel and key == "gpu_backend"):
+                found.setdefault(key, []).append(text + gpu.issue_text(issue))
+        driver = self.cfg.intel_vulkan_warning()
+        if driver:
+            found.setdefault("gpu_backend", []).append(driver)
         vendor_keys = set(found)    # the vendor's own warning on a setting says it already
         for w in specs.warnings(self.cfg.pc_specs(), warning_settings):
             if w.key and w.key not in vendor_keys:

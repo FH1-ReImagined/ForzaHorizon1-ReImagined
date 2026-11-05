@@ -930,12 +930,21 @@ Steam Deck, or "Other / not sure". The launcher detects the card once (first sta
 * **Known problems** are never forbidden: the option keeps working, with an orange line under it giving the reason
   and the issue number while it holds the problem value, and the choice is marked ("Direct3D 12 (flickers on
   NVIDIA, #46)"). The explicit choice of the player always wins.
+* **Old Intel graphics drivers (#672):** an Intel integrated GPU whose driver reports a Vulkan API below 1.3 can't run
+  the Vulkan renderer (an HD 520 on Vulkan 1.2.203 closed before the title screen, #669; a UHD on 1.2.131 ran at about
+  1 fps, #640). At each start the launcher asks the Vulkan driver in a process of its own
+  (`forza-launcher --vulkan-devices`, `launcher/forza_launcher/vulkan_probe.py`) and, when the GPU the game would use
+  is such an iGPU, Setup and Play say so: update the Intel driver from intel.com, or use Direct3D 12 ("Use Direct3D
+  12" switches Settings > Display > Graphics API). A new launcher.json on Windows starts on Direct3D 12 there; an
+  existing one is never switched by itself. On Linux, which has no Direct3D 12, the warning asks to update Mesa. No
+  warning when the version is unknown, and never from the Vulkan version on AMD (Vega iGPUs report 1.3.2xx on
+  current drivers, #268). Tests: `launcher/test_intel_vulkan.py`.
 
 | Card | Preset | Marked as a known problem |
 |---|---|---|
 | NVIDIA | Vulkan, render scale 1, AMD FSR 1, 60 fps, shader cache and background shader compilation on (scale 2 is the most you should need) | Direct3D 12 (Windows): flicker, green reflections on glass and paint (#46). Render scale 3 and above: flicker and coloured artifacts across the map (#47). Background compilation or the shader cache off: Vulkan stutter (#49, open: warm-cache stutter unmeasured). Traffic car glow in the distance (#48): no setting avoids it |
 | AMD (Linux and Windows) | Vulkan, render scale 1, AMD FSR 1, 60 fps | none; render scale 3 and 4 are clean on Radeon (Vulkan/RADV, and Direct3D 12 under vkd3d-proton at 3) |
-| Intel | Vulkan, render scale 1, AMD FSR 1, 30 fps | nothing reported yet; Direct3D 12 (a different render target path on Intel) and render scale 2 and up are marked as untested / slow |
+| Intel | Vulkan, render scale 1, AMD FSR 1, 30 fps (Direct3D 12 on a new Windows install whose iGPU driver is below Vulkan 1.3, above) | a driver below Vulkan 1.3 (#669, #640); Direct3D 12 (a different render target path on Intel) and render scale 2 and up are marked as untested / slow |
 | Steam Deck | Vulkan, render scale 1, AMD FSR 1, 30 fps, Scene anti-aliasing Off, Console shadow and texture detail, 3D scene at 720p, Letterbox on, shader cache and background shader compilation on; Battery saver (above) stays off, as on every PC ([steam_deck.md](steam_deck.md)) | render scale above 1 and a frame rate above 40: the Deck ran 17 to 25 fps (#45); 40 suits its screen at 40 Hz (LCD) or 80 Hz (OLED) |
 
 Tests: `python3 -m unittest launcher/test_gpu.py` (detection from a fake sysfs and PowerShell / wmic output, presets
