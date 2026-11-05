@@ -45,6 +45,13 @@ int main() {
   Check(r.Set(Owner::kOnlinePhoto, 0) == depth, "back in the camera: focus's range");
   Check(r.Set(Owner::kPhotoFocus, 0) == 0, "everyone released: none");
 
+  // A paint job drawn at 2x (#680) holds all of physical memory while it is drawn; the focus's
+  // range comes back when it is done.
+  Check(r.Set(Owner::kPhotoFocus, depth) == depth, "focus");
+  Check(r.Set(Owner::kLiveryBake, all) == all, "a paint job drawn at 2x: all of physical memory");
+  Check(r.Set(Owner::kLiveryBake, 0) == depth, "paint job done: focus's range stays");
+  Check(r.Set(Owner::kPhotoFocus, 0) == 0, "released: none");
+
   if (failures) return EXIT_FAILURE;
   std::printf("readback_wait: all checks passed\n");
   return EXIT_SUCCESS;

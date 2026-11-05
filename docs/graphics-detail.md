@@ -13,7 +13,7 @@ cars (High 2x, Ultra 4x the game's distances and counts); it applies live and is
 in-game Graphics screen, see [Car detail](#car-detail-361).
 
 **Paint job detail** (`livery_bake_scale`) draws each car's vinyls and decals for driving at 2x
-the game's 1024x1024 (photos keep the game's size); see [Paint job detail](#paint-job-detail-659).
+the game's 1024x1024 (photos keep the game's size for their final textures); see [Paint job detail](#paint-job-detail-659).
 
 A third option, **Shadow softness** (`world_shadow_filter`, #380), changes how the shadows
 are filtered rather than which objects cast them; it applies live and is also in the in-game
@@ -277,6 +277,33 @@ for the photo (mode 7), into two uncompressed 8:8:8:8 1024x1024 final textures i
 DXT5 pair; at 2048x2048 those did not fit next to the car's own textures (the texture was not
 made and Take Photo crashed), so photos keep the game's 1024x1024, without DXT5 compression.
 
+Photo mode's copy of the paint job (+236 is 2; a car's own is 1) draws no sides. Once a car's
+paint job is drawn, the game saves its layout, compressed, as the layout's size squared x 4
+bytes (`sub_82D4E7D0`, queued by the setup's steps in `sub_82D5C5F8`), and the copy loads that
+save into its own layout (`sub_82D4E9F0`), as many bytes as its own layout holds. At 2x the save
+is 2048x2048 (16 MB raw) and a 1024x1024 copy read its first 4 MB: a quarter of the design, cut
+into bands and moved, so in photo mode decals were gone or in the wrong place and vinyls had
+other diagonals and hard cuts (#680). The hook keeps each save's size with its address. The copy
+keeps the game's 1024x1024 layout; when its save was 2048x2048, the hook reads the whole save in
+four 4 MB parts (`sub_82D3E878`, through the layout's own memory) and halves it into the layout,
+each texel the average of 2x2 through the Xenos tiling. The photo's final textures are
+1024x1024 either way. A first version made the copy's layout 2048x2048 instead: photo mode's
+heap has no room for that, and from the heap of the render copies it was not made once a
+damaged car's copies were there (the game stopped entering photo mode, 1 in 6 on Windows and on
+the first entry after a crash into a wall here).
+
+The CPU compresses the render copies (`LivRenderPristineN`/`DamageN`) from guest memory, which
+the GPU's resolves write. With `readback_resolve = some` (the default) a resolve is copied back
+only when its key is new; at 2x the damage copy's was not, so `LivDamageN` came out the same as
+`LivPristineN` (one texture, one fingerprint in a texture dump) and the car showed no scratches
+when driving (#680), while photo mode, which draws its own uncompressed damage copy, had them.
+With `readback_resolve = full` the 2048x2048 `LivDamageN` has the scratches. While a paint job is
+drawn at 2x, from its first render copy until 2 s after its last compression, the hook puts all
+of physical memory in `readback_resolve_wait_range` (`src/platform/readback_wait.h`, owner
+`kLiveryBake`), the way the online photo does at its shutter: those resolves wait for the GPU
+and are copied back. That is a car loading with a paint job at 2x, about a second; Console
+never asks for it.
+
 ### Memory
 
 | Texture (per car with a paint job) | Console | 2x |
@@ -304,11 +331,24 @@ decal's outlines are slightly crisper at 2x; at render scale 2 (2560x1440) the d
 clear: at Console the letters' edges show DXT5 blocks and texel steps, at 2x they are smooth
 and the black outlines thin and even. At 2x the Paint Shop's menus and decal editor show the
 car and its design as at Console, and the car after leaving it carries the design. Take Photo
-works at 2x in free roam and after the Paint Shop (photo mode's paint job at the game's size,
-as above), and a race (GoPro Millennia Masters, 7 CPU cars, test save) ran 35 s with no paint job made. No
+works at 2x in free roam and after the Paint Shop, and a race (GoPro Millennia Masters, 7 CPU cars, test save) ran 35 s with no paint job made. No
 errors in the logs. Not checked: online
 lobbies with many paint jobs, Windows, the frame time while a car loads, and the disc build
 (its functions come from `tools/tu_address_map.py`, it compiles, it was not run).
+
+Photo mode's copy (#680), same save: the layout the car saved and the one photo mode loaded,
+dumped from guest memory and untiled. At Console both are the same 4 MB, byte for byte. At 2x
+before the fix the save was 16 MB and the copy's layout a cut-up quarter of it (the rear decal
+in four bands at the bottom of the layout, the side decal missing); a 2048x2048 copy loaded all
+16 MB, byte for byte the save; the save halved as the hook does it differs from the Console layout
+by 0.013 on average per byte (0 to 255), so the design is where the Console one has it.
+
+Scratches (#680), same save, a texture dump of free roam: at Console `LivPristineN` and
+`LivDamageN` are two 1024x1024 DXT5 textures, the damage one with scratches over the body. At 2x
+before the fix the dump held a single 2048x2048 DXT5, the pristine one (the damage texture had
+the same picture); with `readback_resolve = full`, and after the fix with the default `some`, it
+holds both, the damage one with the same scratches as at Console (the same fingerprint in both
+runs).
 
 ### The decals themselves
 
