@@ -1132,9 +1132,10 @@ its registers, so a write between its check and the block is not missed. With `F
 limit while the command processor waits for a vblank. The other six D3D wait loops (their conditions can depend
 on other words) keep the 50 us sleeps; on Windows those now sleep on a high-resolution waitable timer instead of
 yielding on every poll, which kept the waiting thread on a core for the whole wait (#268: it is the race's render
-thread, most of each frame). None of this has run on Windows yet, so there it is off unless the setting
-`gpu_wait_blocking` is on (Advanced > GPU, "Sleep while waiting for the GPU (testing)"); it is on by default on Linux
-and macOS (`launcher/test_gpu_wait_blocking.py` checks both defaults). Off, the waits are the ones before it.
+thread, most of each frame). The setting `gpu_wait_blocking` (Advanced > GPU on Windows, "Sleep while waiting for
+the GPU") turns it on; it was off on Windows until it ran there and is on everywhere since #640 (measured on a
+4-core Windows laptop, [below](#a-4-core-laptop-with-a-gtx-1650-ti-and-8-gb-640-2026-11-04);
+`launcher/test_gpu_wait_blocking.py` checks the default). Off, the waits are the ones before it.
 `FORZA_GPU_WAIT=block|sleep|spin` overrides the setting (sleep: the old waits; spin: the game's loop).
 
 **Measured** (four cores, 3 runs each, B and C alternating; A = neither fix: the main-branch game, runtime and
@@ -3097,3 +3098,122 @@ Millennia Masters race and drive 2 minutes, note the time, quit. The `forza.log`
 memory:`) and a line a minute with the textures, render targets, GPU memory and resident memory (`GPU minute`).
 Then the same at render scale 2. Paging shows as `hard_faults_s` above a few hundred while driving, and as private
 bytes close to the commit limit.
+
+## A 4-core laptop with a GTX 1650 Ti and 8 GB (#640, 2026-11-04)
+
+**The PC.** Core i5-10300H (4 cores, 8 threads, 45 W), GeForce GTX 1650 Ti (4 GB, 50 W, driver 555.97) plus Intel UHD
+Graphics (Optimus, driver 26.20.100.7985 from 2020, Vulkan 1.2.131), 8 GB of RAM (7.8 GB visible, 2.3 GB page file
+that Windows grows), the internal 1920x1080 144 Hz screen, Windows 11 (build 26300), on mains power, Balanced plan.
+Windows and the apps a player has open (here a desktop app of about 1 GB) leave 4 GB of RAM free before the game
+starts.
+
+**Method.** The game of main f21286d built by the launcher (TU4) on that PC; the golden TU4 save in a fresh user
+folder for each run, offline, audio muted, the startup movies skipped; the launcher's settings for this PC (60 fps,
+AMD FSR 1, the 720p scene with the game's 4x MSAA, render scale 1, fullscreen, vsync), each run a fresh start from
+a scheduled task in the signed-in session. **Benchmark**: the built-in one (Recaro Rush, 15 s settling, 60 s
+measured; its fps, 1% low and p99). **Free roam**: from the spawn on County Route 203, full throttle for 150 s with a
+2.5 s brake and turn every 25 s (`FORZA_AUTOPRESS`), measured over the frames while the car moves
+(`FORZA_FRAMETIME_CSV`, 2-5 km a run). Process memory every 10 s (`tools/memory_snapshot.ps1`), thread CPU times
+every 15 s (the game log's thread ids name the command processor, main loop and render thread), `nvidia-smi` every
+5 s. Runs of a comparison alternate, 3 each, at the laptop's steady temperature; mean of the runs, the range in
+brackets where it matters.
+
+**What it does at the launcher's settings** (GTX 1650 Ti, before fixes 1 and 2; the driver pipeline store off, as
+in fix 1's runs: fix 3 has what it adds):
+
+| | Benchmark | Free roam |
+| --- | --- | --- |
+| fps, 1% low, p99 | 42.7 [38.7-46.6], 28.7, 33.2 ms | 54.9 [53.7-55.6], 30.7, 30.1 ms |
+| GPU (`nvidia-smi`), power | 74-92% busy, 49 W of 50 | 95-97%, 49 W |
+| Command processor | 77% of a thread, 17.9 ms CPU a frame, 4.2 us a draw, 4,000-4,500 draws | 70%, 14.6 ms, 4.4 us, 3,100-3,500 draws |
+| Render thread | 86-88% of a thread | 88-90% |
+| Main loop, the busiest other thread (an SDK one) | 30%, 42-49% | 42%, 39-40% |
+| Game process CPU | 3.4 threads (of 8) | 3.7 |
+| Working set, private bytes (commit) | 1.36-1.39 GB, 2.65-2.69 GB | 1.27-1.34 GB, 2.64-2.68 GB |
+| VRAM: dedicated, shared | 1.22-1.24 GB, 0.23 GB | 1.22-1.24 GB, 0.21-0.23 GB |
+| System: commit of its limit, RAM free (least) | 9.5 of 10.3 GB, 2.27-2.28 GB | 9.5 of 10.3 GB, 2.28-2.32 GB |
+
+The lowest settings the launcher has (3D scene 540p, Scene anti-aliasing Off, anisotropic filtering off, motion blur
+off, 60 fps), first start of those settings: benchmark 53.8 fps, 1% low 25.9 (the pipelines of the new settings were
+built in it), p99 29.5 ms.
+
+**Where the frame goes.**
+- **The GPU first.** The GTX 1650 Ti is 91-98% busy at its 50 W limit in free roam and most of the race, at the
+  720p scene: the game's 4x MSAA scene in three passes and the EDRAM emulation's render targets cost far more GPU
+  time than 720p suggests. Lighter scene settings are what helps (fix 2).
+- **Then the four cores.** On Windows the render thread's waits for the GPU yielded on every poll
+  (`gpu_wait_blocking` was off there, untested): `SwitchToThread` returns at once when no other thread waits for
+  that CPU, so the thread spun for its whole wait, 86-90% of a CPU, next to a command processor at 70-77%. With
+  eight threads on four cores that takes a core's share of execution and power from the command processor (fix 1).
+  Once the GPU has room (540p), the benchmark stops at 54-55 fps with the command processor at 12-14 ms CPU a frame
+  and 2-3 ms of game waits: that chain is #607's.
+- **Not RAM.** The game's working set is 1.3-1.4 GB with 2.2 GB of RAM free and few pages read back from the disk;
+  of the 2.7 GB of private bytes, 1.29 GB are write-combined or uncached (GPU-visible) mappings, the same with or
+  without the pipeline file below, and much of the rest is committed but never touched (Windows trims the working set to
+  0.75 GB late in a run without hard faults). The exception is the driver pipeline file (fix 3).
+- **Not VRAM.** 1.2-1.35 GB of the 4 GB at render scale 1, whatever the scene settings (540p adds render targets:
+  677 MB instead of 562 MB).
+
+**Fix 1: the render thread sleeps on Windows too** (`gpu_wait_blocking` on by default everywhere,
+`src/hooks/gpu_wait.cpp`; launchers that saved the old off turn it on once). Both arms with the driver pipeline
+store off (fix 3) so the starts are the same:
+
+| | Benchmark, off | Benchmark, on | Free roam, off | Free roam, on |
+| --- | --- | --- | --- | --- |
+| fps | 42.7 [38.7-46.6] | 46.8 [45.9-47.9] | 54.9 [53.7-55.6] | 54.7 [54.0-55.1] |
+| 1% low, p99 | 28.7, 33.2 ms | 30.3, 30.9 ms | 30.7, 30.1 ms | 29.1, 29.9 ms |
+| Render thread, command processor | 86%, 77% | 45%, 77% | 89%, 70% | 40%, 66% |
+| Command processor a frame, a draw | 17.9 ms, 4.18 us | 16.0 ms, 3.83 us | 14.6 ms, 4.42 us | 13.4 ms, 4.26 us |
+| Game process CPU, CPU clock (of 2.5 GHz) | 3.4 threads, 126-128% | 3.0 threads, 130% | 3.7, 122-125% | 3.05, 129-130% |
+
+The benchmark gains 10% and holds it from run to run; free roam, where the GPU is the limit, keeps its frame rate
+with 0.65 threads less CPU and a higher CPU clock. No freeze in the 24 runs with it on.
+
+**Fix 2: the 540p scene on entry cards** (`launcher/forza_launcher/specs.py`: a new launcher on integrated graphics,
+under 4 GB, or a GTX / RX 400-500-era card with 4 GB gets `scene_resolution = 540`; with existing settings it is a
+warning with "Use recommended" above 30 fps; not on a Steam Deck, whose CPU is its limit). Benchmark, render thread
+sleeping, 3 runs each, rotated:
+
+| Scene | fps | 1% low | p99 | Draws | Command processor a frame |
+| --- | --- | --- | --- | --- | --- |
+| 720p, 4x MSAA (the game's) | 46.8 [45.7-48.1] | 30.6 | 30.4 ms | 4,000-4,350 | 15.9 ms |
+| 720p, Scene anti-aliasing Off | 52.5 [51.8-53.3] | 35.0 | 26.7 ms | 3,200-3,600 | 12.2 ms |
+| 540p (one pass, 2x MSAA) | 54.3 [52.7-55.2] | 34.3 | 27.0 ms | 3,400-3,800 | 13.8 ms |
+| 540p, Off, anisotropic off, no motion blur | 54.9 [53.3-56.8] | 35.2 | 26.2 ms | 3,000-3,650 | 11.8 ms |
+
+540p alone gives 16%; the lowest settings add little to it (the CPU chain is next). 540p keeps 2x MSAA and the
+sharp HUD, so it is the one the launcher picks. In free roam (3 drives each, alternating; these drives got farther
+along the road than fix 1's, 4.0-4.5 km against 3.0-3.6 km, so the 720p arm is faster than there) it reaches the
+60 fps cap: 57.7 [56.6-58.3] -> 59.9 [59.7-60.0] fps, 1% low 33.4 -> 48.6, p99 27.0 -> 18.0 ms, the GPU 98% ->
+91-94% busy.
+
+**Fix 3: no driver pipeline file on NVIDIA** (the NVIDIA preset sets `vulkan_store_pipeline_cache = false`;
+NVIDIA launchers turn it off once). The SDK keeps each pipeline's driver data in
+`shaders/local/*.vkpc` and seeds that pipeline's creation with it at the next start. On this driver not one of 404
+to 949 stored pipelines was reused in any of the 9 starts that read the file (`0 pipelines created from stored
+driver data, N compiled (N stale entries rebuilt)`: the creation feedback reports a miss, so each is created
+twice). Each entry also grew from about 60 KB in the first session to about 2 MB once later sessions added
+pipelines (a new pipeline's data held much more than itself), so the file reached the 512 MB a save keeps after
+five sessions: 252 pipelines in 510 MB, all of it held in RAM while playing. Benchmark, 3 starts each, alternating, with that file:
+
+| | File kept (0.2.6) | Off |
+| --- | --- | --- |
+| Shader warm-up, start to the race loading | 17 s, 24 s | 3 s, 10 s |
+| Private bytes, working set (peak) | 3.29 GB, 1.96 GB | 2.72 GB, 1.42 GB |
+| RAM free (least), system commit | 1.69 GB, 10.1 of 10.3 GB | 2.20 GB, 9.5 of 10.3 GB |
+| fps, 1% low, p99 | 45.2, 28.8, 31.8 ms | 46.0, 28.8, 31.5 ms |
+
+One start after the file had dropped out of the file cache spent 78 s reading it and reached the race loading
+after 106 s. Without the file the driver's own shader cache does the work: no pipeline stalls over 50 ms in either
+arm. On RADV the entries are reused (10 KB each), so the setting stays on for AMD and Intel.
+
+**Intel UHD (the same laptop, `--gpu_vendor=intel`): not playable with its driver.** The first start reached the
+benchmark at 1.4 fps: 3,500 `Failed to submit Vulkan sparse binds`, then upload buffers that could not be allocated,
+private bytes up to 6.1 GB, the system commit at its limit (Windows grew the page file from 10.3 to 13.4 GB) and
+314 MB of RAM free. Two more starts never showed a frame (`FORZA_STALL: no frame for 59 s`). With
+`--vulkan_sparse_shared_memory=false` the device was lost after 20 s. The driver is from 2020 (Vulkan
+1.2.131); the game needs a current Intel driver there, and the launcher already
+sends this laptop to the GeForce (#89). Not measured: a current Intel driver.
+
+**For #607.** On this CPU the command processor costs 3.7-4.6 us a draw (12-18 ms a frame at 3,000-4,400 draws)
+and is 65-77% busy; with the GPU relieved it is the next limit at 54-55 fps in the benchmark.
