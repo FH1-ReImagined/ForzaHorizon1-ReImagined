@@ -123,6 +123,14 @@ surface map.
   blend surfaces drew flat purple, and black with 5 dropped as well. So the group order is not
   the whole story: the constants still do not reach the shaders. Next: the hook (upload each
   material's float block, the c360_N values, and FM4's V2LightmapColor defaults per draw).
+  With the swap on and fixup types 4 and 6 skipped (5 kept), two full 9-spot passes in a row
+  gave different colours at every spot (road grey at some spots in one run, purple, red, blue
+  or black in the other): the swap does not make FM4's constants reach the shaders reliably.
+  The road pieces also keep a populated group 0 of their own (ROAD_SZKA_063: types 9, 10, 3,
+  8, no constant block), so the swap leaves them alone; swapping two populated groups would
+  also need their data moved (after the groups: the command buffers, sum of the groups'
+  first sizes, header word 3; constant data, header word 4; fixup locations, the third
+  sizes).
 - FM4's `TrackSettings.xml` (version 59) lacks FH1's renderer settings (Brightness, Contrast,
   ExposureBias, LightHemiTop/Bottom, WorldClear, bloom, height fog); read as it is, the
   circuit drew far too dark. The converter writes Colorado's with FM4's sun gain, lightmap,
