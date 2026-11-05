@@ -313,11 +313,19 @@ lobbies with many paint jobs, Windows, the frame time while a car loads, and the
 ### The decals themselves
 
 Vinyl shapes (`media/Livery.zip`, `vinyls/*.carbin`, 880 files) are meshes and stay sharp at
-any size. Decals (`decals/*.carbin`, 490 files) are bitmaps: 483 of 512x512 and 7 of 512x256,
-DXT5 with mips, one per file. A decal stretched over most of a side (about 900 pixels of the
-2048x2048 layout for the Amsoil one above) has fewer texels than the layout at 2x, so it is the
-next limit. They load as ordinary textures, so a texture pack (`docs/texture_packs.md`) could
-replace them with larger ones; not tried yet.
+any size. Decals (`decals/*.carbin`, 490 files, 478 different pictures) are bitmaps: 256x256 (7
+of them 256x128) 8:8:8:8 with 9 mip levels, one per file. A decal stretched over most of a side
+(about 900 pixels of the 2048x2048 layout for the Amsoil one above) has a quarter of the layout's
+texels at 2x, so it is the next limit. They load as ordinary textures, so the launcher's **Make
+decal pack** (Texture packs page, [texture packs](texture_packs.md#make-decal-pack)) upscales them
+2x or 4x from the game files into a texture pack.
+
+Checked (same save, Title Update 4, render scale 2, Paint job detail 2x, the car's side at the
+festival spawn): with the decal pack the Amsoil decal's letters and outlines are crisp and the
+registered mark readable, where the game's decal shows soft, stepped edges; 4x is a little
+crisper than 2x there. On the rear bumper, where the decal is small, the pack changes little. The pack must be in memory when the car loads (the paint job is drawn once
+then), which is why the decal pack asks to be read at start (its `pack.toml`, SDK patch 0436).
+Without that the car showed the game's decal.
 
 ## Shadow softness (#380)
 
