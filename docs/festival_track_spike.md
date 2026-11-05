@@ -246,9 +246,25 @@ instances; 33446 streaming blocks asked for). Suzuka-specific assumptions found 
   logs each draw's texture fetch constants: base, size, format) shows why: the road's lightmap
   sampler (s7) holds a 32 x 32 8888 texture, where Suzuka's road gets its lightmap atlas
   (texture 783, _0x0000030F.bix, 128 x 512 DXT1). Laguna's road lightmap is texture 1323
-  (_0x0000052B.bix, 512 x 256 DXT1, the same format), so FH1 draws with a stand-in: that
-  texture is never loaded, or not found by its record. Next: trace the texture load for that
-  record (its number, file and zone list), against Suzuka's.
+  (_0x0000052B.bix, 512 x 256 DXT1, the same format), so FH1 draws with a stand-in. Traced
+  further (`FORZA_STREAM_LOG=1` logs every streamed file): the black road pieces (e.g. model
+  567) have no lightmap record of their own kind (flag 12, atlas | 0x4); their lightmap and
+  mask are atlas tiles (flag 9, atlas | 0x1: 1058 records) with no texture file of their own.
+  FM4 draws those from the atlas, the static pack's entry of the record's file (857), at the
+  record's rectangle. FH1 ties one record to each pack entry (the numbers file); of the
+  streamed records only those with 0x4 ever stream (274 of 533 lightmaps by spot 2, none of
+  the 1382 flag 8 and 9 records), and the other records of an atlas keep a texture object that
+  never gets a texture: the 32 x 32 stand-in, black through the lightmap. Suzuka has 51 such
+  records, Laguna Seca 1058, nearly all its road. Tried: the pack entry taking the first
+  lightmap record of a file shared with tiles (kept: harmless, no change); pointing every tile's
+  texture-table entry at its atlas's object before the user lists are made (the converter
+  writes <track>_stx_files.bin, a pack entry per atlas-only record; the hook,
+  `FORZA_FM4_ATLAS_ALIAS=1`, a test): the game crashed soon after loading in FH1's per-model
+  texture binding (a null read at +0xC, lr 82E18E80), so shared objects are not the way. Next:
+  give each tile's own object the atlas's texture (the texture object's layout, from the pack
+  loader sub_82E323A0/sub_82D09648 and the binding near sub_82E18FC8), or cut the tiles out
+  of the atlas into textures of their own in the converter (Xenos untiling of the pack's
+  texture formats).
 - Still one converted track at a time: the converter writes FH1's zipmanifest.xml with one
   line for its track, so the last converted circuit is the one mounted
   (`reconvert_track.sh` copies it into the game folder).

@@ -12,6 +12,7 @@
 //                             teleports' orientation and the collision queries (callers,
 //                             limits, masks, empty results, the car's cache boxes)
 //   FORZA_TRACK_NO_TRAFFIC=1  the other cars go far below the circuit
+//   FORZA_STREAM_LOG=1        log every track archive file streamed (FM4STREAM: number, name)
 //   FORZA_ZONE_TRACE=1        log zones made live and dropped, with the streaming blocks,
 //                             live instance objects and placements in use
 //   FORZA_FM4_ZONE_POOL=n     n times the live instance objects (a converted track's zones)
@@ -372,7 +373,9 @@ extern "C" REX_FUNC(sub_82E18FC8) {
 // The texture user lists (sub_82E24248, once per track load): its early-out conditions.
 namespace forza { void LogGuestThreads(const char* why); }
 extern "C" REX_FUNC(__imp__sub_82E24248);
+namespace { void AliasAtlasTiles(uint8_t* base, uint32_t t); }
 extern "C" REX_FUNC(sub_82E24248) {
+  AliasAtlasTiles(base, ctx.r3.u32);
   if (std::getenv("FORZA_TRACK_SPAWN")) {
     const uint32_t t = ctx.r3.u32;
     REXLOG_INFO("FM4TRACK: texture users: lists {} {} textures {} models {} instances {}",
@@ -457,6 +460,8 @@ extern "C" REX_FUNC(sub_82EB6960) {
                   kind == 0 ? "models" : kind == 1 ? "textures" : "other files", name);
     }
   }
+  static const bool every = std::getenv("FORZA_STREAM_LOG") != nullptr;  // every file
+  if (every) REXLOG_INFO("FM4STREAM: {} {}", ctx.r5.u32, CString(base, ctx.r6.u32));
   if (std::getenv("FORZA_TRACK_SPAWN") && logged.fetch_add(1) < 5) {
     REXLOG_INFO("FM4TRACK: stream file {} r4 {:08X} r6 '{}' r7 {:08X} r8 {:08X} from {:08X}",
                 ctx.r5.u32, ctx.r4.u32, CString(base, ctx.r6.u32), ctx.r7.u32, ctx.r8.u32,
@@ -479,6 +484,9 @@ namespace {
 struct Fm4Stx {
   std::string track;
   std::vector<uint32_t> ids;
+  // Per texture record: the pack entry an FM4 atlas tile is drawn from, -1 for none
+  // (<track>_stx_files.bin next to the numbers file; tools/fm4_pvs.py).
+  std::vector<uint32_t> atlas_of;
 };
 const Fm4Stx& Fm4StxConfig() {
   static const Fm4Stx c = [] {
@@ -496,10 +504,47 @@ const Fm4Stx& Fm4StxConfig() {
       }
       std::fclose(f);
     }
-    REXLOG_INFO("FM4TRACK: {} static texture pack: {} texture numbers", c.track, c.ids.size());
+    std::string files = v.substr(bar + 1);
+    const auto at = files.rfind("_stx_numbers.bin");
+    if (at != std::string::npos) {
+      files.replace(at, std::strlen("_stx_numbers.bin"), "_stx_files.bin");
+      if (std::FILE* f = std::fopen(files.c_str(), "rb")) {
+        uint8_t b[4];
+        while (std::fread(b, 1, 4, f) == 4) {
+          c.atlas_of.push_back(uint32_t(b[0]) << 24 | b[1] << 16 | b[2] << 8 | b[3]);
+        }
+        std::fclose(f);
+      }
+    }
+    REXLOG_INFO("FM4TRACK: {} static texture pack: {} texture numbers, {} records", c.track,
+                c.ids.size(), c.atlas_of.size());
     return c;
   }();
   return c;
+}
+// FM4's atlas tiles (see Fm4Stx::atlas_of): each such record's texture object becomes its
+// atlas's (the pack entry's record's), before the objects' user lists are made (sub_82E24248),
+// so the tiles' draws get the atlas's texture when it is there.
+// A test only (FORZA_FM4_ATLAS_ALIAS=1): with the objects shared, the per-model texture
+// binding (sub_82E18FC8's callee, lr 82E18E80) read a null pointer at +0xC soon after the
+// track loaded. The tiles need the atlas's texture in their own objects instead.
+void AliasAtlasTiles(uint8_t* base, uint32_t t) {
+  if (!std::getenv("FORZA_FM4_ATLAS_ALIAS")) return;
+  const Fm4Stx& c = Fm4StxConfig();
+  const uint32_t texs = Load32(base, t + 2812), n = Load32(base, t + 2816);
+  if (c.atlas_of.empty() || c.atlas_of.size() != n || !texs || !GuestReadable(texs)) return;
+  uint32_t done = 0;
+  for (uint32_t i = 0; i < n; ++i) {
+    const uint32_t k = c.atlas_of[i];
+    if (k >= c.ids.size() || c.ids[k] >= n || c.ids[k] == i) continue;
+    const uint32_t obj = Load32(base, texs + 4 * c.ids[k]);
+    if (!obj) continue;
+    uint8_t* p = forza::GuestPtr(base, texs + 4 * i);
+    p[0] = uint8_t(obj >> 24); p[1] = uint8_t(obj >> 16); p[2] = uint8_t(obj >> 8);
+    p[3] = uint8_t(obj);
+    ++done;
+  }
+  REXLOG_INFO("FM4TRACK: {} atlas tiles take their atlas's texture", done);
 }
 thread_local bool fm4_stx_active = false;
 thread_local uint32_t fm4_stx_last = 0, fm4_stx_ids = 0;

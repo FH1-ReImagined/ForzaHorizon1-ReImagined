@@ -1068,13 +1068,31 @@ def convert_mod(mod, fh1_disc, loose):
               f"{max(len(c['textures']) for c in cells)} textures")
     # The static pack's texture numbers: pack entry k is texture file k; its record is the
     # first texture record of that file.
+    # A file shared by a lightmap's records (flag 0x4) and others is the lightmaps' atlas: its
+    # entry takes the first lightmap record. Laguna Seca's lightmap atlas (file 857) is shared
+    # by 126 records, the first of them a flag-9 one (an atlas tile, not a lightmap): with that
+    # record's flags FH1 drew every road piece's lightmap as a 32 x 32 stand-in, the road black.
     first = {}
     for i, t in enumerate(F["textures"]):
-        first.setdefault(t[1], i)
+        k = first.get(t[1])
+        if k is None or (t[6] & 0x4 and not F["textures"][k][6] & 0x4):
+            first[t[1]] = i
     numbers = [first.get(k, 0xFFFFFFFF) for k in range(max(first) + 1)]
     os.makedirs(loose, exist_ok=True)
     with open(os.path.join(loose, f"{track}_stx_numbers.bin"), "wb") as f:
         f.write(struct.pack(f">{len(numbers)}I", *numbers))
+    # FM4's atlas tiles: a record from an atlas (flag 0x8) with no texture file of its own
+    # (no 0x4: nothing streamed for it) is drawn from its atlas, the pack entry of its file.
+    # FH1 ties one record to each pack entry (the numbers above), so every other tile of that
+    # atlas had a texture object that never got its texture: a 32 x 32 stand-in (Laguna Seca's
+    # road lightmaps and masks, flag 9; drawn black). <track>_stx_files.bin, a u32 per record,
+    # gives such a record the pack entry it is drawn from (-1 for the others); the game
+    # (hooks/fm4_track.cpp) points those records at their atlas's texture object.
+    files_of = [t[1] if (t[6] & 0xC) == 0x8 and numbers[t[1]] != i else 0xFFFFFFFF
+                for i, t in enumerate(F["textures"])]
+    with open(os.path.join(loose, f"{track}_stx_files.bin"), "wb") as f:
+        f.write(struct.pack(f">{len(files_of)}I", *files_of))
+    print(f"{track}: {sum(v != 0xFFFFFFFF for v in files_of)} atlas tiles drawn from their atlas")
     members = [(p, zones[p] if p in zones else open(stand_in, "rb").read()
                 if p.lower().endswith(".stx.bin") and stand_in
                 else open(os.path.join(bin_dir, p), "rb").read()) for p in order]
