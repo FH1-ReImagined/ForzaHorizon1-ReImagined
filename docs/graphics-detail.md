@@ -12,6 +12,9 @@ and apply from the next start (the game reads them when it loads the track):
 cars (High 2x, Ultra 4x the game's distances and counts); it applies live and is also in the
 in-game Graphics screen, see [Car detail](#car-detail-361).
 
+**Paint job detail** (`livery_bake_scale`) draws each car's vinyls and decals for driving at 2x
+the game's 1024x1024 (photos keep the game's size); see [Paint job detail](#paint-job-detail-659).
+
 A third option, **Shadow softness** (`world_shadow_filter`, #380), changes how the shadows
 are filtered rather than which objects cast them; it applies live and is also in the in-game
 Graphics screen. See [Shadow softness](#shadow-softness-380) below. A fourth,
@@ -226,6 +229,95 @@ does not show (the switch is a visible pop only when it happens near the camera,
 the levels move away). The differences between the frames are the camera settling and the crowd.
 Photo mode cannot show it: the selection does not run while the world is paused there (no picks
 are logged), so the cars keep the models they had when it opened.
+
+## Paint job detail (#659)
+
+**Settings > Display > World detail > Paint job detail** (`livery_bake_scale`): Console (1,
+default) or 2x. Vinyls and decals look sharp in the Paint Shop and soft when driving and in
+photos; 2x draws the paint job for driving at twice the game's resolution (photo mode's own
+copy stays at the game's size, below). It applies from the next start.
+
+### How the game draws a paint job
+
+The Paint Shop draws the side being edited into a 2048x2048 layout every frame. For driving and
+photos the game draws the whole design once, when the car loads, through a chain of render
+textures (TU4 addresses; disc ones in `src/hooks/livery_bake.cpp`), all made with
+`sub_82CF9058`:
+
+| Texture | Size (Aventador) | Made by | What it holds |
+| --- | --- | --- | --- |
+| `LivInt-<n>-0` to `-4` | 640x150 to 1882x724 | `sub_82D4DBC8` | each side's layers |
+| `LivRenderTexture` | 1024x1024 (Paint Shop 2048), 8:8:8:8 | `sub_82D4BD60` | the sides put together in the car's texture layout (`sub_82D511B8`, at rectangles given in pixels of the 1024x1024 layout) |
+| `LivRenderPristineN`, `LivRenderDamageN` | 1024x1024, 6 levels, 8:8:8:8 | `sub_82D53420` | the layout without and with damage, and its mips (`sub_82D54030`, `sub_82D50040`: drawn in strips that fit the 10 MB of EDRAM) |
+| `LivPristineN`, `LivDamageN` | 1024x1024, 6 levels, DXT5 | `sub_82D5B3D0` | the same compressed on the CPU (`sub_825AC118`, `sub_82CFAB18`, through two 1024x1024 scratch textures from `sub_8259A318`): the textures the car is drawn with |
+
+(`LivRenderPristine0`/`Damage0` and `LivPristine0`/`Damage0`, 2048x2048, are made only when a
+setup's flags ask for them; no car seen here did.) The whole car (sides, roof, bumpers) shares
+the 1024x1024, so a decal gets about half the texels it has in the Paint Shop. Render scale does
+not help: the CPU compresses the guest's 1024x1024 copy, so the car is drawn with a 1024x1024
+DXT5 texture at every render scale.
+
+### What 2x does
+
+`src/hooks/livery_bake.cpp` makes every 1024x1024 texture of the chain 2048x2048 (with one more
+mip level where it has mips, so the smallest stays 32x32), the layout size the draws read (+60
+of the setup), the sides' rectangles for the blit into the layout, and the compression's
+scratch textures with them. The draws, EDRAM strips, mips and the compression follow the sizes.
+The Paint Shop's own 2048x2048 layout and the sides (`LivInt`, already up to 1882 wide) stay as
+they are. `tests/livery_bake_test.cpp` checks the sizes.
+
+Each step matters: with only the render textures scaled, the CPU compression read them as
+1024x1024 (the car showed a magnified corner of the layout); with the compressed textures too
+but not the scratch ones, the car got DXT5 garbage; with the layout too but not the sides'
+rectangles, the sides landed in a quarter of the layout and the car showed no decals. Only a driving
+car's paint job is scaled (mode 6 or 8 at +232 of the setup, whose final textures are the DXT5
+pair). The Paint Shop's editor (+236 -1) has its own 2048x2048 layout with its sides placed in
+it; scaled too, the editor's car was black and torn. Photo mode draws the car's paint job again
+for the photo (mode 7), into two uncompressed 8:8:8:8 1024x1024 final textures instead of the
+DXT5 pair; at 2048x2048 those did not fit next to the car's own textures (the texture was not
+made and Take Photo crashed), so photos keep the game's 1024x1024, without DXT5 compression.
+
+### Memory
+
+| Texture (per car with a paint job) | Console | 2x |
+| --- | --- | --- |
+| `LivRenderPristineN` + `DamageN` (8:8:8:8, mips) | 2 x 5.3 MB | 2 x 21.3 MB |
+| `LivPristineN` + `DamageN` (DXT5, mips) | 2 x 1.3 MB | 2 x 5.3 MB |
+| `LivRenderTexture` | 4 MB | 16 MB |
+| scratch textures (during the compression only) | 5 MB | 20 MB |
+| Total kept | about 17 MB | about 69 MB |
+
+The game makes these from memory it reserves at start for render textures: the guest's
+physical memory in use was the same at Console and 2x (357 MB in free roam). The graphics card
+holds a copy of each (the render ones at the render scale squared) and the EDRAM strips while
+the paint job is drawn. Only cars with a paint job pay: in single player that is the player's
+car (the 7 CPU cars of the GoPro Millennia Masters race and the traffic have none); online,
+each player's car with one. 4096x4096 (4x) does not fit: the first such texture was not made
+and the game stopped on the missing livery, so the option stops at 2x.
+
+### Checked
+
+Title Update 4, Linux/RADV, the Aventador with an Amsoil decal on the rear bumper and on the
+right side (placed in the Paint Shop on a copy of the test save), free roam at the festival,
+chase camera at the spawn, the same frame at both levels. At 1280x720, render scale 1, the
+decal's outlines are slightly crisper at 2x; at render scale 2 (2560x1440) the difference is
+clear: at Console the letters' edges show DXT5 blocks and texel steps, at 2x they are smooth
+and the black outlines thin and even. At 2x the Paint Shop's menus and decal editor show the
+car and its design as at Console, and the car after leaving it carries the design. Take Photo
+works at 2x in free roam and after the Paint Shop (photo mode's paint job at the game's size,
+as above), and a race (GoPro Millennia Masters, 7 CPU cars, test save) ran 35 s with no paint job made. No
+errors in the logs. Not checked: online
+lobbies with many paint jobs, Windows, the frame time while a car loads, and the disc build
+(its functions come from `tools/tu_address_map.py`, it compiles, it was not run).
+
+### The decals themselves
+
+Vinyl shapes (`media/Livery.zip`, `vinyls/*.carbin`, 880 files) are meshes and stay sharp at
+any size. Decals (`decals/*.carbin`, 490 files) are bitmaps: 483 of 512x512 and 7 of 512x256,
+DXT5 with mips, one per file. A decal stretched over most of a side (about 900 pixels of the
+2048x2048 layout for the Amsoil one above) has fewer texels than the layout at 2x, so it is the
+next limit. They load as ordinary textures, so a texture pack (`docs/texture_packs.md`) could
+replace them with larger ones; not tried yet.
 
 ## Shadow softness (#380)
 

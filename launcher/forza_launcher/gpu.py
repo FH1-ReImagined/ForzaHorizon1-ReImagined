@@ -269,11 +269,12 @@ _FSR = {"present_effect": "fsr", "resolution_scale": 1, "async_shader_compilatio
 # The Steam Deck's settings (#140, docs/steam_deck.md), also what specs.py offers on one. The command
 # processor of the GPU emulation sets its frame rate (docs/perf.md): the one-pass scene takes about a fifth
 # of its work away, and 540p saves only GPU time. Shadow, texture and car detail stay the game's own (their cost
-# is within the noise on a fast PC, docs/graphics-detail.md; not measured on a Deck). Its 16:10 screen shows
+# is within the noise on a fast PC, docs/graphics-detail.md; not measured on a Deck), and so does paint job
+# detail (its cost is memory per car, which the Deck's shared 16 GB has least of). Its 16:10 screen shows
 # the 16:9 picture pixel for pixel between two bars.
 DECK_SETTINGS = {"frame_rate": 30, "resolution_scale": 1, "present_effect": "fsr", "scene_msaa": "off",
                  "world_shadow_detail": "console", "world_texture_detail": "console", "world_car_detail": "console",
-                 "scene_resolution": "720",
+                 "livery_bake_scale": 1, "scene_resolution": "720",
                  "present_letterbox": True}
 
 PRESETS = {

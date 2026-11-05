@@ -166,6 +166,7 @@ set(FORZA_SOURCES
     src/hooks/scene_tiling.cpp
     src/hooks/world_detail.cpp
     src/hooks/car_detail.cpp
+    src/hooks/livery_bake.cpp
     src/hooks/shadow_filter.cpp
     src/hooks/ai_catchup.cpp
     src/hooks/physics_loader_check.cpp

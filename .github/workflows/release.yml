@@ -192,6 +192,11 @@ jobs:
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/car_detail_test.cpp -o "$RUNNER_TEMP/car-detail-test"
           "$RUNNER_TEMP/car-detail-test"
       - if: runner.os == 'Linux'
+        name: Livery bake sizes
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/livery_bake_test.cpp -o "$RUNNER_TEMP/livery-bake-test"
+          "$RUNNER_TEMP/livery-bake-test"
+      - if: runner.os == 'Linux'
         name: Shadow softness levels
         run: |
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/shadow_filter_test.cpp -o "$RUNNER_TEMP/shadow-filter-test"
