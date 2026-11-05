@@ -42,6 +42,7 @@ def S(cores=8, avx2=True, ram=16, vram=8, integrated=False, gpu_name="NVIDIA GeF
 
 
 GTX1660 = S(6, True, 32, 6, False, "NVIDIA GeForce GTX 1660 SUPER", "AMD Ryzen 5 7600X 6-Core Processor")
+GTX1650TI = S(4, True, 7.8, 4, False, "NVIDIA GeForce GTX 1650 Ti", "Intel(R) Core(TM) i5-10300H CPU @ 2.50GHz")
 IRIS = S(4, True, 16, 0, True, "Intel(R) Iris(R) Xe Graphics", "11th Gen Intel(R) Core(TM) i5-1135G7")
 DECK = S(4, True, 16, 1, True, "Steam Deck", "AMD Custom APU 0405")
 
@@ -182,6 +183,15 @@ class Recommendations(unittest.TestCase):
         self.assertEqual(self.rec(S(2, ram=4))["frame_rate"], 30)
         self.assertEqual(self.rec(Specs()), gpu.settings_for(gpu.NVIDIA))     # unknown: no change
 
+    def test_entry_cards_get_the_540p_scene(self):
+        self.assertEqual(self.rec(GTX1650TI)["scene_resolution"], "540")          # #640
+        self.assertEqual(self.rec(IRIS, gpu.INTEL)["scene_resolution"], "540")
+        self.assertNotIn("scene_resolution", self.rec(GTX1660))                   # 6 GB
+        self.assertNotIn("scene_resolution", self.rec(S(4, vram=4, gpu_name="NVIDIA GeForce RTX 3050 Laptop GPU")))
+        self.assertEqual(self.rec(DECK, gpu.DECK)["scene_resolution"], "720")    # its CPU is the limit
+        r = specs.recommended(GTX1650TI, {"present_effect": "fsr3", "frame_rate": 60, "resolution_scale": 1}, "")
+        self.assertNotIn("scene_resolution", r)                                    # FSR 3 keeps 720p (a mid card)
+
     def test_vendor_known_problems_win(self):
         self.assertEqual(self.rec(S(8), gpu.INTEL)["resolution_scale"], 1)     # Intel warns at 2
         self.assertEqual(self.rec(S(8), gpu.INTEL)["frame_rate"], 30)          # never above the preset's
@@ -215,6 +225,17 @@ class Warnings(unittest.TestCase):
         self.assertIn("forza_antialiasing", self.texts(IRIS, forza_antialiasing="smaa"))
         self.assertNotIn("forza_antialiasing", self.texts(S(8), forza_antialiasing="smaa"))
         self.assertNotIn("resolution_scale", self.texts(IRIS, resolution_scale=2, present_effect="fsr3"))
+
+    def test_540p_scene_on_an_entry_card(self):
+        t = self.texts(GTX1650TI)
+        self.assertEqual(list(t), ["scene_resolution"])
+        self.assertIn("GeForce GTX 1650 Ti (4 GB) sets the frame rate at the 720p scene", t["scene_resolution"])
+        fix = [w.fix for w in specs.warnings(GTX1650TI, {"frame_rate": 60})]
+        self.assertEqual(fix, [{"scene_resolution": "540"}])
+        self.assertEqual(self.texts(GTX1650TI, scene_resolution="540"), {})
+        self.assertEqual(self.texts(GTX1650TI, frame_rate=30), {})                # holds 30 at 720p
+        self.assertEqual(self.texts(GTX1650TI, forza_antialiasing="smaa"), {})    # 540p does not apply
+        self.assertIn("scene_resolution", self.texts(IRIS))
 
     def test_old_cpu_and_low_ram(self):
         self.assertTrue([w for w in specs.warnings(S(4, avx2=False), {}) if "without AVX2" in w.text])

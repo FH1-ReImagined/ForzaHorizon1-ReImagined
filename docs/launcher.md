@@ -917,7 +917,9 @@ Steam Deck, or "Other / not sure". The launcher detects the card once (first sta
   6 cores, high = 6+ cores with AVX2; graphics (limits render scale, FSR 3, anti-aliasing): low = integrated or under
   4 GB, mid = 4 to 7 GB or a GTX / RX 400-500 / Vega-era card, high = 8 GB+ on a newer card. A new launcher gets 30 fps
   (low CPU) or 60 fps, and render scale 2 only with a high-end card, on top of the vendor preset (whose known problems
-  always win). Settings that are heavy for the PC get an orange line with the numbers (render scale 2 renders 2560x1440
+  always win). On an entry card (low graphics, or a GTX / RX 400-500-era card with 4 GB; not a Steam Deck) it also gets
+  the 540p 3D scene (#640: a GTX 1650 Ti laptop is limited by its GPU at the 720p scene, 46.8 -> 54.3 fps in the
+  benchmark, docs/perf.md); with existing settings that is a warning with "Use recommended" above 30 fps. Settings that are heavy for the PC get an orange line with the numbers (render scale 2 renders 2560x1440
   ...). A launcher with existing settings is never changed silently: a banner on the Settings page offers "Use
   recommended" (only the settings that warn) or "Keep mine", and comes back only when the hardware changes.
   On a Steam Deck (#140) the banner offers the Deck preset itself (`gpu.DECK_SETTINGS`, below) whenever a setting

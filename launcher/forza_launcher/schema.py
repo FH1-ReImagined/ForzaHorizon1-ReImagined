@@ -144,7 +144,8 @@ add("resolution_scale", "Render scale", "Display", "int", 1,
     "for about 40% fewer fps; above 2 is experimental (flicker on NVIDIA, issue #47).", "Picture",
     lo=1, hi=8, restart=True)
 add("scene_resolution", "3D scene resolution", "Display", "choice", "720",
-    "For integrated graphics that can't hold the frame rate: 540p draws the 3D scene at 960x540 "
+    "For integrated graphics and entry cards (GTX 1650 class) that can't hold the frame rate: 540p "
+    "draws the 3D scene at 960x540 "
     "(about half the pixels) and scales it to 720p; the HUD, text and menus stay at 720p, and the "
     "upscaling filter (AMD FSR 1 is the sharpest) takes the picture to the window. It saves GPU time "
     "only: a PC limited by its CPU (Steam Deck) gets nothing. The scene is drawn in one pass with 2x "
