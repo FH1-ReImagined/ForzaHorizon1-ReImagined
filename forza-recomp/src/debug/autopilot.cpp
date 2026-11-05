@@ -76,6 +76,13 @@ bool Drive(uint8_t* base, int16_t& steer, uint8_t& brake, uint8_t& throttle) {
     return (q.x - pos[0]) * (q.x - pos[0]) + (q.z - pos[2]) * (q.z - pos[2]) +
            (q.y - pos[1]) * (q.y - pos[1]);
   };
+  // FORZA_AUTOPILOT_DELAY=s: leave the pad alone for s seconds after the car is first seen.
+  static double first_seen = 0;
+  if (first_seen == 0) first_seen = Now();
+  static const double delay = std::getenv("FORZA_AUTOPILOT_DELAY")
+                                  ? std::strtod(std::getenv("FORZA_AUTOPILOT_DELAY"), nullptr)
+                                  : 0.0;
+  if (Now() - first_seen < delay) return false;
   if (!found) {  // the nearest point anywhere, then only ahead
     size_t best = 0;
     for (size_t i = 1; i < n; ++i)
@@ -161,6 +168,30 @@ bool Drive(uint8_t* base, int16_t& steer, uint8_t& brake, uint8_t& throttle) {
     throttle = 0;
     brake = 255;
     steer = int16_t(-s * 32767);
+  }
+  // FORZA_AUTOPILOT_TRACE=<file>: every 0.1 s, a row of time, place, speeds, inputs and
+  // the four wheels (contact, suspension, wheel speed, slip ratio, slip angle).
+  static std::FILE* trace = [] {
+    const char* p = std::getenv("FORZA_AUTOPILOT_TRACE");
+    return p ? std::fopen(p, "w") : nullptr;
+  }();
+  static double last_trace = 0;
+  if (trace && t - last_trace >= 0.1) {
+    last_trace = t;
+    forza::telemetry::CarPhysicsView ph{};
+    const bool have = forza::telemetry::LocalCarPhysics(base, ph);
+    std::fprintf(trace, "%.2f %d %.2f %.2f %.2f %.2f %.2f %.3f %.3f %.3f %.2f %.2f %d", t, int(at),
+                 pos[0], pos[1], pos[2], speed * 3.6f, have ? ph.speed * 3.6f : -1.0f, s,
+                 throttle / 255.0f, brake / 255.0f, std::atan2(fwd[0], fwd[2]) * 57.3f,
+                 std::atan2(vx, vz) * 57.3f, have ? ph.gear : -1);
+    if (have) {
+      std::fprintf(trace, " ctl %.2f %.2f %.2f", ph.controls[0], ph.controls[1], ph.controls[2]);
+      for (int w = 0; w < 4; ++w)
+        std::fprintf(trace, " w%d %d %.3f %.1f %.3f %.3f", w, int(ph.contact[w]), ph.suspension[w],
+                     ph.wheel_speed[w], ph.slip[w], ph.slip_angle[w]);
+    }
+    std::fprintf(trace, "\n");
+    std::fflush(trace);
   }
   if (t - last_log > 1.0) {
     last_log = t;

@@ -8,8 +8,10 @@
 //                             changed zipmanifest.xml that mounts a converted track's archive)
 //   FORZA_FM4_COL=1           the track's collision is read whole from its .col files (a
 //                             converted FM4 track's, tools/fm4_col.py), not streamed as .fiz
-//   FORZA_FIZ_TRACE=1         log the track archive's depot reads (with their callers) and
-//                             the teleports' orientation
+//   FORZA_FIZ_TRACE=1         log the track archive's depot reads (with their callers), the
+//                             teleports' orientation and the collision queries (callers,
+//                             limits, masks, empty results, the car's cache boxes)
+//   FORZA_TRACK_NO_TRAFFIC=1  the other cars go far below the circuit
 //   FORZA_FM4_ZONE_POOL=n     n times the live instance objects (a converted track's zones)
 // tu_address_map: TU4 addresses
 //
@@ -71,7 +73,12 @@ void OnTeleport(PPCContext& ctx, uint8_t* base) {
   // free-roam AI drivers are teleported too, to their own places.
   static std::atomic<uint32_t> player{0};
   uint32_t expected = 0;
-  if (!player.compare_exchange_strong(expected, ctx.r3.u32) && expected != ctx.r3.u32) return;
+  if (!player.compare_exchange_strong(expected, ctx.r3.u32) && expected != ctx.r3.u32) {
+    // FORZA_TRACK_NO_TRAFFIC=1: the other cars (free roam's traffic and drivers) go far below
+    // the circuit, where nothing holds them.
+    if (std::getenv("FORZA_TRACK_NO_TRAFFIC")) ctx.v1.f32[2] = -2000.0f;
+    return;
+  }
   ctx.v1.f32[3] = spawn.x;
   ctx.v1.f32[2] = spawn.y;
   ctx.v1.f32[1] = spawn.z;
@@ -614,5 +621,175 @@ extern "C" REX_FUNC(sub_82E11B60) {
     }
   }
   __imp__sub_82E11B60(ctx, base);
+}
+#endif
+
+#if FORZA_TU4
+namespace {
+bool FizTrace() {
+  static const bool on = std::getenv("FORZA_FIZ_TRACE") != nullptr;
+  return on;
+}
+}  // namespace
+
+// The collision world's triangle query (sub_82DD7310, the cell query's one caller): its
+// callers, once each, for FORZA_FIZ_TRACE runs (which code turns triangles into forces).
+extern "C" REX_FUNC(__imp__sub_82DD7310);
+extern "C" REX_FUNC(sub_82DD7310) {
+  if (FizTrace()) {
+    static std::mutex m;
+    static std::vector<uint32_t> seen;
+    const uint32_t lr = uint32_t(ctx.lr);
+    std::lock_guard<std::mutex> lock(m);
+    if (seen.size() < 24 && std::find(seen.begin(), seen.end(), lr) == seen.end()) {
+      seen.push_back(lr);
+      std::string chain;
+      uint32_t frame = ctx.r1.u32;
+      for (int i = 0; i < 8 && Stack(frame) && GuestReadable(frame); ++i) {
+        const uint32_t parent = Load32(base, frame);
+        if (parent <= frame || parent - frame > 0x100000 || !GuestReadable(parent - 8)) break;
+        chain += fmt::format(" {:08X}", Load32(base, parent - 8));
+        frame = parent;
+      }
+      REXLOG_INFO("FM4TRACK: triangle query from {:08X} (r5 {:08X} r6 {:08X} r7 {:08X}){}", lr,
+                  ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, chain);
+    }
+  }
+  __imp__sub_82DD7310(ctx, base);
+}
+#endif
+
+#if FORZA_TU4
+// The collision world's other query (sub_82DD59F0, its vtable's second entry): callers.
+extern "C" REX_FUNC(__imp__sub_82DD59F0);
+extern "C" REX_FUNC(sub_82DD59F0) {
+  if (FizTrace()) {
+    static std::mutex m;
+    static std::vector<uint32_t> seen;
+    const uint32_t lr = uint32_t(ctx.lr);
+    std::lock_guard<std::mutex> lock(m);
+    if (seen.size() < 24 && std::find(seen.begin(), seen.end(), lr) == seen.end()) {
+      seen.push_back(lr);
+      std::string chain;
+      uint32_t frame = ctx.r1.u32;
+      for (int i = 0; i < 8 && Stack(frame) && GuestReadable(frame); ++i) {
+        const uint32_t parent = Load32(base, frame);
+        if (parent <= frame || parent - frame > 0x100000 || !GuestReadable(parent - 8)) break;
+        chain += fmt::format(" {:08X}", Load32(base, parent - 8));
+        frame = parent;
+      }
+      REXLOG_INFO("FM4TRACK: world query 1 from {:08X} (r5 {:08X} r6 {:08X} r7 {:08X}){}", lr,
+                  ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, chain);
+    }
+  }
+  const uint32_t self = ctx.r3.u32, lr1 = uint32_t(ctx.lr), box = ctx.r4.u32, lim = ctx.r5.u32;
+  __imp__sub_82DD59F0(ctx, base);
+  if (FizTrace() && lim == 10000) {
+    static std::atomic<int> n{0};
+    const uint32_t rec = GuestReadable(self + 100) ? Load32(base, self + 100) : 0;
+    const uint32_t st = rec && GuestReadable(rec + 20) ? Load32(base, rec + 20) : 0;
+    const uint32_t state = st && GuestReadable(st + 8) ? Load32(base, st + 8) : 0xFFFFFFFF;
+    float x = 0, z = 0;
+    if (GuestReadable(box)) {
+      uint32_t v = Load32(base, box);
+      std::memcpy(&x, &v, 4);
+      v = Load32(base, box + 8);
+      std::memcpy(&z, &v, 4);
+    }
+    if (n.fetch_add(1) < 300)
+      REXLOG_INFO("FM4TRACK: world query 1 limit 10000 from {:08X} at {:.1f},{:.1f}: cell record "
+                  "{:08X} cell {:08X} state {} -> {}", lr1, x, z, rec,
+                  rec && GuestReadable(rec) ? Load32(base, rec) : 0, state, ctx.r3.u32);
+  }
+}
+#endif
+
+#if FORZA_TU4
+// The cell queries (sub_82DD5318, sub_82DD6C08: r3 the cell, r4 the box, r5 the most
+// triangles wanted, r6 the list, r7 the flag mask): each caller's limit and mask, and how
+// often a query comes back empty, for FORZA_FIZ_TRACE runs.
+namespace {
+struct QueryStat {
+  uint32_t lr, limit, mask;
+  uint64_t calls, empty;
+};
+std::mutex query_mutex;
+std::vector<QueryStat> query_stats;
+void CountQuery(uint32_t lr, uint32_t limit, uint32_t mask, uint32_t result) {
+  std::lock_guard<std::mutex> lock(query_mutex);
+  for (auto& q : query_stats) {
+    if (q.lr == lr && q.limit == limit && q.mask == mask) {
+      ++q.calls;
+      if (!result) ++q.empty;
+      if ((q.calls & (q.calls - 1)) == 0 && q.calls >= 64)
+        REXLOG_INFO("FM4TRACK: cell query from {:08X} limit {} mask {:02X}: {} calls, {} empty",
+                    lr, limit, mask, q.calls, q.empty);
+      return;
+    }
+  }
+  query_stats.push_back({lr, limit, mask, 1, result ? 0u : 1u});
+  REXLOG_INFO("FM4TRACK: cell query from {:08X} limit {} mask {:02X} (new)", lr, limit, mask);
+}
+}  // namespace
+extern "C" REX_FUNC(__imp__sub_82DD5318);
+extern "C" REX_FUNC(sub_82DD5318) {
+  const uint32_t lr = uint32_t(ctx.lr), limit = ctx.r5.u32, mask = ctx.r7.u32 & 0xFF;
+  const uint32_t box = ctx.r4.u32;
+  float b[8] = {};
+  if (FizTrace() && GuestReadable(box))
+    for (int i = 0; i < 8; ++i) {
+      const uint32_t v = Load32(base, box + 4 * i);
+      std::memcpy(&b[i], &v, 4);
+    }
+  __imp__sub_82DD5318(ctx, base);
+  if (FizTrace()) {
+    CountQuery(lr, limit, mask, ctx.r3.u32);
+    static std::atomic<int> boxes{0};
+    if (limit == 10000 && boxes.fetch_add(1) < 400)
+      REXLOG_INFO("FM4TRACK: cache query box {:.1f},{:.1f},{:.1f} .. {:.1f},{:.1f},{:.1f}: {} triangles",
+                  b[0], b[1], b[2], b[4], b[5], b[6], ctx.r3.u32);
+  }
+}
+extern "C" REX_FUNC(__imp__sub_82DD6C08);
+extern "C" REX_FUNC(sub_82DD6C08) {
+  const uint32_t lr = uint32_t(ctx.lr), limit = ctx.r5.u32, mask = ctx.r7.u32 & 0xFF;
+  __imp__sub_82DD6C08(ctx, base);
+  if (FizTrace()) CountQuery(lr, limit, mask, ctx.r3.u32);
+}
+#endif
+
+#if FORZA_TU4
+// The streaming file blocks (sub_82E3A2E8 takes one 1028-byte block from the free list at
+// 0x835A0B40; the pool holds about 23 MB). Driving a converted FM4 circuit for a few minutes
+// empties it (its zones' files are read into it as Colorado's are, and fewer of them leave),
+// and the next file read writes through a null block (sub_82E3CAE8). FORZA_FM4_STREAM_POOL=1
+// links 4096 more blocks (4 MB of the guest heap) into the free list each time it runs dry.
+extern "C" REX_FUNC(__imp__sub_82E3A2E8);
+extern "C" REX_FUNC(sub_82E3A2E8) {
+  static const bool on = std::getenv("FORZA_FM4_STREAM_POOL") != nullptr;
+  constexpr uint32_t kFreeList = 0x835A0B40, kInitialised = 0x835A0B44;
+  if (on && Load32(base, kInitialised) && !Load32(base, kFreeList)) {
+    static std::mutex m;
+    std::lock_guard<std::mutex> lock(m);
+    if (!Load32(base, kFreeList)) {
+      constexpr uint32_t kBlock = 1028, kCount = 4096;
+      const uint32_t mem = REX_KERNEL_MEMORY()->SystemHeapAlloc(kBlock * kCount);
+      if (mem) {
+        for (uint32_t i = 0; i < kCount; ++i) {
+          const uint32_t next = i + 1 < kCount ? mem + kBlock * (i + 1) : 0;
+          uint8_t* p = forza::GuestPtr(base, mem + kBlock * i);
+          p[0] = uint8_t(next >> 24); p[1] = uint8_t(next >> 16);
+          p[2] = uint8_t(next >> 8); p[3] = uint8_t(next);
+        }
+        uint8_t* head = forza::GuestPtr(base, kFreeList);
+        head[0] = uint8_t(mem >> 24); head[1] = uint8_t(mem >> 16);
+        head[2] = uint8_t(mem >> 8); head[3] = uint8_t(mem);
+        static std::atomic<int> grown{0};
+        REXLOG_INFO("FM4TRACK: streaming blocks ran out: {} more (time {})", kCount,
+                    grown.fetch_add(1) + 1);
+      }
+    }
+  }
+  __imp__sub_82E3A2E8(ctx, base);
 }
 #endif

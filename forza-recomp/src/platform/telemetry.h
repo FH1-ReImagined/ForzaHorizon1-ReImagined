@@ -11,4 +11,11 @@ void Physics(uint8_t* base);
 bool LocalCarPosition(uint8_t* base, float& x, float& z);
 // The player's car position and forward vector (world, y up).
 bool LocalCarPose(uint8_t* base, float position[3], float forward[3]);
+// The player's car's controls, wheels and gear (platform/car_physics.h), when it is loaded.
+struct CarPhysicsView {
+  float rpm, speed, controls[5], slip[4], slip_angle[4], wheel_speed[4], suspension[4];
+  bool contact[4];
+  uint8_t gear;
+};
+bool LocalCarPhysics(uint8_t* base, CarPhysicsView& out);
 }
