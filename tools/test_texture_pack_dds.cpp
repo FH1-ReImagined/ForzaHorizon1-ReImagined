@@ -2,7 +2,7 @@
 // source (patch 0280). Padded rows of uncompressed images (the header's pitch, per mip level),
 // headers that do not match their data, the DX10 header, and every format written by the dump
 // read back unchanged. The DDS files are made here. Also the texture_packs order (patch 0310)
-// and pack.toml's preload (patch 0436).
+// and pack.toml's preload (patch 0436), and the replacements' graphics memory limit (patch 0437).
 // Build with the patched SDK source:
 //   c++ -std=c++20 -I ~/rexglue-sdk-src-forza/sdk/include
 //       ~/rexglue-sdk-src-forza/sdk/src/graphics/pipeline/texture/pack_format.cpp
@@ -327,6 +327,58 @@ int main() {
     CHECK(!tp::ManifestPreload("preloaded = true\n"));
     CHECK(!tp::ManifestPreload("[extra]\npreload = true\n"));
     CHECK(!tp::ManifestPreload("preload = true\npreload = false\n"));   // the last one counts
+  }
+
+  // The replacements' graphics memory (patch 0437, #677): the limit, and what is freed for it.
+  {
+    constexpr uint64_t MiB = uint64_t(1) << 20, GiB = uint64_t(1) << 30;
+    CHECK(tp::ReplacementMemoryLimit(1500, 16 * GiB, false, 32 * GiB) == 1500 * MiB);
+    CHECK(tp::ReplacementMemoryLimit(0, 16 * GiB, false, 32 * GiB) == 16 * GiB / 100 * 40);
+    CHECK(tp::ReplacementMemoryLimit(0, 4 * GiB, false, 16 * GiB) == 4 * GiB / 100 * 40);
+    CHECK(tp::ReplacementMemoryLimit(0, 256 * MiB, false, 0) == 256 * MiB);  // at least
+    // An integrated GPU: a quarter of the system heap, up to 2 GiB.
+    CHECK(tp::ReplacementMemoryLimit(0, 512 * MiB, true, 6 * GiB) == 6 * GiB / 4);
+    CHECK(tp::ReplacementMemoryLimit(0, 512 * MiB, true, 32 * GiB) == 2 * GiB);
+
+    const uint64_t now = 100000;
+    auto r = [](uint64_t fingerprint, uint64_t bytes, uint32_t refs, uint64_t last_used,
+                uint64_t released, bool pinned) {
+      tp::ResidentReplacement resident;
+      resident.fingerprint = fingerprint;
+      resident.bytes = bytes;
+      resident.refs = refs;
+      resident.last_used_ms = last_used;
+      resident.released_ms = released;
+      resident.pinned = pinned;
+      return resident;
+    };
+    const std::vector<tp::ResidentReplacement> resident = {
+        r(1, 100, 1, now - 500, 0, false),      // on screen
+        r(2, 100, 1, now - 60000, 0, false),    // held, last drawn a minute ago
+        r(3, 100, 0, now - 9000, now - 3000, false),  // no texture since 3 s
+        r(4, 100, 1, now - 10000, 0, false),    // held, drawn 10 s ago
+        r(5, 100, 0, now - 9000, now - 4000, false),  // no texture since 4 s
+        r(6, 100, 0, now - 90000, 0, true),     // preloaded
+    };
+    bool fits = false;
+    // It fits: nothing freed.
+    CHECK(tp::ChooseEvictions(resident, 600, 100, 1000, 900, now, fits).empty() && fits);
+    // 100 over: the replacement no texture has had for longest.
+    auto chosen = tp::ChooseEvictions(resident, 600, 100, 600, 600, now, fits);
+    CHECK((chosen == std::vector<uint64_t>{5}) && fits);
+    // Down to a target: the unheld ones, then the least recently drawn.
+    chosen = tp::ChooseEvictions(resident, 600, 100, 600, 300, now, fits);
+    CHECK((chosen == std::vector<uint64_t>{5, 3, 2, 4}) && fits);
+    // Never the one on screen nor the preloaded one: then it does not fit.
+    chosen = tp::ChooseEvictions(resident, 600, 300, 300, 300, now, fits);
+    CHECK((chosen == std::vector<uint64_t>{5, 3, 2, 4}) && !fits);
+    // Larger than the limit alone.
+    chosen = tp::ChooseEvictions({}, 0, 2000, 1000, 875, now, fits);
+    CHECK(chosen.empty() && !fits);
+    // Drawn exactly kInUseMs ago is no longer on screen.
+    chosen = tp::ChooseEvictions({r(7, 100, 1, now - tp::kInUseMs, 0, false)}, 100, 100, 100, 100,
+                                 now, fits);
+    CHECK((chosen == std::vector<uint64_t>{7}) && fits);
   }
 
   std::printf("texture pack DDS: PASS\n");
