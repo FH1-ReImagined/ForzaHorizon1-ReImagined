@@ -141,6 +141,14 @@ surface map.
   come in where FH1 draws a mesh without a command buffer for that pass (FM4's, with an
   empty group 0): its effect pass and constant commit. That path, and FH1's pixel-constant
   setter, are the hook's place; not found yet.
+- FH1's own track shaders need the same: every Colorado road and blend shader reads per-
+  material c360_N constants (c0-c6), which FH1 gets from each mesh's group-0 command buffer.
+  FM4's road drawn with FH1's H_ROAD_DIFF1_MODULATE (`FM4_PVS_SHADERS`) faulted in
+  sub_8248C200 (setting the type 9/10 fixups FH1's effect expects in that buffer). So moving
+  the materials to FH1's shaders also needs FH1-format command buffers in group 0; both that
+  and converting FM4's buffers come down to writing FH1's precompiled command-buffer format
+  (a header of state masks and sizes, then tagged register-write entries: 0x84.., 0x88..,
+  0xC4.., 0xC8..), not decoded yet.
 - FM4's `TrackSettings.xml` (version 59) lacks FH1's renderer settings (Brightness, Contrast,
   ExposureBias, LightHemiTop/Bottom, WorldClear, bloom, height fog); read as it is, the
   circuit drew far too dark. The converter writes Colorado's with FM4's sun gain, lightmap,
