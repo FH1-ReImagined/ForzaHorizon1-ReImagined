@@ -104,6 +104,19 @@ surface map.
   right, while the blend surfaces (road, grass, shoulders) keep a random tint from c0-c6 and
   the road constants. Making the texel x c0-c6 multiplies read 1 (`FM4_SHADERS_TINTS=1`, off by
   default) turned the pit wall black: more constants are stale than that.
+- Why the constants are stale: a model's materials (in `.rmb.bin`, after the shader names) are
+  a header of 8 words, then pass groups: u32 2, u32 n, n 8-byte records (u16 register, u8
+  pass, u8 size, u8 kind 0x41-0x49, 0, u16 data offset: material constant blocks, samplers,
+  the uvOS constants), u32 m, m 8-byte entries, 3 sizes. The record layout is the same in
+  both games, and each material's float block (the c360_N values: tint, tiling, e.g. 0.50,
+  0.57, 0.49 then 4, 4, 1, 50 for TERR_SZKA_014) sits just before the groups. The order
+  differs: Colorado's run populated, empty, populated (main pass first, `h_road...`), FM4's
+  start with empty groups and put the populated one (25 records) after them (TERR_SZKA_014:
+  E E E P, E E P, E E P, E E P, E E P, E E E E E). FH1 most likely takes the first group as
+  the main pass and finds no records, so none of the material's constants or sampler states
+  are set. Not yet confirmed in FH1's code (the record kinds are handled in TU4
+  sub_82F6DD58/sub_82F6E0F8; the group reader is still to find); the next step is to
+  reorder FM4's groups in the converter, the same bytes, so no offsets move.
 - FM4's `TrackSettings.xml` (version 59) lacks FH1's renderer settings (Brightness, Contrast,
   ExposureBias, LightHemiTop/Bottom, WorldClear, bloom, height fog); read as it is, the
   circuit drew far too dark. The converter writes Colorado's with FM4's sun gain, lightmap,
@@ -114,9 +127,9 @@ surface map.
 ## Open
 
 - (c) The road, terrain and buildings draw with FM4's own shaders, at 13:00, over a ground.
-  Still to do: the blend surfaces' stale constants (above): either upload FM4's pixel-shader
-  constants per draw (a hook where FH1 binds a track material) or move the materials to FH1's
-  own shaders; the stretched ground shows its blend texture's sandy channel more than grass;
+  Still to do: the blend surfaces' stale constants (above): reorder FM4's material pass
+  groups so FH1 reads their records (likely enough without a hook; a hook that uploads the
+  float blocks per draw is the fallback); the stretched ground shows its blend texture's sandy channel more than grass;
   the zone-size glitch above (likely the same stale constants: more materials per zone, more
   chances to draw after an unrelated effect).
 - The streaming block pool still needs `FORZA_FM4_STREAM_POOL`.
