@@ -25,6 +25,13 @@ TITLES = ("Horizon Bass Arena", "Horizon Pulse", "Horizon Rocks")
 LOGOS = ("RS_BassArena", "RS_Pulse", "RS_2Eleven")
 MAX_BANK = 0x7FFFFFFF
 MARKER = ".reimagined-radio.json"
+MAX_TAG = 100  # Characters in a custom song's artist or title (the stock names reach 47).
+# The stock station logos in media/ui/textures/Horizon.zip, Hud/Radio/ (#678): texture,
+# the slot it belongs to, and what it is. A custom logo replaces the slot's two textures.
+STOCK_LOGOS = (("RS_BassArena", "Radio1", "station logo"), ("RS_Pulse", "Radio2", "station logo"),
+               ("RS_2Eleven", "Radio3", "station logo"), ("Radio1", "Radio1", "station icon"),
+               ("Radio2", "Radio2", "station icon"), ("Radio3", "Radio3", "station icon"),
+               ("RS_Off", "", "radio off icon"))
 # Leveling (#662). The stock station songs (R1-R3 in Radio_Music.fsb) measure a median
 # -14.6 LUFS integrated, with true peaks at a median -4.4 dBTP and -2.8 dBTP at the 75th
 # percentile. The game plays the radio at musicLevel 0.85 times the player's Radio volume
@@ -82,7 +89,82 @@ def settings(cfg):
                 or len(songs) > 200 or any(not isinstance(s, str) for s in songs)):
             raise RadioError(f"{slot}: choose a name (1–64 characters), Add or Replace, and at most 200 songs.")
         out["stations"][slot] = {"name": name, "mode": mode, "songs": list(songs),
-                                  "logo": str(station.get("logo", ""))}
+                                  "logo": str(station.get("logo", "")),
+                                  "tags": _tags(slot, station.get("tags", {}), songs)}
+    return out
+
+
+def _tags(slot, value, songs):
+    """Per-song artist and title for the HUD (#678): {path: {"artist", "title"}}.
+
+    Empty fields use the defaults (the file name and the station name), and entries
+    for songs no longer in the playlist are dropped. Configs without tags still load.
+    """
+    if not isinstance(value, dict):
+        raise RadioError(f"{slot}: the song names are invalid. Restore launcher.json from its backup.")
+    out = {}
+    for song, tag in value.items():
+        if not isinstance(tag, dict):
+            raise RadioError(f"{slot}: the song names are invalid. Restore launcher.json from its backup.")
+        clean = {}
+        for field in ("artist", "title"):
+            text = tag.get(field, "")
+            if not isinstance(text, str):
+                raise RadioError(f"{slot}: the song names are invalid. Restore launcher.json from its backup.")
+            text = text.strip()
+            if len(text) > MAX_TAG or any(ord(c) < 32 for c in text):
+                raise RadioError(f"{slot}: a song's artist or title is longer than {MAX_TAG} characters "
+                                 "or has a line break.")
+            if text:
+                clean[field] = text
+        if clean and song in songs:
+            out[song] = clean
+    return out
+
+
+def song_names(station, song):
+    """(title, artist) the in-game radio HUD shows for a custom song."""
+    tag = station.get("tags", {}).get(song, {})
+    return tag.get("title") or Path(song).stem, tag.get("artist") or station["name"]
+
+
+def ffprobe_path(ffmpeg=""):
+    """FFprobe beside the chosen FFmpeg, else on PATH; None when there is none."""
+    if ffmpeg:
+        exe = Path(ffmpeg)
+        sibling = exe.with_name("ffprobe" + exe.suffix)
+        if sibling.is_file():
+            return str(sibling)
+    return shutil.which("ffprobe")
+
+
+def read_tags(song, ffprobe):
+    """The artist and title tags of a music file, read with FFprobe; {} when unavailable."""
+    if not ffprobe:
+        return {}
+    try:
+        result = subprocess.run(
+            [str(ffprobe), "-v", "error", "-show_entries", "format_tags:stream_tags", "-of", "json",
+             str(Path(song).resolve())], capture_output=True, timeout=15,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        probe = json.loads(result.stdout.decode("utf-8", "replace") or "{}")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return {}
+    if not isinstance(probe, dict):
+        return {}
+    # Container tags first (MP3, M4A), then stream tags (Ogg, Opus); keys differ in case.
+    sources = [probe.get("format", {})] + list(probe.get("streams", []) or [])
+    out = {}
+    for source in sources:
+        tags = source.get("tags", {}) if isinstance(source, dict) else {}
+        if not isinstance(tags, dict):
+            continue
+        for key, text in tags.items():
+            field = str(key).lower()
+            if field in ("artist", "title") and field not in out and isinstance(text, str):
+                text = " ".join(text.split())[:MAX_TAG]
+                if text:
+                    out[field] = text
     return out
 
 
@@ -366,6 +448,180 @@ def logo_xds(filename, width=210, height=100):
     return header + pixels
 
 
+def _updated(cfg):
+    """A reader that prefers the title update's media.zip member over the original file."""
+    paths.ensure_tools_importable()
+    from extract_map_points import read_member
+    from . import game as game_module
+    from .config import render_toml
+    install, _ = game_module.find_game(cfg)
+    update = game_module.update_data_root(cfg, install, render_toml(cfg)) / "media.zip" if install else None
+    extra = game_module.split_args(cfg.advanced.get("extra_args", ""))
+    for i, arg in enumerate(extra):
+        if arg.startswith("--update_data_root="):
+            update = Path(arg.split("=", 1)[1]) / "media.zip"
+        elif arg == "--update_data_root" and i + 1 < len(extra):
+            update = Path(extra[i + 1]) / "media.zip"
+    def updated(rel, original):
+        if update and update.is_file():
+            data = read_member(update, rel)
+            if data is not None:
+                return data
+        return original()
+    return updated
+
+
+def _tiled(x, y, width, log2):
+    """Xenos 2D tiled byte offset of element (x, y); width in elements, 2**log2 bytes each."""
+    macro = ((y >> 5) * (width >> 5)) << (log2 + 7)
+    micro = ((y & 6) << 2) << log2
+    base = macro + ((micro & ~0xF) << 1) + (micro & 0xF) + ((y & 8) << (3 + log2)) + ((y & 1) << 4)
+    macro = (x >> 5) << (log2 + 7)
+    micro = (x & 7) << log2
+    offset = base + macro + ((micro & ~0xF) << 1) + (micro & 0xF)
+    return (((offset & ~0x1FF) << 3) + ((offset & 0x1C0) << 2) + (offset & 0x3F)
+            + ((y & 16) << 7) + (((((y & 8) >> 2) + (x >> 3)) & 3) << 6))
+
+
+def _rgb565(value):
+    r, g, b = value >> 11, (value >> 5) & 63, value & 31
+    return (r << 3) | (r >> 2), (g << 2) | (g >> 4), (b << 3) | (b >> 2)
+
+
+def _dxt_colors(block, four):
+    c0, c1, bits = struct.unpack_from("<HHI", block)
+    a, b = _rgb565(c0), _rgb565(c1)
+    if four or c0 > c1:
+        palette = [a + (255,), b + (255,), tuple((2 * p + q) // 3 for p, q in zip(a, b)) + (255,),
+                   tuple((p + 2 * q) // 3 for p, q in zip(a, b)) + (255,)]
+    else:  # DXT1's three-colour mode: index 3 is transparent black.
+        palette = [a + (255,), b + (255,), tuple((p + q) // 2 for p, q in zip(a, b)) + (255,), (0, 0, 0, 0)]
+    return [palette[(bits >> 2 * i) & 3] for i in range(16)]
+
+
+def _dxt5_alpha(block):
+    a0, a1 = block[0], block[1]
+    bits = int.from_bytes(block[2:8], "little")
+    if a0 > a1:
+        palette = [a0, a1] + [((7 - i) * a0 + i * a1) // 7 for i in range(1, 7)]
+    else:
+        palette = [a0, a1] + [((5 - i) * a0 + i * a1) // 5 for i in range(1, 5)] + [0, 255]
+    return [palette[(bits >> 3 * i) & 7] for i in range(16)]
+
+
+# Xenos texture formats the radio HUD uses: fetch format -> (name, alpha, block bytes).
+# The *_AS_16_16_16_16 variants (51, 53) store the same blocks.
+XDS_FORMATS = {6: ("A8R8G8B8 (uncompressed)", "8-bit", 0), 18: ("DXT1 (BC1)", "1-bit", 8),
+               51: ("DXT1 (BC1)", "1-bit", 8), 20: ("DXT5 (BC3)", "8-bit", 16),
+               53: ("DXT5 (BC3)", "8-bit", 16)}
+
+
+def decode_xds(data):
+    """Decode a tiled 2D HUD texture to (width, height, RGBA bytes, format name, alpha kind)."""
+    if not 52 < len(data) <= 32 * 1024**2:
+        raise RadioError("The logo texture is empty or too large.")
+    words = struct.unpack_from(">13I", data)
+    fetch0, fetch1, dims = words[7], words[8], words[9]
+    fmt, endian = fetch1 & 0x3F, (fetch1 >> 6) & 3
+    if fmt not in XDS_FORMATS or not fetch0 >> 31:
+        raise RadioError(f"Unsupported logo texture format {fmt}.")
+    name, alpha, block = XDS_FORMATS[fmt]
+    width, height = (dims & 0x1FFF) + 1, ((dims >> 13) & 0x1FFF) + 1
+    pitch = ((fetch0 >> 22) & 0x1FF) * 32
+    if width * height > 4 * 1024**2 or pitch < width:
+        raise RadioError("The logo texture has invalid dimensions.")
+    pixels = bytearray(data[52:])
+    if endian == 1:  # 8-in-16: swap the bytes of every 16-bit word.
+        pixels[0::2], pixels[1::2] = pixels[1::2], pixels[0::2]
+    rgba = bytearray(width * height * 4)
+    if not block:
+        for y in range(height):
+            for x in range(width):
+                at = _tiled(x, y, pitch, 2)
+                if at + 4 > len(pixels):
+                    raise RadioError("The logo texture is truncated.")
+                a, r, g, b = pixels[at:at + 4]
+                rgba[(y * width + x) * 4:(y * width + x + 1) * 4] = bytes((r, g, b, a))
+        return width, height, bytes(rgba), name, alpha
+    log2 = 3 if block == 8 else 4
+    for by in range((height + 3) // 4):
+        for bx in range((width + 3) // 4):
+            at = _tiled(bx, by, pitch // 4, log2)
+            if at + block > len(pixels):
+                raise RadioError("The logo texture is truncated.")
+            raw = pixels[at:at + block]
+            if block == 8:
+                texels = _dxt_colors(raw, False)
+            else:
+                texels = [c[:3] + (a,) for c, a in zip(_dxt_colors(raw[8:], True), _dxt5_alpha(raw))]
+            for i, texel in enumerate(texels):
+                x, y = bx * 4 + i % 4, by * 4 + i // 4
+                if x < width and y < height:
+                    rgba[(y * width + x) * 4:(y * width + x + 1) * 4] = bytes(texel)
+    return width, height, bytes(rgba), name, alpha
+
+
+def _art_bounds(width, height, rgba):
+    """Bounding box of the visible (alpha > 0) pixels, or None when nothing is visible."""
+    xs, ys = [], []
+    for y in range(height):
+        row = rgba[y * width * 4 + 3:(y + 1) * width * 4:4]
+        visible = [x for x, a in enumerate(row) if a]
+        if visible:
+            xs += (visible[0], visible[-1])
+            ys.append(y)
+    if not ys:
+        return None
+    return {"x": min(xs), "y": ys[0], "width": max(xs) - min(xs) + 1, "height": ys[-1] - ys[0] + 1}
+
+
+def export_stock_logos(cfg, folder):
+    """Write the game's own station logos as PNGs plus stock-logos.json to folder (#678).
+
+    They come from the player's local game files and go only to the folder chosen.
+    Returns the number of logos written.
+    """
+    paths.ensure_tools_importable()
+    from extract_map_points import read_member
+    from xdc_decode import png_bytes
+    textures = Path(cfg.game_files()) / "media/ui"
+    archive = next((p for p in sorted(textures.glob("*/*.zip")) if p.parent.name.lower() == "textures"
+                    and p.name.lower() == "horizon.zip"), None) if textures.is_dir() else None
+    updated = _updated(cfg)
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    notes = []
+    for texture, slot, kind in STOCK_LOGOS:
+        rel = f"Hud/Radio/{texture}.xds"
+        data = updated(f"ui/textures/horizon/{rel}",
+                       lambda: read_member(archive, rel) if archive else None)
+        if data is None:
+            continue
+        width, height, rgba, fmt, alpha = decode_xds(data)
+        (folder / f"{texture}.png").write_bytes(png_bytes(width, height, rgba))
+        transparent = any(a < 255 for a in rgba[3::4])
+        note = {"file": f"{texture}.png", "game_texture": f"media/ui/textures/Horizon.zip/{rel}",
+                "kind": kind, "station": TITLES[SLOTS.index(slot)] if slot else "",
+                "slot": slot, "width": width, "height": height, "format": fmt,
+                "alpha": alpha if transparent else "opaque",
+                "visible_area": _art_bounds(width, height, rgba)}
+        if kind == "station logo":
+            note["custom_logo"] = ("A custom PNG is scaled to fit 210x72 without cropping, centred, "
+                                   "at the top of this 210x100 slot; the HUD draws the song's title "
+                                   "and artist over the bottom 28 pixels.")
+        elif kind == "station icon":
+            note["custom_logo"] = "A custom PNG is also scaled to fit this 64x32 icon, centred."
+        notes.append(note)
+    if not notes:
+        raise RadioError("The station logos were not found in your game files. "
+                         "Check the game files folder on the Setup page.")
+    (folder / "stock-logos.json").write_text(json.dumps({
+        "about": "Forza Horizon's own radio station logos, exported from your game files for "
+                 "reference. They are game assets: keep them to yourself.",
+        "logos": notes}, indent=2) + "\n", encoding="utf-8")
+    return len(notes)
+
+
 def build(cfg, progress=lambda n, total, text: None, cancelled=lambda: False):
     """Build privately, then atomically switch the generated overlay while idle."""
     spec = settings(cfg)
@@ -389,24 +645,8 @@ def build(cfg, progress=lambda n, total, text: None, cancelled=lambda: False):
     game = Path(cfg.game_files())
     radio = game / "media/audio/radio"
     bank = read_bank(radio / "Radio_Music.fsb")
-    paths.ensure_tools_importable()
+    updated = _updated(cfg)
     from extract_map_points import read_member
-    from . import game as game_module
-    from .config import render_toml
-    install, _ = game_module.find_game(cfg)
-    update = game_module.update_data_root(cfg, install, render_toml(cfg)) / "media.zip" if install else None
-    extra = game_module.split_args(cfg.advanced.get("extra_args", ""))
-    for i, arg in enumerate(extra):
-        if arg.startswith("--update_data_root="):
-            update = Path(arg.split("=", 1)[1]) / "media.zip"
-        elif arg == "--update_data_root" and i + 1 < len(extra):
-            update = Path(extra[i + 1]) / "media.zip"
-    def updated(rel, original):
-        if update and update.is_file():
-            data = read_member(update, rel)
-            if data is not None:
-                return data
-        return original()
     system = read_radio_xml(updated("audio/radio/RadioSystem.xml", lambda: (radio / "RadioSystem.xml").read_bytes()))
     info = read_radio_xml(updated("audio/radio/RadioSoundbankInfo_Music.xml", lambda: (radio / "RadioSoundbankInfo_Music.xml").read_bytes()))
     target = mods.mods_dir(cfg) / MOD
@@ -442,7 +682,8 @@ def build(cfg, progress=lambda n, total, text: None, cancelled=lambda: False):
                 samples = encode(song, encoded, ffmpeg, cancelled, spec["level"])
                 name = f"RI_{slot}_{done:04d}"
                 additions.append((sample_header(name, samples, encoded.stat().st_size), encoded))
-                ET.SubElement(native, "MusicTrack", name=Path(song).stem, artist=station["name"],
+                title, artist = song_names(station, song)
+                ET.SubElement(native, "MusicTrack", name=title, artist=artist,
                               fmodname=name, likelihoodDaytime="1", likelihoodMorning="1",
                               likelihoodEvening="1", likelihoodNight="1")
                 entry = ET.SubElement(info.getroot(), "Bank", Name=name)

@@ -356,6 +356,201 @@ class RadioTests(unittest.TestCase):
         shiboken6.delete(page)
         app.processEvents()
 
+    # --- Song artist and title (#678) ---
+
+    def test_configs_without_song_names_still_load(self):
+        cfg = Config(self.root / "launcher.json")
+        cfg.d["custom_radio"]["stations"]["Radio1"] = {"name": "Old", "songs": ["a.wav"], "mode": "add"}
+        station = radio.settings(cfg)["stations"]["Radio1"]
+        self.assertEqual(station["tags"], {})
+        self.assertEqual(radio.song_names(station, "dir/a.wav"), ("a", "Old"))
+
+    def test_song_names_survive_restart_and_drop_removed_songs(self):
+        cfg = Config(self.root / "launcher.json")
+        cfg.d["custom_radio"]["stations"]["Radio2"] = {
+            "name": "Night Drive", "songs": ["a.wav", "b.wav"], "mode": "replace",
+            "tags": {"a.wav": {"artist": " Chase & Status ", "title": "Blind Faith"},
+                     "b.wav": {"title": "Only Title", "artist": ""},
+                     "gone.wav": {"artist": "Removed"}}}
+        cfg.d["custom_radio"] = radio.settings(cfg)
+        cfg.save()
+        station = radio.settings(Config(cfg.path))["stations"]["Radio2"]
+        self.assertEqual(station["tags"], {"a.wav": {"artist": "Chase & Status", "title": "Blind Faith"},
+                                           "b.wav": {"title": "Only Title"}})
+        self.assertEqual(radio.song_names(station, "b.wav"), ("Only Title", "Night Drive"))
+
+    def test_invalid_song_names_rejected(self):
+        cfg = Config(self.root / "launcher.json")
+        for tags in ([], {"a.wav": "x"}, {"a.wav": {"artist": 3}},
+                     {"a.wav": {"title": "Line\nbreak"}}, {"a.wav": {"artist": "x" * (radio.MAX_TAG + 1)}}):
+            cfg.d["custom_radio"]["stations"] = {"Radio1": {"name": "N", "songs": ["a.wav"], "tags": tags}}
+            with self.assertRaises(radio.RadioError):
+                radio.settings(cfg)
+
+    def test_build_writes_edited_artist_and_title_for_the_hud(self):
+        cfg, encoded = self._build_fixture()
+        other = self.root / "other.wav"
+        other.touch()
+        station = cfg.d["custom_radio"]["stations"]["Radio1"]
+        song = station["songs"][0]
+        station["songs"].append(str(other))
+        station["tags"] = {song: {"artist": "Rusko & Friends", "title": "Everyday (VIP)"}}
+        with patch.object(radio, "encode", side_effect=encoded):
+            radio.build(cfg)
+        built = radio.mods.mods_dir(cfg) / radio.MOD / "media/audio/radio/RadioSystem.xml"
+        tracks = radio.read_radio_xml(built.read_bytes()).getroot().findall(".//MusicTrack")
+        self.assertEqual([(t.get("name"), t.get("artist")) for t in tracks],
+                         [("Everyday (VIP)", "Rusko & Friends"), ("other", "Test")])
+        self.assertIn(b'artist="Rusko &amp; Friends"', built.read_bytes())
+
+    def test_read_tags_from_ffprobe_json(self):
+        probe = {"format": {"tags": {"ARTIST": "Format  Artist"}},
+                 "streams": [{"tags": {"title": "Stream Title", "artist": "Ignored"}}]}
+        result = subprocess.CompletedProcess([], 0, json.dumps(probe).encode(), b"")
+        with patch.object(radio.subprocess, "run", return_value=result) as run:
+            self.assertEqual(radio.read_tags(self.root / "a.ogg", "ffprobe"),
+                             {"artist": "Format Artist", "title": "Stream Title"})
+        self.assertEqual(run.call_args[0][0][0], "ffprobe")
+        with patch.object(radio.subprocess, "run", side_effect=OSError("missing")):
+            self.assertEqual(radio.read_tags(self.root / "a.ogg", "ffprobe"), {})
+        self.assertEqual(radio.read_tags(self.root / "a.ogg", None), {})
+
+    def test_ffprobe_is_found_beside_the_chosen_ffmpeg(self):
+        ffmpeg, ffprobe = self.root / "ffmpeg.exe", self.root / "ffprobe.exe"
+        ffmpeg.touch()
+        ffprobe.touch()
+        self.assertEqual(radio.ffprobe_path(str(ffmpeg)), str(ffprobe))
+
+    def test_page_edits_song_names_prefilled_from_tags(self):
+        from PySide6.QtWidgets import QApplication, QDialog, QLineEdit
+        from forza_launcher.ui import radio_page
+        app = QApplication.instance() or QApplication([])
+        cfg = Config(self.root / "launcher.json")
+        class Window:
+            def running(self):
+                return False
+        page = radio_page.RadioPage(cfg, Window())
+        page.name.setText("Night Drive")
+        page._add(["/music/a.flac", "/music/b.flac"])
+        seen = []
+        def answer():
+            artist, title = page._edit_dialog.findChildren(QLineEdit)
+            seen.append((artist.text(), title.text()))
+            title.setText("  Edited   Title ")
+            return QDialog.Accepted
+        with patch.object(radio, "read_tags", return_value={"artist": "Tag Artist", "title": "Tag Title"}), \
+                patch.object(radio_page.QDialog, "exec", side_effect=answer):
+            page._edit(page.songs.item(0))
+        self.assertEqual(seen, [("Tag Artist", "Tag Title")])
+        saved = radio.settings(Config(cfg.path))["stations"]["Radio1"]
+        self.assertEqual(saved["songs"], ["/music/a.flac", "/music/b.flac"])
+        self.assertEqual(saved["tags"], {"/music/a.flac": {"artist": "Tag Artist", "title": "Edited Title"}})
+        self.assertIn("Tag Artist – Edited Title", page.songs.item(0).text())
+        self.assertEqual(page.songs.item(1).text(), "/music/b.flac")
+        # Stored names win over the file's tags; empty fields go back to the defaults.
+        with patch.object(radio, "read_tags", side_effect=AssertionError("not probed")), \
+                patch.object(radio_page.QDialog, "exec", side_effect=lambda: (
+                    seen.append(tuple(f.text() for f in page._edit_dialog.findChildren(QLineEdit))),
+                    [f.clear() for f in page._edit_dialog.findChildren(QLineEdit)],
+                    QDialog.Accepted)[-1]):
+            page._edit(page.songs.item(0))
+        self.assertEqual(seen[-1], ("Tag Artist", "Edited Title"))
+        self.assertEqual(radio.settings(Config(cfg.path))["stations"]["Radio1"]["tags"], {})
+        page._set_tags("/music/b.flac", "Someone", "")
+        page.songs.item(1).setSelected(True)
+        page._remove()
+        self.assertEqual(radio.settings(Config(cfg.path))["stations"]["Radio1"]["tags"], {})
+        page.close()
+        import shiboken6
+        shiboken6.delete(page)
+        app.processEvents()
+
+    # --- Exporting the stock logos (#678) ---
+
+    def test_custom_logo_texture_decodes_back_to_its_pixels(self):
+        from PySide6.QtGui import QImage, QColor
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance() or QApplication([])
+        image = QImage(210, 72, QImage.Format_RGBA8888)
+        image.fill(QColor(23, 67, 149, 211))
+        p = self.root / "logo.png"
+        image.save(str(p))
+        width, height, rgba, fmt, alpha = radio.decode_xds(radio.logo_xds(p))
+        self.assertEqual((width, height, alpha), (210, 100, "8-bit"))
+        self.assertIn("uncompressed", fmt)
+        self.assertEqual(rgba[(10 * 210 + 105) * 4:(10 * 210 + 106) * 4], bytes((23, 67, 149, 211)))
+        self.assertEqual(rgba[(99 * 210 + 105) * 4 + 3], 0)
+        self.assertEqual(radio._art_bounds(width, height, rgba), {"x": 0, "y": 0, "width": 210, "height": 72})
+
+    def test_dxt1_and_dxt5_logos_decode_from_tiled_blocks(self):
+        # DXT5: red at 200 alpha in block (0, 0), opaque white in block (9, 1).
+        red = bytes((200, 0)) + bytes(6) + struct.pack("<HHI", 0xF800, 0, 0)
+        white = bytes((255, 255)) + bytes(6) + struct.pack("<HHI", 0xFFFF, 0, 0)
+        width, height, rgba, fmt, alpha = radio.decode_xds(
+            dxt_texture(53, 16, 40, 8, {(0, 0): red, (9, 1): white}))
+        self.assertEqual((width, height, fmt, alpha), (40, 8, "DXT5 (BC3)", "8-bit"))
+        self.assertEqual(rgba[:4], bytes((255, 0, 0, 200)))
+        at = (5 * 40 + 37) * 4
+        self.assertEqual(rgba[at:at + 4], bytes((255, 255, 255, 255)))
+        self.assertEqual(rgba[(5 * 40) * 4 + 3], 0)  # An empty block is transparent.
+        # DXT1 three-colour mode (c0 < c1): index 0 is blue, index 3 transparent.
+        blue = struct.pack("<HHI", 0x001F, 0x07E0, 0b1100)
+        width, height, rgba, fmt, alpha = radio.decode_xds(dxt_texture(51, 8, 64, 32, {(3, 2): blue}))
+        self.assertEqual((width, height, fmt, alpha), (64, 32, "DXT1 (BC1)", "1-bit"))
+        at = (8 * 64 + 12) * 4
+        self.assertEqual(rgba[at:at + 8], bytes((0, 0, 255, 255, 0, 0, 0, 0)))
+        with self.assertRaises(radio.RadioError):
+            radio.decode_xds(dxt_texture(53, 16, 40, 8, {})[:52 + 64])
+
+    def test_export_writes_png_and_notes_to_the_chosen_folder_only(self):
+        import zipfile
+        game = self.root / "game"
+        textures = game / "media/ui/textures"
+        textures.mkdir(parents=True)
+        red = bytes((128, 128)) + bytes(6) + struct.pack("<HHI", 0xF800, 0, 0)
+        with zipfile.ZipFile(textures / "Horizon.zip", "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("Hud/Radio/RS_Pulse.xds", dxt_texture(53, 16, 210, 100, {(5, 6): red}))
+            zf.writestr("Hud/Radio/Radio2.xds", dxt_texture(51, 8, 64, 32, {}))
+        before = (textures / "Horizon.zip").read_bytes()
+        cfg = Config(self.root / "launcher.json")
+        cfg.d["game_root"] = str(game)
+        cfg.d["advanced"]["data_root"] = str(self.root / "data")
+        out = self.root / "export"
+        self.assertEqual(radio.export_stock_logos(cfg, out), 2)
+        self.assertEqual(sorted(p.name for p in out.iterdir()), ["RS_Pulse.png", "Radio2.png", "stock-logos.json"])
+        notes = {n["file"]: n for n in json.loads((out / "stock-logos.json").read_text())["logos"]}
+        pulse = notes["RS_Pulse.png"]
+        self.assertEqual((pulse["width"], pulse["height"], pulse["format"], pulse["alpha"], pulse["station"]),
+                         (210, 100, "DXT5 (BC3)", "8-bit", "Horizon Pulse"))
+        self.assertEqual(pulse["visible_area"], {"x": 20, "y": 24, "width": 4, "height": 4})
+        self.assertIn("210x72", pulse["custom_logo"])
+        self.assertEqual((notes["Radio2.png"]["alpha"], notes["Radio2.png"]["kind"]), ("opaque", "station icon"))
+        from PySide6.QtGui import QImage
+        png = QImage(str(out / "RS_Pulse.png"))
+        self.assertEqual((png.width(), png.height()), (210, 100))
+        self.assertEqual(png.pixelColor(21, 25).getRgb(), (255, 0, 0, 128))
+        self.assertEqual((textures / "Horizon.zip").read_bytes(), before)
+        self.assertFalse((self.root / "data").exists() and any((self.root / "data").rglob("*.png")))
+        (textures / "Horizon.zip").unlink()
+        with self.assertRaises(radio.RadioError):
+            radio.export_stock_logos(cfg, self.root / "empty")
+
+
+def dxt_texture(fmt, block, width, height, blocks):
+    """A synthetic tiled, 8-in-16 swapped DXT texture: {(block x, block y): block bytes}."""
+    pitch = (width + 127) & ~127
+    rows = (height + 127) & ~127
+    log2 = 3 if block == 8 else 4
+    pixels = bytearray(pitch // 4 * rows // 4 * block)
+    for (bx, by), raw in blocks.items():
+        at = radio._tiled(bx, by, pitch // 4, log2)
+        pixels[at:at + block] = raw
+    pixels[0::2], pixels[1::2] = pixels[1::2], pixels[0::2]
+    fetch0 = 0x800000FE | ((pitch // 32) << 22)
+    header = struct.pack(">13I", 3, 1, 0, 0, 0, 0xFFFF0000, 0xFFFF0000, fetch0, 0x40 | fmt,
+                         ((height - 1) << 13) | (width - 1), 0xD10, 0, 0xA00)
+    return header + bytes(pixels)
+
 
 def _ffmpeg_with_lame():
     ffmpeg = shutil.which("ffmpeg")
@@ -423,6 +618,21 @@ class RadioLevelingFFmpegTests(unittest.TestCase):
         self.assertLessEqual(peak, radio.LEVEL_CEILING + .5)
         self.assertLess(loudness, radio.LEVEL_TARGET - 3)
         self.assertLessEqual(loudness, before + .5)
+
+
+@unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg and FFprobe are not installed")
+class RadioTagsFFprobeTests(unittest.TestCase):
+    """Tags of generated test audio; no music is used."""
+
+    def test_artist_and_title_tags_are_read(self):
+        with tempfile.TemporaryDirectory() as temp:
+            for name in ("tone.flac", "tone.ogg", "tone.wav"):
+                song = Path(temp) / name
+                subprocess.run([shutil.which("ffmpeg"), "-nostdin", "-v", "error", "-f", "lavfi",
+                                "-i", "sine=f=440:duration=1", "-metadata", "artist=Test Artist",
+                                "-metadata", "title=Test Tone", str(song)], check=True, timeout=60)
+                self.assertEqual(radio.read_tags(song, shutil.which("ffprobe")),
+                                 {"artist": "Test Artist", "title": "Test Tone"}, name)
 
 
 if __name__ == "__main__":
