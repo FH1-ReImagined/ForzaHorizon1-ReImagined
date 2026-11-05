@@ -639,8 +639,8 @@ POOL_ZONES = int(os.environ.get("FM4_PVS_POOL_ZONES", "4"))
 # radius (m) of the instances that pick a zone's FM4 cells, _CELLS how many cells, _SIZE the
 # smallest extent (m) taken from them: 25, so stands and walls seen from far away are drawn
 # (120 before, while bigger zones still showed stale-constant colours; a lap at 25 m held 30
-# fps with 4% more draws and needed 3 x 4 MB more streaming blocks, FORZA_FM4_STREAM_POOL,
-# where 120 m needed 1).
+# fps with 4% more draws and needed 10 MB more streaming blocks (fm4_stream_blocks.txt,
+# STREAM_MARGIN) than at 120 m).
 VISIBLE = os.environ.get("FM4_PVS_VISIBLE", "1") == "1"
 VISIBLE_NEAR = float(os.environ.get("FM4_PVS_VISIBLE_NEAR", "40"))
 VISIBLE_CELLS = int(os.environ.get("FM4_PVS_VISIBLE_CELLS", "1"))
