@@ -12,7 +12,7 @@ converted files next to a copy of the game folder. Nothing from either game is i
 2. `tools/fm4_pvs.py convert MOD FH1_DISC LOOSE` converts the mod's layouts (ribbons):
    - each PVS from FM4's version 27 to FH1's 50, split into 100 m hex zones (`.hex`,
      `__RnnZnnnnn.pvsz`, `FilenameMap_nn.dat`, `PVSZLookup_nn.dat`); big models go into every
-     zone their extent reaches, and each zone also takes the large pieces (120 m and over)
+     zone their extent reaches, and each zone also takes the large pieces (25 m and over)
      of the FM4 visibility cell that best matches its centre (`FM4_PVS_VISIBLE*`);
    - texture records (FM4's atlas flag 8 and projected-lightmap flag 0x10 dropped), shader
      names, instance flags (high half 0x083F, FM4's low 16 bits, bit 28 dropped);
@@ -89,7 +89,8 @@ surface map.
 - FM4's PVS cells are visibility sets with no position, in order round the lap. Bigger zones
   (everything over 25 m from them) gave a flat black road, missing ground and cyan, green
   or blue kerbs and verges that change from run to run, so only pieces of 120 m and over
-  are added. The cause (a per-zone or live-set limit) isn't known.
+  were added. The cause was the stale constants (below): with them fixed, 25 m draws right
+  and is the default.
 - FH1 lights a track from `Tracks\<track>\Ribbon_NN\TimeOfDay{,A,B,Neutral}.xml` (sun,
   sky, clouds, haze, the clock's speed, keyed by minutes after midnight). FM4's circuits have
   none, and Suzuka came out with a deep blue night sky and a moon. With Colorado's curves
@@ -217,9 +218,8 @@ surface map.
 
 - (c) The road, terrain and buildings draw with FM4's own shaders, at 13:00, over a ground.
   Still to do: FM4's shadows (the shadow map reads 1, `shad_color` 1 and the shadow clip
-  constants 0: no shadows on the circuit); the stretched ground shows its blend texture's
-  sandy channel more than grass; `FM4_PVS_VISIBLE_SIZE` 25 as the default (above).
-- Where the next session starts (stopped for a PC restart):
+  constants 0: no shadows on the circuit; the shader rewrite they need is below).
+- Shadows, as far as looked into:
   - Shadows: FH1's colour-pass track shaders take shadows from a screen-space mask on s13
     (`ShadowMaskSamp`, fetched at the clip position the VS exports, divided by w in the PS);
     the cascades (CSMShadowMapLevel0-2TM c180-c191, s8) are only read by the passes that draw
@@ -231,17 +231,31 @@ surface map.
     with serialisation, which needs instructions inserted (control flow rewritten). Not done.
     FM4's own shadow colour is TrackSettings ShadowColor (0.389, 0.460, 0.565); with the
     shadow term at 1 it changes no pixel, so shad_color stays 1 until there is a shadow source.
-  - Ground: a pass with `FM4_PVS_GROUND=0` showed where the ground is seen (holes past the
-    circuit's edge at spots 4 and 9; the pale areas at spots 6 and 7 are FM4's own). It fills
-    them pale sand or white at spot 4 with any of the flat terr_blnd pieces (900, 866, 855,
-    272, 230, 503 tried), so it is its blend mask, not the model. New, not yet tested:
-    `FM4_PVS_GROUND_MASK=621` or `3` draws the ground with a copy of its model whose mask
-    (the texture record after its lightmap's atlas tile) is that flat texture (off by default;
-    the copy is <prefix>.NNNNN.rmb.bin with the next model number; Ribbon_00 and 02 got it,
-    01 kept its own). Next: run spots 4 and 9 with each and keep the one that reads grass.
-  - 25 m visible set as the default: lap.sh NAME SECS [SCALE] (trk-spike) is written for it
-    (autopilot from the grid, zone trace, streaming-block count, frame cost CSV); not run yet.
-    Compare a lap at 120 m and at 25 m (ran_out, max_blocks, cpu_ms and draws per frame).
-  - The trk-spike conversion was left mid-test (mask 621): run reconvert.sh before using it.
+- Ground: a pass with `FM4_PVS_GROUND=0` showed where the ground is seen: the holes past the
+  circuit's edge, as at spot 9 (behind the fence); the pale areas at spots 4, 6 and 7 are FM4's
+  own horizon landscape and run-off, the same with the ground off. The stretched piece took a
+  corner of its blend mask everywhere (pale sand and patches) whichever flat terr_blnd piece
+  it was (900, 866, 855, 272, 230, 503 tried). `FM4_PVS_GROUND_MASK=n` (a test, off) draws it
+  with a copy of its model whose mask (the texture record after its lightmap's atlas tile)
+  is texture n: at 120 m, 621 made the ground green at spot 9 and changed nothing else in a
+  9-spot pass, 3 made it white (the other layer). But with the 25 m visible set, 621 left a
+  hole at the grid's left verge (the horizon showing through, still after 60 s), where the
+  ground without it draws pale green and white: 621 is likely not a flat texture (it looks
+  bluish and clouded there). Not the default. Next: find (decode) a really flat texture in the
+  static pack, or point the mask at the grass layer's own texture and check which channel the
+  TERR_BLND shaders blend by. The copy is <prefix>.NNNNN.rmb.bin with the next model number
+  (Ribbon_00 and 02; 01 picks another ground model and keeps it as it is). Sheets (trk-spike,
+  not in the repo): shots/suzuka-spots-ground-mask.png (default, 621, 3 at 120 m) and
+  shots/suzuka-spots-25m-mask-off-on.png.
+- The visible set's 25 m default (`FM4_PVS_VISIBLE_SIZE`, 120 before): two autopilot runs from
+  the grid (`lap.sh NAME 450 0.5` in trk-spike, 5.1 km of the 5.8 km lap, 30 fps cap, frame cost
+  CSV and zone trace; `lap_cmp.py`) at 120 m and 25 m: the cap held in both (frame p99 33.8 ms,
+  no GPU wait), command processor CPU 2.24 -> 2.39 ms a frame, draws 1385 -> 1443 on average;
+  streaming blocks in use at most 24037 -> 34518, the pool topped up once -> three times (4096
+  blocks, 4 MB of guest heap, each; `FORZA_FM4_STREAM_POOL`, needed at 120 m as well).
+  No crash. So 25 m is the default; the largest zone holds 504 instances (404 at 120 m). Two
+  9-spot passes at 25 m drew the same and right (shots/suzuka-spots-vis25-run1-run2.png); it
+  also brings in geometry the 120 m set left out, such as the dark back of the grandstand at
+  spot 3.
 - The streaming block pool still needs `FORZA_FM4_STREAM_POOL`.
 - AI, the airport entry, ribbons 01 and 02, other circuits.

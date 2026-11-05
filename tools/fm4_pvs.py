@@ -501,7 +501,10 @@ GROUND_BELOW = float(os.environ.get("FM4_PVS_GROUND_BELOW", "4"))
 # times the ground took one corner of that mask everywhere: pale sand where the holes past
 # the circuit's edges were filled. The ground is drawn instead with a copy of its model
 # (<prefix>.NNNNN.rmb.bin, NNNNN the next model number) whose mask is texture
-# FM4_PVS_GROUND_MASK, a flat one (FM4's texture 621 or 3); "off" keeps the model's own.
+# FM4_PVS_GROUND_MASK (a test, off by default): Suzuka's 621 made the ground green at spot 9,
+# 3 white, but with the 25 m visible set 621 left a hole at the grid's verge (the horizon
+# showing through, also after 60 s): 621 is likely not a flat texture. A track without the
+# texture keeps the model's own mask.
 _mask = os.environ.get("FM4_PVS_GROUND_MASK", "off")
 GROUND_MASK = None if _mask == "off" else int(_mask)
 GROUND_COPIES = {}  # new model file: the file it is a copy of (made by convert_mod)
@@ -590,11 +593,14 @@ def ground_instance(F, used):
 POOL_ZONES = int(os.environ.get("FM4_PVS_POOL_ZONES", "4"))
 # FM4_PVS_VISIBLE=0 zones instances by position only (see convert); FM4_PVS_VISIBLE_NEAR the
 # radius (m) of the instances that pick a zone's FM4 cells, _CELLS how many cells, _SIZE the
-# smallest extent (m) taken from them.
+# smallest extent (m) taken from them: 25, so stands and walls seen from far away are drawn
+# (120 before, while bigger zones still showed stale-constant colours; a lap at 25 m held 30
+# fps with 4% more draws and needed 3 x 4 MB more streaming blocks, FORZA_FM4_STREAM_POOL,
+# where 120 m needed 1).
 VISIBLE = os.environ.get("FM4_PVS_VISIBLE", "1") == "1"
 VISIBLE_NEAR = float(os.environ.get("FM4_PVS_VISIBLE_NEAR", "40"))
 VISIBLE_CELLS = int(os.environ.get("FM4_PVS_VISIBLE_CELLS", "1"))
-VISIBLE_SIZE = float(os.environ.get("FM4_PVS_VISIBLE_SIZE", "120"))
+VISIBLE_SIZE = float(os.environ.get("FM4_PVS_VISIBLE_SIZE", "25"))
 # FM4_PVS_SKY=0 leaves FM4's sky dome out (see convert).
 SKY = os.environ.get("FM4_PVS_SKY", "1") == "1"
 SKY_EXTENT = 4200.0
