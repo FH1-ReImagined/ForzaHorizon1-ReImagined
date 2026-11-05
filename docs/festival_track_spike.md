@@ -53,7 +53,7 @@ Converter test switches: `FM4_PVS_FLAGS`, `FM4_PVS_FLAGMASK`, `FM4_PVS_SHADERS`,
 `FM4_PVS_PROJLM`, `FM4_PVS_SKY`, `FM4_PVS_SHADER_PATCHES`, `FM4_PVS_LIGHTMAPS`, `FM4_PVS_HEX`,
 `FM4_PVS_EXTENT`, `FM4_PVS_VISIBLE`, `FM4_PVS_VISIBLE_NEAR`, `FM4_PVS_VISIBLE_CELLS`, `FM4_PVS_VISIBLE_SIZE`,
 `FM4_PVS_TOD`, `FM4_PVS_TRACKSETTINGS`, `FM4_PVS_TRACKSETTINGS_FM4`, `FM4_SHADERS_LIGHTMAP`,
-`FM4_SHADERS_LIGHTMAP_COLOURS`, `FM4_SHADERS_TINTS`, `FM4_PVS_GROUND`, `FM4_PVS_GROUND_SCALE`, `FM4_PVS_GROUND_BELOW`, `FM4_PVS_GROUND_MODEL`,
+`FM4_SHADERS_LIGHTMAP_COLOURS`, `FM4_SHADERS_TINTS`, `FM4_PVS_PASS_GROUPS`, `FM4_PVS_PASS_GROUP_DROP`, `FM4_PVS_GROUND`, `FM4_PVS_GROUND_SCALE`, `FM4_PVS_GROUND_BELOW`, `FM4_PVS_GROUND_MODEL`,
 `FM4_COL_NORMALS`, `FM4_COL_WALL`, `FM4_COL_EDGES`, `FM4_COL_REMAP`, `FM4_COL_GRID`,
 `FM4_COL_SURFACE`, `FM4_COL_KEEP_DEGENERATE`; `FM4_DISC` (FM4's disc folder) for the
 surface map.
@@ -114,9 +114,15 @@ surface map.
   start with empty groups and put the populated one (25 records) after them (TERR_SZKA_014:
   E E E P, E E P, E E P, E E P, E E P, E E E E E). FH1 most likely takes the first group as
   the main pass and finds no records, so none of the material's constants or sampler states
-  are set. Not yet confirmed in FH1's code (the record kinds are handled in TU4
-  sub_82F6DD58/sub_82F6E0F8; the group reader is still to find); the next step is to
-  reorder FM4's groups in the converter, the same bytes, so no offsets move.
+  are set. The records turned out to be command-buffer fixups: TU4 sub_82D19210 switches on
+  the first word's low 4 bits (1, 2 vertex/index addresses; 3; 4 viewport floats; 5; 6
+  scissor; 7, 8; 9 a constant-data address; 10 an address). FH1's main passes use 1, 2, 3,
+  8, 9; FM4's also 4, 5, 6, 10. Swapping FM4's first populated group into group 0
+  (`FM4_PVS_PASS_GROUPS=1`, a test) makes FH1 run them: type 4 faulted on a null pointer
+  (FH1 passes no viewport data); with 4 and 6 made type 0 (skipped) the track loaded, but the
+  blend surfaces drew flat purple, and black with 5 dropped as well. So the group order is not
+  the whole story: the constants still do not reach the shaders. Next: the hook (upload each
+  material's float block, the c360_N values, and FM4's V2LightmapColor defaults per draw).
 - FM4's `TrackSettings.xml` (version 59) lacks FH1's renderer settings (Brightness, Contrast,
   ExposureBias, LightHemiTop/Bottom, WorldClear, bloom, height fog); read as it is, the
   circuit drew far too dark. The converter writes Colorado's with FM4's sun gain, lightmap,
@@ -127,9 +133,8 @@ surface map.
 ## Open
 
 - (c) The road, terrain and buildings draw with FM4's own shaders, at 13:00, over a ground.
-  Still to do: the blend surfaces' stale constants (above): reorder FM4's material pass
-  groups so FH1 reads their records (likely enough without a hook; a hook that uploads the
-  float blocks per draw is the fallback); the stretched ground shows its blend texture's sandy channel more than grass;
+  Still to do: the blend surfaces' stale constants (above), now for a hook that uploads
+  each material's float block per draw (the group reorder alone does not set them); the stretched ground shows its blend texture's sandy channel more than grass;
   the zone-size glitch above (likely the same stale constants: more materials per zone, more
   chances to draw after an unrelated effect).
 - The streaming block pool still needs `FORZA_FM4_STREAM_POOL`.

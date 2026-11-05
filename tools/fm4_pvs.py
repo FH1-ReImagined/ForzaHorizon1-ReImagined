@@ -761,6 +761,71 @@ def write_track_settings(fh1_disc, root):
             open(path, "w", encoding="utf-8").write(xml)
 
 
+# A model's materials (after its shader names) are an 8-word header and 21 pass groups:
+# u32 2, u32 n, n 8-byte records (u16 register, u8 pass, u8 size, u8 kind, 0, u16 data
+# offset: the constant blocks, samplers and uvOS constants the draw sets), u32 m, m 8-byte
+# entries, 3 sizes (0 for an empty group). Both games use the same layout, but FH1 keeps its
+# main pass in group 0 (57 of 60 Colorado models; the others hold 12 and 18) and FM4 keeps
+# group 0 empty and its first populated one at 3 (or 9, 6...). FH1 then set none of FM4's
+# material constants and its pixel shaders read another draw's: flat blue, green or magenta
+# road and walls, different every run. FM4_PVS_PASS_GROUPS=1 (a test, off by default) swaps
+# an empty group 0 with the first populated group; the groups between are empty (sizes 0),
+# so the data the sizes count stays where it was, and the file keeps its size. FH1 then
+# runs FM4's fixups (it faulted on type 4 until those were dropped) but the blend surfaces
+# still drew flat purple (types 5 kept) or black (5 dropped): the constants are not set
+# that way either.
+PASS_GROUPS = os.environ.get("FM4_PVS_PASS_GROUPS", "0") == "1"
+PASS_GROUP_DROP = {int(x, 0) for x in os.environ.get("FM4_PVS_PASS_GROUP_DROP", "4,5,6").split(",") if x}
+
+
+def pass_groups(d, p):
+    out = []
+    while p + 8 <= len(d) and len(out) < 21:
+        t, n = struct.unpack_from(">II", d, p)
+        if t != 2 or n > 4096:
+            return None
+        q = p + 8 + 8 * n
+        if q + 4 > len(d):
+            return None
+        m = struct.unpack_from(">I", d, q)[0]
+        q += 4 + 8 * m + 12
+        if m > 4096 or q > len(d):
+            return None
+        out.append((p, q, n, struct.unpack_from(">3I", d, q - 12)))
+        p = q
+    return out if len(out) == 21 else None
+
+
+def fix_pass_groups(data):
+    """The model file with its main pass group first (see PASS_GROUPS), or None if unchanged."""
+    k = data.rfind(b".fx")
+    if k < 0:
+        return None
+    p = k + 3
+    if p + 32 > len(data) or struct.unpack_from(">I", data, p)[0] != 1:
+        return None
+    g = pass_groups(data, p + 32)
+    if not g or g[0][2]:
+        return None
+    first = next((i for i, x in enumerate(g) if x[2]), None)
+    if first is None or any(any(x[3]) for x in g[:first]):
+        return None
+    a0, a1 = g[0][0], g[0][1]
+    b0, b1 = g[first][0], g[first][1]
+    moved = bytearray(data[b0:b1])
+    # The records are command-buffer fixups (TU4 sub_82D19210, switch on the first word's low
+    # 4 bits): FH1's main pass uses types 1, 2, 3, 8 and 9 and gives no data for the others;
+    # FM4's 4 (a viewport fixup in FH1's numbering) faulted on a null pointer. Types in
+    # PASS_GROUP_DROP become 0, which the switch skips.
+    for i in range(g[first][2]):
+        o = 8 + 8 * i
+        w = struct.unpack_from(">I", moved, o)[0]
+        if (w & 0xF) in PASS_GROUP_DROP:
+            struct.pack_into(">I", moved, o, w & ~0xF)
+    out = data[:a0] + bytes(moved) + data[a1:b0] + data[a0:a1] + data[b1:]
+    return out
+
+
 def convert_mod(mod, fh1_disc, loose):
     tracks = os.path.join(mod, "media", "tracks")
     (track,) = [d for d in os.listdir(tracks) if os.path.isdir(os.path.join(tracks, d))]
@@ -778,6 +843,16 @@ def convert_mod(mod, fh1_disc, loose):
              for dp, _, fs in os.walk(bin_dir) for n in fs
              if not n.endswith(".pvsz") and (keep_stx or not n.lower().endswith(".stx.bin"))]
     write_track_settings(fh1_disc, root)
+    if PASS_GROUPS:
+        fixed = 0
+        for n in os.listdir(bin_dir):
+            if n.lower().endswith(".rmb.bin"):
+                path = os.path.join(bin_dir, n)
+                out = fix_pass_groups(open(path, "rb").read())
+                if out is not None:
+                    open(path, "wb").write(out)
+                    fixed += 1
+        print(f"{track}: main pass group first in {fixed} models")
     ribbons = []
     for ribbon in sorted(d for d in os.listdir(root) if d.lower().startswith("ribbon_")):
         pvs = [f for f in os.listdir(os.path.join(root, ribbon)) if f.lower().endswith(".pvs")]
