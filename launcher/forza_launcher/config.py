@@ -58,7 +58,7 @@ def _default():
         # website account, so the card asks the service for the link's state.
         "web_account": {"linked": False},
         # One-time fixes of values an older launcher saved: done once, so a later choice sticks.
-        "migrated": {"discord_application_id": False},
+        "migrated": {"discord_application_id": False, "gpu_wait_blocking": False},
     }
 
 
@@ -100,7 +100,7 @@ class Config:
             data = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             # A new launcher.json starts with today's defaults: nothing to migrate later.
-            self.d["migrated"]["discord_application_id"] = True
+            self.d["migrated"].update(discord_application_id=True, gpu_wait_blocking=True)
             return
         if isinstance(data, dict):
             _merge(self.d, data)
@@ -123,6 +123,11 @@ class Config:
             if not str(self.d["settings"].get("discord_application_id") or "").strip():
                 self.d["settings"]["discord_application_id"] = schema.BY_KEY["discord_application_id"].default
             migrated["discord_application_id"] = True
+        # Up to 0.2.6 "Sleep while waiting for the GPU" was off by default on Windows (not measured
+        # there yet) and every launcher.json saved that off; it is on by default now (#640).
+        if not migrated.get("gpu_wait_blocking"):
+            self.d["settings"]["gpu_wait_blocking"] = True
+            migrated["gpu_wait_blocking"] = True
         self.d['haptics'] = normalize_haptics(self.d.get('haptics'))
         prefs = self.d.get('save_manager')
         if not isinstance(prefs, dict):

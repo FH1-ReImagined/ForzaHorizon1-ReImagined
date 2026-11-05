@@ -821,7 +821,7 @@ stays, and any other rate chosen in the menu replaces it. Tests: `launcher/test_
 **Battery saver (#140, Linux).** Display > Frame rate > Battery saver: Off (the default), On, or "Auto on battery
 (Steam Deck)". When it applies, Play starts the game at 30 fps and render scale 1 with AMD FSR 1 and Scene
 anti-aliasing Off (FSR 3 becomes FSR 1, SMAA and FSR Native AA the game's own anti-aliasing) and passes
-`--gpu_wait_blocking=true` (already the default on Linux). A frame rate of 20 or 40 stays: the player chose it for a
+`--gpu_wait_blocking=true` (already the default). A frame rate of 20 or 40 stays: the player chose it for a
 screen 30 does not divide (a Deck at 40 Hz). Only this start's `forza.toml` and command line change: `launcher.json`
 keeps the player's own values, which the next start on mains power uses again, and the player's own extra flags
 still come last. Auto applies on a Steam Deck (as the GPU detection finds it) whose battery runs it: no charger in
