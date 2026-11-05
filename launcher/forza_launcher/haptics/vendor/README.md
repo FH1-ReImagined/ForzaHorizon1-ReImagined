@@ -8,6 +8,7 @@ Adaptations: no connection pulse; trigger-only output (preserves lightbar,
 player LEDs and body rumble); discovery errors retry; avoid sleeping under
 producer lock; close handles after failed setup; launcher-specific error text;
 lazy package initialization; expose transport errors for launcher status;
-skip unchanged reports (#692).
+skip unchanged reports (#692); zone_vibration, the per-zone vibration mode (0x26)
+with its frequency in parameter 8 (#692).
 The FH1 packet receiver, lifecycle and resistance mapping
 are local code. No FH6 parser, UI, updater or audio dependencies are bundled.

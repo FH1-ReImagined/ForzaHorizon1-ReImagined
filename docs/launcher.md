@@ -330,14 +330,16 @@ with its MIT license and source revision included in
 `launcher/forza_launcher/ui/controller_art/`. The images and button sprites are
 bundled locally, so the guide works offline.
 
-The **DualSense adaptive triggers** card saves throttle resistance, brake
-resistance and overall intensity. Effects default off. The launcher starts the
+The **DualSense adaptive triggers** card saves throttle strength, brake
+strength and overall intensity. Effects default off. The launcher starts the
 loopback telemetry service only when either haptics option is enabled at game
 launch. If both were off, enabling an effect during play requires a game restart;
 Controls shows a restart hint. Once telemetry is running, effects can be changed
 during play. It requires a rebuilt game with the FH1 telemetry bridge and a DualSense
-or DualSense Edge. This first version uses default-layout LT/RT inputs; RPM,
-tire slip, ABS and surface effects are not mapped yet. Status shows whether the
+or DualSense Edge. It assumes the default layout (LT brake, RT throttle). The
+effects follow the car, not the trigger: the brake stiffens with the deceleration and
+pulses with ABS or a locked wheel, the throttle buzzes on wheelspin and gets a light
+wall at the rev limiter, and both shake on rough ground and in a crash. Status shows whether the
 controller and driving telemetry are ready. See [telemetry.md](telemetry.md) for
 the protocol, hardware limitations and validation.
 

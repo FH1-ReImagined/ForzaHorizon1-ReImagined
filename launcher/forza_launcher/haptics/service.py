@@ -8,7 +8,8 @@ from dataclasses import replace
 
 from .settings import normalize
 from .telemetry import Decoder
-from .vendor.dualsense.triggers import feedback, off
+from .feel import Feel
+from .vendor.dualsense.triggers import off
 from .xbox import XboxOutput
 
 STALE_SECONDS = .35
@@ -28,35 +29,6 @@ def supports_xbox(directory):
         return supported(directory) and metadata.get('xbox_trigger_rumble') == 1
     except (OSError, ValueError, AttributeError):
         return False
-
-
-ZONES = 10  # MultiplePositionFeedback: ten zones along the trigger's travel
-
-
-def profile(strength, intensity):
-    """Resistance that grows with the press: each zone has the force the trigger's position in it
-    asks for (strength 0-8 at full travel, scaled by intensity %). The first zone stays free."""
-    top = strength * intensity / 100
-    return [int(top*(i+.5)/ZONES + .5) for i in range(ZONES)]
-
-
-def effects(frame, settings):
-    """Basic resistance for the default driving layout (LT brake, RT throttle).
-
-    The effect is a fixed per-zone profile, so the controller itself makes the trigger stiffer the
-    deeper it goes. It does not follow the live LT/RT value: an effect set from the trigger's
-    position moves the trigger, the next report moves the effect, and over Bluetooth's latency a
-    trigger held half way bounced between two forces (#224, #692). The pair changes only when
-    driving starts or stops or a setting changes. Deliberately does not infer ABS, traction,
-    gears or RPM from missing signals. Without a frame or outside driving (`frame.active` is false
-    in menus) both triggers are released.
-    """
-    if frame is None or not frame.active or not settings['enabled']:
-        return off(), off()
-    def pedal(strength):
-        zones = profile(strength, settings['intensity'])
-        return feedback(zones) if any(zones) else off()
-    return pedal(settings['brake_strength']), pedal(settings['throttle_strength'])
 
 
 class HapticsService:
@@ -121,6 +93,7 @@ class HapticsService:
     def _run(self):
         device = None
         failed = False
+        feel = Feel()  # the effects follow the car, never the trigger (feel.py, #692)
         try:
             while not self._stop.is_set():
                 data = None
@@ -157,7 +130,7 @@ class HapticsService:
                             device.close()
                         device, failed = None, True
                 if device:
-                    device.set(*effects(frame, settings))
+                    device.set(*feel.update(frame, settings, time.monotonic()))
                     if not settings['enabled']:
                         device.close()
                         device = None

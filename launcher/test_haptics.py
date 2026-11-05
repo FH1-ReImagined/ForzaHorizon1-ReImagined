@@ -12,7 +12,8 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from forza_launcher.haptics.settings import normalize, DEFAULTS
 from forza_launcher.haptics.telemetry import WIRE, Decoder
-from forza_launcher.haptics.service import HapticsService, effects, profile, supported
+from forza_launcher.haptics.feel import Feel
+from forza_launcher.haptics.service import HapticsService, supported
 from forza_launcher.haptics.vendor.dualsense.triggers import off
 
 
@@ -56,55 +57,28 @@ class PacketTests(unittest.TestCase):
         self.assertIsNone(decoder.decode(packet(seq=1, stamp=99)))
         self.assertIsNotNone(decoder.decode(packet(seq=1, stamp=101)))
 
-    def test_sequence_wrap_and_raw_input_mapping(self):
+    def test_sequence_wrap_and_v1_pedal_weight(self):
         decoder = Decoder(1)
         self.assertIsNotNone(decoder.decode(packet(seq=0xffffffff)))
         frame = decoder.decode(packet(seq=0))
         prefs = {**DEFAULTS, 'enabled': True, 'intensity': 100}
-        left, right = effects(frame, prefs)
-        self.assertEqual(left[0], 0x21)
-        self.assertNotEqual(left, right)
-        self.assertEqual(effects(frame, {**prefs, 'intensity': 0}), (off(), off()))
-        self.assertEqual(effects(None, prefs), (off(), off()))
-
-    def test_held_half_press_does_not_flicker(self):
-        # #224, #692: the effect must not follow the trigger. A trigger held half way, jittering
-        # or pushed back by the resistance, keeps one steady effect: the controller applies the
-        # per-zone profile itself, so nothing is re-sent while the trigger moves.
-        for prefs in ({**DEFAULTS, 'enabled': True}, {**DEFAULTS, 'enabled': True, 'intensity': 100}):
-            decoder = Decoder(1)
-            out = set()
-            for seq, v in enumerate([0, 20, 61, 59, 62, 60, 127, 129, 126, 130, 200, 255, 4, 12, 0]):
-                out.add(effects(decoder.decode(packet(seq=seq, stamp=seq+1, throttle=v, brake=v)), prefs))
-            self.assertEqual(len(out), 1)
-            left, right = out.pop()
-            self.assertEqual((left[0], right[0]), (0x21, 0x21))
-
-    def test_resistance_grows_with_the_press(self):
-        for strength in range(9):
-            for intensity in (0, 35, 70, 100):
-                zones = profile(strength, intensity)
-                self.assertEqual(len(zones), 10)
-                self.assertEqual(zones, sorted(zones))
-                self.assertEqual(zones[0], 0)  # the first tenth of travel stays free
-                self.assertLessEqual(zones[-1], 8)
-        self.assertEqual(profile(8, 100), [0, 1, 2, 3, 4, 4, 5, 6, 7, 8])
-        self.assertEqual(profile(3, 70), [0, 0, 1, 1, 1, 1, 1, 2, 2, 2])  # default throttle
-        prefs = {**DEFAULTS, 'enabled': True, 'throttle_strength': 0}
-        frame = Decoder(1).decode(packet())
-        self.assertEqual(effects(frame, prefs)[1], off())
-        self.assertEqual(effects(frame, {**prefs, 'throttle_strength': 1, 'intensity': 10})[1], off())
+        left, right = Feel().update(frame, prefs)
+        self.assertEqual(left[0], 0x21)  # a v1 game: light brake weight only (test_trigger_feel)
+        self.assertEqual(right, off())
+        self.assertEqual(Feel().update(frame, {**prefs, 'intensity': 0}), (off(), off()))
+        self.assertEqual(Feel().update(None, prefs), (off(), off()))
 
     def test_menus_release_the_triggers_and_driving_brings_them_back(self):
         decoder = Decoder(1)
         prefs = {**DEFAULTS, 'enabled': True, 'intensity': 100}
+        feel = Feel()
         driving = decoder.decode(packet(seq=0, stamp=1, active=1))
         menu = decoder.decode(packet(seq=1, stamp=2, active=0, flags=0))
         again = decoder.decode(packet(seq=2, stamp=3, active=1))
-        on = effects(driving, prefs)
+        on = feel.update(driving, prefs)
         self.assertEqual(on[0][0], 0x21)
-        self.assertEqual(effects(menu, prefs), (off(), off()))
-        self.assertEqual(effects(again, prefs), on)
+        self.assertEqual(feel.update(menu, prefs), (off(), off()))
+        self.assertEqual(feel.update(again, prefs), on)
 
     def test_settings_normalize_and_capability_detection(self):
         self.assertEqual(normalize(None), DEFAULTS)
