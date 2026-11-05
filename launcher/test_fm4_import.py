@@ -602,10 +602,32 @@ class Fm4FormTests(unittest.TestCase):
                 t.addfile(info, io.BytesIO(data))
                 t.addfile(self._tarinfo("evil", extra))
             out = self.t / f"out-{kind}"
-            with self.assertRaises(fm4cars.Fm4Error) as e:  # the tool path, as for .7z and .rar
+            try:  # the tool path, as for .7z and .rar
                 fm4cars.unpack_archive(tar, "tar", True, out, lambda *a: None, lambda: False)
-            self.assertIn(f"{kind}.tar holds an unsafe entry (", str(e.exception))
-            self.assertFalse(out.exists())
+            except fm4cars.Fm4Error as e:  # the tool made the link: refused, nothing left
+                self.assertIn(f"{kind}.tar holds an unsafe entry (", str(e))
+                self.assertFalse(out.exists())
+            else:  # the tool wrote it as a plain file (older p7zip) or left it out
+                self.assertIsNone(fm4cars.unsafe_entry(out))
+
+    def test_a_link_an_extractor_leaves_is_refused_and_deleted(self):
+        (self.t / "fm4.7z").write_bytes(b"7z\xbc\xaf\x27\x1c" + b"\0" * 32)
+        out = self.t / "out"
+
+        def tool(exe, p, out, progress, cancelled):
+            (out / "fm4.iso").write_bytes(b"x")
+            try:
+                os.symlink("/", out / "root")
+            except OSError:
+                os.mkfifo(out / "root") if hasattr(os, "mkfifo") else self.skipTest("no links here")
+            return None
+        with patch.object(fm4cars, "_tool_paths", lambda kind: ["7z"]), \
+                patch.object(fm4cars, "_tool_size", lambda exe, p: None), patch.object(fm4cars, "_run_tool", tool):
+            with self.assertRaises(fm4cars.Fm4Error) as e:
+                fm4cars.unpack_archive(self.t / "fm4.7z", "7z", False, out, lambda *a: None, lambda: False)
+        self.assertIn("fm4.7z holds an unsafe entry (root: ", str(e.exception))
+        self.assertFalse(out.exists())
+        self.assertTrue(Path("/").exists())
         # nothing but plain files and folders passes
         (self.t / "ok").mkdir()
         (self.t / "ok/a").write_bytes(b"x")
