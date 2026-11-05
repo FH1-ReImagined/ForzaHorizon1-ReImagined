@@ -149,6 +149,21 @@ surface map.
   and converting FM4's buffers come down to writing FH1's precompiled command-buffer format
   (a header of state masks and sizes, then tagged register-write entries: 0x84.., 0x88..,
   0xC4.., 0xC8..), not decoded yet.
+- PM4 decoding (the SDK's packet layout): a group's first data area is the buffer's header
+  and state masks; the second (header word 4 bytes, from the end of the first) is plain PM4
+  in both games: NOPs, type-0 writes of VS c0.. and PS c0..c7 (FM4's carry the material's
+  tint and tiling, e.g. PS c0 = 0.503, 0.565, 0.485, 0.518 and c1 = 4, 4, 1, 50 for
+  TERR_SZKA_014), PS c116..c127 (zeros, patched by type 8: the uvOS), IM_LOAD (shaders),
+  LOAD_ALU_CONSTANT, the fetch constants, viewport and scissor registers, DRAW_INDX (index
+  address 0xFFFFFFFF, patched). FH1's (Colorado's) have the same shape: group 0 is a
+  one-shader pass (depth), groups 3 and 6 the colour passes with two shaders, as FM4's group
+  3. The fixup kinds match too (5/0x41, 4/0x43 viewport, 6/0x42 scissor, 9, 10, 3, 8), so the
+  formats are compatible. Skipping FM4's fixup types (`FM4_PVS_FIXUP_DROP`, a test): 4
+  removes most draws (viewport), 6 changes nothing visible, 5 breaks the framing; none makes
+  the colours right. So FM4's buffers, with their constant writes, are most likely not what
+  FH1 draws FM4's colour pass with; the next step would be a run-time trace of the PS
+  constants at each draw (a command-processor IssueDraw wrapper) to see which path draws
+  them.
 - FM4's `TrackSettings.xml` (version 59) lacks FH1's renderer settings (Brightness, Contrast,
   ExposureBias, LightHemiTop/Bottom, WorldClear, bloom, height fog); read as it is, the
   circuit drew far too dark. The converter writes Colorado's with FM4's sun gain, lightmap,

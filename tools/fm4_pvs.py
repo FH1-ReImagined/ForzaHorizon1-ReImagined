@@ -796,6 +796,30 @@ def pass_groups(d, p):
     return out if len(out) == 21 else None
 
 
+# FM4_PVS_FIXUP_DROP=4,5,6: those command-buffer fixup types become 0 (skipped) in every
+# pass group (a test; see PASS_GROUPS for the record layout).
+FIXUP_DROP = {int(x, 0) for x in os.environ.get("FM4_PVS_FIXUP_DROP", "").split(",") if x}
+
+
+def drop_fixups(data):
+    k = data.rfind(b".fx")
+    if k < 0 or not FIXUP_DROP:
+        return None
+    g = pass_groups(data, k + 3 + 32)
+    if not g:
+        return None
+    out = bytearray(data)
+    hit = 0
+    for p0, p1, n, sizes in g:
+        for i in range(n):
+            o = p0 + 8 + 8 * i
+            w = struct.unpack_from(">I", out, o)[0]
+            if (w & 0xF) in FIXUP_DROP:
+                struct.pack_into(">I", out, o, w & ~0xF)
+                hit += 1
+    return bytes(out) if hit else None
+
+
 def fix_pass_groups(data):
     """The model file with its main pass group first (see PASS_GROUPS), or None if unchanged."""
     k = data.rfind(b".fx")
@@ -843,6 +867,16 @@ def convert_mod(mod, fh1_disc, loose):
              for dp, _, fs in os.walk(bin_dir) for n in fs
              if not n.endswith(".pvsz") and (keep_stx or not n.lower().endswith(".stx.bin"))]
     write_track_settings(fh1_disc, root)
+    if FIXUP_DROP:
+        dropped = 0
+        for n in os.listdir(bin_dir):
+            if n.lower().endswith(".rmb.bin"):
+                path = os.path.join(bin_dir, n)
+                out = drop_fixups(open(path, "rb").read())
+                if out is not None:
+                    open(path, "wb").write(out)
+                    dropped += 1
+        print(f"{track}: fixups {sorted(FIXUP_DROP)} dropped in {dropped} models")
     if PASS_GROUPS:
         fixed = 0
         for n in os.listdir(bin_dir):
