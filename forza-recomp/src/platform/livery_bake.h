@@ -26,6 +26,17 @@ inline uint32_t ParseScale(int32_t value) { return value == 2 ? 2u : 1u; }
 
 inline uint32_t ScaledSize(uint32_t size, uint32_t scale) { return size * scale; }
 
+// +236 of a paint job: -1 the Paint Shop's editor, 1 a car's (its layout is saved once drawn,
+// sub_82D4E7D0), 2 photo mode's copy, which draws no sides and loads that saved layout instead
+// (sub_82D4E9F0, as many bytes as its own layout holds).
+constexpr uint32_t kCopy = 2;
+
+// The size of a copy's layout: the size its source layout was saved at when that is the scale's
+// (a driving paint job drawn at 2x), else the game's (a save of unknown size included).
+inline uint32_t CopyLayoutSize(uint32_t scale, uint32_t saved_size) {
+  return scale > 1 && saved_size == ScaledSize(kGameSize, scale) ? saved_size : kGameSize;
+}
+
 struct Texture {
   uint32_t width;
   uint32_t height;

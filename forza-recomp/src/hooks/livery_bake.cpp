@@ -27,11 +27,18 @@
 // the compression follow the sizes. Only a driving car's paint job (mode 6 or 8) is scaled:
 // the Paint Shop's editor has its own 2048x2048 layout (+236 -1), and photo mode's paint job
 // (mode 7, 8:8:8:8 final textures) has no room at 2048 (see Scaled below).
+// Photo mode's paint job draws no sides: it loads the layout its driving paint job saved once
+// drawn (sub_82D4E7D0, compressed, the layout's size squared x 4 bytes; sub_82D4E9F0 reads as
+// many bytes as its own layout holds). At 2x that save is 2048x2048, so photo mode's layout is
+// made 2048x2048 too when its save is (in the heap the driving paint job's render copies came
+// from: photo mode's own heap has no room for it), and the photo's final textures stay
+// 1024x1024 (#680: read into a 1024x1024 layout, a quarter of the save came out cut into bands
+// and shifted, the decals gone or in the wrong place).
 // The scale is read once. 4096 is not offered: the game's memory for render textures has no
 // room for them (the first 4096x4096 texture is not made and the game stops on the missing
 // livery). Memory: src/platform/livery_bake.h, docs/graphics-detail.md.
 // Disc build: sub_82C92390, sub_82C9A2D8, sub_82C8B028, sub_82C8D750, sub_82C38828,
-// sub_8252CC60, sub_82A40CB0 and sub_82C90178.
+// sub_8252CC60, sub_82A40CB0, sub_82C90178 and sub_82C8D7D8; heap ids at 0x832A85C8/CC.
 // tu_address_map: TU4 addresses
 
 #include "../platform/guest_addr.h"
@@ -46,6 +53,8 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <mutex>
+#include <unordered_map>
 
 REXCVAR_DEFINE_INT32(livery_bake_scale, 1, "Display",
                      "Resolution of the textures each car's paint job (vinyls and decals) is drawn "
@@ -53,6 +62,10 @@ REXCVAR_DEFINE_INT32(livery_bake_scale, 1, "Display",
                      "sharper small decals, more memory per car with a paint job)");
 
 #if FORZA_TU4
+// The heap ids the layout (LivRenderTexture) and the render copies (LivRenderPristineN/DamageN)
+// are made from (photo mode sets its own).
+constexpr uint32_t kLayoutHeap = 0x83393FF8;
+constexpr uint32_t kRenderHeap = 0x83393FFC;
 #define RenderSetupStep sub_82D53420
 #define OriginalRenderSetupStep __imp__sub_82D53420
 #define CompressedSetupStep sub_82D5B3D0
@@ -69,7 +82,11 @@ REXCVAR_DEFINE_INT32(livery_bake_scale, 1, "Display",
 #define OriginalTextureHeaderCore __imp__sub_82AFE400
 #define BlitSection sub_82D511B8
 #define OriginalBlitSection __imp__sub_82D511B8
+#define SaveLayout sub_82D4E7D0
+#define OriginalSaveLayout __imp__sub_82D4E7D0
 #else
+constexpr uint32_t kLayoutHeap = 0x832A85C8;
+constexpr uint32_t kRenderHeap = 0x832A85CC;
 #define RenderSetupStep sub_82C92390
 #define OriginalRenderSetupStep __imp__sub_82C92390
 #define CompressedSetupStep sub_82C9A2D8
@@ -86,6 +103,8 @@ REXCVAR_DEFINE_INT32(livery_bake_scale, 1, "Display",
 #define OriginalTextureHeaderCore __imp__sub_82A40CB0
 #define BlitSection sub_82C90178
 #define OriginalBlitSection __imp__sub_82C90178
+#define SaveLayout sub_82C8D7D8
+#define OriginalSaveLayout __imp__sub_82C8D7D8
 #endif
 extern "C" REX_FUNC(OriginalRenderSetupStep);
 extern "C" REX_FUNC(OriginalCompressedSetupStep);
@@ -95,14 +114,17 @@ extern "C" REX_FUNC(OriginalMakeRenderTexture);
 extern "C" REX_FUNC(OriginalMakeScratchTextures);
 extern "C" REX_FUNC(OriginalTextureHeaderCore);
 extern "C" REX_FUNC(OriginalBlitSection);
+extern "C" REX_FUNC(OriginalSaveLayout);
 
 namespace {
 namespace lb = forza::livery_bake;
 
 // The setup's texture layout size (+60): 1024, or 2048 in the Paint Shop.
 constexpr uint32_t kLayoutSizeOffset = 60;
-// -1 in the Paint Shop.
+// -1 in the Paint Shop, 1 a car's paint job, 2 photo mode's copy of it (lb::kCopy).
 constexpr uint32_t kPaintShopOffset = 236;
+// A copy's source: the object holding the saved layout (its data at +8).
+constexpr uint32_t kSourceOffset = 12;
 // What the paint job is drawn for (sub_82D5B3D0 picks its final textures by it).
 constexpr uint32_t kModeOffset = 232;
 // Each side's rectangle in the layout (in the paint job the blit gets): 4 floats a side.
@@ -118,6 +140,19 @@ thread_local bool g_in_scratch = false;
 std::atomic<bool> g_unscaled_layout{false};
 
 std::atomic<uint32_t> g_logged{0};
+
+// The heap a scaled driving paint job's render copies came from (0 before the first).
+std::atomic<uint32_t> g_render_heap{0};
+
+// The layouts driving paint jobs saved: the saved data's address and the size it was saved at.
+std::mutex g_saved_mutex;
+std::unordered_map<uint32_t, uint32_t> g_saved;  // guarded by g_saved_mutex
+
+uint32_t SavedSize(uint32_t data) {
+  std::lock_guard lock(g_saved_mutex);
+  const auto it = g_saved.find(data);
+  return it == g_saved.end() ? 0 : it->second;
+}
 
 uint32_t Scale() {
   static const uint32_t scale = [] {
@@ -162,11 +197,21 @@ void ScaleLayoutSize(uint8_t* base, uint32_t setup) {
   if (Load32(base, at) == lb::kGameSize) Store32(base, at, lb::ScaledSize(lb::kGameSize, scale));
 }
 
+// The size photo mode's copy of a paint job gets for its layout: its saved layout's (0 for any
+// other paint job).
+uint32_t CopyLayoutSize(uint8_t* base, uint32_t setup) {
+  if (!setup || Load32(base, setup + kPaintShopOffset) != lb::kCopy) return 0;
+  const uint32_t source = Load32(base, setup + kSourceOffset);
+  const uint32_t data = source >= 0x10000 ? Load32(base, source + 8) : 0;
+  return lb::CopyLayoutSize(Scale(), data ? SavedSize(data) : 0);
+}
+
 }  // namespace
 
 // One step of a car livery's setup: makes at most one of LivRenderPristineN/DamageN (or 0).
 extern "C" REX_FUNC(RenderSetupStep) {
   g_in_livery = Scaled(base, ctx.r3.u32);
+  if (g_in_livery && Scale() > 1) g_render_heap = Load32(base, kRenderHeap);
   OriginalRenderSetupStep(ctx, base);
   g_in_livery = false;
 }
@@ -191,11 +236,26 @@ extern "C" REX_FUNC(MakeLayoutTexture) {
                   scaled ? "scaled" : "the game's size");
     }
   }
+  // Photo mode's copy takes its save's size, from the render copies' heap (see the top).
+  const uint32_t copy = CopyLayoutSize(base, setup);
+  const uint32_t render_heap = g_render_heap.load();
+  const bool scaled_copy = copy > lb::kGameSize && render_heap;
+  const uint32_t layout_heap = Load32(base, kLayoutHeap);
+  const bool other_heap = scaled_copy;
   g_unscaled_layout = !scaled;
-  g_in_livery = scaled;
+  g_in_livery = scaled || scaled_copy;
+  if (other_heap) Store32(base, kLayoutHeap, render_heap);
   OriginalMakeLayoutTexture(ctx, base);
+  if (other_heap) Store32(base, kLayoutHeap, layout_heap);
   g_in_livery = false;
   if (scaled) ScaleLayoutSize(base, setup);
+  if (scaled_copy && Load32(base, setup + kLayoutSizeOffset) == lb::kGameSize) {
+    Store32(base, setup + kLayoutSizeOffset, copy);
+    static std::atomic<uint32_t> logged{0};
+    if (logged.fetch_add(1, std::memory_order_relaxed) < 4) {
+      REXLOG_INFO("livery_bake_scale: photo mode's paint job loads a {}x{} layout", copy, copy);
+    }
+  }
 }
 
 // Sets the layout size again (1024, or 2048 in the Paint Shop).
@@ -207,6 +267,19 @@ extern "C" REX_FUNC(ResetLayoutSize) {
   } else {
     g_unscaled_layout = true;
   }
+}
+
+// Saves a driving paint job's layout for photo mode's copy (r3 where the saved data goes, r4 the
+// layout texture, r5 its size): the size is kept with the data's address.
+extern "C" REX_FUNC(SaveLayout) {
+  const uint32_t out = ctx.r3.u32, size = ctx.r5.u32;
+  OriginalSaveLayout(ctx, base);
+  const uint32_t saved = out >= 0x10000 ? Load32(base, out) : 0;
+  const uint32_t data = saved >= 0x10000 ? Load32(base, saved + 8) : 0;
+  if (!data) return;
+  std::lock_guard lock(g_saved_mutex);
+  if (g_saved.size() >= 64) g_saved.clear();  // one per paint job drawn; never grows unbounded
+  g_saved[data] = size;
 }
 
 // Makes a render texture: r3 the slot, r4 width, r5 height, r6 format, r7 name, r9 levels.

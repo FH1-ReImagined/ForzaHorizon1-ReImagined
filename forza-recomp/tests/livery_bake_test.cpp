@@ -51,6 +51,16 @@ int main() {
   CHECK(Same(l::Scaled({1024, 1024, 0}, 4), {1024, 1024, 0}));
   CHECK(l::ScaledSize(1024, 2) == 2048);
 
+  // Photo mode's copy of a paint job loads the layout its driving paint job saved, as many bytes
+  // as its own layout holds: its layout takes the saved size at 2x (#680), the game's otherwise.
+  CHECK(l::CopyLayoutSize(1, 1024) == 1024);
+  CHECK(l::CopyLayoutSize(2, 2048) == 2048);
+  CHECK(l::CopyLayoutSize(2, 1024) == 1024);  // saved before the scale applied, or by another
+  CHECK(l::CopyLayoutSize(2, 0) == 1024);     // a save it has no size for
+  CHECK(l::CopyLayoutSize(1, 2048) == 1024);  // the scale is off: never larger than the game's
+  CHECK(l::CopyLayoutSize(2, 4096) == 1024);
+  CHECK(l::kCopy == 2);
+
   // Memory: an 8:8:8:8 1024x1024 with 6 levels is 5.33 MB, its DXT5 copy a quarter of that.
   const uint64_t rgba_n = 4u * (1024 * 1024 + 512 * 512 + 256 * 256 + 128 * 128 + 64 * 64 + 32 * 32);
   CHECK(l::Bytes(n, l::kRgbaFormat) == rgba_n);
