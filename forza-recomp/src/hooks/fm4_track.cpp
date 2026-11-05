@@ -12,6 +12,9 @@
 //                             teleports' orientation and the collision queries (callers,
 //                             limits, masks, empty results, the car's cache boxes)
 //   FORZA_TRACK_NO_TRAFFIC=1  the other cars go far below the circuit
+//   FORZA_ZONE_TRACE=1        log zones made live and dropped, with the streaming blocks,
+//                             live instance objects and placements in use
+//   FORZA_FM4_STREAM_POOL=1   more streaming blocks when they run out
 //   FORZA_FM4_ZONE_POOL=n     n times the live instance objects (a converted track's zones)
 // tu_address_map: TU4 addresses
 //
@@ -261,6 +264,7 @@ extern "C" REX_FUNC(sub_82CC3180) {
 
 // A zone being made live (sub_82E1CA20: r3 the track presentation, r4 the zone record):
 // the presentation's model and instance tables, for FORZA_TRACK_SPAWN runs.
+namespace { void LogZones(uint8_t* base, uint32_t pres, const char* what, uint32_t zone); }
 extern "C" REX_FUNC(__imp__sub_82E1CA20);
 extern "C" REX_FUNC(sub_82E1CA20) {
   if (std::getenv("FORZA_TRACK_SPAWN")) {
@@ -305,7 +309,9 @@ extern "C" REX_FUNC(sub_82E1CA20) {
                   mx, first5);
     }
   }
+  const uint32_t live_pres = ctx.r3.u32, live_zone = GuestReadable(ctx.r4.u32 + 12) ? Load32(base, ctx.r4.u32 + 12) : 0;
   __imp__sub_82E1CA20(ctx, base);
+  if (std::getenv("FORZA_ZONE_TRACE")) LogZones(base, live_pres, "live", live_zone);
 }
 
 // A zone's instance index (sub_82CEE9F8: r3 out, r4 the cell, r5 &k): log the zone's list
@@ -791,5 +797,55 @@ extern "C" REX_FUNC(sub_82E3A2E8) {
     }
   }
   __imp__sub_82E3A2E8(ctx, base);
+}
+#endif
+
+#if FORZA_TU4
+// Zone bookkeeping for FORZA_ZONE_TRACE runs: zone requests dropped (sub_82E1AFD8: r3 the
+// presentation, r4 the zone), the loaded-zone list (presentation+0xA08..0xA0C, 16 bytes each,
+// +0xC the zone) and the streaming blocks in use (0x835A0B48), on every make-live and drop.
+namespace {
+bool ZoneTrace() {
+  static const bool on = std::getenv("FORZA_ZONE_TRACE") != nullptr;
+  return on;
+}
+void LogZones(uint8_t* base, uint32_t pres, const char* what, uint32_t zone) {
+  const uint32_t a = Load32(base, pres + 0xA08), b = Load32(base, pres + 0xA0C);
+  const uint32_t loaded = b >= a ? (b - a) / 16 : 0;
+  std::string ids;
+  for (uint32_t p = a; p < b && p < a + 16 * 40; p += 16) ids += fmt::format(" {}", Load32(base, p + 12));
+  const uint32_t pending = Load32(base, pres + 0x10000 - 9808);
+  const uint32_t ipool = Load32(base, pres + 0x50);
+  const uint32_t ppool = Load32(base, pres + 0x10000 - 10232 + 232);
+  REXLOG_INFO("FM4ZONES: {} {}: {} loaded ({}), {} pending, streaming blocks in use {}, "
+              "instance objects in use {}, placements in use {}", what, zone, loaded, ids,
+              pending, Load32(base, 0x835A0B48), ipool && GuestReadable(ipool + 12) ? Load32(base, ipool + 12) : 0,
+              ppool && GuestReadable(ppool + 12) ? Load32(base, ppool + 12) : 0);
+}
+}  // namespace
+extern "C" REX_FUNC(__imp__sub_82E1AFD8);
+extern "C" REX_FUNC(sub_82E1AFD8) {
+  const uint32_t pres = ctx.r3.u32, zone = ctx.r4.u32;
+  __imp__sub_82E1AFD8(ctx, base);
+  if (ZoneTrace()) LogZones(base, pres, "dropped", zone);
+}
+#endif
+
+#if FORZA_TU4
+// The pool of instance placements (sub_82CEDEE0: r4 the count, set up right after the live
+// instance objects by sub_82E296C0, with the same count): FORZA_FM4_ZONE_POOL=n makes it n
+// times larger too (driving into Suzuka's Degner zones ran it dry: a null placement written
+// in the zone reader, sub_82CF2168).
+extern "C" REX_FUNC(__imp__sub_82CEDEE0);
+extern "C" REX_FUNC(sub_82CEDEE0) {
+  if (const char* p = std::getenv("FORZA_FM4_ZONE_POOL")) {
+    const uint32_t lr = uint32_t(ctx.lr);
+    const int n = std::atoi(p);
+    if (lr > 0x82E296C0 && lr < 0x82E29A00 && n > 1) {
+      REXLOG_INFO("FM4TRACK: instance placement pool {} -> {}", ctx.r4.u32, ctx.r4.u32 * n);
+      ctx.r4.u64 = uint64_t(ctx.r4.u32) * n;
+    }
+  }
+  __imp__sub_82CEDEE0(ctx, base);
 }
 #endif

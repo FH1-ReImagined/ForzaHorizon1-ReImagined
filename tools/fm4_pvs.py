@@ -413,9 +413,20 @@ def convert(F, files):
                       "textures": tex, "texture_flags": [0] * len(tex), "files": [],
                       "drawn": [1] * len(zi), "placements": [placement_of(insts[i]) for i in zi]})
     P["zones"] = [(len(z["instances"]), 0, len(z["models"])) for z in zones]
+    # FH1 sizes its pools of live instance objects and placements from the largest zone in
+    # this table: 3 x (its instances + 128) + the dynamic ones (sub_82E296C0), for Colorado's
+    # zones that each hold everything visible from them. Up to 14 of these hex zones are live
+    # at once and they share few instances, so the pools ran dry past Degner (1540 objects
+    # and 1133 placements in use where they held 1079). A last table entry no hex points at,
+    # never streamed, makes them POOL_ZONES times the largest zone.
+    if POOL_ZONES:
+        biggest = max(z[0] for z in P["zones"])
+        P["zones"].append((POOL_ZONES * biggest, 0, 0))
     return P, zones, grid
 
 
+# FM4_PVS_POOL_ZONES=n: the zone pools' size, in largest zones (0: FH1's own sizing).
+POOL_ZONES = int(os.environ.get("FM4_PVS_POOL_ZONES", "4"))
 # FM4_PVS_SKY=0 leaves FM4's sky dome out (see convert).
 SKY = os.environ.get("FM4_PVS_SKY", "1") == "1"
 SKY_EXTENT = 4200.0
