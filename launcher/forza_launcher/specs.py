@@ -155,6 +155,30 @@ def gpu_tier(s: Specs) -> str:
     return UNKNOWN
 
 
+def entry_card(s: Specs) -> bool:
+    """Graphics that set the frame rate at the game's 720p scene (#640): integrated, under 4 GB, or a
+    GTX / RX 400-500-era card with 4 GB (a GTX 1650 Ti laptop: 47 fps in the benchmark at 720p, 54 at
+    540p). Not a Steam Deck, whose CPU is its limit (its preset keeps 720p)."""
+    if is_deck(s):
+        return False
+    g = gpu_tier(s)
+    return g == LOW or (g == MID and 0 < s.vram_gb <= 4.5 and bool(_OLD_CARD.search(s.gpu_name or "")))
+
+
+def scene_540_applies(settings: dict) -> bool:
+    """The 540p scene is drawn only without FSR 3, DLSS, a separate anti-aliasing method and Ultrawide
+    gameplay (schema: scene_resolution)."""
+    return (settings.get("present_effect") != "fsr3" and settings.get("fh1_upscaler", "off") == "off"
+            and settings.get("forza_antialiasing", "game") == "game" and not settings.get("forza_ultrawide"))
+
+
+def scene_540_notice(s: Specs) -> str:
+    """The one-time notice of the launcher.json migration to the 540p scene (config.Config)."""
+    return (f"3D scene resolution is now 540p on {_gpu_label(s)}: a GTX 1650 Ti laptop got 16% more fps in the "
+            "benchmark (47 to 54). The HUD and menus stay sharp. To go back to 720p: Settings > Display > "
+            "3D scene resolution.")
+
+
 def describe(s: Specs) -> str:
     """'Detected: Ryzen 5 7600X (6 cores), GeForce GTX 1660 SUPER (6 GB), 32 GB RAM: mid-range graphics, fast CPU'"""
     parts = []
@@ -661,6 +685,8 @@ def recommended(s: Specs, settings: dict, vendor: str = "") -> dict:
         want["resolution_scale"] = SCALE_BY_GPU[g]
         if g == LOW and settings.get("present_effect") == "fsr3":
             want["present_effect"] = "fsr"
+    if entry_card(s) and scene_540_applies({**settings, **want}):
+        want["scene_resolution"] = "540"
     want.update(deck_offer(s, {**settings, **want}))
     out = {}
     for key, value in want.items():

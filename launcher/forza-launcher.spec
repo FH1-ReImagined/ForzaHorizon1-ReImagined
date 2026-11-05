@@ -52,9 +52,10 @@ hidden += ["certifi"] + collect_submodules("truststore")
 datas += collect_data_files("sdl2dll")
 hidden += ["sdl2dll"]
 
-# The title update step (a Python tool the frozen app runs itself with --run-script), and the shader
+# The title update step (a Python tool the frozen app runs itself with --run-script), Import FM4 cars
+# (fm4_*, carbin_dump, #648), and the shader
 # prebuild (#226), which imports pipeline_list, fxobj_shaders, xxh3, lzx_delta and apply_title_update.
-for _tool in ("apply_title_update.py", "lzx_delta.py", "xdc_decode.py", "extract_map_points.py", "livery_codec.py", "pipeline_list.py", "fxobj_shaders.py", "xxh3.py", "native_menu_scene.py", "offline_cars_flow.py", "native_tuning_assets.py"):
+for _tool in ("apply_title_update.py", "fm4_cars.py", "fm4_carbin.py", "fm4_physdef.py", "carbin_dump.py", "lzx_delta.py", "xdc_decode.py", "extract_map_points.py", "livery_codec.py", "pipeline_list.py", "fxobj_shaders.py", "xxh3.py", "native_menu_scene.py", "offline_cars_flow.py", "native_tuning_assets.py"):
     if (repo / "tools" / _tool).is_file():
         datas.append((str(repo / "tools" / _tool), "tools"))
 datas.append((str(repo / "tools" / "native_menu" / "fh1_donors.json"), "tools/native_menu"))
@@ -75,7 +76,8 @@ a = Analysis(
     datas=datas,
     binaries=collect_dynamic_libs("sdl2dll"),
     hiddenimports=hidden + ["install_dlc", "xcontent_extract", "xiso_extract", "xdc_decode", "livery_codec", "tomllib", "pipeline_list",
-                            "fxobj_shaders", "xxh3", "lzx_delta", "apply_title_update", "offline_cars_flow", "extract_map_points"],
+                            "fxobj_shaders", "xxh3", "lzx_delta", "apply_title_update", "offline_cars_flow", "extract_map_points",
+                            "fm4_cars", "fm4_carbin", "fm4_physdef", "carbin_dump"],
     excludes=["tkinter", "unittest", "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets",
               "PySide6.QtQml", "PySide6.QtQuick", "PySide6.Qt3DCore", "PySide6.QtMultimedia",
               "PySide6.QtNetwork", "PySide6.QtPdf", "PySide6.QtSql", "PySide6.QtTest"],

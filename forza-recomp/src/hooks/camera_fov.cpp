@@ -42,7 +42,7 @@ extern "C" REX_FUNC(sub_8284EF90) {
   if ((settings.Stock() && !trace) || REXCVAR_GET(vr_head_pose_test) || forza::xr::CockpitActive()) return;
   const Memory memory{base};
   const auto world = forza::camera::camera_world.load(std::memory_order_relaxed);
-  if (!forza::camera::LiveCameraWorld(memory(world, 0x2C)) || director > UINT32_MAX - 20) return;
+  if (!forza::camera::LoadedCameraWorld(memory(world, 0x2C)) || director > UINT32_MAX - 20) return;
   const auto* active = memory(director + 20, 4);
   if (!active) return;
   const float original = float(ctx.f1.f64);

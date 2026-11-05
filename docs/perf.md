@@ -560,6 +560,13 @@ the `GPU slow frames` lines). Checked with 0426 on the golden save at render sca
 cache): the vinyl group thumbnail (MY VINYL GROUPS and the storefront preview), the paint job preview,
 the storefront livery texture, two saved photos with their thumbnails, and the car's thumbnail after
 an Auto Upgrade at a Horizon Outpost (`Thumbnail_N.xdc`, 768x288, the 3/4 and side views) are correct.
+
+**The reporter's A/B (#536, RX 6600, Linux).** The pairs came from a non-default kernel parameter,
+`amdgpu.vm_update_mode=3` (CPU page-table updates), set to work around another game. With it, each
+readback buffer free took about 25 ms; with the default (`-1`) 0.02-0.03 ms. With the parameter, 0426
+lifted the 1% low from 26.4 to 31.5-32.6 fps (12 of 20 frames over 33 ms held a free without it);
+without the parameter reuse makes no measurable difference. Players with that parameter set should
+keep `vulkan_readback_reuse_buffers` on, or remove the parameter.
 In the first check run, with an empty pipeline cache, the paint job preview came out black; that run
 logged resolves copied back while draws' pipelines were still being built (as in #74). The same flow
 with the cache warm is correct with and without 0426.
@@ -1125,9 +1132,10 @@ its registers, so a write between its check and the block is not missed. With `F
 limit while the command processor waits for a vblank. The other six D3D wait loops (their conditions can depend
 on other words) keep the 50 us sleeps; on Windows those now sleep on a high-resolution waitable timer instead of
 yielding on every poll, which kept the waiting thread on a core for the whole wait (#268: it is the race's render
-thread, most of each frame). None of this has run on Windows yet, so there it is off unless the setting
-`gpu_wait_blocking` is on (Advanced > GPU, "Sleep while waiting for the GPU (testing)"); it is on by default on Linux
-and macOS (`launcher/test_gpu_wait_blocking.py` checks both defaults). Off, the waits are the ones before it.
+thread, most of each frame). The setting `gpu_wait_blocking` (Advanced > GPU on Windows, "Sleep while waiting for
+the GPU") turns it on; it was off on Windows until it ran there and is on everywhere since #640 (measured on a
+4-core Windows laptop, [below](#a-4-core-laptop-with-a-gtx-1650-ti-and-8-gb-640-2026-11-04);
+`launcher/test_gpu_wait_blocking.py` checks the default). Off, the waits are the ones before it.
 `FORZA_GPU_WAIT=block|sleep|spin` overrides the setting (sleep: the old waits; spin: the game's loop).
 
 **Measured** (four cores, 3 runs each, B and C alternating; A = neither fix: the main-branch game, runtime and
@@ -2906,6 +2914,85 @@ yields (0.2-0.35 ms a frame, not on the chain), the GPU and readback waits (zero
 a setting, render scale or MSAA). The audio mixer is a fixed 11-13% of a core here, 2-2.5 times that on a Deck, where it
 competes for the four cores; worth a look after the three above.
 
+### Step 2: the hottest instruction of the command processor (#607, ReIGlue 0435, 2026-11-04)
+
+After the cuts above (present without the replay wait #613, binding reuse #179/#192, the split #474) and the
+dropped register elision (ReIGlue #32), what is left on the command processor that none of them covers?
+
+**Method.** TU4 game of main f95b52c (`-DFORZA_CPU_TARGET=x86-64-v3`), ReIGlue 641a19c (the pin) built with
+`-gline-tables-only` (same code; samples resolve to inlined functions), the golden TU4 save in a scratch
+`--user_data_root`, scratch XDG dirs, offline, audio muted, the launcher's Steam Deck preset with
+`--frame_rate=240` (uncapped: the frame waits on the command processor), BENCH lock held, no other game running
+(checked every 10 s). Free roam (60 s of `tools/autodrive.py` on the County Route loop) and the race (GoPro
+Millennia Masters, 60 s from the start); 8 cores, or CPUs 0-3 with `taskset`. `PERF_CPUPROF` samples (1 ms of CPU
+time, self time) symbolized with their inline chains (`llvm-symbolizer --inlining`) and attributed to the physical
+function; `eu-stack` call stacks of the command processor (264 in a race) for the waits. perf is still not
+installed.
+
+**Where the command processor's time goes** (free roam, ms of CPU a frame; 4 cores: 3.50 ms, 2,755 draws,
+188 fps; 8 cores: 3.70 ms, 2,808 draws, 181 fps):
+
+| Area | 4 cores | 8 cores | Covered by |
+| --- | --- | --- | --- |
+| Bindings, textures, samplers, `vkUpdateDescriptorSets` | 0.99 (28 %) | 1.04 (28 %) | #179, #192 (Sean's drafts) |
+| PM4 decode, register writes and their copies | 0.86 (25 %) | 0.90 (24 %) | #474 (ReIGlue #26), ReIGlue #32 dropped |
+| Guest memory: `RequestRanges`, `mprotect`, `EnableAccessCallbacks`, watches, lock wakes | 0.34 (10 %) | 0.32 (9 %) | |
+| Shaders and pipelines (`IM_LOAD` memo, translation and pipeline lookups) | 0.21 (6 %) | 0.23 (6 %) | |
+| System constants, viewport, dynamic state | 0.21 (6 %) | 0.22 (6 %) | |
+| `memcmp` | 0.08 (2 %) | 0.07 (2 %) | |
+| Yields in `WAIT_REG_MEM` (waiting for the game) | 0.05 (1 %) | 0.10 (3 %) | |
+| `IssueDraw`, primitives, render targets, uploads, the rest | 0.77 (22 %) | 0.81 (22 %) | |
+
+Wall clock (call stacks, race, 8 cores): 47 % in `IssueDraw`, 16 % waiting for the submission thread at the swap
+(#613), 13 % waiting for the game (`WAIT_REG_MEM`). Off the chain: the render thread 2.8 ms a frame (83 % guest
+code, 7 % `sched_yield`), the main loop 2.2 ms (93 % guest code), the submission thread 1.0 ms (78 % RADV).
+
+Outside the covered areas the profile is flat: no function above 2 % of the thread. But one instruction stands
+out: **3.6-3.9 % of all the command processor's samples land right after the `xchg` in
+`TextureCache::RequestTextures`**, `texture_became_outdated_.exchange(false)` on every draw. A locked instruction
+waits for the store buffer to drain, and at that point it holds the draw's register, constant and command
+stores. The flag is only set by memory watch callbacks. The next was `ExecutePacket`'s division of the packet's
+start offset (for the VR stereo log, 0396), 1.2 % of the thread, about 24 times a draw.
+
+**Change: ReIGlue 0435.** The flag is loaded first and exchanged only when set (a callback that sets it after the
+load is seen by the next draw, as before after the exchange); `ExecutePacket` keeps the read offset and divides
+only when it logs the packet. No setting: the behaviour is the same. In the profiles `RequestTextures` falls from
+4.7 % to 0.9 % of the thread and `ExecutePacket` from 6.3 % to 5.4 %.
+
+**Measured.** One game build, the two plugins (A = the pin, B = 0435; the same runtime), 3 runs each, A and B
+alternating which ran first, 24 runs, no other game. Mean [min-max]; fps, 1 % low and p99 from the command
+processor's frame intervals over the 60 s:
+
+| Scene | Build | fps | 1 % low fps | p99 ms | CP CPU ms a frame | CP us a draw | Draws |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Race, 8 cores | A | 186.5 [185.2-187.7] | 115.2 [114.0-116.9] | 8.45 [8.45-8.45] | 3.70 [3.67-3.73] | 1.258 [1.255-1.263] | 2,942 |
+| Race, 8 cores | B | 191.5 [190.5-192.3] | 116.0 [114.5-116.8] | 8.42 [8.40-8.44] | 3.54 [3.53-3.56] | 1.204 [1.202-1.204] | 2,943 |
+| Race, 8 cores | change | **+2.7 %** | +0.7 % | -0.4 % | -4.3 % | -4.3 % | |
+| Race, 4 cores | A | 183.7 [181.1-185.4] | 108.6 [106.6-110.2] | 8.51 [8.47-8.54] | 3.67 [3.62-3.72] | 1.237 [1.236-1.238] | 2,964 |
+| Race, 4 cores | B | 186.1 [184.1-187.6] | 111.9 [111.2-112.4] | 8.45 [8.44-8.45] | 3.57 [3.53-3.58] | 1.186 [1.176-1.195] | 3,005 |
+| Race, 4 cores | change | **+1.3 %** | +3.0 % | -0.8 % | -2.8 % | -4.1 % | |
+| Free roam, 8 cores | A | 186.5 [181.7-189.6] | 113.6 [107.8-123.6] | 7.35 [6.64-8.02] | 3.60 [3.54-3.67] | 1.311 [1.310-1.312] | 2,742 |
+| Free roam, 8 cores | B | 193.0 [181.7-202.1] | 118.6 [117.6-119.6] | 6.92 [6.50-7.21] | 3.42 [3.28-3.60] | 1.251 [1.236-1.264] | 2,735 |
+| Free roam, 8 cores | change | **+3.5 %** | +4.3 % | -5.8 % | -4.8 % | -4.6 % | |
+| Free roam, 4 cores | A | 190.7 [183.2-195.6] | 103.5 [103.1-104.4] | 8.22 [7.94-8.46] | 3.47 [3.38-3.54] | 1.277 [1.267-1.289] | 2,716 |
+| Free roam, 4 cores | B | 186.0 [182.1-191.9] | 98.7 [87.6-106.4] | 8.40 [7.75-9.11] | 3.46 [3.35-3.61] | 1.235 [1.214-1.256] | 2,804 |
+| Free roam, 4 cores | change | **-2.4 %** | -4.7 % | +2.2 % | -0.2 % | -3.3 % | |
+
+- The command processor's CPU per draw falls 4.3-4.6 % on 8 cores and 3.3-4.1 % on 4, every run of one build
+  outside the other's range: about 0.05-0.06 us a draw, 0.15-0.2 ms of a 3,000-draw frame.
+- The frame rate follows on 8 cores (race +2.7 %, the runs apart; free roam +3.5 %, inside its spread). On 4 cores
+  the race gains 1.3 % (the ranges overlap) and free roam shows no gain: its runs differ by 3 % in draws a frame and
+  by 7 % in fps within a build. With four cores the command processor is not the only thing the frame waits for
+  (run-queue waits, the render thread), so part of the saving becomes waiting.
+- Same output: the change keeps the behaviour. `ExecutePacketType3 overflow` / `INDIRECT RINGBUFFER` errors came
+  in 1 of 12 A runs and 2 of 12 B runs (once with draws failing in the same burst); they are not new, and neither
+  change touches the packet parsing.
+
+**Left** (this round, not built): the guest memory area (9-10 %: three `mprotect` calls per protected range, one
+for each of the physical memory's views, under the global lock the game's write faults take; 88 texture loads
+a frame in free roam), the `IM_LOAD` memo's `memcmp`, `Fh1DirtSeamInterpolator`'s per-draw binary search
+(0.6-0.9 %).
+
 ## Stutter in the first part of a drive (#614, 2026-11-03)
 
 **The report.** A side-by-side video of the same replayed drive on one Windows PC: our Vulkan path showed tall
@@ -2968,3 +3055,245 @@ be built, 1148 of 1190 before), the game's part of the prebuild takes 3.0-3.4 s 
 instead of 26-27; the race minute and the free-roam drive have no spike from pipelines left. What remains on this PC
 is the game's own frames while it loads. Not changed: on NVIDIA every start still compiles what its driver cache does
 not keep (#406), at the warm-up, before the title screen, not in play.
+
+## Memory: what the game takes in RAM and VRAM, for 8 GB PCs (#640, 2026-11-04)
+
+**Measured** on the RX 9060 XT PC (Linux, RADV, 30 GB): TU4, the golden save, offline, audio muted (the XMA decoder
+still decodes), the launcher's defaults (60 fps, AMD FSR 1, the game's 4x scene MSAA), render scale 1, a 1280x720
+window, a warm shader cache. Two scenes: free roam after a 4-minute drive (throttle and steering on the roads
+around the festival) and the GoPro Millennia Masters race after 2 minutes (`tools/autodrive.py`). Each number is
+the process's own (`tools/memory_snapshot.py`: `/proc/PID/smaps`, the guest memory file's pages, the DRM client's
+VRAM and GTT), so other games on the PC do not change it.
+
+| MB | Free roam, after the drive | Race, 2 minutes in |
+| --- | --- | --- |
+| RSS (PSS) | 1,186 (933) | 1,204 (942) |
+| Guest memory: pages written (of the 4.5 GB file) | 488 | 491 |
+| Guest memory: host commit (Windows: commit charge), in use now | 704, 528 | 704, 529 |
+| Heaps and other private memory (anon) | 343 | 350 |
+| The game's code (forza, file-backed, evictable) | 64 | 63 |
+| SDK, driver and system libraries: RSS (PSS) | 77 (36) | 77 (36) |
+| GTT (system RAM the GPU driver holds for us, not in RSS) | 59 | 79 |
+| VRAM (device-local) | 1,094 | 1,106 |
+
+The guest's pages are mapped twice (virtual and physical views), so RSS counts them twice and PSS once. Over a
+60-minute soak (#45, above) RSS grows another 90 MB, flat after 20-30 minutes, as the texture cache fills.
+
+**The heaps**, by allocation site (an `LD_PRELOAD` heap tracker, allocations of 4 KB and more, free roam after the
+drive; 297 MB tracked):
+
+| MB | What |
+| --- | --- |
+| 143 | XMA decoder: an FFmpeg codec context for each of the 320 contexts, 450 KB each, set up at start (the game uses 48 in free roam, 70 after the drive) |
+| 40 | XMA decoder: a 128 KB packet buffer for each of the 320 contexts, never used |
+| 11 | XMA decoder: the decoders in use (MDCT tables) |
+| 18.6 + 18 | shader translations: our SPIR-V (473 translations) and the driver's copy in the shader modules |
+| 20 | glslang's built-in symbol tables, kept after the startup compiles |
+| 12 | three descriptor set allocators |
+| 9.5 | the guest heaps' page tables |
+| 4.5 | the audio system |
+| 3.4 | the driver pipeline cache's entries (RADV: 10 KB a pipeline) |
+
+**On Windows** the guest memory is a page-file-backed section (`CreateFileMappingW` with `SEC_RESERVE`, 4.5 GB
+reserved, nothing committed). `Memory::Initialize` then commits the whole physical memory (512 MB) at start, and
+every guest allocation commits its pages; guest releases never give them back (a mapped view cannot be decommitted),
+so the guest's commit charge is the high-water mark: 576 MB at the title screen, 642 MB in free roam, 704 MB after a
+drive (ReIGlue 0427 logs it: `Guest memory: N MB committed on the host`). Committed pages the game never wrote cost
+no RAM; the ones it wrote stay in RAM or the page file. On top come the heaps (all committed, also what Linux never
+touched, like the 128 KB packet buffers), the driver's own memory (not measured here) and the driver pipeline cache
+below. An estimate for NVIDIA, from the code and #406's sizes: guest 0.7 GB, heaps 0.35 GB, the driver pipeline
+cache 1-1.6 GB in a long session: 2-2.7 GB of commit plus the driver's; after the fixes here 0.7 + 0.2 + at most 0.5:
+1.4 GB plus the driver's. An 8 GB PC's commit limit is its RAM plus the page file (system-managed: a few GB that
+grows on demand), so the limit is not the risk; the working set is: what the game wrote stays in RAM or goes to the
+page file, next to Windows' own 3-4 GB, and VRAM that overflows a 4 GB card goes to system RAM too.
+
+**What fits in 4 GB of VRAM** (the race, device-local, the GPU minute lines' split):
+
+| | VRAM MB | Render targets | Textures |
+| --- | --- | --- | --- |
+| Render scale 1, scene MSAA 4x (default) | 1,106 | 38, 540 MB | 211 MB |
+| Render scale 1, `scene_msaa = off` | 1,044 | 35, 494 MB | 186 MB |
+| Render scale 2, scene MSAA 4x | 3,129 | 38, 2,020 MB | 372 MB |
+| Render scale 2, `scene_msaa = off` | 2,942 | 35, 1,839 MB | 369 MB |
+
+Every host render target covers the whole EDRAM's worth of rows for its pitch, whatever the MSAA, so MSAA off saves
+little; render scale 2 multiplies them by four. The texture cache then grows to its 384 MB limit in 20 minutes
+(`texture_cache_memory_limit_soft`), and the guest memory's GPU copy holds the 360 MB of physical memory in use.
+At render scale 1 a 4 GB card has room (1.1 GB, 1.4 GB after an hour); at render scale 2 the game alone takes 3.1 GB
+two minutes into the race and more as the texture cache grows toward its hard limit (768 MB), so with the desktop
+on the same card there is little or no room left, and the driver moves memory to system RAM (Windows: "shared GPU
+memory"), which an 8 GB PC does not have to spare either.
+
+**Fixed** (ReIGlue 0428-0430; before and after, the same runs):
+
+| MB | Free roam after the drive | Race |
+| --- | --- | --- |
+| RSS | 1,186 -> 1,035 (0428 only) | 1,204 -> 1,037 (0428-0430) |
+| PSS | 933 -> 785 | 942 -> 781 |
+| Heaps (anon) | 343 -> 205 | 350 -> 194 |
+| Private writable mappings (the closest Linux has to commit) | 1,339 -> 1,163 | 1,378 -> 1,184 |
+
+- 0428, the XMA decoder: FFmpeg's state is made on a context's first decode and freed when the game releases it,
+  and the packet's buffer reference wraps the frame array the data was already in. Decoding is the same: with a hash
+  of every decoded frame (the input frame and the PCM it gave) over a 150 s drive, 39 of the 31,006 input frames
+  both builds decoded gave no output in common, and 30 of 30,662 between two runs of the unchanged build (frames
+  whose output depends on the frame before).
+- 0429, the driver pipeline cache: every pipeline's driver data stayed in memory until exit, to be saved, though a
+  save keeps 512 MB. NVIDIA's data is about 2 MB a pipeline (#406): a session of 800 pipelines held about 1.6 GB.
+  Now new data is kept only while the total fits what a save keeps. Nothing changes on RADV (10 KB a pipeline);
+  with the bound lowered to 2 MB for the test (`vulkan_store_pipeline_cache_memory_mb`), the save stays within it and
+  the next start creates the pipelines it holds from it. Not measured on NVIDIA here (the laptop was offline): on
+  the 8 GB GTX 1650 Ti it should be the largest of the three, up to about 1 GB less in a long session.
+- 0430: a shader translation's SPIR-V is freed once its shader module exists (18.6 MB after the drive, twice that in
+  a long session).
+- The render tests: baselines recorded from the unchanged build (`tools/render_test.py record`, 3 runs; the stored
+  October baselines no longer match main in 4 scenes, fixes or not), then `check` with 0427-0430: 6 of 6 scenes
+  pass, each within its run-to-run noise (dssim title 0.0000, free roam 0.0016 and 0.0007, cockpit 0.0006, photo
+  mode 0.0084, race 0.0035).
+
+**Not done, with estimates:**
+
+- Render targets sized to the rows the game draws instead of the whole EDRAM: each of the 38 is a full EDRAM's rows
+  for its pitch (`GetRenderTargetHeight`), 540 MB at render scale 1 and 2 GB at render scale 2. If a 720p scene
+  uses about half of those rows (not measured), half of that: 250 MB and 1 GB. A change to the EDRAM emulation's
+  aliasing, so a careful one; the biggest VRAM saving for 4 GB cards.
+- A smaller texture cache on 4 GB cards (`texture_cache_memory_limit_soft = 192`): 190 MB of VRAM late in a session,
+  at the cost of reloading textures unused for 30 s. A launcher setting for a Low preset.
+- The driver pipeline cache on NVIDIA still holds up to 512 MB: reading entries from the file when a pipeline needs
+  them (or a smaller bound on 8 GB PCs) would keep it to the entries in use. Windows cannot replace a mapped file,
+  so mapping it needs the save to write elsewhere first.
+- Texture packs: up to 256 MB of decoded textures wait for upload (`kMaxPendingDecodedBytes`), at 32 MB a frame;
+  64 MB would keep two frames' worth queued: up to 190 MB less RAM while a pack streams. Not measured (no pack here).
+- The physical memory committed whole at start (Windows): 512 MB of commit for about 360 MB used, 150 MB of commit
+  but no RAM. Committing it on demand changes what the GPU may read of released memory; little to gain.
+- glslang's built-in tables (20 MB) after the startup compiles; the guest heaps' page tables and descriptor pools
+  (22 MB): small.
+
+**To repeat on Windows** (the 8 GB laptop): start the game from the launcher at its defaults, then in a PowerShell
+window `powershell -ExecutionPolicy Bypass -File tools\memory_snapshot.ps1` (a CSV row every 30 s on the desktop:
+working set, private bytes, the GPU process memory's dedicated and shared usage, the system's commit and its limit,
+free RAM, pages read from the disk a second). Play to free roam, drive 4 minutes, note the time, start the GoPro
+Millennia Masters race and drive 2 minutes, note the time, quit. The `forza.log` adds the guest's commit (`Guest
+memory:`) and a line a minute with the textures, render targets, GPU memory and resident memory (`GPU minute`).
+Then the same at render scale 2. Paging shows as `hard_faults_s` above a few hundred while driving, and as private
+bytes close to the commit limit.
+
+## A 4-core laptop with a GTX 1650 Ti and 8 GB (#640, 2026-11-04)
+
+**The PC.** Core i5-10300H (4 cores, 8 threads, 45 W), GeForce GTX 1650 Ti (4 GB, 50 W, driver 555.97) plus Intel UHD
+Graphics (Optimus, driver 26.20.100.7985 from 2020, Vulkan 1.2.131), 8 GB of RAM (7.8 GB visible, 2.3 GB page file
+that Windows grows), the internal 1920x1080 144 Hz screen, Windows 11 (build 26300), on mains power, Balanced plan.
+Windows and the apps a player has open (here a desktop app of about 1 GB) leave 4 GB of RAM free before the game
+starts.
+
+**Method.** The game of main f21286d built by the launcher (TU4) on that PC; the golden TU4 save in a fresh user
+folder for each run, offline, audio muted, the startup movies skipped; the launcher's settings for this PC (60 fps,
+AMD FSR 1, the 720p scene with the game's 4x MSAA, render scale 1, fullscreen, vsync), each run a fresh start from
+a scheduled task in the signed-in session. **Benchmark**: the built-in one (Recaro Rush, 15 s settling, 60 s
+measured; its fps, 1% low and p99). **Free roam**: from the spawn on County Route 203, full throttle for 150 s with a
+2.5 s brake and turn every 25 s (`FORZA_AUTOPRESS`), measured over the frames while the car moves
+(`FORZA_FRAMETIME_CSV`, 2-5 km a run). Process memory every 10 s (`tools/memory_snapshot.ps1`), thread CPU times
+every 15 s (the game log's thread ids name the command processor, main loop and render thread), `nvidia-smi` every
+5 s. Runs of a comparison alternate, 3 each, at the laptop's steady temperature; mean of the runs, the range in
+brackets where it matters.
+
+**What it does at the launcher's settings** (GTX 1650 Ti, before fixes 1 and 2; the driver pipeline store off, as
+in fix 1's runs: fix 3 has what it adds):
+
+| | Benchmark | Free roam |
+| --- | --- | --- |
+| fps, 1% low, p99 | 42.7 [38.7-46.6], 28.7, 33.2 ms | 54.9 [53.7-55.6], 30.7, 30.1 ms |
+| GPU (`nvidia-smi`), power | 74-92% busy, 49 W of 50 | 95-97%, 49 W |
+| Command processor | 77% of a thread, 17.9 ms CPU a frame, 4.2 us a draw, 4,000-4,500 draws | 70%, 14.6 ms, 4.4 us, 3,100-3,500 draws |
+| Render thread | 86-88% of a thread | 88-90% |
+| Main loop, the busiest other thread (an SDK one) | 30%, 42-49% | 42%, 39-40% |
+| Game process CPU | 3.4 threads (of 8) | 3.7 |
+| Working set, private bytes (commit) | 1.36-1.39 GB, 2.65-2.69 GB | 1.27-1.34 GB, 2.64-2.68 GB |
+| VRAM: dedicated, shared | 1.22-1.24 GB, 0.23 GB | 1.22-1.24 GB, 0.21-0.23 GB |
+| System: commit of its limit, RAM free (least) | 9.5 of 10.3 GB, 2.27-2.28 GB | 9.5 of 10.3 GB, 2.28-2.32 GB |
+
+The lowest settings the launcher has (3D scene 540p, Scene anti-aliasing Off, anisotropic filtering off, motion blur
+off, 60 fps), first start of those settings: benchmark 53.8 fps, 1% low 25.9 (the pipelines of the new settings were
+built in it), p99 29.5 ms.
+
+**Where the frame goes.**
+- **The GPU first.** The GTX 1650 Ti is 91-98% busy at its 50 W limit in free roam and most of the race, at the
+  720p scene: the game's 4x MSAA scene in three passes and the EDRAM emulation's render targets cost far more GPU
+  time than 720p suggests. Lighter scene settings are what helps (fix 2).
+- **Then the four cores.** On Windows the render thread's waits for the GPU yielded on every poll
+  (`gpu_wait_blocking` was off there, untested): `SwitchToThread` returns at once when no other thread waits for
+  that CPU, so the thread spun for its whole wait, 86-90% of a CPU, next to a command processor at 70-77%. With
+  eight threads on four cores that takes a core's share of execution and power from the command processor (fix 1).
+  Once the GPU has room (540p), the benchmark stops at 54-55 fps with the command processor at 12-14 ms CPU a frame
+  and 2-3 ms of game waits: that chain is #607's.
+- **Not RAM.** The game's working set is 1.3-1.4 GB with 2.2 GB of RAM free and few pages read back from the disk;
+  of the 2.7 GB of private bytes, 1.29 GB are write-combined or uncached (GPU-visible) mappings, the same with or
+  without the pipeline file below, and much of the rest is committed but never touched (Windows trims the working set to
+  0.75 GB late in a run without hard faults). The exception is the driver pipeline file (fix 3).
+- **Not VRAM.** 1.2-1.35 GB of the 4 GB at render scale 1, whatever the scene settings (540p adds render targets:
+  677 MB instead of 562 MB).
+
+**Fix 1: the render thread sleeps on Windows too** (`gpu_wait_blocking` on by default everywhere,
+`src/hooks/gpu_wait.cpp`; launchers that saved the old off turn it on once). Both arms with the driver pipeline
+store off (fix 3) so the starts are the same:
+
+| | Benchmark, off | Benchmark, on | Free roam, off | Free roam, on |
+| --- | --- | --- | --- | --- |
+| fps | 42.7 [38.7-46.6] | 46.8 [45.9-47.9] | 54.9 [53.7-55.6] | 54.7 [54.0-55.1] |
+| 1% low, p99 | 28.7, 33.2 ms | 30.3, 30.9 ms | 30.7, 30.1 ms | 29.1, 29.9 ms |
+| Render thread, command processor | 86%, 77% | 45%, 77% | 89%, 70% | 40%, 66% |
+| Command processor a frame, a draw | 17.9 ms, 4.18 us | 16.0 ms, 3.83 us | 14.6 ms, 4.42 us | 13.4 ms, 4.26 us |
+| Game process CPU, CPU clock (of 2.5 GHz) | 3.4 threads, 126-128% | 3.0 threads, 130% | 3.7, 122-125% | 3.05, 129-130% |
+
+The benchmark gains 10% and holds it from run to run; free roam, where the GPU is the limit, keeps its frame rate
+with 0.65 threads less CPU and a higher CPU clock. No freeze in the 24 runs with it on.
+
+**Fix 2: the 540p scene on entry cards** (`launcher/forza_launcher/specs.py`: a new launcher on integrated graphics,
+under 4 GB, or a GTX / RX 400-500-era card with 4 GB gets `scene_resolution = 540`, and an existing launcher.json
+there once, with a notice (`config.py`, `migrated.scene_540`), where 540p is drawn; not on a Steam Deck, whose CPU is
+its limit). Benchmark, render thread
+sleeping, 3 runs each, rotated:
+
+| Scene | fps | 1% low | p99 | Draws | Command processor a frame |
+| --- | --- | --- | --- | --- | --- |
+| 720p, 4x MSAA (the game's) | 46.8 [45.7-48.1] | 30.6 | 30.4 ms | 4,000-4,350 | 15.9 ms |
+| 720p, Scene anti-aliasing Off | 52.5 [51.8-53.3] | 35.0 | 26.7 ms | 3,200-3,600 | 12.2 ms |
+| 540p (one pass, 2x MSAA) | 54.3 [52.7-55.2] | 34.3 | 27.0 ms | 3,400-3,800 | 13.8 ms |
+| 540p, Off, anisotropic off, no motion blur | 54.9 [53.3-56.8] | 35.2 | 26.2 ms | 3,000-3,650 | 11.8 ms |
+
+540p alone gives 16%; the lowest settings add little to it (the CPU chain is next). 540p keeps 2x MSAA and the
+sharp HUD, so it is the one the launcher picks. In free roam (3 drives each, alternating; these drives got farther
+along the road than fix 1's, 4.0-4.5 km against 3.0-3.6 km, so the 720p arm is faster than there) it reaches the
+60 fps cap: 57.7 [56.6-58.3] -> 59.9 [59.7-60.0] fps, 1% low 33.4 -> 48.6, p99 27.0 -> 18.0 ms, the GPU 98% ->
+91-94% busy.
+
+**Fix 3: no driver pipeline file on NVIDIA** (the NVIDIA preset sets `vulkan_store_pipeline_cache = false`;
+NVIDIA launchers turn it off once). The SDK keeps each pipeline's driver data in
+`shaders/local/*.vkpc` and seeds that pipeline's creation with it at the next start. On this driver not one of 404
+to 949 stored pipelines was reused in any of the 9 starts that read the file (`0 pipelines created from stored
+driver data, N compiled (N stale entries rebuilt)`: the creation feedback reports a miss, so each is created
+twice). Each entry also grew from about 60 KB in the first session to about 2 MB once later sessions added
+pipelines (a new pipeline's data held much more than itself), so the file reached the 512 MB a save keeps after
+five sessions: 252 pipelines in 510 MB, all of it held in RAM while playing. Benchmark, 3 starts each, alternating, with that file:
+
+| | File kept (0.2.6) | Off |
+| --- | --- | --- |
+| Shader warm-up, start to the race loading | 17 s, 24 s | 3 s, 10 s |
+| Private bytes, working set (peak) | 3.29 GB, 1.96 GB | 2.72 GB, 1.42 GB |
+| RAM free (least), system commit | 1.69 GB, 10.1 of 10.3 GB | 2.20 GB, 9.5 of 10.3 GB |
+| fps, 1% low, p99 | 45.2, 28.8, 31.8 ms | 46.0, 28.8, 31.5 ms |
+
+One start after the file had dropped out of the file cache spent 78 s reading it and reached the race loading
+after 106 s. Without the file the driver's own shader cache does the work: no pipeline stalls over 50 ms in either
+arm. On RADV the entries are reused (10 KB each), so the setting stays on for AMD and Intel.
+
+**Intel UHD (the same laptop, `--gpu_vendor=intel`): not playable with its driver.** The first start reached the
+benchmark at 1.4 fps: 3,500 `Failed to submit Vulkan sparse binds`, then upload buffers that could not be allocated,
+private bytes up to 6.1 GB, the system commit at its limit (Windows grew the page file from 10.3 to 13.4 GB) and
+314 MB of RAM free. Two more starts never showed a frame (`FORZA_STALL: no frame for 59 s`). With
+`--vulkan_sparse_shared_memory=false` the device was lost after 20 s. The driver is from 2020 (Vulkan
+1.2.131); the game needs a current Intel driver there, and the launcher already
+sends this laptop to the GeForce (#89). Not measured: a current Intel driver.
+
+**For #607.** On this CPU the command processor costs 3.7-4.6 us a draw (12-18 ms a frame at 3,000-4,400 draws)
+and is 65-77% busy; with the GPU relieved it is the next limit at 54-55 fps in the benchmark.

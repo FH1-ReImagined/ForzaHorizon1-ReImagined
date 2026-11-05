@@ -6,6 +6,7 @@ See docs/custom-radio.md for format evidence and remaining runtime qualification
 """
 import copy
 import json
+import math
 import re
 import shutil
 import struct
@@ -23,6 +24,19 @@ SLOTS = ("Radio1", "Radio2", "Radio3")
 TITLES = ("Horizon Bass Arena", "Horizon Pulse", "Horizon Rocks")
 LOGOS = ("RS_BassArena", "RS_Pulse", "RS_2Eleven")
 MAX_BANK = 0x7FFFFFFF
+MARKER = ".reimagined-radio.json"
+# Leveling (#662). The stock station songs (R1-R3 in Radio_Music.fsb) measure a median
+# -14.6 LUFS integrated, with true peaks at a median -4.4 dBTP and -2.8 dBTP at the 75th
+# percentile. The game plays the radio at musicLevel 0.85 times the player's Radio volume
+# (at most 1.0), adds the car and world sounds without a limiter, and the output stage
+# clamps at full scale. A modern master (around -7 LUFS, peaks at 0 dBFS) leaves no room
+# for that, so each song is turned down, or up, to the stock loudness with one linear
+# gain: no compression. The gain stops where the song's true peak would pass the ceiling,
+# so a quiet song with loud peaks is never boosted into clipping. The ceiling applies
+# before encoding, half a decibel under -3 dBTP to leave room for the MP3 encoder.
+LEVEL_TARGET = -14.5  # LUFS
+LEVEL_CEILING = -3.5  # dBTP
+LEVELING = {"target": LEVEL_TARGET, "ceiling": LEVEL_CEILING}
 
 
 class RadioError(ValueError):
@@ -50,7 +64,10 @@ def settings(cfg):
     value = cfg.d.get("custom_radio", {})
     if not isinstance(value, dict):
         raise RadioError("Radio settings are invalid. Restore launcher.json from its backup.")
-    out = {"version": 1, "ffmpeg": str(value.get("ffmpeg", "")), "stations": {}}
+    level = value.get("level", True)
+    if not isinstance(level, bool):
+        raise RadioError("Radio settings are invalid. Restore launcher.json from its backup.")
+    out = {"version": 1, "ffmpeg": str(value.get("ffmpeg", "")), "level": level, "stations": {}}
     stations = value.get("stations", {})
     if not isinstance(stations, dict):
         raise RadioError("Radio station settings are invalid.")
@@ -145,17 +162,11 @@ def mp3_samples(path):
     return count * 1152
 
 
-def encode(source, output, ffmpeg, cancelled=lambda: False):
-    source, output = Path(source), Path(output)
-    if not source.is_file():
-        raise RadioError(f"Song not found: {source}. Remove it from the playlist or choose its new location.")
-    cmd = [str(ffmpeg), "-nostdin", "-v", "error", "-i", str(source.resolve()),
-           "-map", "0:a:0", "-vn", "-map_metadata", "-1", "-t", "1800",
-           "-ac", "2", "-ar", "48000", "-c:a", "libmp3lame", "-b:a", "160k",
-           "-write_xing", "0", "-id3v2_version", "0", "-f", "mp3", str(output)]
+def _run(cmd, source, cancelled, verb="encode"):
+    """Run FFmpeg with the cancel check and the five-minute limit; return its last log bytes."""
     # A file keeps stderr bounded in memory and avoids a pipe deadlock.
-    with tempfile.TemporaryFile() as errors:
-        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=errors,
+    with tempfile.TemporaryFile() as log:
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=log,
                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         try:
             deadline = time.monotonic() + 300
@@ -166,13 +177,71 @@ def encode(source, output, ffmpeg, cancelled=lambda: False):
                     raise RadioError(f"Encoding timed out: {source.name}. Try a shorter or different file.")
                 time.sleep(.05)
             if proc.returncode:
-                errors.seek(0)
-                raise RadioError(f"Could not encode {source.name}: " + errors.read(4096).decode("utf-8", "replace"))
+                log.seek(0)
+                raise RadioError(f"Could not {verb} {source.name}: " + log.read(4096).decode("utf-8", "replace"))
+            log.seek(max(0, log.tell() - 4096))
+            return log.read()
         finally:
             if proc.poll() is None:
                 proc.kill()
                 proc.wait()
+
+
+def _input(source, ffmpeg, verbosity):
+    # Both passes see the same audio: first stream, at most 30 minutes, stereo 48 kHz.
+    return [str(ffmpeg), "-nostdin", "-hide_banner", "-nostats", "-v", verbosity,
+            "-i", str(source.resolve()), "-map", "0:a:0", "-vn", "-t", "1800", "-ac", "2", "-ar", "48000"]
+
+
+def measure(source, ffmpeg, cancelled=lambda: False):
+    """First pass: integrated loudness (LUFS) and true peak (dBTP), EBU R128.
+
+    FFmpeg's ebur128 filter is the meter loudnorm uses, without loudnorm's 192 kHz
+    resampling: about a second per song instead of eight. metadata=1 moves its
+    per-frame lines to the verbose level, so only the summary is logged.
+    """
+    source = Path(source)
+    cmd = _input(source, ffmpeg, "info") + ["-af", "ebur128=peak=true:metadata=1", "-f", "null", "-"]
+    log = _run(cmd, source, cancelled, "measure").decode("utf-8", "replace")
+    summary = log[log.rfind("Summary:"):]
+    loudness = re.search(r"\bI:\s*(-?(?:inf|[0-9.]+)) LUFS", summary)
+    peak = re.search(r"\bPeak:\s*(-?(?:inf|[0-9.]+)) dBFS", summary)
+    if "Summary:" not in log or not loudness or not peak:
+        raise RadioError(f"Could not measure the loudness of {source.name}. "
+                         "Turn off song leveling on the Radio page or use another FFmpeg build.")
+    return float(loudness.group(1)), float(peak.group(1))
+
+
+def level_gain(loudness, peak):
+    """Linear gain in dB toward LEVEL_TARGET that keeps the true peak under LEVEL_CEILING."""
+    if not math.isfinite(loudness) or loudness <= -70:
+        return 0.0  # Silence or no measurable programme: leave it alone.
+    gain = LEVEL_TARGET - loudness
+    if math.isfinite(peak):
+        gain = min(gain, LEVEL_CEILING - peak)
+    return round(max(-40.0, min(40.0, gain)), 2)
+
+
+def encode(source, output, ffmpeg, cancelled=lambda: False, level=True):
+    source, output = Path(source), Path(output)
+    if not source.is_file():
+        raise RadioError(f"Song not found: {source}. Remove it from the playlist or choose its new location.")
+    gain = [] if not level else ["-af", f"volume={level_gain(*measure(source, ffmpeg, cancelled)):.2f}dB"]
+    cmd = _input(source, ffmpeg, "error") + gain + [
+        "-map_metadata", "-1", "-c:a", "libmp3lame", "-b:a", "160k",
+        "-write_xing", "0", "-id3v2_version", "0", "-f", "mp3", str(output)]
+    _run(cmd, source, cancelled)
     return mp3_samples(output)
+
+
+def stale(cfg):
+    """True when the published stations were built with other leveling than the current setting."""
+    try:
+        wanted = LEVELING if settings(cfg)["level"] else None
+        marker = json.loads((mods.mods_dir(cfg) / MOD / MARKER).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return not isinstance(marker, dict) or marker.get("format", 1) < 2 or marker.get("leveling") != wanted
 
 
 def write_bank(source, output, additions, cancelled=lambda: False):
@@ -343,8 +412,7 @@ def build(cfg, progress=lambda n, total, text: None, cancelled=lambda: False):
     target = mods.mods_dir(cfg) / MOD
     target.parent.mkdir(parents=True, exist_ok=True)
     # Never take over a user-created folder with our reserved name.
-    marker = ".reimagined-radio.json"
-    if target.is_symlink() or (target.exists() and not (target / marker).is_file()):
+    if target.is_symlink() or (target.exists() and not (target / MARKER).is_file()):
         raise RadioError(f"{target} already exists and was not generated by Radio. Move it before building.")
     backup = target.with_name("." + MOD + ".previous")
     if backup.exists():
@@ -371,7 +439,7 @@ def build(cfg, progress=lambda n, total, text: None, cancelled=lambda: False):
                     raise RadioError("Radio build cancelled. Your previous stations are unchanged.")
                 progress(done, total, f"Encoding {Path(song).name}")
                 encoded = work / f"track-{done}.mp3"
-                samples = encode(song, encoded, ffmpeg, cancelled)
+                samples = encode(song, encoded, ffmpeg, cancelled, spec["level"])
                 name = f"RI_{slot}_{done:04d}"
                 additions.append((sample_header(name, samples, encoded.stat().st_size), encoded))
                 ET.SubElement(native, "MusicTrack", name=Path(song).stem, artist=station["name"],
@@ -405,7 +473,8 @@ def build(cfg, progress=lambda n, total, text: None, cancelled=lambda: False):
                 out.write_bytes(patch_strings(data, titles))
         (staged / "mod.toml").write_text('name = "Custom radio"\nversion = "1"\n'
                                          'description = "Built locally from your game and music"\n', encoding="utf-8")
-        (staged / marker).write_text(json.dumps({"format": 1, "settings": spec}, ensure_ascii=False), encoding="utf-8")
+        (staged / MARKER).write_text(json.dumps({"format": 2, "settings": spec,
+                                                 "leveling": LEVELING if spec["level"] else None}, ensure_ascii=False), encoding="utf-8")
         if cancelled():
             raise RadioError("Radio build cancelled. Your previous stations are unchanged.")
         if (Path(cfg.game_files()).resolve() != game.resolve()

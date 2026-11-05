@@ -144,7 +144,8 @@ add("resolution_scale", "Render scale", "Display", "int", 1,
     "for about 40% fewer fps; above 2 is experimental (flicker on NVIDIA, issue #47).", "Picture",
     lo=1, hi=8, restart=True)
 add("scene_resolution", "3D scene resolution", "Display", "choice", "720",
-    "For integrated graphics that can't hold the frame rate: 540p draws the 3D scene at 960x540 "
+    "For integrated graphics and entry cards (GTX 1650 class) that can't hold the frame rate: 540p "
+    "draws the 3D scene at 960x540 "
     "(about half the pixels) and scales it to 720p; the HUD, text and menus stay at 720p, and the "
     "upscaling filter (AMD FSR 1 is the sharpest) takes the picture to the window. It saves GPU time "
     "only: a PC limited by its CPU (Steam Deck) gets nothing. The scene is drawn in one pass with 2x "
@@ -252,6 +253,24 @@ add("world_texture_detail", "Distant texture detail", "Display", "choice", "cons
     "Console 0, High -0.5, Ultra -1). Best with 8x or 16x anisotropic filtering; Ultra can "
     "shimmer slightly on fine patterns.", "World detail",
     choices=[("console", "Console"), ("high", "High"), ("ultra", "Ultra")], restart=True)
+add("world_car_detail", "Car detail", "Display", "choice", "console",
+    "How far other cars (traffic, rivals, drivatars) keep their detailed models before they switch "
+    "to simpler ones, and how many of them may: Console is the game's own (full detail only for "
+    "the two nearest cars, within 15 m); High keeps them twice as far and allows twice as many "
+    "cars, Ultra four times. The model switches then happen farther away (Ultra: none within 50 m "
+    "on a free roam drive); see docs/graphics-detail.md for the measured cost. Also in the "
+    "in-game Graphics screen, where it applies without a restart.",
+    "World detail",
+    choices=[("console", "Console"), ("high", "High"), ("ultra", "Ultra")])
+add("livery_bake_scale", "Paint job detail", "Display", "choice", 1,
+    "Sharper vinyls and decals on cars in free roam and races. The Paint Shop shows your "
+    "design at full detail, but for driving the game draws it into a 1024x1024 texture per car, "
+    "where small decals and text blur. 2x draws it at 2048x2048. It costs about 50 MB more of the "
+    "game's memory and some graphics memory for each car with a paint job (in single player only "
+    "yours); cars without one cost nothing. Photos keep the game's size (photo mode draws the paint "
+    "job uncompressed). See docs/graphics-detail.md.",
+    "World detail",
+    choices=[(1, "Console"), (2, "2x")], restart=True)
 add("world_shadow_filter", "Shadow softness", "Display", "choice", "console",
     "Softer, smoother edges on the shadows of trees, cars and scenery: Soft filters each shadow "
     "over a 1.5 times wider area, Softer twice as wide with a wider blur. Measured on an RX 9060 XT: "
@@ -667,13 +686,14 @@ add("store_shaders", "Keep a shader cache", "Advanced", "bool", True,
     "Fewer stutters the second time you play.", "GPU")
 add("vulkan_store_pipeline_cache", "Keep compiled Vulkan pipelines", "Advanced", "bool", True,
     "Reuse local GPU driver data when preparing cached shaders at startup. Requires the shader "
-    "cache and Vulkan. New scenes may still compile shaders; driver changes rebuild the cache.", "GPU", restart=True)
+    "cache and Vulkan. New scenes may still compile shaders; driver changes rebuild the cache. "
+    "Off on NVIDIA, whose driver keeps its own cache and never reused this one.", "GPU", restart=True)
 add("async_shader_compilation", "Compile shaders in the background", "Advanced", "bool", True,
     "", "GPU")
-add("gpu_wait_blocking", "Sleep while waiting for the GPU (testing)", "Advanced", "bool", False,
+add("gpu_wait_blocking", "Sleep while waiting for the GPU", "Advanced", "bool", True,
     "The render thread sleeps until the GPU is done instead of keeping a CPU core busy, which "
-    "leaves more CPU and power to the game on laptops. On by default on Linux; not tested on "
-    "Windows yet: turn it on to try it, and report any freeze (GitHub issue #45).", "GPU",
+    "leaves more CPU and power to the game, above all on 4-core PCs and laptops. Turn it off "
+    "only to compare, and report it if the game runs better without it.", "GPU",
     platform="windows", restart=True)
 add("present_safe_area_x", "Safe area width %", "Advanced", "int", 90, "", "GPU",
     lo=0, hi=100)
@@ -700,6 +720,12 @@ add("coop_results", "Co-op campaign results", "Online", "bool", True,
     "ones you earned to the save you played with. The request carries your player ID and a signature "
     "made with your signing key (not the key itself). "
     "Nothing is asked offline or of a server on this PC.", "Co-op campaign")
+# Launcher only: see challenges.py, forza-live #1.
+add("challenges", "Daily and weekly challenges", "Online", "bool", True,
+    "Show the main server's daily and weekly challenges and your progress on the Play page. The "
+    "launcher asks the main server for them when the Play page is open (at most every 5 minutes) "
+    "and after a game session, only with Server set to Public server. The request carries your "
+    "player ID and a signature made with your signing key (not the key itself).", "Challenges"),
 # Discord status display is on by default; the "Online features" choice (PRIVACY.md) and this
 # switch turn it off. The application ID is public maintainer setup, separated from the
 # ordinary sharing switch. Never request a token or secret.

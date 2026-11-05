@@ -5,11 +5,13 @@ texture the game loads by a fingerprint of its contents, and draws a file named 
 fingerprint instead. The game itself never sees the file; it keeps its own texture, in its own
 memory, and only the graphics card's copy changes.
 
-A **texture pack** is a folder of such files. Packs come from two places, and the project hosts
-neither (they are derived from the game's art):
+A **texture pack** is a folder of such files. Packs come from these places, and the project hosts
+none of them (they are derived from the game's art):
 
 - **Make HD pack**: the launcher upscales the textures *you* dumped, on your PC, with an AI
   upscaler (Real-ESRGAN), and compresses them. Nothing of the game is downloaded or shared.
+- **Make decal pack**: the same for the Paint Shop's decals, read from your own game files (no
+  dump needed).
 - **Community packs**: packs other players made by hand, added with **Add pack…**.
 
 ## The Texture packs page
@@ -32,7 +34,9 @@ Windows): the launcher passes it as `texture_pack_root`; without the launcher it
 
 - `texture_dump_png` (on): with `texture_dump`, also write a `.png` of the largest level.
 - `texture_replace_preload` (off): read every pack file at start instead of when its texture
-  first loads, so no texture is shown at the original resolution first (more memory).
+  first loads, so no texture is shown at the original resolution first (more memory). Off, a
+  pack can ask for this for its own files: a top-level `preload = true` in its `pack.toml` (SDK
+  patch 0436; the decal pack does, [Make decal pack](#make-decal-pack)).
 - `texture_pack_root`: another folder (the launcher then passes no `texture_packs`).
 
 ### The list
@@ -44,8 +48,9 @@ the selected row too). **Ticked packs are used from top to bottom: when two pack
 same texture, the one lower in the list wins** (as on the Mods page). The details under the list
 name the textures a pack shares with others and whose copy is used. **Move up**, **Move down**,
 **Remove** (asks first; a linked folder loses only the link) and **Refresh** work as on the Mods
-page. The pack Make HD pack writes, "HD pack (made on this PC)" (`hd-pack`), starts at the top, so
-hand-made packs below it win over it.
+page. The pack Make HD pack writes, "HD pack (made on this PC)" (`hd-pack`), starts at the top, and
+the one Make decal pack writes, "Decal pack (made on this PC)" (`decal-pack`), right below it, so
+hand-made packs below them win over them.
 
 launcher.json keeps the order and the packs turned off (`"texture_packs": {"order": [...],
 "disabled": [...]}`). With Use texture packs on, every start passes
@@ -74,8 +79,8 @@ only after you say yes (never while the game runs).
 Refused, in words under the list: a zip with an absolute path, `..` or a link (zip slip), more
 than 200,000 files or 32 GB unpacked, a texture over 2 GB, a texture dump (a folder with
 `index.tsv`: the game's own textures), and a pack without a single texture the game can use. A
-pack named `hd-pack` or `dump` is added as `hd-pack (added)` (those folders are Make HD pack's
-and the dump's). Kept, with a note: files the game cannot use (a cube map, a format it does not
+pack named `hd-pack`, `decal-pack` or `dump` is added as `hd-pack (added)` and so on (those
+folders are Make HD pack's, Make decal pack's and the dump's). Kept, with a note: files the game cannot use (a cube map, a format it does not
 read, a size over 16384, a file shorter than its header), files not named by a fingerprint, a
 texture in a pack twice, and files that are byte for byte the game's own dumped textures (they
 change nothing, and a pack must not contain them).
@@ -233,6 +238,67 @@ chase camera at 1440p the difference is clear on the near road and foliage, smal
 terrain. Compressed and PNG packs look the same in the game: the shots at the spawn point differ
 only where something moved between runs (foliage in the wind, traffic's tyre tracks on the dirt).
 
+## Make decal pack
+
+**Make decal pack** (the **Sharper decals** box on the Texture packs page, #659) upscales the Paint
+Shop's decals, the sponsor and brand logos you put on a car, into the pack "Decal pack (made on
+this PC)" (`textures/decal-pack`), at **2x** (default) or **4x**. A decal is a 256x256 picture (7
+of them 256x128) that the game stretches over part of the car: with **Paint job detail** at 2x
+(Settings > Display > World detail, see [graphics detail](graphics-detail.md#paint-job-detail-659)),
+a large decal covers about 900 pixels of the car's 2048x2048 paint job, so the decal itself is
+what looks soft. The pack also sharpens the decals' pictures in the Paint Shop's Decal Select.
+
+It needs no dump and no driving around: the launcher reads the 490 decal files of the game's own
+`media/Livery.zip` (in your game files), works out the fingerprint the game gives each decal's
+texture, and upscales every one. Nothing of the game is downloaded or shared; the result stays in
+your data folder. The upscaler is Make HD pack's (downloaded once for both, after you say yes),
+and so is the job: in the background, with a progress bar and **Cancel**; **Continue decal pack**
+goes on from where it stopped. A pack made at the other scale is replaced after you say yes.
+
+What is different from Make HD pack:
+
+- **No colour test.** Decals are flat logos, which the HD pack's data map test would leave out.
+- **The alpha goes through the upscaler too.** A decal's alpha is the logo's outline: scaled
+  smoothly, as the HD pack does, the outline would stay as soft as the original while the colour
+  inside sharpens. Here the alpha is upscaled as a grey picture of its own, its levels matched to
+  the original's (a model that made it a little darker would make the whole decal see-through),
+  and values within 3 of clear or opaque are made exactly that.
+- **No fringes.** The game stores white under a decal's transparent texels; the colour there is
+  filled from the logo's edge before upscaling (as for the HD pack's cut-outs), so the GPU's
+  filtering draws no white or dark line around the logo, on light or dark paint.
+
+Measured on a Ryzen 7 7800X3D with a Radeon RX 9060 XT (Linux), the 478 different decals:
+
+| | 2x (default) | 4x |
+| --- | --- | --- |
+| A decal | 512x512, BC7 with mips | 1024x1024, BC7 with mips |
+| Making the pack | 6 min 32 s | 6 min 33 s |
+| On disk | 160 MB | 633 MB |
+| Graphics memory of the whole pack (loaded at start, below) | 178 MiB | 652 MiB |
+
+476 of the decals come out BC7 (they have alpha), 2 BC1. The time is the same at both scales:
+the model works at 4x (2x is its output halved), and each decal goes through it twice, colour
+and alpha. Reading the 490 files from Livery.zip takes about 10 s of it.
+
+**Loaded at start.** The game draws a car's decals into its paint job once, when the car loads
+(and again only when the paint job changes). A replacement is read the first time its texture
+loads and drawn from the frame after, which for a decal is too late: the paint job is drawn with
+the game's own decal, and the pack changes nothing on the car. So the decal pack's `pack.toml`
+says `preload = true` (SDK patch 0436): the game reads that pack's files and puts them in graphics
+memory at start, 178 MiB at 2x or 652 MiB at 4x, and the game's own decal is never used. The
+other packs are read as their textures load, as before (an HD pack is not preloaded with it).
+
+How the decals are read (`launcher/forza_launcher/decal_pack.py`): each `decals/*.carbin` (zip
+method 21, the game's LZX, decoded in Python) has the texture's width, height, mip count and
+format word (`0x18287F86`, 8:8:8:8) at 0x143-0x152 and its largest level at 0x157, tiled and
+big-endian as the console loads it (4 bytes a texel: A, R, G, B). The fingerprint is the game's
+(`Packs::Fingerprint`, see [Dumping](#dumping)) of that level as a k_8_8_8_8 texture, k8in32, pitch
+width/32, tiled, packed mips. It was checked against the game: a dump of a Paint Shop visit (Decal
+Select's 42 decals) and of free roam with the Amsoil decal on the car has exactly these names. The
+picture upscaled is the untiled level, in the dump PNG's channel order. 12 of the 490 files share
+their picture with another, so the pack has 478 textures. `launcher/test_decal_pack.py` tests the
+reading, the fingerprint, the job and the page with a made-up Livery.zip.
+
 ## Making and sharing a pack
 
 A pack is a folder:
@@ -258,8 +324,8 @@ Rocks HD/
 **Sharing is your responsibility.** A pack holds changed game art, which belongs to the game's
 publisher; the project does not host packs and cannot vouch for any. Share only your own work:
 never the game's textures unchanged, the dumped files, files only re-saved or converted from them,
-or a dump; and keep the pack Make HD pack made on your PC to yourself (it is the game's art run
-through a program, not your work). The launcher notes files of an added pack that are the game's
+or a dump; and keep the packs Make HD pack and Make decal pack made on your PC to yourself (they
+are the game's art run through a program, not your work). The launcher notes files of an added pack that are the game's
 own textures unchanged.
 
 ## Dumping
@@ -386,7 +452,8 @@ texture cache's replacement images (`VulkanTextureCache::UploadTexturePackReplac
 sets `texture_pack_root` (`src/forza_app.h`); the launcher's options are in
 `launcher/forza_launcher/schema.py`, the packs in `texture_packs.py` (tests:
 `launcher/test_texture_packs.py`), Make HD pack in `hd_pack.py` (tests: `launcher/test_hd_pack.py`,
-with a stand-in for the upscaler), the page in `ui/texture_packs_page.py` (its list is the Mods
+with a stand-in for the upscaler), Make decal pack in `decal_pack.py` (tests:
+`launcher/test_decal_pack.py`), the page in `ui/texture_packs_page.py` (its list is the Mods
 page's, `ui/mods_page.py` `FolderListPage`). The compressor (#413) is `forza-recomp/texcompress`
 (`texcompress.{h,cpp}`: mips, encoding, DDS; `main.cpp`: the program and its job list; built by the
 game's CMake and staged next to the game by `builder.stage_runtime`), tested by

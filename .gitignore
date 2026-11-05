@@ -1,5 +1,6 @@
 # Game media and anything derived from it never goes in the repo.
 extracted/
+/extracted
 *.xex
 *.iso
 *.zip

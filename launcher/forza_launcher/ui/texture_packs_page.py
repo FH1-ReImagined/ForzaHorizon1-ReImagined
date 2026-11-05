@@ -1,11 +1,12 @@
 """Texture packs (#384): the packs in the textures folder (add, remove, turn on or off, order),
-Make HD pack, which upscales the player's own dump on this PC (hd_pack.py), and Compress PNGs,
+Make HD pack, which upscales the player's own dump on this PC (hd_pack.py), Make decal pack, which
+upscales the Paint Shop's decals from the game files (decal_pack.py, #659), and Compress PNGs,
 which makes a pack's PNGs DDS files that take a quarter of the graphics memory (#413,
 texture_compress.py)."""
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QProgressBar, QPushButton, QVBoxLayout
 
-from .. import GITHUB_URL, hd_pack, installer, pins, schema, specs, texture_compress, texture_packs
+from .. import GITHUB_URL, decal_pack, hd_pack, installer, pins, schema, specs, texture_compress, texture_packs
 from .mods_page import FolderListPage, _link_label, _size
 from .widgets import Switch, card, label
 from . import theme
@@ -34,7 +35,7 @@ class TexturePacksPage(FolderListPage):
                          "Higher-resolution textures, drawn by the graphics card in place of the "
                          "game's own. The game's files stay as they are.")
         self.task = None
-        self.task_kind = ""   # "hd" (Make HD pack) or "compress" (Compress PNGs)
+        self.task_kind = ""   # "hd" (Make HD pack), "decal" (Make decal pack) or "compress" (Compress PNGs)
         self.plan = None
         lay = self.page_layout
 
@@ -76,6 +77,7 @@ class TexturePacksPage(FolderListPage):
         lay.addWidget(c)
 
         self._hd_card(lay)
+        self._decal_card(lay)
 
         c, cl = card(spacing=8)
         cl.addWidget(label("How texture packs work", "cardTitle"))
@@ -102,13 +104,13 @@ class TexturePacksPage(FolderListPage):
         texture_packs.remember(self.cfg, items)
 
     def install(self, path, replace):
-        if self.busy() and path.name == texture_packs.HD_PACK:
-            raise texture_packs.InstallError("Make HD pack is writing that folder: wait for it to finish.")
+        if self.busy() and path.name in texture_packs.MADE_HERE:
+            raise texture_packs.InstallError("The launcher is writing that folder: wait for it to finish.")
         return texture_packs.install(path, self.folder(), replace=replace)
 
     def remove_folder(self, folder):
-        if self.busy() and folder == texture_packs.HD_PACK:
-            raise texture_packs.InstallError("Make HD pack is writing this pack: cancel it first.")
+        if self.busy() and folder in texture_packs.MADE_HERE:
+            raise texture_packs.InstallError("The launcher is writing this pack: cancel it first.")
         texture_packs.remove(self.cfg, folder)
 
     def row_texts(self, p):
@@ -143,7 +145,10 @@ class TexturePacksPage(FolderListPage):
         return f"Added {p.summary()} ({p.files} texture(s)).{' ' + p.note if p.note else ''}"
 
     def remove_question(self, p):
-        made = " It was made on this PC: Make HD pack can make it again." if p.made_here else ""
+        made = ""
+        if p.made_here:
+            button = "Make decal pack" if p.folder == texture_packs.DECAL_PACK else "Make HD pack"
+            made = f" It was made on this PC: {button} can make it again."
         return f'Remove "{p.title}"? Its folder {p.folder} is deleted from the textures folder.{made}'
 
     def add_path(self, path):
@@ -175,6 +180,7 @@ class TexturePacksPage(FolderListPage):
         if self.items and not self.cfg.settings.get("texture_replace"):
             self._say(self.message.text() + " Use texture packs is off: turn it on above to use them.")
         self._refresh_hd()
+        self._refresh_decals()
 
     def _set_option(self, key, on):
         """Through the Settings page when there is one (it shows the change, saves and writes
@@ -266,20 +272,23 @@ class TexturePacksPage(FolderListPage):
         self.task, self.task_kind = Task(job, name), kind
         self.task.progress.connect(self._task_progress)
         self.task.done.connect(self._task_done)
-        bar = self.bar if kind == "hd" else self.compress_bar
+        bar, status = self._task_widgets(kind)
         bar.setValue(0)
         bar.show()
-        status = self.hd_status if kind == "hd" else self.compress_status
         status.setStyleSheet("")
         status.show()
         self.compress_cancel.setVisible(kind == "compress")
         self.task.start()
         self._refresh_hd()
+        self._refresh_decals()
         self._selected()
 
+    def _task_widgets(self, kind):
+        return {"hd": (self.bar, self.hd_status), "decal": (self.decal_bar, self.decal_status)}.get(
+            kind, (self.compress_bar, self.compress_status))
+
     def _task_progress(self, fraction, text):
-        bar, status = (self.bar, self.hd_status) if self.task_kind == "hd" else (self.compress_bar,
-                                                                                 self.compress_status)
+        bar, status = self._task_widgets(self.task_kind)
         bar.setValue(int(max(0.0, min(1.0, fraction)) * 1000))
         status.setText(text)
 
@@ -290,6 +299,9 @@ class TexturePacksPage(FolderListPage):
         self.compress_cancel.hide()
         if kind == "hd":
             self._hd_done(ok, message)
+            return
+        if kind == "decal":
+            self._decal_done(ok, message)
             return
         self.compress_bar.hide()
         if not ok and message == "Cancelled.":
@@ -303,6 +315,8 @@ class TexturePacksPage(FolderListPage):
             self.task.cancel()
             if self.task_kind == "compress":
                 self.compress_status.setText("Stopping… the textures compressed so far stay compressed.")
+            elif self.task_kind == "decal":
+                self.decal_status.setText("Stopping… the decals made so far are kept.")
 
     # ---- Make HD pack -------------------------------------------------------------------------
     def _hd_card(self, lay):
@@ -540,8 +554,130 @@ class TexturePacksPage(FolderListPage):
         if ok and not self.cfg.settings.get("texture_replace"):
             self.hd_status.setText(message + " Turn on Use texture packs above to see it in the game.")
 
+    # ---- Make decal pack ----------------------------------------------------------------------
+    def _decal_card(self, lay):
+        c, cl = card(spacing=12)
+        cl.addWidget(label("Sharper decals", "cardTitle"))
+        cl.addWidget(label(
+            "Upscales the Paint Shop's 478 decals (the sponsor and brand logos) from your game files, on "
+            "this PC, with the same upscaler as Make HD pack: no dump needed. The game's decals are "
+            "256x256, so a big decal on a car looks soft, most of all with Settings > Display > World "
+            "detail > Paint job detail at 2x. The result is the pack \"Decal pack (made on this PC)\"; "
+            "it also sharpens the Paint Shop's decal pictures.", "muted"))
+        row = QHBoxLayout()
+        row.setSpacing(12)
+        self.decal_scale = QComboBox()
+        self.decal_scale.addItem("2x (recommended): about 180 MB of graphics memory", 2)
+        self.decal_scale.addItem("4x: about 650 MB of graphics memory", 4)
+        self.decal_scale.setAccessibleName("Decal upscale")
+        self.decal_scale.setMinimumWidth(330)
+        self.decal_scale.currentIndexChanged.connect(lambda _i: self._refresh_decals())
+        row.addWidget(self.decal_scale)
+        self.decal_button = QPushButton("Make decal pack")
+        self.decal_button.clicked.connect(self.make_decal_pack)
+        row.addWidget(self.decal_button)
+        self.decal_cancel = QPushButton("Cancel")
+        self.decal_cancel.clicked.connect(self.cancel_task)
+        self.decal_cancel.hide()
+        row.addWidget(self.decal_cancel)
+        row.addStretch()
+        cl.addLayout(row)
+        self.decal_estimate = label("", "muted")
+        cl.addWidget(self.decal_estimate)
+        self.decal_bar = QProgressBar()
+        self.decal_bar.setRange(0, 1000)
+        self.decal_bar.hide()
+        cl.addWidget(self.decal_bar)
+        self.decal_status = label("", "muted")
+        cl.addWidget(self.decal_status)
+        lay.addWidget(c)
+
+    def _decal_scale(self) -> int:
+        return int(self.decal_scale.currentData() or decal_pack.DEFAULT_SCALE)
+
+    def _refresh_decals(self):
+        if not hasattr(self, "decal_scale"):
+            return
+        running = self.busy() and self.task_kind == "decal"
+        self.decal_button.setVisible(not running)
+        self.decal_cancel.setVisible(running)
+        self.decal_scale.setEnabled(not running)
+        if running:
+            return
+        p = decal_pack.plan(self.cfg, self._decal_scale())
+        if not p.found:
+            self.decal_estimate.setText("The game's decals (media/Livery.zip) are not there: install the "
+                                        "game in Setup first.")
+            self.decal_button.setEnabled(False)
+            return
+        if p.todo:
+            made = f" ({p.done:,} already made)" if p.done else ""
+            lines = [f"{p.decals:,} decal files: {p.todo:,} to upscale{made}."]
+        else:
+            lines = [f"All {p.decals:,} decals are in the decal pack."]
+        if p.replaces:
+            lines.append(f"Making it at {p.scale}x replaces your {p.replaces}x decal pack.")
+        lines.append(f"The pack: about {_gb(p.disk_bytes())} on disk and {_gb(p.gpu_bytes())} of graphics "
+                     "memory, all of it from the start of the game (a car's decals are drawn into its paint "
+                     "job when the car loads, so they must be there by then).")
+        if p.todo:
+            lines.append(f"About {max(1, round(p.seconds() / 60))} min on a mid-range graphics card; the "
+                         "game can run meanwhile.")
+        if not p.compressed:
+            lines.append("Written as PNGs, which take 4 times the graphics memory of compressed textures. "
+                         + NO_COMPRESSOR)
+        self.decal_estimate.setText(" ".join(lines))
+        self.decal_button.setEnabled(bool(p.todo) and not self.busy())
+        self.decal_button.setText("Continue decal pack" if p.done and p.todo else "Make decal pack")
+
+    def make_decal_pack(self):
+        if self.busy():
+            return
+        scale = self._decal_scale()
+        before = decal_pack.existing_scale(self.cfg)
+        if before and before != scale and decal_pack.pack_dir(self.cfg).is_dir():
+            if not self._confirm("Make decal pack", f"Your decal pack was made at {before}x. Making it at "
+                                                    f"{scale}x replaces it. Continue?"):
+                return
+        if not hd_pack.installed(self.cfg):
+            size = pins.SIZES_MB.get(hd_pack.platform_key(), 45)
+            if not self._confirm("Make decal pack", f"Download the upscaler (Real-ESRGAN, {size} MB) from its "
+                                                    "official release on GitHub? It is checked against its "
+                                                    "known checksum and kept in the launcher's tools folder."):
+                return
+        cfg = self.cfg
+
+        def job(task):
+            try:
+                if not hd_pack.installed(cfg):
+                    task.progress.emit(0.0, "Downloading the upscaler…")
+                    hd_pack.install(cfg, lambda done, total: task.progress.emit(
+                        done / total if total else 0.0, f"Downloading the upscaler… {done >> 20} MB"),
+                        task.cancelled)
+                result = decal_pack.make(cfg, scale, progress=lambda f, text: task.progress.emit(f, text),
+                                         cancelled=task.cancelled)
+            except (RuntimeError, OSError) as e:
+                raise installer.InstallError(f"Make decal pack stopped: {e}") from e
+            words = f"Made {result.made} decal(s) in {max(1, round(result.seconds / 60))} min."
+            if result.failed:
+                words += f" {len(result.failed)} could not be made (first: {result.failed[0]})."
+            return words
+
+        self._start_task(job, "make decal pack", "decal")
+        self.decal_status.setText("Starting…")
+
+    def _decal_done(self, ok, message):
+        self.decal_bar.hide()
+        if not ok and message == "Cancelled.":
+            message = "Stopped. The decals made so far are kept: Make decal pack continues from there."
+        self.decal_status.setText(message)
+        self.decal_status.setStyleSheet("" if ok or "Stopped" in message else f"color: {theme.ERR};")
+        self.refresh()
+        if ok and not self.cfg.settings.get("texture_replace"):
+            self.decal_status.setText(message + " Turn on Use texture packs above to see it in the game.")
+
     def shutdown(self, wait_ms=15000) -> bool:
-        """Stops Make HD pack or Compress PNGs (when the window closes); False when it did not stop
+        """Stops Make HD pack, Make decal pack or Compress PNGs (when the window closes); False when it did not stop
         in time."""
         if not self.busy():
             return True

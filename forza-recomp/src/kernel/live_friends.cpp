@@ -705,6 +705,16 @@ void LiveChatSay(uint8_t channel, const std::string& text) {
   chat_to = to;
 }
 
+bool LiveChatCommand(const std::string& text) {
+  const size_t n = std::min(text.size(), kMaxMessage * 4);
+  std::vector<uint8_t> body{kChatSay, kToWorld};
+  Put64(body, 0);
+  body.push_back(uint8_t(n >> 8));
+  body.push_back(uint8_t(n));
+  body.insert(body.end(), text.begin(), text.begin() + n);
+  return LiveSendChat(body);
+}
+
 std::vector<LiveRelation> LiveRelations() {
   std::lock_guard<std::mutex> lock(mutex);
   return relations;

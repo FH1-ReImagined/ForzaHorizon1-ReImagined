@@ -11,8 +11,8 @@ from . import OLD_PUBLIC_SERVERS, PUBLIC_SERVER, display, gpu, languages, paths,
 from .haptics.settings import DEFAULTS as HAPTICS_DEFAULTS, normalize as normalize_haptics
 
 # Settings of the launcher itself: not game cvars, never written to forza.toml.
-LAUNCHER_ONLY = ("share_shader_list", "coop_results", "battery_saver", "game_language", "vr_mode",
-                 "vr_picture", "vr_seat_height_cm")
+LAUNCHER_ONLY = ("share_shader_list", "coop_results", "challenges", "battery_saver", "game_language",
+                 "vr_mode", "vr_picture", "vr_seat_height_cm")
 ONLINE_MODES = ["public", "local", "custom", "offline"]
 # First-run values that differ from the game's own defaults.
 FIRST_RUN = {"frame_rate": 60, "present_effect": "fsr"}
@@ -27,7 +27,7 @@ def _default():
         "mods": {"order": [], "disabled": []},
         # Texture packs (#384, texture_packs.py): the same for the folders in <data>/textures.
         "texture_packs": {"order": [], "disabled": []},
-        "custom_radio": {"version": 1, "ffmpeg": "", "stations": {}},
+        "custom_radio": {"version": 1, "ffmpeg": "", "level": True, "stations": {}},
         "check_updates": True,    # one background check per packaged launcher session
         "game_package": "",       # the Games on Demand package (file)
         "tu_package": "",         # the player's title update package (TU4)
@@ -44,7 +44,8 @@ def _default():
                      "data_root_asked": False},  # the player answered the offer to leave Documents\\forza
         "settings": {**schema.defaults(), **FIRST_RUN},
         # The graphics card the player has (#52): '' until detected; the player can change it.
-        "gpu": {"vendor": "", "detected": "", "name": "", "checked": False},
+        # vulkan: its Vulkan devices and their driver's API version (gpu.vulkan_devices, #672); None: unknown.
+        "gpu": {"vendor": "", "detected": "", "name": "", "checked": False, "vulkan": None},
         # The PC's CPU, RAM and card (#206): the detected specs plus what the player already answered.
         "specs": {"checked": False, "fingerprint": "", "dismissed": "", "values": None},
         # Battery saver (#140): the settings it forced at the last start (power.py); None: none.
@@ -54,8 +55,12 @@ def _default():
         # The "Online features" choice (online_features.py, PRIVACY.md): on (None until made), the
         # first-run question still to ask, and the installer run whose choice was applied.
         "online_features": {"on": None, "ask": False, "installer": ""},
+        # Settings > Online > Website account (web_account.py): this launcher linked the game to a
+        # website account, so the card asks the service for the link's state.
+        "web_account": {"linked": False},
         # One-time fixes of values an older launcher saved: done once, so a later choice sticks.
-        "migrated": {"discord_application_id": False},
+        "migrated": {"discord_application_id": False, "gpu_wait_blocking": False,
+                     "nvidia_pipeline_cache": False, "scene_540": False},
     }
 
 
@@ -89,6 +94,7 @@ class Config:
         self.d = _default()
         self.loaded = False
         self.gamertag_cleaned = None
+        self.notices = []   # one-time notices of changes this launcher made to the saved settings (Play page)
         self.load()
 
     # --- persistence ---
@@ -97,7 +103,8 @@ class Config:
             data = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             # A new launcher.json starts with today's defaults: nothing to migrate later.
-            self.d["migrated"]["discord_application_id"] = True
+            self.d["migrated"].update(discord_application_id=True, gpu_wait_blocking=True,
+                                      nvidia_pipeline_cache=True, scene_540=True)
             return
         if isinstance(data, dict):
             _merge(self.d, data)
@@ -120,6 +127,17 @@ class Config:
             if not str(self.d["settings"].get("discord_application_id") or "").strip():
                 self.d["settings"]["discord_application_id"] = schema.BY_KEY["discord_application_id"].default
             migrated["discord_application_id"] = True
+        # Up to 0.2.6 "Sleep while waiting for the GPU" was off by default on Windows (not measured
+        # there yet) and every launcher.json saved that off; it is on by default now (#640).
+        if not migrated.get("gpu_wait_blocking"):
+            self.d["settings"]["gpu_wait_blocking"] = True
+            migrated["gpu_wait_blocking"] = True
+        # NVIDIA's driver never reused the stored driver pipelines (#640); up to 0.2.6 the NVIDIA preset kept
+        # them, so every NVIDIA launcher.json holds that on.
+        if not migrated.get("nvidia_pipeline_cache"):
+            if self.d["gpu"].get("vendor") == gpu.NVIDIA:
+                self.d["settings"]["vulkan_store_pipeline_cache"] = False
+            migrated["nvidia_pipeline_cache"] = True
         self.d['haptics'] = normalize_haptics(self.d.get('haptics'))
         prefs = self.d.get('save_manager')
         if not isinstance(prefs, dict):
@@ -135,6 +153,7 @@ class Config:
         self.gamertag_cleaned = None  # (saved, cleaned) when the saved Gamertag was not plain ASCII
         if isinstance(saved_tag, str) and saved_tag.strip() != self.d["settings"]["gamertag"]:
             self.gamertag_cleaned = (saved_tag, self.d["settings"]["gamertag"])
+        self._migrate_scene_540()
         online = self.d["online"]
         if online.get("mode") == "custom" and online.get("custom_server", "").strip() in OLD_PUBLIC_SERVERS:
             online["mode"], online["custom_server"] = "public", ""
@@ -167,6 +186,45 @@ class Config:
             gpu.apply_preset(self.settings, found.vendor)
         return found.vendor
 
+    # --- the Vulkan driver (#672) ---
+    def detect_vulkan(self, devices=None) -> bool:
+        """Ask the Vulkan driver which API version it has (each launcher start: a driver update changes it).
+        A new launcher.json on Windows whose Intel iGPU has a driver below Vulkan 1.3 gets Direct3D 12;
+        an existing one keeps its Graphics API (Setup and Play warn and offer "Use Direct3D 12").
+        Returns True when what is known changed."""
+        found = gpu.vulkan_devices() if devices is None else devices
+        if not found:
+            return False   # unknown: keep what was known
+        first = self.gpu.get("vulkan") is None
+        changed = self.gpu.get("vulkan") != found
+        self.gpu["vulkan"] = found
+        if first and not self.loaded and gpu.IS_WINDOWS and self.old_intel_vulkan() is not None:
+            self.settings["gpu_backend"] = "d3d12"
+        return changed
+
+    def old_intel_vulkan(self):
+        """The game's Vulkan device when it is an Intel iGPU on a driver below Vulkan 1.3, else None."""
+        devices = self.gpu.get("vulkan")
+        if not isinstance(devices, list):
+            return None
+        try:
+            index = int(self.settings.get("vulkan_device", -1))
+        except (TypeError, ValueError):
+            index = -1
+        return gpu.old_intel_vulkan(devices, self.gpu_vendor(), index)
+
+    def intel_vulkan_warning(self) -> str:
+        """The warning for Setup and Play: '' when the driver is fine or unknown, or when the game already
+        uses Direct3D 12 (Windows)."""
+        device = self.old_intel_vulkan()
+        if device is None or (gpu.IS_WINDOWS and self.settings.get("gpu_backend", "vulkan") == "d3d12"):
+            return ""
+        return gpu.old_intel_vulkan_text(device, gpu.IS_WINDOWS)
+
+    def intel_vulkan_fix(self) -> dict:
+        """What "Use Direct3D 12" sets ({} where it does not apply: Linux, or nothing to warn about)."""
+        return {"gpu_backend": "d3d12"} if gpu.IS_WINDOWS and self.intel_vulkan_warning() else {}
+
     # --- PC specs (#206) ---
     def pc_specs(self) -> specs.Specs:
         return specs.specs_from_dict(self.d["specs"].get("values"))
@@ -184,7 +242,27 @@ class Config:
         cache.update(checked=True, fingerprint=specs.fingerprint(), values=asdict(found))
         if first and not self.loaded:
             self.settings.update(specs.recommended(found, display.effective(self.settings, found), self.gpu_vendor()))
+        elif self.loaded:
+            self._migrate_scene_540()   # a launcher.json from before the specs were detected (#206)
         return True
+
+    def _migrate_scene_540(self):
+        """Up to 0.2.6 every launcher.json saved the 720p scene; on an entry card the 540p one is the
+        recommendation since #640 (specs.entry_card, the benchmark 47 -> 54 fps on a GTX 1650 Ti laptop). Done
+        once, with a notice, so a player who sets 720p again keeps it. Only where 540p is drawn: FSR 3, DLSS, a
+        separate anti-aliasing method and Ultrawide gameplay keep 720p. Waits for the specs when a launcher.json
+        has none yet."""
+        migrated = self.d["migrated"]
+        if migrated.get("scene_540") or not self.d["specs"].get("values"):
+            return
+        s = self.pc_specs()
+        if not s.known():
+            return
+        migrated["scene_540"] = True
+        if (specs.entry_card(s) and str(self.settings.get("scene_resolution")) == "720"
+                and specs.scene_540_applies(self.settings)):
+            self.settings["scene_resolution"] = "540"
+            self.notices.append(specs.scene_540_notice(s))
 
     def effective_settings(self, log=None) -> dict:
         """The settings as the game will get them: "Match display" (frame_rate 0) as a number (#215)."""

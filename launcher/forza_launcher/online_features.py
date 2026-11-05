@@ -2,9 +2,9 @@
 the launcher asks the first time it opens where no installer ran (Linux, Flatpak, a source checkout).
 
 On (the default) changes nothing. Off turns off what sends data over the network by itself: online
-play (Server: Offline), shader-list sharing, the co-op results fetch, the launcher's update check
-and the game's Discord activity. Sharing and co-op results are turned off themselves too, so they
-stay off when the player turns online play back on. Each one can be turned on again in Settings
+play (Server: Offline), shader-list sharing, the co-op results fetch, the Play page's challenges,
+the launcher's update check and the game's Discord activity. Sharing, co-op results and challenges
+are turned off themselves too, so they stay off when the player turns online play back on. Each one can be turned on again in Settings
 or on the About page.
 
 The installer writes its choice to install_options.json next to forza-launcher.exe, with a stamp
@@ -47,6 +47,7 @@ def turn_off(cfg, updates=True):
     cfg.online["mode"] = "offline"
     cfg.settings["share_shader_list"] = False
     cfg.settings["coop_results"] = False
+    cfg.settings["challenges"] = False
     cfg.settings["discord_presence"] = False
     if updates:
         cfg.d["check_updates"] = False
@@ -87,7 +88,7 @@ def answer(cfg, on: bool):
 
 
 def keep_off_after_reset(cfg):
-    """Reset settings: the defaults put online play, sharing, co-op results and Discord activity
+    """Reset settings: the defaults put online play, sharing, co-op results, challenges and Discord activity
     back on; a player who chose "Online features" off keeps them off."""
     if state(cfg).get("on") is False:
         turn_off(cfg, updates=False)
