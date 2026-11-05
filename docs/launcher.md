@@ -827,7 +827,7 @@ stays, and any other rate chosen in the menu replaces it. Tests: `launcher/test_
 **Battery saver (#140, Linux).** Display > Frame rate > Battery saver: Off (the default), On, or "Auto on battery
 (Steam Deck)". When it applies, Play starts the game at 30 fps and render scale 1 with AMD FSR 1 and Scene
 anti-aliasing Off (FSR 3 becomes FSR 1, SMAA and FSR Native AA the game's own anti-aliasing) and passes
-`--gpu_wait_blocking=true` (already the default on Linux). A frame rate of 20 or 40 stays: the player chose it for a
+`--gpu_wait_blocking=true` (already the default). A frame rate of 20 or 40 stays: the player chose it for a
 screen 30 does not divide (a Deck at 40 Hz). Only this start's `forza.toml` and command line change: `launcher.json`
 keeps the player's own values, which the next start on mains power uses again, and the player's own extra flags
 still come last. Auto applies on a Steam Deck (as the GPU detection finds it) whose battery runs it: no charger in
@@ -923,7 +923,12 @@ Steam Deck, or "Other / not sure". The launcher detects the card once (first sta
   6 cores, high = 6+ cores with AVX2; graphics (limits render scale, FSR 3, anti-aliasing): low = integrated or under
   4 GB, mid = 4 to 7 GB or a GTX / RX 400-500 / Vega-era card, high = 8 GB+ on a newer card. A new launcher gets 30 fps
   (low CPU) or 60 fps, and render scale 2 only with a high-end card, on top of the vendor preset (whose known problems
-  always win). Settings that are heavy for the PC get an orange line with the numbers (render scale 2 renders 2560x1440
+  always win). On an entry card (low graphics, or a GTX / RX 400-500-era card with 4 GB; not a Steam Deck) it also gets
+  the 540p 3D scene (#640: a GTX 1650 Ti laptop is limited by its GPU at the 720p scene, 46.8 -> 54.3 fps in the
+  benchmark, docs/perf.md). An existing launcher.json on an entry card gets it too, once (`migrated.scene_540`),
+  with a notice on the Play page that says where to change it back (Settings > Display > 3D scene resolution);
+  a player who sets 720p again keeps it. Only where 540p is drawn: FSR 3, DLSS, a separate anti-aliasing method and
+  Ultrawide gameplay keep 720p. Settings that are heavy for the PC get an orange line with the numbers (render scale 2 renders 2560x1440
   ...). A launcher with existing settings is never changed silently: a banner on the Settings page offers "Use
   recommended" (only the settings that warn) or "Keep mine", and comes back only when the hardware changes.
   On a Steam Deck (#140) the banner offers the Deck preset itself (`gpu.DECK_SETTINGS`, below) whenever a setting

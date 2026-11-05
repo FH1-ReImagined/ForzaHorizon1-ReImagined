@@ -69,9 +69,9 @@ class MainWindow(QMainWindow):
                 cfg.save()
             except OSError:
                 pass
-        if cfg.detect_specs():   # once, and again when the graphics card changed (#206)
+        if cfg.detect_specs() or cfg.notices:   # once, and again when the graphics card changed (#206)
             try:
-                cfg.save()
+                cfg.save()   # a one-time change (cfg.notices) is saved at once, so it is never made again
             except OSError:
                 pass
         # The Vulkan driver's API version (#672): before the first settings are written on a new
@@ -222,6 +222,8 @@ class MainWindow(QMainWindow):
         ask_online = self._first_run()
         self.show_page(0)
         self.refresh_all()
+        if cfg.notices:   # one-time changes to the saved settings, e.g. the 540p scene on an entry card (#640)
+            self.play.show_message(" ".join(cfg.notices))
         if cfg.loaded:
             from .. import gpu
             from .workers import Probe
