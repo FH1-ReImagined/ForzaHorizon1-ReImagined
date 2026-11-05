@@ -37,6 +37,9 @@ Windows): the launcher passes it as `texture_pack_root`; without the launcher it
   first loads, so no texture is shown at the original resolution first (more memory). Off, a
   pack can ask for this for its own files: a top-level `preload = true` in its `pack.toml` (SDK
   patch 0436; the decal pack does, [Make decal pack](#make-decal-pack)).
+- `texture_replace_memory_limit_mb` (0): the most graphics memory the replacements take, in MB
+  (0: 40% of the graphics card's own memory; on integrated graphics a quarter of the system
+  memory, up to 2 GB). See [Graphics memory](#graphics-memory) (SDK patch 0437).
 - `texture_pack_root`: another folder (the launcher then passes no `texture_packs`).
 
 ### The list
@@ -397,26 +400,76 @@ and why (a wrong aspect ratio, an unsupported format).
 - A texture the game samples as signed data keeps its original (the replacement is only bound
   where the game reads it unsigned, which is how it reads colour textures).
 - The game's own texture still loads (its memory and its copy on the graphics card), so a
-  replacement adds graphics memory; replacements stay loaded until the game exits. The log's
-  summary line counts them (`MiB of GPU memory`).
+  replacement adds graphics memory, for as long as the game has the texture
+  ([Graphics memory](#graphics-memory)).
 - The mip level the GPU picks follows the replacement's size, so the distance where a texture
   turns blurry moves out, as it should; the game's mip clamps (`mip_min_level`) are levels of
   the new image, a little sharper than before.
 - Only what the list above dumps can be replaced: no cube maps (sky, reflections), 3D textures
   or other formats yet.
 
+## Graphics memory
+
+A replacement is on the graphics card while the game has a texture with its picture, as the
+game's own textures are streamed (SDK patch 0437, #677). When the game drops its texture (its
+texture cache frees it, or the game loads another picture into its memory), the replacement is
+freed 5 seconds later (the game often loads the same picture again right away). One the game
+has but has not drawn for 30 seconds is freed too: the game keeps textures it no longer draws
+until its own texture cache is full. Either way the file is read again when the texture is next
+loaded or drawn, and the game's own texture is drawn until then (a frame or a few). Preloaded packs ([Make decal pack](#make-decal-pack),
+`texture_replace_preload`) stay loaded.
+
+All replacements fit in a limit, `texture_replace_memory_limit_mb`: by default 40% of the
+graphics card's own memory (6.4 GB on a 16 GB card, 1.6 GB on a 4 GB one; on integrated graphics
+a quarter of the system memory, up to 2 GB), and less while the card is nearly full (the driver's
+memory budget, other programs included). A replacement that would not fit frees others first:
+those no texture has any more, then those not drawn for 2 seconds, least recently drawn first.
+Replacements on screen and preloaded ones are never freed for it. If it still does not fit, the
+game's own texture is drawn, and the replacement is tried again when the texture is drawn 30
+seconds or more later. The log says so once (`fill their graphics memory`), and its summary line
+counts what was freed and held back.
+
+Measured on a Ryzen 7 7800X3D with a Radeon RX 9060 XT (16 GB, Linux, RADV; limit 6,521 MiB):
+15 minutes of free roam each on the 28.5 km soak loop from the save's spawn (`tools/autodrive.py`,
+720p, 60 fps cap, nothing else running), with a test pack of 2,712 textures from a dump of that
+drive, upscaled 2x (6.9 GB of graphics memory as PNGs, 1.7 GB as BC7). The game's own textures
+stay under its cache's 384 MB the whole time, so none of them is destroyed. "Before" is SDK patch
+0436, "0437 (no idle)" the patch without the 30-second rule, and "256 MB" it with
+`texture_replace_memory_limit_mb=256`:
+
+| | Replacements' graphics memory at 5 / 10 / 15 min | Files read | Freed | Held back | Game's graphics memory at 15 min | fps, p99, worst frame |
+| --- | --- | --- | --- | --- | --- | --- |
+| No pack | | | | | 1.3 GB | 59.9, 18.9 ms, 70 ms |
+| PNG, before | 2,803 / 4,028 / 5,041 MiB (still growing) | 2,197 | 0 | 0 | 6.4 GB | 60.0, 17.2 ms, 41 ms |
+| PNG, 0437 (no idle) | 2,386 / 2,853 / 3,297 MiB | 2,205 | 286 | 0 | 4.6 GB | 60.0, 17.1 ms, 33 ms |
+| BC7, before | 713 / 967 / 1,236 MiB | 2,170 | 0 | 0 | 2.6 GB | 60.0, 17.1 ms, 40 ms |
+| BC7, 0437 (no idle) | 591 / 733 / 853 MiB | 2,148 | 237 | 0 | 2.1 GB | 59.7, 17.4 ms, 100 ms (one burst of slow frames with no upload or wait behind it) |
+| PNG, 0437, 256 MB | 256 / 256 / 256 MiB | 9,654 | 1,615 | 7,933 | 1.6 GB | 60.0, 17.0 ms, 26 ms |
+
+At 256 MB the textures beyond it are drawn as the game's own (screenshots at the same places show
+the game's textures, no corruption); the cost is reading files again, 6.9 GB of them in 15
+minutes (from the page cache: 0.96 GB from disk), with no slower frame. Uploading took at most
+21 ms in one frame (PNG; 4 ms at 256 MB), within the 32 MiB a frame.
+
 ## The log
 
 At most once a minute while something happens; the counts are since the start:
 
 ```
-Texture packs: command processor time 6.4 ms (1.70 ms since the last summary; hashing 5.8 ms,
-dump copies 0.0 ms; at most 924 us for a load); 1902 loads fingerprinted (107.0 MiB); dumped 0
-(0.0 MiB written, 0 queued, 0 dropped, 0 failed); replacements for 22 textures (22 files read,
-0 not usable, 22 uploaded, 66.8 MiB of GPU memory); textures skipped: 3 format, 6
-cube/3D/array/scaled, 27 screen-sized, 51 dynamic, 0 mips only, 59 tiny; 164 GPU-written loads;
-formats not handled: k_32_FLOAT 1, k_24_8 1, k_2_10_10_10 1
+Texture packs: command processor time 28.3 ms (1.70 ms since the last summary; hashing 20.5 ms,
+dump copies 0.0 ms; at most 220 us for a load); 11104 loads fingerprinted (416.9 MiB); dumped 0
+(0.0 MiB written, 0 queued, 0 dropped, 0 failed); replacements for 2115 textures (2148 files
+read (1147.7 MiB), 0 not usable, 2148 uploaded (1217.8 MiB in 102.8 ms, at most 11.23 ms a
+frame), 237 freed (364.4 MiB), 0 held back by the limit; 853.4 MiB of GPU memory now, at most
+871.9, limit 6521 MiB); textures skipped: 3 format, 9 cube/3D/array/scaled, 20 screen-sized, 83
+dynamic, 0 mips only, 688 tiny; 245 GPU-written loads; formats not handled: k_32_FLOAT 1,
+k_24_8 1, k_2_10_10_10 1
 ```
+
+The replacements' part (SDK patch 0437): the files read and their size, the uploads (their size,
+the time they took and the most in one frame), the replacements freed, the ones held back by the
+limit, and the graphics memory they take now, the most they took and the limit
+([Graphics memory](#graphics-memory)).
 
 The command processor time is what fingerprinting cost the thread that feeds the GPU (every
 frame waits for it): it runs when a texture's data loads (created, or reloaded after the game
@@ -447,7 +500,9 @@ SDK patch 0280 (`docs/sdk_patches.md`): `src/graphics/pipeline/texture/pack.{h,c
 fingerprint, the dump writer with its untiling, DDS and PNG encoders, the replacement reader and
 its two worker threads), the hook in `TextureCache::CommitPreparedTextureLoad`, and the Vulkan
 texture cache's replacement images (`VulkanTextureCache::UploadTexturePackReplacement`,
-`GetTexturePackView`). SDK patch 0310: `texture_packs`, the packs to read in order, `.` for the loose files
+`GetTexturePackView`). SDK patch 0437: freeing and the limit (`TexturePackMakeRoom`,
+`FreeReleasedTexturePackReplacements`; the policy, `ReplacementMemoryLimit` and
+`ChooseEvictions` in `pack_format.cpp`, tested by `tools/test_texture_pack_dds.cpp`). SDK patch 0310: `texture_packs`, the packs to read in order, `.` for the loose files
 (`ParsePackOrder` in `pack_format.cpp`, tested by `tools/test_texture_pack_dds.cpp`). The game
 sets `texture_pack_root` (`src/forza_app.h`); the launcher's options are in
 `launcher/forza_launcher/schema.py`, the packs in `texture_packs.py` (tests:
