@@ -109,8 +109,15 @@ class DualSense:
         self._release()
 
     def set(self, left, right, lb_r=0, lb_g=0, lb_b=0, motor_l=0, motor_r=0, player_leds=0):
-        """Queue a new (L2, R2) effect pair, lightbar color, motor rumble, and player LEDs."""
+        """Queue a new (L2, R2) effect pair, lightbar color, motor rumble, and player LEDs.
+
+        An unchanged request writes nothing: the controller keeps its effect, and a report every
+        frame (USB or Bluetooth) only re-applied it and crowded the link (#692)."""
+        request = ((left, right), (lb_r, lb_g, lb_b), (motor_l, motor_r), player_leds)
         with self._lock:
+            if request == (self._pending, self._pending_lb, self._pending_motors,
+                           self._pending_player_leds):
+                return  # still pending, or written; a reconnect writes it again
             self._pending = (left, right)
             self._pending_lb = (lb_r, lb_g, lb_b)
             self._pending_motors = (motor_l, motor_r)
