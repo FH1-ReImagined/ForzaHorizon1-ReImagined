@@ -9,7 +9,9 @@ Nothing is downloaded and nothing leaves this PC. docs/modding/fm4-cars.md has t
 """
 import copy
 import json
+import re
 import shutil
+import struct
 import tempfile
 from pathlib import Path
 
@@ -62,56 +64,283 @@ def stale(cfg):
     return _dlc(cfg) != sorted(info.get("dlc", []))
 
 
-def _check_disc1(root: Path):
-    xex = root / "default.xex"
-    if not xex.is_file():
-        raise Fm4Error("This is not Forza Motorsport 4's Disc 1: it has no default.xex.")
+# ---- What the player chose (#681) --------------------------------------------------------------
+# Disc 1 can be a disc image, a Games on Demand package (its data parts hold the same XDVDFS
+# volume as the disc) or a folder with the disc's files; Disc 2 also its car packs themselves.
+# Anything else is named in plain words: another game's package, a title update, a lone XEX.
+
+TITLES = {0x4D5309C9: "Forza Horizon", FM4_TITLE: "Forza Motorsport 4", 0x4D53084D: "Forza Motorsport 3",
+          0x4D530AA4: "Forza Horizon 2"}
+# Xbox 360 content package types (the header's content type)
+CONTENT_TYPES = {0x1: "saved game", 0x2: "content package (DLC)", 0x4000: "hard drive install",
+                 0x7000: "Games on Demand package", 0x9000: "avatar item", 0x10000: "profile",
+                 0x20000: "gamer picture", 0x30000: "theme", 0x80000: "demo",
+                 0xB0000: "title update", 0xD0000: "Xbox Live Arcade game"}
+CHOOSE = {1: "Choose your FM4 Disc 1 (the play disc): its disc image (.iso), its Games on Demand "
+             "package or a folder with its files.",
+          2: "Choose your FM4 Disc 2 (the content install disc): its disc image (.iso), a folder with "
+             "its files or its car packs, or Skip."}
+DISC2_AS_DISC1 = ("This is Forza Motorsport 4's Disc 2 (the content install disc), not Disc 1. Choose "
+                  "Disc 1 (the play disc) first: Disc 2 comes at the next step.")
+
+
+def _game_thing(title, thing):
+    """'a Forza Horizon content package (DLC)', or the same of another game with its title id."""
+    name = TITLES.get(title)
+    if name:
+        return f"a {name} {thing}"
+    article = "an" if thing[:1].lower() in "aeiox" else "a"
+    return f"{article} {thing} of another game (title id {title:08X})"
+
+
+def package_header(path):
+    """(content type, title id, volume type, display name) of an Xbox 360 content package
+    (STFS or Games on Demand: CON, LIVE or PIRS), or None when the file is not one."""
+    try:
+        with open(path, "rb") as f:
+            raw = f.read(0x511)
+    except OSError:
+        return None
+    if len(raw) < 0x511 or raw[:4] not in (b"CON ", b"LIVE", b"PIRS"):
+        return None
+    content_type, = struct.unpack_from(">I", raw, 0x344)
+    title, = struct.unpack_from(">I", raw, 0x360)
+    volume, = struct.unpack_from(">I", raw, 0x3A9)
+    name = raw[0x411:0x511].decode("utf-16-be", "replace").split("\0")[0].strip()
+    return content_type, title, volume, name
+
+
+def _xex_title(path):
     from .xexcheck import header_info
-    with open(xex, "rb") as f:
-        info = header_info(f.read(0x10000))
-    if not info or info[3] != FM4_TITLE:
-        raise Fm4Error("This is not Forza Motorsport 4's Disc 1 (the title id is not 4D530910).")
+    try:
+        with open(path, "rb") as f:
+            info = header_info(f.read(0x10000))
+    except OSError:
+        return None
+    return info[3] if info else None
+
+
+def describe(path: Path, disc=1):
+    """Why a file is not FM4's Disc `disc`, in plain words: what it is and what to choose."""
+    hdr = package_header(path)
+    if hdr:
+        content_type, title, _, name = hdr
+        named = f' ("{name}")' if name else ""
+        if title == FM4_TITLE and content_type == 0x2 and disc == 1:
+            return (f"{path.name} is one of Forza Motorsport 4's Disc 2 car packs{named}, not Disc 1. "
+                    "Choose Disc 1 first: the car packs come at the next step (Disc 2).")
+        thing = CONTENT_TYPES.get(content_type, f"content package (type {content_type:X})")
+        return f"{path.name} is {_game_thing(title, thing)}{named}, not a Forza Motorsport 4 disc. " + CHOOSE[disc]
+    title = _xex_title(path)
+    if title is not None:
+        what = _game_thing(title, "program file (XEX)")
+        return f"{path.name} is {what}, not a Forza Motorsport 4 disc. " + CHOOSE[disc]
+    hint = ""
+    m = re.fullmatch(r"([0-9A-Fa-f]{8})[0-9A-Fa-f]{8}", path.stem)
+    if m and int(m.group(1), 16) in TITLES:
+        hint = (f" Its name is the kind a {TITLES[int(m.group(1), 16)]} content package has "
+                f"({m.group(1).upper()} is that game's title id): renaming a package to .iso does not "
+                "make it a disc image.")
+    return (f"{path.name} is not an Xbox 360 disc image, Games on Demand package or content package."
+            f"{hint} " + CHOOSE[disc])
+
+
+def _god_packages(folder: Path):
+    """Forza Motorsport 4 Games on Demand packages (the file next to its <name>.data folder) in a
+    folder, its 00007000 folder or the title folders' (up to Content/0000000000000000)."""
+    bases = [folder, folder / "00007000", *folder.glob("*/00007000"), *folder.glob("*/*/00007000")]
+    found = []
+    for base in bases:
+        try:
+            files = sorted(f for f in base.iterdir() if f.is_file())
+        except OSError:
+            continue
+        for f in files:
+            hdr = package_header(f)
+            if (f.with_name(f.name + ".data").is_dir() and hdr and hdr[1] == FM4_TITLE
+                    and hdr[2] == 1 and f not in found):
+                found.append(f)
+    return found
+
+
+def _source(path, disc):
+    """What was chosen for Disc `disc`: ("folder", folder), ("image", disc image),
+    ("god", [Games on Demand packages]) or ("pack", a Disc 2 car pack). Anything else raises
+    Fm4Error saying what it is."""
+    p = Path(path)
+    if p.is_file() and p.parent.name.lower().endswith(".data") and re.fullmatch(r"Data\d+", p.name, re.I):
+        p = p.parent  # one of a Games on Demand package's parts: the package is next to the folder
+    if p.is_dir() and p.name.lower().endswith(".data") and p.with_name(p.name[:-5]).is_file():
+        p = p.with_name(p.name[:-5])
+    if p.is_dir():
+        if (p / "default.xex").is_file():
+            return "folder", p
+        gods = _god_packages(p)
+        return ("god", gods) if gods else ("folder", p)
+    if not p.is_file():
+        raise Fm4Error(f"{p} does not exist.")
+    import xiso_extract
+    if xiso_extract.is_iso(p):
+        return "image", p
+    hdr = package_header(p)
+    if hdr and hdr[1] == FM4_TITLE:
+        if hdr[2] == 1:
+            if not p.with_name(p.name + ".data").is_dir():
+                raise Fm4Error(f"{p.name} is Forza Motorsport 4's Games on Demand package, but the "
+                               f"{p.name}.data folder with its data is not next to it.")
+            return "god", [p]
+        if hdr[0] == 0x2 and disc == 2:
+            return "pack", p
+    if _xex_title(p) == FM4_TITLE:
+        return "folder", p.parent  # FM4's default.xex: the disc's files are around it
+    raise Fm4Error(describe(p, disc))
+
+
+def _open_volume(kind, path):
+    import xcontent_extract
+    import xiso_extract
+    try:
+        return xiso_extract.open_iso(path) if kind == "image" else xcontent_extract.open_package(str(path))
+    except xiso_extract.IsoError as e:
+        raise Fm4Error(f"{path.name}: {e}") from None
+    except SystemExit as e:  # the extractor's way of refusing a damaged package
+        raise Fm4Error(f"{path.name} could not be read: {e}") from None
+
+
+def _close(volume):
+    for f in getattr(volume, "files", []):
+        f.close()
+
+
+def _names(volume):
+    import xiso_extract
+    try:
+        return {e.path.replace("\\", "/").lower() for e in volume.entries()}
+    except (SystemExit, xiso_extract.IsoError) as e:
+        raise Fm4Error(f"The disc's files could not be read: {e}") from None
+
+
+def _extract(volume, out, wanted, label, progress, cancelled):
+    import xiso_extract
+    try:
+        xiso_extract.extract(volume, out, lambda d, t, n: progress(d, t, label + n), cancelled, wanted=wanted)
+    except InterruptedError:
+        raise Cancelled() from None
+    except (SystemExit, xiso_extract.IsoError) as e:
+        raise Fm4Error(f"The disc's files could not be read: {e}") from None
+
+
+def _check_xex(xex: Path):
+    title = _xex_title(xex)
+    if title is None:
+        raise Fm4Error("This is not Forza Motorsport 4's Disc 1: its default.xex is not an Xbox 360 program.")
+    if title != FM4_TITLE:
+        name = TITLES.get(title)
+        what = f"a {name} disc" if name else f"another game's disc (title id {title:08X})"
+        raise Fm4Error(f"This is {what}, not Forza Motorsport 4's Disc 1 (title id {FM4_TITLE:08X}). "
+                       + CHOOSE[1])
+
+
+def _find_ci(root: Path, *parts):
+    p = root
+    for part in parts:
+        try:
+            p = next((c for c in p.iterdir() if c.name.lower() == part.lower()), None)
+        except OSError:
+            return None
+        if p is None:
+            return None
+    return p
+
+
+def _check_disc1(root: Path):
+    if not (root / "default.xex").is_file():
+        if _find_ci(root, "content", "0000000000000000"):
+            raise Fm4Error(DISC2_AS_DISC1)
+        raise Fm4Error("This folder is not Forza Motorsport 4's Disc 1: it has no default.xex. " + CHOOSE[1])
+    _check_xex(root / "default.xex")
+    if not _find_ci(root, "Media", "db", "gamedb.slt"):
+        if _find_ci(root, "content", "0000000000000000"):
+            raise Fm4Error(DISC2_AS_DISC1)
+        raise Fm4Error("This is not Forza Motorsport 4's Disc 1: it has no Media/db/gamedb.slt.")
+
+
+def _unpack_disc1(kind, found, out, progress, cancelled):
+    """Unpacks what the cars need from a disc image or a Games on Demand package into out:
+    default.xex first, so another game or Disc 2 is refused before the long copy."""
+    for n, path in enumerate(found):
+        volume = _open_volume(kind, path)
+        try:
+            names = _names(volume)
+            if "media/db/gamedb.slt" not in names and n + 1 < len(found):
+                continue  # Disc 2 of a Games on Demand copy: try the next package
+            if "default.xex" not in names:
+                if any(x.startswith("content/") for x in names):
+                    raise Fm4Error(DISC2_AS_DISC1)
+                raise Fm4Error(f"{path.name} is not Forza Motorsport 4's Disc 1: it has no default.xex. "
+                               + CHOOSE[1])
+            _extract(volume, out, ("default.xex",), "Reading Disc 1: ", progress, cancelled)
+            _check_xex(out / "default.xex")
+            if "media/db/gamedb.slt" not in names:
+                if any(x.startswith("content/") for x in names):
+                    raise Fm4Error(DISC2_AS_DISC1)
+                raise Fm4Error(f"{path.name} is not Forza Motorsport 4's Disc 1: it has no Media/db/gamedb.slt.")
+            _extract(volume, out, DISC1_PATHS[1:], "Reading Disc 1: ", progress, cancelled)
+            return out
+        finally:
+            _close(volume)
+
+
+def _car_packs(folder: Path):
+    """FM4's car packs in a folder: its STFS packages of content type 2 (Disc 2 has four)."""
+    out = []
+    for p in sorted(folder.rglob("*")):
+        if p.is_file() and p.stat().st_size > 1 << 20:
+            hdr = package_header(p)
+            if hdr and hdr[1] == FM4_TITLE and hdr[0] == 0x2 and hdr[2] != 1:
+                out.append(p)
+    return out
 
 
 def prepare(disc1, disc2, work: Path, progress, cancelled):
     """Folders the converter reads: (disc 1 folder, disc 2 packages folder or None). A disc
-    image is unpacked into work (only what the cars need); a folder is used as it is."""
+    image or Games on Demand package is unpacked into work (only what the cars need); a folder
+    is used as it is."""
     paths.ensure_tools_importable()
     import xcontent_extract
-    import xiso_extract
-    disc1 = Path(disc1)
-    if disc1.is_file():
-        if not xiso_extract.is_iso(disc1):
-            raise Fm4Error(f"{disc1.name} is not an Xbox 360 disc image.")
-        out = work / "disc1"
-        iso = xiso_extract.open_iso(disc1)
-        try:
-            xiso_extract.extract(iso, out, lambda d, t, n: progress(d, t, "Reading Disc 1: " + n),
-                                 cancelled, wanted=DISC1_PATHS)
-        finally:
-            iso.close()
-        disc1 = out
+    kind, found = _source(disc1, 1)
+    if kind == "folder":
+        disc1 = found
+    else:
+        disc1 = _unpack_disc1(kind, found if kind == "god" else [found], work / "disc1", progress, cancelled)
     _check_disc1(disc1)
     if not disc2:
         return disc1, None
-    disc2 = Path(disc2)
-    packages = []
-    if disc2.is_file():
-        if not xiso_extract.is_iso(disc2):
-            raise Fm4Error(f"{disc2.name} is not an Xbox 360 disc image.")
-        iso = xiso_extract.open_iso(disc2)
-        try:
-            xiso_extract.extract(iso, work / "disc2", lambda d, t, n: progress(d, t, "Reading Disc 2: " + n),
-                                 cancelled, wanted=("content",))
-        finally:
-            iso.close()
-        disc2 = work / "disc2"
-    for p in sorted(disc2.rglob("*")):
-        # the car packs: STFS packages of FM4 (title 4D530910, content type 2)
-        if p.is_file() and p.stat().st_size > 1 << 20 and p.name.lower().startswith("4d530910"):
-            packages.append(p)
-    if not packages:
-        return disc1, disc2  # already unpacked packages (each with Media/DLCZips)
+    kind, found = _source(disc2, 2)
+    if kind == "pack":
+        packages = [found]
+    else:
+        if kind != "folder":
+            for path in (found if kind == "god" else [found]):
+                volume = _open_volume(kind, path)
+                try:
+                    names = _names(volume)
+                    if not any(x.startswith("content/") for x in names):
+                        if kind == "god" and path is not found[-1]:
+                            continue
+                        raise Fm4Error(f"{path.name} has no Forza Motorsport 4 car packs: is it Disc 1? "
+                                       + CHOOSE[2])
+                    _extract(volume, work / "disc2", ("content",), "Reading Disc 2: ", progress, cancelled)
+                    break
+                finally:
+                    _close(volume)
+            found = work / "disc2"
+        disc2 = found
+        packages = _car_packs(disc2)
+        if not packages:
+            if _find_ci(disc2, "Media", "db", "gamedb.slt"):
+                raise Fm4Error("This folder is Forza Motorsport 4's Disc 1, chosen again for Disc 2. " + CHOOSE[2])
+            return disc1, disc2  # already unpacked packages (each with Media/DLCZips)
     out = work / "content"
     for k, pkg in enumerate(packages):
         if cancelled():

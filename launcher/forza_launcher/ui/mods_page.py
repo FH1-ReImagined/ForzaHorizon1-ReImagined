@@ -417,8 +417,9 @@ class ModsPage(FolderListPage):
         c, cl = card(spacing=10)
         cl.addWidget(label("Forza Motorsport 4 cars", "cardTitle"))
         cl.addWidget(label("Add the cars of your own Forza Motorsport 4 discs that FH1 lacks, with FH1's "
-                           "handling. Choose Disc 1 (a disc image or its files), then Disc 2 for its car "
-                           "packs, or skip it. The cars are converted on this PC and appear as the "
+                           "handling. Choose Disc 1 (a disc image, a Games on Demand package or a folder with "
+                           "its files), then Disc 2 for its car packs, or skip it. The cars are converted on "
+                           "this PC and appear as the "
                            "\"FM4 cars\" mod: untick it to hide them, remove it to delete them.", "muted"))
         row = QHBoxLayout()
         row.setSpacing(12)
@@ -458,13 +459,15 @@ class ModsPage(FolderListPage):
     def _fm4_pick(self, title):
         ask = QMessageBox(self)
         ask.setWindowTitle(title)
-        ask.setText(f"{title}: a disc image (.iso) or a folder with the disc's files?")
-        iso = ask.addButton("Disc image…", QMessageBox.AcceptRole)
+        ask.setText(f"{title}: a disc image (.iso) or Games on Demand package, or a folder with the "
+                    "disc's files?")
+        iso = ask.addButton("Disc image or package…", QMessageBox.AcceptRole)
         folder = ask.addButton("Folder…", QMessageBox.AcceptRole)
         skip = ask.addButton("Skip" if "2" in title else "Cancel", QMessageBox.RejectRole)
         ask.exec()
         if ask.clickedButton() is iso:
-            path, _ = QFileDialog.getOpenFileName(self, title, str(Path.home()), "Disc images (*.iso);;All files (*)")
+            path, _ = QFileDialog.getOpenFileName(self, title, str(Path.home()), "Disc images (*.iso);;"
+                                                  "Games on Demand packages and all files (*)")
             return path or None
         if ask.clickedButton() is folder:
             return QFileDialog.getExistingDirectory(self, title, str(Path.home())) or None
