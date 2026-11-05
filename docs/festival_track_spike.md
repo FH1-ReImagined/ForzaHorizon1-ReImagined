@@ -131,6 +131,16 @@ surface map.
   also need their data moved (after the groups: the command buffers, sum of the groups'
   first sizes, header word 3; constant data, header word 4; fixup locations, the third
   sizes).
+- Toward the hook (not built): the set-fixup calls (TU4 sub_8248B570, the same signature as
+  sub_82D19758: handle, type, register, data) come from sub_8248B5D0 (types 1, 2: vertex and
+  index buffers), sub_8248B2D8 (3, 8), sub_8248C200 (9, 10) and sub_8249E4E0 (4, 5, 6, per
+  frame: type 5 takes device values, not material constants). So FH1 does not set material
+  constants through fixups. Each group's command buffer is a precompiled D3D command buffer
+  (a header of masks and sizes, then register-write entries such as 0xC4002487); FM4's and
+  FH1's differ in their entries, likely an older XDK's format. The material constants must
+  come in where FH1 draws a mesh without a command buffer for that pass (FM4's, with an
+  empty group 0): its effect pass and constant commit. That path, and FH1's pixel-constant
+  setter, are the hook's place; not found yet.
 - FM4's `TrackSettings.xml` (version 59) lacks FH1's renderer settings (Brightness, Contrast,
   ExposureBias, LightHemiTop/Bottom, WorldClear, bloom, height fog); read as it is, the
   circuit drew far too dark. The converter writes Colorado's with FM4's sun gain, lightmap,
