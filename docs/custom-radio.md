@@ -13,6 +13,17 @@ to 30 minutes; each station accepts at most 200 songs, subject to the game's 2 G
 bank limit. Logos fit without cropping in the native logo slot, with transparent
 space below the artwork to keep track titles readable.
 
+**Level songs to the game's loudness** (on by default) measures each song first
+(EBU R128, FFmpeg's ebur128 filter) and applies one fixed gain while encoding,
+toward -14.5 LUFS, the median of the stock station songs. The gain never pushes
+a song's true peak above -3.5 dBTP, so a quiet song with loud peaks is not
+raised into clipping. Nothing is compressed or limited. Without it, a current
+release mastered near -7 LUFS plays about 7 dB louder than the game's own songs
+and can clip when the radio volume is high, because the game mixes the radio
+with the car and world sounds without a limiter (#662). Stations built before
+this option, or with the other setting, need one more **Build stations**; the
+Radio page says so.
+
 Settings stay in launcher.json and generated assets stay in
 `<data>/mods/reimagined-radio/`, outside the versioned installation. Updates do
 not require adding songs again. The original game bank and selected music files
