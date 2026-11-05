@@ -19,8 +19,8 @@
 
 #include "../platform/guest_addr.h"
 #include "../platform/guest_memory.h"
+#include "../platform/readback_wait.h"
 
-#include <rex/cvar.h>
 #include <rex/logging.h>
 #include <rex/ppc/context.h>
 #include <rex/ppc/func.h>
@@ -31,7 +31,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
-#include <string>
 #include <thread>
 
 #if FORZA_TU4
@@ -74,7 +73,7 @@ uint64_t g_generation = 0;  // Protected by g_mutex, as is the setting.
 bool g_set = false;
 
 bool SetRange(uint64_t range) {
-  return rex::cvar::SetFlagByName("readback_resolve_wait_range", std::to_string(range));
+  return forza::readback_wait::Request(forza::readback_wait::Owner::kBigShot, range);
 }
 
 // The physical range of both front buffers (each from its fetch constant: base address in
