@@ -52,7 +52,8 @@ converted files next to a copy of the game folder. Nothing from either game is i
 Converter test switches: `FM4_PVS_FLAGS`, `FM4_PVS_FLAGMASK`, `FM4_PVS_SHADERS`,
 `FM4_PVS_PROJLM`, `FM4_PVS_SKY`, `FM4_PVS_SHADER_PATCHES`, `FM4_PVS_LIGHTMAPS`, `FM4_PVS_HEX`,
 `FM4_PVS_EXTENT`, `FM4_PVS_VISIBLE`, `FM4_PVS_VISIBLE_NEAR`, `FM4_PVS_VISIBLE_CELLS`, `FM4_PVS_VISIBLE_SIZE`,
-`FM4_PVS_TOD`, `FM4_PVS_GROUND`, `FM4_PVS_GROUND_SCALE`, `FM4_PVS_GROUND_BELOW`, `FM4_PVS_GROUND_MODEL`,
+`FM4_PVS_TOD`, `FM4_PVS_TRACKSETTINGS`, `FM4_PVS_TRACKSETTINGS_FM4`, `FM4_SHADERS_LIGHTMAP`,
+`FM4_SHADERS_LIGHTMAP_COLOURS`, `FM4_SHADERS_TINTS`, `FM4_PVS_GROUND`, `FM4_PVS_GROUND_SCALE`, `FM4_PVS_GROUND_BELOW`, `FM4_PVS_GROUND_MODEL`,
 `FM4_COL_NORMALS`, `FM4_COL_WALL`, `FM4_COL_EDGES`, `FM4_COL_REMAP`, `FM4_COL_GRID`,
 `FM4_COL_SURFACE`, `FM4_COL_KEEP_DEGENERATE`; `FM4_DISC` (FM4's disc folder) for the
 surface map.
@@ -92,16 +93,31 @@ surface map.
   none, and Suzuka came out with a deep blue night sky and a moon. With Colorado's curves
   held at 13:00 it reads as day whatever the clock says.
 - A placement's rotation may scale: the ground is a terrain piece placed with (15, 1, -15).
-- Kerbside walls and barriers sometimes draw flat cyan, green or blue, differently from run to
-  run with the same files (seen with and without the ground). Cause not known.
+- The flat cyan, green, blue or magenta surfaces are stale pixel-shader constants, not
+  textures or pipelines. FH1 sets none of the constants FM4's track pixel shaders read except
+  by chance (another draw's values left in the register): the lightmap colours
+  V2LightmapColor1/2 (c247, c248; lightmap = lerp(c247, c248, texel)) and the material slots
+  c360_0..6 (c0-c6: texture tints and UV scales) at least. Shown at one spot (the grid): with
+  the same files the road and walls came out blue, then green; with the lightmap fetch forced
+  to 1 every lightmapped surface went saturated red, blue or white; with c247/c248 replaced
+  (`tools/fm4_shaders.py`, `FM4_SHADERS_LIGHTMAP_COLOURS`) the walls, signs and buildings draw
+  right, while the blend surfaces (road, grass, shoulders) keep a random tint from c0-c6 and
+  the road constants. Making the texel x c0-c6 multiplies read 1 (`FM4_SHADERS_TINTS=1`, off by
+  default) turned the pit wall black: more constants are stale than that.
+- FM4's `TrackSettings.xml` (version 59) lacks FH1's renderer settings (Brightness, Contrast,
+  ExposureBias, LightHemiTop/Bottom, WorldClear, bloom, height fog); read as it is, the
+  circuit drew far too dark. The converter writes Colorado's with FM4's sun gain, lightmap,
+  road and fog values (`FM4_PVS_TRACKSETTINGS`: merge, fh1, fm4).
 - Shots for comparisons: a shared shader cache for one's own runs and 25 s after loading;
   with a fresh cache, draws are skipped while pipelines build and pieces go missing.
 
 ## Open
 
 - (c) The road, terrain and buildings draw with FM4's own shaders, at 13:00, over a ground.
-  Still to do: the track surfaces are darker than FM4's (FM4's shaders take FH1's sun and
-  lightmap constants); the stretched ground shows its blend texture's sandy channel more
-  than grass; the zone-size and barrier colour glitches above.
+  Still to do: the blend surfaces' stale constants (above): either upload FM4's pixel-shader
+  constants per draw (a hook where FH1 binds a track material) or move the materials to FH1's
+  own shaders; the stretched ground shows its blend texture's sandy channel more than grass;
+  the zone-size glitch above (likely the same stale constants: more materials per zone, more
+  chances to draw after an unrelated effect).
 - The streaming block pool still needs `FORZA_FM4_STREAM_POOL`.
 - AI, the airport entry, ribbons 01 and 02, other circuits.

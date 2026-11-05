@@ -723,6 +723,44 @@ def write_time_of_day(fh1_disc, ribbon_dir):
         open(os.path.join(ribbon_dir, name), "w", encoding="utf-8").write(xml)
 
 
+# FM4's <track>/TrackSettings.xml (version 59) lacks what FH1's renderer reads in its
+# version 64 (Brightness, Contrast, ExposureBias, LightHemiTop/Bottom, WorldClear, the bloom
+# block, height fog): read as it is, the circuit drew far too dark. FM4_PVS_TRACKSETTINGS=
+# merge (the default) writes Colorado's with FM4's values for the elements in
+# TRACK_SETTINGS_FM4 (what FM4's own shaders take: sun gain, lightmap and road constants)
+# and FM4's fog; "fh1" Colorado's as it is; "fm4" leaves FM4's.
+TRACK_SETTINGS = os.environ.get("FM4_PVS_TRACKSETTINGS", "merge")
+TRACK_SETTINGS_FM4 = [x for x in os.environ.get(
+    "FM4_PVS_TRACKSETTINGS_FM4", "SkyboxHeightOffset,sunGainScale,TrackLightMapTransition,"
+    "TrackLightMapColor,RoadSpecular,TrackLightMapParams,wholeTrackLightmapRadius,Fog").split(",") if x]
+
+
+def merge_track_settings(fh1_xml, fm4_xml):
+    import re
+    out = fh1_xml
+    for name in TRACK_SETTINGS_FM4:
+        pat = re.compile(r"<%s\b[^>]*?(/>|>.*?</%s>)" % (name, name), re.S)
+        a, b = pat.search(out), pat.search(fm4_xml)
+        if a and b:
+            out = out[:a.start()] + b.group(0) + out[a.end():]
+    return out
+
+
+def write_track_settings(fh1_disc, root):
+    if TRACK_SETTINGS == "fm4":
+        return
+    src = os.path.join(fh1_disc, "media", "tracks", "colorado", "TrackSettings.xml")
+    if not os.path.exists(src):
+        return
+    fh1 = open(src, encoding="utf-8", errors="replace").read()
+    for name in os.listdir(root):
+        if name.lower().startswith("tracksettings") and name.lower().endswith(".xml"):
+            path = os.path.join(root, name)
+            fm4 = open(path, encoding="utf-8", errors="replace").read()
+            xml = fh1 if TRACK_SETTINGS == "fh1" else merge_track_settings(fh1, fm4)
+            open(path, "w", encoding="utf-8").write(xml)
+
+
 def convert_mod(mod, fh1_disc, loose):
     tracks = os.path.join(mod, "media", "tracks")
     (track,) = [d for d in os.listdir(tracks) if os.path.isdir(os.path.join(tracks, d))]
@@ -739,6 +777,7 @@ def convert_mod(mod, fh1_disc, loose):
     files = [os.path.relpath(os.path.join(dp, n), bin_dir).replace(os.sep, "/")
              for dp, _, fs in os.walk(bin_dir) for n in fs
              if not n.endswith(".pvsz") and (keep_stx or not n.lower().endswith(".stx.bin"))]
+    write_track_settings(fh1_disc, root)
     ribbons = []
     for ribbon in sorted(d for d in os.listdir(root) if d.lower().startswith("ribbon_")):
         pvs = [f for f in os.listdir(os.path.join(root, ribbon)) if f.lower().endswith(".pvs")]

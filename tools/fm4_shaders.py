@@ -30,6 +30,9 @@ PS_MAGIC = 0x102A1100
 # CO_DIFF_1_noLM): FH1 binds its shadow mask there, so those surfaces took FH1's shadows
 # through FM4's lightmap lookup; it is made to return 1 as well.
 SHADOW_SAMPLERS = ("s_grayscaleShadowMap", "projTrackLightmap")
+# FM4_SHADERS_LIGHTMAP=one makes the baked lightmap read 1 too (a test, see LIGHTMAP_UV).
+if __import__("os").environ.get("FM4_SHADERS_LIGHTMAP") == "one":
+    SHADOW_SAMPLERS += ("Light_MapSampler",)
 MUL, MAX = 1, 3
 
 
@@ -95,6 +98,75 @@ def alu_fields(w):
             "vop": (w[2] >> 24) & 0x1F}
 
 
+# The baked lightmap's colour: FM4's pixel shaders map the lightmap texel lm to
+# lerp(V2LightmapColor1, V2LightmapColor2, lm) (c247, c248: add d = c248 - c247, then
+# mad out = d * lm + c247). FH1 sets neither for these draws, so they kept whatever the last
+# draw left there: roads, grass and walls drew dark, or flat blue, green, cyan or magenta,
+# differently from run to run. The mad becomes lm * c255.x + c255.y, lm itself (c255 is the
+# shaders' literal (1, 0, ...), read as 1 in their clamps and 0 in their maxes).
+# FM4_SHADERS_LIGHTMAP_COLOURS=0 leaves them.
+LIGHTMAP_COLOURS = __import__("os").environ.get("FM4_SHADERS_LIGHTMAP_COLOURS", "1") == "1"
+SWZ_X, SWZ_Y = 0x6C, 0xB1  # .xxxx and .yyyy as Xenos relative swizzles
+
+
+def lightmap_colours(data, start, alus):
+    done = []
+    diffs = set()
+    for s, f, w in alus:
+        consts = {r for r, _, is_reg in f["src"][:2] if not is_reg}
+        if f["vop"] == 0 and consts == {247, 248} and not f["export"]:
+            diffs.add(f["vdst"])
+    for s, f, w in alus:
+        a, b, c = f["src"]
+        if f["vop"] != 11 or c[2] or c[0] != 247 or f["export"]:
+            continue
+        if a[2] and a[0] & 0x3F in diffs:
+            slot = 0   # src1 is the colour difference, src2 the lightmap
+        elif b[2] and b[0] & 0x3F in diffs:
+            slot = 1
+        else:
+            continue
+        w1, w2 = w[1], w[2]
+        # The difference operand becomes c255.x, src3 c255.y; their negate bits cleared.
+        shift = (16, 8)[slot]
+        w2 = (w2 & ~(0xFF << shift)) | (255 << shift)
+        w2 &= ~(1 << (31 - slot))          # a constant
+        w1 = (w1 & ~(0xFF << shift)) | (SWZ_X << shift)
+        w1 &= ~(1 << (26 - slot))
+        w2 = (w2 & ~0xFF) | 255
+        w1 = (w1 & ~0xFF) | SWZ_Y
+        w1 &= ~(1 << 24)
+        struct.pack_into(">3I", data, start + 12 * s, w[0], w1, w2)
+        done.append(f"slot {s}: lightmap colour lerp(c247, c248) -> the lightmap")
+    return done
+
+
+# A texture's colour times a material constant (mul r.xyz = texel.xyz * cN.xyz, N 0 to 6,
+# the c360_N slots FH1 fills from its own materials): under FH1 these hold another draw's
+# values too, so blend surfaces (road, grass, shoulders) drew flat green or magenta. The
+# constant becomes c255.x (1). FM4_SHADERS_TINTS=0 leaves them.
+TINTS = __import__("os").environ.get("FM4_SHADERS_TINTS", "0") == "1"
+
+
+def material_tints(data, start, ins, alus):
+    done = []
+    texels = {(w[0] >> 12) & 0x3F for s, kind, w in ins if kind == "fetch" and (w[0] & 0x1F) == 1}
+    for s, f, w in alus:
+        if f["vop"] != 1 or f["export"] or f["vmask"] & 0x7 != 0x7:
+            continue
+        a, b = f["src"][0], f["src"][1]
+        for slot, (k, other) in enumerate(((a, b), (b, a))):
+            if not k[2] and k[0] <= 6 and other[2] and other[0] & 0x3F in texels:
+                shift = (16, 8)[slot]
+                w1 = (w[1] & ~(0xFF << shift)) | (SWZ_X << shift)
+                w1 &= ~(1 << (26 - slot))
+                w2 = (w[2] & ~(0xFF << shift)) | (255 << shift)
+                struct.pack_into(">3I", data, start + 12 * s, w[0], w1, w2)
+                done.append(f"slot {s}: texel x c{k[0]} (material tint) -> texel")
+                break
+    return done
+
+
 def patch_fxobj(name, data):
     """The patched file and a list of what was done."""
     data = bytearray(data)
@@ -114,6 +186,10 @@ def patch_fxobj(name, data):
                 struct.pack_into(">3I", data, start + 12 * s, *w)
                 done.append(f"slot {s}: shadow map fetch -> 1")
         alus = [(s, alu_fields(w), w) for s, kind, w in ins if kind == "alu"]
+        if LIGHTMAP_COLOURS:
+            done += lightmap_colours(data, start, alus)
+        if TINTS:
+            done += material_tints(data, start, ins, alus)
         if "BLND" in base:
             # Inputs: registers read before any write; texture coordinates: fetch sources.
             written, inputs, reads = set(), set(), {}
