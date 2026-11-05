@@ -47,7 +47,8 @@ To run it (dev): the loose files over a copy of the game folder, the mod from
 tools/fm4_track_mod.py, and
   FORZA_INSECURE_FILES='zipmanifest.xml|\\tracks\\<track>\\'
   FORZA_FM4_STX='<Track>|LOOSE_DIR/<track>_stx_numbers.bin'
-  FORZA_TRACK_SPAWN=x,y,z[,fx,fz] (Suzuka's main straight: 478,604.5,14,0.57,-0.82)
+  FORZA_TRACK_SPAWN=x,y,z[,fx,fz] (Suzuka's grid: 605.6,598.5,-134.1,0.61,-0.79, 15 m behind
+    the start line, FM4's first AI waypoint, media/AI/Tracks/suzuka_00.geo)
   FORZA_FM4_COL=1 (the collision read whole from the converted .col files)
   FORZA_FM4_ZONE_POOL=4 (more live instance objects: the hex zones share few instances)
 and FM4_DISC=<FM4's disc folder> when converting, for the surface numbers (tools/fm4_col.py).
@@ -414,6 +415,36 @@ def convert(F, files):
         reach = (e[0] ** 2 + e[2] ** 2) ** 0.5
         for cell in grid.cells_near(*spots[i], reach):
             members[cell].append(i)
+    # And everything FM4 sees from there: FM4's cells are visibility sets (650 to 870 of
+    # Suzuka's 3349 instances each, in order round the lap) without a position. A zone takes
+    # the cells that hold the most of the instances standing near its centre (VISIBLE_NEAR
+    # m, twice that if none). By position alone some far pieces (the tree line past the
+    # Esses, ground beyond a crest) were in no live zone.
+    if VISIBLE:
+        sets = [set(c["instances"]) for c in F["cells"]]
+        for cell in grid.cells:
+            cx, cz = grid.centre(*cell)
+            for r in (VISIBLE_NEAR, 2 * VISIBLE_NEAR):
+                near = [i for i in used
+                        if (spots[i][0] - cx) ** 2 + (spots[i][1] - cz) ** 2 < r * r]
+                if near:
+                    break
+            if not near:
+                continue
+            # The cell holding the most of them (the smaller first on a tie); of what it
+            # sees, only the large pieces (VISIBLE_SIZE m and over: ground, road, rows of
+            # trees). With everything over 25 m (zones of up to 445 instances, 524 textures)
+            # the road under the car drew flat black, ground near it went missing and kerbs
+            # and verges drew cyan, green or blue, differently from run to run.
+            ranked = sorted(range(len(sets)),
+                            key=lambda k: (-sum(i in sets[k] for i in near), len(sets[k])))
+            seen = set(members[cell])
+            for k in ranked[:VISIBLE_CELLS]:
+                for i in sorted(sets[k] - seen):
+                    if max(F["models"][insts[i]["model"]]["extent"][:3]) < VISIBLE_SIZE:
+                        continue
+                    members[cell].append(i)
+                    seen.add(i)
     # The sky dome (FM4's first always-drawn instance) as an object of every zone: FH1 keeps
     # its own sky above, the dome adds FM4's landscape round the horizon. Its model's extent
     # is FM4's 0; FH1 gets the dome's size instead.
@@ -447,6 +478,13 @@ def convert(F, files):
 
 # FM4_PVS_POOL_ZONES=n: the zone pools' size, in largest zones (0: FH1's own sizing).
 POOL_ZONES = int(os.environ.get("FM4_PVS_POOL_ZONES", "4"))
+# FM4_PVS_VISIBLE=0 zones instances by position only (see convert); FM4_PVS_VISIBLE_NEAR the
+# radius (m) of the instances that pick a zone's FM4 cells, _CELLS how many cells, _SIZE the
+# smallest extent (m) taken from them.
+VISIBLE = os.environ.get("FM4_PVS_VISIBLE", "1") == "1"
+VISIBLE_NEAR = float(os.environ.get("FM4_PVS_VISIBLE_NEAR", "40"))
+VISIBLE_CELLS = int(os.environ.get("FM4_PVS_VISIBLE_CELLS", "1"))
+VISIBLE_SIZE = float(os.environ.get("FM4_PVS_VISIBLE_SIZE", "120"))
 # FM4_PVS_SKY=0 leaves FM4's sky dome out (see convert).
 SKY = os.environ.get("FM4_PVS_SKY", "1") == "1"
 SKY_EXTENT = 4200.0
@@ -460,8 +498,9 @@ HEX_RADIUS = float(os.environ.get("FM4_PVS_HEX", "100"))
 class HexGrid:
     """FH1's zone grid (a <track>_NN.hex file, HEXY version 101): flat-topped hexes of a
     radius, in columns 1.5 radii apart, odd columns half a hex lower; the centre of (col, row)
-    is origin + (2 + 1.5 col, sqrt3/2 + sqrt3 row + sqrt3/2 (col odd)) radii (fitted to
-    Colorado's zones and their contents). Every cell of the grid is a zone here."""
+    is origin + (1 + 1.5 col, sqrt3/2 + sqrt3 row + sqrt3/2 (col odd)) radii (TU4
+    sub_8320EA30 and sub_8320EAA8; an x of 2 radii, fitted to Colorado's zones, put every
+    zone's contents 100 m off the zone FH1 draws from). Every cell of the grid is a zone here."""
 
     def __init__(self, points, radius):
         self.r = radius
@@ -475,10 +514,10 @@ class HexGrid:
 
     def centre(self, c, r):
         h = 3 ** 0.5 * self.r
-        return (self.ox + (2 + 1.5 * c) * self.r, self.oz + h / 2 + h * r + (h / 2 if c & 1 else 0))
+        return (self.ox + (1 + 1.5 * c) * self.r, self.oz + h / 2 + h * r + (h / 2 if c & 1 else 0))
 
     def cell_of(self, x, z):
-        c0 = int((x - self.ox - 2 * self.r) / (1.5 * self.r))
+        c0 = int((x - self.ox - self.r) / (1.5 * self.r))
         r0 = int((z - self.oz) / (3 ** 0.5 * self.r))
         best = None
         for c in range(c0 - 1, c0 + 2):

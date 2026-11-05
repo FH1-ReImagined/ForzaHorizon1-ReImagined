@@ -20,8 +20,8 @@
 //
 // tools/fm4_track_mod.py --free-roam makes FH1's free roam load an FM4 circuit in place of
 // Colorado. The car then starts at its saved Colorado position, in the void.
-// FORZA_TRACK_SPAWN=x,y,z[,fx,fz] (world metres, y up; Suzuka's flying start is
-// 487.7,606,22.5) moves the player car's teleports there (the spawn into free roam, a car
+// FORZA_TRACK_SPAWN=x,y,z[,fx,fz] (world metres, y up; Suzuka's grid is
+// 605.6,598.5,-134.1,0.61,-0.79) moves the player car's teleports there (the spawn into free roam, a car
 // reset), facing (fx, 0, fz) when given, and logs every vehicle teleport. Called from the teleport hook in teleport_velocity.cpp.
 
 #include "../platform/guest_addr.h"

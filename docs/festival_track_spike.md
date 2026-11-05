@@ -12,7 +12,8 @@ converted files next to a copy of the game folder. Nothing from either game is i
 2. `tools/fm4_pvs.py convert MOD FH1_DISC LOOSE` converts the mod's layouts (ribbons):
    - each PVS from FM4's version 27 to FH1's 50, split into 100 m hex zones (`.hex`,
      `__RnnZnnnnn.pvsz`, `FilenameMap_nn.dat`, `PVSZLookup_nn.dat`); big models go into every
-     zone their extent reaches;
+     zone their extent reaches, and each zone also takes the large pieces (120 m and over)
+     of the FM4 visibility cell that best matches its centre (`FM4_PVS_VISIBLE*`);
    - texture records (FM4's atlas flag 8 and projected-lightmap flag 0x10 dropped), shader
      names, instance flags (high half 0x083F, FM4's low 16 bits, bit 28 dropped);
    - the sky dome as an object of every zone; one padding zone-table entry that sizes FH1's
@@ -32,7 +33,7 @@ converted files next to a copy of the game folder. Nothing from either game is i
 | --- | --- |
 | `FORZA_INSECURE_FILES='zipmanifest.xml\|\tracks\<track>\'` | lets the changed manifest and the track's files open as plain files |
 | `FORZA_FM4_STX='<Track>\|LOOSE/<track>_stx_numbers.bin'` | FM4's static texture pack read as FH1's |
-| `FORZA_TRACK_SPAWN=x,y,z[,fx,fz]` | the player's teleports go there (facing fx,fz); FM4TRACK diagnostics on |
+| `FORZA_TRACK_SPAWN=x,y,z[,fx,fz]` | the player's teleports go there (facing fx,fz); FM4TRACK diagnostics on. Suzuka's grid: `605.6,598.5,-134.1,0.61,-0.79` (15 m behind FM4's first AI waypoint, `media/AI/Tracks/suzuka_00.geo`) |
 | `FORZA_FM4_COL=1` | the collision manager reads every cell from the `.col` (no `.fiz` streaming) |
 | `FORZA_FM4_STREAM_POOL=1` | more streaming file blocks when the 23 MB pool runs dry |
 | `FORZA_FM4_ZONE_POOL=n` | n x the live-instance and placement pools (not needed with the padding zone) |
@@ -45,6 +46,7 @@ converted files next to a copy of the game folder. Nothing from either game is i
 
 Converter test switches: `FM4_PVS_FLAGS`, `FM4_PVS_FLAGMASK`, `FM4_PVS_SHADERS`,
 `FM4_PVS_PROJLM`, `FM4_PVS_SKY`, `FM4_PVS_SHADER_PATCHES`, `FM4_PVS_LIGHTMAPS`, `FM4_PVS_HEX`,
+`FM4_PVS_EXTENT`, `FM4_PVS_VISIBLE`, `FM4_PVS_VISIBLE_NEAR`, `FM4_PVS_VISIBLE_CELLS`, `FM4_PVS_VISIBLE_SIZE`,
 `FM4_COL_NORMALS`, `FM4_COL_WALL`, `FM4_COL_EDGES`, `FM4_COL_REMAP`, `FM4_COL_GRID`,
 `FM4_COL_SURFACE`, `FM4_COL_KEEP_DEGENERATE`; `FM4_DISC` (FM4's disc folder) for the
 surface map.
@@ -70,10 +72,23 @@ surface map.
   FH1 applies it, as for Colorado's. The converter zones them by the rotated centre: zoned by
   the stored one, most of the road near the camera was never loaded.
 - FM4's `clr_0` shader draws nothing under FH1, so it can't be used as a flat-colour test.
+- FH1's hex zone (col, row) has its centre at origin + (1 + 1.5 col, sqrt3/2 + sqrt3 row +
+  sqrt3/2 if col is odd) radii (TU4 sub_8320EA30/sub_8320EAA8, the `.hex` reader
+  sub_8320EBF0). The converter had 2 + 1.5 col, so every zone's contents sat 100 m off the
+  zone FH1 draws from; road a few metres ahead was in a live zone but not drawn. FH1 draws
+  the camera's zone (`FORZA_ZONE_TRACE` lists the live ones; the first is the camera's).
+- FM4's PVS cells are visibility sets with no position, in order round the lap. Bigger zones
+  (everything over 25 m from them) gave a flat black road, missing ground and cyan, green
+  or blue kerbs and verges that change from run to run, so only pieces of 120 m and over
+  are added. The cause (a per-zone or live-set limit) isn't known.
+- Shots for comparisons: a shared shader cache for one's own runs and 25 s after loading;
+  with a fresh cache, draws are skipped while pipelines build and pieces go missing.
 
 ## Open
 
-- (c) The road, terrain and buildings now draw with FM4's own shaders; how close they look to
-  FM4 (lighting, the projected lightmap) is not checked yet.
+- (c) The road, terrain and buildings now draw with FM4's own shaders. Still to do: the
+  scene is darker than FM4's and the sky stays FH1's deep blue (FH1's time of day and
+  lighting constants feed FM4's shaders); holes where FM4 has no ground (its sky dome's
+  lower half), seen past some crests and corners; the zone-size glitch above.
 - The streaming block pool still needs `FORZA_FM4_STREAM_POOL`.
 - AI, the airport entry, ribbons 01 and 02, other circuits.
