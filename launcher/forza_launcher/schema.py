@@ -228,7 +228,8 @@ if IS_WINDOWS:
         "another Direct3D 12 renderer, with its own FSR 1 upscaler. Its first start builds every shader "
         "behind a boot screen (about 10 minutes on a 4-core CPU, once), and the first drives can show "
         "plain white ground for a while as it builds the shaders the game makes in play. It can be "
-        "slower than Vulkan (on a GTX 1650 Ti laptop, about 40 FPS against 55). Vulkan-only features "
+        "slower than Vulkan (on a GTX 1650 Ti laptop, about 53 FPS against 60 in free roam and 36 against 52 "
+        "in the benchmark). Vulkan-only features "
         "(DLSS, FSR 3, SMAA, HDR, VR, ultrawide) are off with it. Report problems with it in an issue.",
         "Picture",
         choices=[("vulkan", "Vulkan"), ("d3d12", "Direct3D 12"), ("regpu", "ReGPU (experimental)")],
