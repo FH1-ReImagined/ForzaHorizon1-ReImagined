@@ -265,6 +265,20 @@ instances; 33446 streaming blocks asked for). Suzuka-specific assumptions found 
   loader sub_82E323A0/sub_82D09648 and the binding near sub_82E18FC8), or cut the tiles out
   of the atlas into textures of their own in the converter (Xenos untiling of the pack's
   texture formats).
+- Cutting the tiles out (looked into, not done): the atlases are only in the static pack. A
+  record's file number is not a texture number: `_0x00000359.bix` is texture 857's own file,
+  not atlas file 857, and many atlas files (all of Suzuka's) have no file at all. The pack is a
+  sectioned CAFF archive (875 symbols, a `.data` section and others) with no reader in the repo
+  yet. The per-piece textures FH1 streams are BIX1 files: a 28-byte header (width, height, mip
+  count, the format word, the whole mip chain's size, the base level's size) and the mips 1..n
+  in `_0x<number>.bix`, the base level in `_0x<number>_B.bix`, all Xenos-tiled; formats 2, 18
+  (DXT1), 19, 20 (DXT4/5), 49 and 59 occur, never 8888. The cut needs the CAFF layout (and
+  any compression), the texture headers in it (fetch constants: base, size, format, packed
+  mips), untiling, decoding the tile's texels (a tile is 2 x 2 to 64 x 64 texels of a 128 to
+  512 texture), and writing a BIX FH1 accepts (re-encoded in the atlas's DXT format, or a
+  format FH1 has not streamed from a track before), with flag 0x4 set on the record: more than
+  a few hours. The alternative, giving each tile's own texture object the atlas's texture in
+  the game, needs the texture object's layout instead.
 - Still one converted track at a time: the converter writes FH1's zipmanifest.xml with one
   line for its track, so the last converted circuit is the one mounted
   (`reconvert_track.sh` copies it into the game folder).
