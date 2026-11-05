@@ -219,5 +219,29 @@ surface map.
   Still to do: FM4's shadows (the shadow map reads 1, `shad_color` 1 and the shadow clip
   constants 0: no shadows on the circuit); the stretched ground shows its blend texture's
   sandy channel more than grass; `FM4_PVS_VISIBLE_SIZE` 25 as the default (above).
+- Where the next session starts (stopped for a PC restart):
+  - Shadows: FH1's colour-pass track shaders take shadows from a screen-space mask on s13
+    (`ShadowMaskSamp`, fetched at the clip position the VS exports, divided by w in the PS);
+    the cascades (CSMShadowMapLevel0-2TM c180-c191, s8) are only read by the passes that draw
+    that mask, and they are depth maps FM4's grayscale fetch cannot compare against. FM4's VS
+    exports no screen position (o3/o4 are M_shad_near/far x the world position), so real
+    shadows mean rewriting each shadowed FM4 shader pair: o3 := the clip position (slots
+    32-35 of ROAD_BLND_2's VS: dp4 with c128-c131 and r4), and in the PS a reciprocal of w,
+    the 0.5 scale and bias (no 0.5 among FM4's literals) and the s11 fetches turned into s13
+    with serialisation, which needs instructions inserted (control flow rewritten). Not done.
+    FM4's own shadow colour is TrackSettings ShadowColor (0.389, 0.460, 0.565); with the
+    shadow term at 1 it changes no pixel, so shad_color stays 1 until there is a shadow source.
+  - Ground: a pass with `FM4_PVS_GROUND=0` showed where the ground is seen (holes past the
+    circuit's edge at spots 4 and 9; the pale areas at spots 6 and 7 are FM4's own). It fills
+    them pale sand or white at spot 4 with any of the flat terr_blnd pieces (900, 866, 855,
+    272, 230, 503 tried), so it is its blend mask, not the model. New, not yet tested:
+    `FM4_PVS_GROUND_MASK=621` or `3` draws the ground with a copy of its model whose mask
+    (the texture record after its lightmap's atlas tile) is that flat texture (off by default;
+    the copy is <prefix>.NNNNN.rmb.bin with the next model number; Ribbon_00 and 02 got it,
+    01 kept its own). Next: run spots 4 and 9 with each and keep the one that reads grass.
+  - 25 m visible set as the default: lap.sh NAME SECS [SCALE] (trk-spike) is written for it
+    (autopilot from the grid, zone trace, streaming-block count, frame cost CSV); not run yet.
+    Compare a lap at 120 m and at 25 m (ran_out, max_blocks, cpu_ms and draws per frame).
+  - The trk-spike conversion was left mid-test (mask 621): run reconvert.sh before using it.
 - The streaming block pool still needs `FORZA_FM4_STREAM_POOL`.
 - AI, the airport entry, ribbons 01 and 02, other circuits.

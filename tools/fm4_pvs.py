@@ -58,6 +58,7 @@ shaders neutral) and drives (collision: tools/fm4_col.py). FM4 has no ground whe
 dome's lower half stood in, so from above much of the infield is empty.
 """
 import os
+import shutil
 import struct
 import sys
 
@@ -458,6 +459,8 @@ def convert(F, files):
     if GROUND:
         g = ground_instance(F, used)
         if g is not None:
+            if GROUND_MASK is not None:
+                g["model"] = ground_model_copy(F, P, files, g["model"])
             insts = insts + [g]
             P["instances"].append(fh1_instance_of(g))
             for cell in grid.cells:
@@ -493,6 +496,44 @@ def convert(F, files):
 GROUND = os.environ.get("FM4_PVS_GROUND", "1") == "1"
 GROUND_SCALE = float(os.environ.get("FM4_PVS_GROUND_SCALE", "15"))
 GROUND_BELOW = float(os.environ.get("FM4_PVS_GROUND_BELOW", "4"))
+# The ground's blend mask: a terrain piece blends its two layers (grass, sand or gravel) by a
+# mask texture of its own (the record after its lightmap's atlas tile), and stretched 15
+# times the ground took one corner of that mask everywhere: pale sand where the holes past
+# the circuit's edges were filled. The ground is drawn instead with a copy of its model
+# (<prefix>.NNNNN.rmb.bin, NNNNN the next model number) whose mask is texture
+# FM4_PVS_GROUND_MASK, a flat one (FM4's texture 621 or 3); "off" keeps the model's own.
+_mask = os.environ.get("FM4_PVS_GROUND_MASK", "off")
+GROUND_MASK = None if _mask == "off" else int(_mask)
+GROUND_COPIES = {}  # new model file: the file it is a copy of (made by convert_mod)
+
+
+def ground_model_copy(F, P, files, model):
+    """The number of a copy of model whose blend mask is texture GROUND_MASK (see there), or
+    model itself if that cannot be done."""
+    M = F["models"][model]
+    recs = F["textures"]
+    lists = M["textures"]
+    lm = [k for k, t in enumerate(lists) if recs[t & 0xFFFFFF][6] & 8]
+    flat = next((i for i, t in enumerate(recs) if t[0] == GROUND_MASK), None)
+    if len(lm) != 1 or flat is None:
+        return model
+    mask_no = recs[lists[lm[0]] & 0xFFFFFF][0] + 1
+    mask = [k for k, t in enumerate(lists) if recs[t & 0xFFFFFF][0] == mask_no]
+    if len(mask) != 1:
+        return model
+    new = len(F["models"])
+    src, dst = f"{F['prefix']}.{model:05d}.rmb.bin", f"{F['prefix']}.{new:05d}.rmb.bin"
+    if src not in files or GROUND_COPIES.get(dst, src) != src:
+        return model
+    textures = list(lists)
+    textures[mask[0]] = (lists[mask[0]] & ~0xFFFFFF) | flat
+    F["models"].append(dict(M, textures=textures))
+    P["models"].append(dict(P["models"][model], textures=textures))
+    P["rmodels"] = len(P["models"])
+    if dst not in files:
+        files.append(dst)
+    GROUND_COPIES[dst] = src
+    return new
 
 
 def ground_instance(F, used):
@@ -914,6 +955,8 @@ def convert_mod(mod, fh1_disc, loose):
         nn = ribbon[-2:]
         converted.append((ribbon, path, F, P, cells, grid,
                           [f"__R{int(nn):02d}Z{k:05d}.pvsz" for k in range(len(cells))]))
+    for dst, src in GROUND_COPIES.items():
+        shutil.copyfile(os.path.join(bin_dir, src), os.path.join(bin_dir, dst))
     order = archive_order(files + [zn for c in converted for zn in c[6]])
     index = {p: i for i, p in enumerate(order)}
     names = [p.split("/")[-1] for p in order]
@@ -963,7 +1006,6 @@ def convert_mod(mod, fh1_disc, loose):
     out_dir = os.path.join(loose, "media", "tracks", track)
     os.makedirs(out_dir, exist_ok=True)
     start, size, count = write_track_zip(members, os.path.join(out_dir, "bin.zip"))
-    import shutil
     shutil.rmtree(bin_dir)
     manifest = open(os.path.join(fh1_disc, "media", "zipmanifest.xml"), "rb").read().decode("utf-8-sig")
     line = (f'<Zip version="1" path="game:\\media\\tracks\\{track.lower()}\\bin.zip" priority="80" '
