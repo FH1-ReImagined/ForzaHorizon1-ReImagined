@@ -14,7 +14,7 @@ Last updated: 2026-11-04. Every change to this policy is a change to this file, 
   - a check for launcher updates on GitHub each time the launcher opens;
   - your activity in the game (with your car, the event and the area of Colorado), shown through the Discord desktop app if it is running.
 - One choice turns all of them off: "Online features" in the Windows installer, or the same question the launcher asks the first time it opens on Linux. You can also turn each one off later in the launcher; see "How to turn each thing off".
-- Separately, on Windows with an NVIDIA graphics card, the first Play downloads NVIDIA's DLSS runtime from GitHub, and actions you start (Build, Make HD pack) download tools. See "Downloads".
+- Separately, on Windows with an NVIDIA graphics card, the first Play downloads NVIDIA's DLSS runtime from GitHub, and actions you start (Build, Make HD pack, Make decal pack) download tools. See "Downloads".
 - Settings > Online > Server > "Offline" stops all contact with game servers.
 - When you play online, the server receives your gamertag, a random player ID (your XUID) and your IP addresses. Other players see your gamertag and XUID, and the server gives the players in your room your IP addresses so that their games can connect to yours.
 - Traffic to the game server is not encrypted. That includes chat messages. Your keys are not sent: the game and the launcher sign their requests with your signing key, and the server keeps only its public key. The one exception is your friends key from older versions, which the game sends once to the public server to move your account to the signing key.
@@ -97,7 +97,7 @@ Each of these downloads shows the site it comes from your IP address, and its Us
 
 - Build (the first time, or when a tool is missing): LLVM, CMake and Ninja from GitHub. On Linux, also the ReXGlue SDK from GitHub.
 - Build on Windows without Visual Studio 2022: the xwin tool from GitHub. xwin then downloads Microsoft's C++ runtime and Windows SDK files from Microsoft's servers. Only the xwin archive is checked against a checksum kept in the launcher; the files xwin downloads from Microsoft are not. This runs only after you tick "I accept Microsoft's license terms...".
-- Make HD pack: the Real-ESRGAN upscaler from GitHub, after you confirm.
+- Make HD pack and Make decal pack: the Real-ESRGAN upscaler from GitHub, after you confirm (once for both).
 - NVIDIA DLSS (Windows with an NVIDIA graphics card): when you press Play, the launcher downloads NVIDIA's DLSS runtime (about 56 MB) and its license from NVIDIA's repository on GitHub, if they are not on your PC yet. With Settings > Display > "Graphics API" set to Vulkan (the default), this happens even when DLSS is off, so that the in-game menu can turn DLSS on later. To avoid it, set "Graphics API" to Direct3D 12 and leave "NVIDIA DLSS" and "NVIDIA DLAA" off. If the download fails, the game still starts.
 
 ### Crash reports

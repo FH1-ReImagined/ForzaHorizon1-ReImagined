@@ -327,6 +327,7 @@ def existing_scale(cfg):
 # --- the images (Qt's QImage: no other imaging library in the launcher) ------------------------
 
 _HOLE = bytes([0] + [255] * 255)  # alpha byte -> 0 for a hole, 255 otherwise
+_SNAP = bytes([0] * 4 + list(range(4, 252)) + [255] * 4)   # alpha within 3 of clear or opaque: exactly
 
 
 def _qimage():
@@ -367,10 +368,11 @@ def not_colour(rgba: bytes) -> str:
     return ""
 
 
-def _fill_holes(rgba: bytes, width: int, height: int) -> bytes:
+def _fill_holes(rgba: bytes, width: int, height: int, transparent=False) -> bytes:
     """The colour under transparent black texels (BC1's cut-out texels decode to black; most
     tools leave DXT5's black too) filled from the texels around them (push-pull over a mip
     pyramid, premultiplied), so the upscaler and the GPU's filtering do not darken the edges.
+    With `transparent`, under every texel of alpha 0 whatever its colour (the decals' are white).
     Every other texel keeps its colour exactly; alpha becomes 255 (the upscaler gets RGB)."""
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QPainter
@@ -379,9 +381,12 @@ def _fill_holes(rgba: bytes, width: int, height: int) -> bytes:
     if not rgba[3::4].count(0):  # no transparent texel: nothing to fill
         data[3::4] = b"\xff" * (width * height)
         return bytes(data)
-    words = array("I")
-    words.frombytes(rgba)
-    coverage = bytes(0 if v == 0 else 255 for v in words)
+    if transparent:
+        coverage = bytes(rgba[3::4]).translate(_HOLE)
+    else:
+        words = array("I")
+        words.frombytes(rgba)
+        coverage = bytes(0 if v == 0 else 255 for v in words)
     if coverage.count(0) in (0, len(coverage)):
         data[3::4] = b"\xff" * (width * height)
         return bytes(data)
@@ -431,24 +436,38 @@ def match_colours(out: bytearray, source: bytes, out_small: bytes, alpha=None):
         out[c::4] = bytes(out[c::4]).translate(lut)
 
 
-def prepare(source_png: Path, input_png: Path):
+ALPHA_SUFFIX = ".alpha"   # <fingerprint>.alpha.png: a decal's alpha, upscaled by the model too
+
+
+def alpha_input(input_png: Path) -> Path:
+    return input_png.with_name(input_png.stem + ALPHA_SUFFIX + ".png")
+
+
+def prepare(source_png: Path, input_png: Path, decal=False):
     """Reads a dumped texture; returns why it is left out ("normal map", "data map"), else its
-    alpha (or None when it is opaque) and the RGB the upscaler gets, written to input_png."""
+    alpha (or None when it is opaque) and the RGB the upscaler gets, written to input_png.
+    `decal` (decal_pack.py): colour art by definition (no data map test, flat logos look like
+    one); the colour under every transparent texel is filled, and the alpha goes through the
+    upscaler too (alpha_input), as grey, so the outline gets as sharp as the colour."""
     QImage = _qimage()
     img = QImage(str(source_png))
     if img.isNull():
         raise OSError(f"{source_png.name} could not be read")
     img, rgba = _rgba(img)
     w, h = img.width(), img.height()
-    why = not_colour(rgba)
+    why = "" if decal else not_colour(rgba)
     if why:
         return why
     alpha = rgba[3::4]
     opaque = alpha.count(255) == len(alpha)
-    rgb = _fill_holes(rgba, w, h)
+    rgb = _fill_holes(rgba, w, h, transparent=decal)
     if not _from_rgba(rgb, w, h).convertToFormat(QImage.Format_RGB888).save(str(input_png), "PNG", 100):
         raise OSError(f"could not write {input_png}")
-    return {"alpha": None if opaque else alpha, "width": w, "height": h}
+    upscaled_alpha = decal and not opaque
+    if upscaled_alpha and not QImage(bytes(alpha), w, h, w, QImage.Format_Grayscale8).convertToFormat(
+            QImage.Format_RGB888).save(str(alpha_input(input_png)), "PNG", 100):
+        raise OSError(f"could not write {alpha_input(input_png)}")
+    return {"alpha": None if opaque else alpha, "width": w, "height": h, "upscaled_alpha": upscaled_alpha}
 
 
 def finish(prepared: dict, input_png: Path, output_png: Path, item: Item, target: Path, raw: Path = None):
@@ -470,7 +489,21 @@ def finish(prepared: dict, input_png: Path, output_png: Path, item: Item, target
     source = _rgba(QImage(str(input_png)))[1]
     small = _rgba(out.scaled(w, h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation))[1]
     match_colours(data, source, small, alpha)
-    if alpha is not None:
+    if alpha is not None and prepared.get("upscaled_alpha"):
+        # The model's grey output at the pack's size, its levels matched to the source alpha's as
+        # the colours are (a darker grey would make the whole decal see-through), then its red
+        # channel, with what is within 3 of opaque or clear made exactly that.
+        grey = QImage(str(alpha_input(output_png)))
+        if grey.isNull():
+            raise OSError(f"the upscaler wrote no readable {alpha_input(output_png).name}")
+        if (grey.width(), grey.height()) != (item.out_width, item.out_height):
+            grey = grey.scaled(item.out_width, item.out_height, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+        grey, levels = _rgba(grey)
+        levels = bytearray(levels)
+        match_colours(levels, _rgba(QImage(str(alpha_input(input_png))))[1],
+                      _rgba(grey.scaled(w, h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation))[1])
+        data[3::4] = bytes(levels[0::4]).translate(_SNAP)
+    elif alpha is not None:
         grey = bytearray(len(alpha) * 4)
         for c in range(3):
             grey[c::4] = alpha
@@ -584,12 +617,26 @@ def make(cfg, scale: int, progress=lambda fraction, text: None, cancelled=lambda
                 0.0, f"Compressing the textures made before: {n} of {t}"), cancelled, top_only=True)
         result.converted = folder.compressed
         result.failed += folder.failed
-    total = len(p.todo)
-    total_pixels = sum(i.width * i.height for i in p.todo) or 1
-    done_pixels = 0
-    batches = _batches(p.todo)
-    log(f"HD pack: {total} textures to upscale {scale}x, {p.done} already made, "
+    log(f"HD pack: {len(p.todo)} textures to upscale {scale}x, {p.done} already made, "
         f"{sum(p.skipped.values())} skipped")
+    upscale(cfg, p.todo, dump_dir(cfg), pack, work, result, start, progress, cancelled)
+    log(f"HD pack: {result.made} made in {result.seconds:.0f} s"
+        + (f" ({dict(result.formats)}, {result.converted} PNGs compressed)" if compress else " (PNG)")
+        + f", left out {dict(result.left_out)}, {len(result.failed)} failed")
+    return result
+
+
+def upscale(cfg, items: list, source: Path, pack: Path, work: Path, result: Result, start: float,
+            progress=lambda fraction, text: None, cancelled=lambda: False, decal=False):
+    """Upscales `items` (source/<fingerprint>.png) into `pack`, in batches through `work` (deleted
+    after), filling `result`: the model on the graphics card, while the processor finishes and
+    compresses (result.compressed) the batch before. Make HD pack and the decal pack
+    (decal_pack.py, `decal`: see prepare) share it. Raises fetch.Cancelled when cancelled."""
+    compress = result.compressed
+    total = len(items)
+    total_pixels = sum(i.width * i.height for i in items) or 1
+    done_pixels = 0
+    batches = _batches(items)
 
     def stage(n):
         return work / f"batch{n}"
@@ -604,13 +651,14 @@ def make(cfg, scale: int, progress=lambda fraction, text: None, cancelled=lambda
             if cancelled():
                 raise fetch.Cancelled()
             try:
-                info = prepare(dump_dir(cfg) / f"{item.fingerprint}.png", stage(n) / "in" / f"{item.fingerprint}.png")
+                info = prepare(source / f"{item.fingerprint}.png", stage(n) / "in" / f"{item.fingerprint}.png",
+                               decal=decal)
             except OSError as e:
                 result.failed.append(f"{item.fingerprint}: {e}")
                 continue
             if isinstance(info, str):
                 result.left_out[info] += 1
-                with open(pack_dir(cfg) / LEFT_OUT, "a", encoding="utf-8") as f:
+                with open(pack / LEFT_OUT, "a", encoding="utf-8") as f:
                     f.write(f"{item.fingerprint}\t{info}\n")
                 continue
             ready.append((item, info))
@@ -671,9 +719,9 @@ def make(cfg, scale: int, progress=lambda fraction, text: None, cancelled=lambda
             while proc is not None and proc.poll() is None:
                 if cancelled():
                     raise fetch.Cancelled()
-                finished = {f.stem for f in (stage(n) / "out").glob("*.png")}
-                part = sum(i.width * i.height for i, _ in ready if i.fingerprint in finished)
-                report(result.made + len(finished), done_pixels + part, "Upscaling")
+                finished = {f.stem for f in (stage(n) / "out").glob("*.png")}   # (and decals' .alpha)
+                part = [i.width * i.height for i, _ in ready if i.fingerprint in finished]
+                report(result.made + len(part), done_pixels + sum(part), "Upscaling")
                 time.sleep(0.25)
             if proc is not None and proc.returncode != 0:
                 err = [line for line in (stage(n) / "messages.txt").read_text("utf-8", "replace").splitlines()
@@ -691,7 +739,3 @@ def make(cfg, scale: int, progress=lambda fraction, text: None, cancelled=lambda
         shutil.rmtree(work, ignore_errors=True)
     result.seconds = time.monotonic() - start
     progress(1.0, f"Made {result.made} of {total}")
-    log(f"HD pack: {result.made} made in {result.seconds:.0f} s"
-        + (f" ({dict(result.formats)}, {result.converted} PNGs compressed)" if compress else " (PNG)")
-        + f", left out {dict(result.left_out)}, {len(result.failed)} failed")
-    return result

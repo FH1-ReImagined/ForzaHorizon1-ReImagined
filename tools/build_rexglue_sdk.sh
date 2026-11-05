@@ -57,11 +57,12 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # 0427-0430: the guest memory's host commit in the log, the XMA decoder's FFmpeg state only for
 # the contexts in use, the driver pipeline cache held in memory up to what a save keeps, and
 # translations' SPIR-V freed once their shader module exists (#640), and 0435: no locked
-# instruction on every draw for the outdated-texture flag, no division per packet (#607).
+# instruction on every draw for the outdated-texture flag, no division per packet (#607), and
+# 0436: a texture pack's pack.toml can ask for its files to be read at start (the decal pack, #659).
 # A reviewed full commit can be pinned before a maintainer publishes a tag.
 # When a tag is supplied, its target must still match this immutable commit.
 REIGLUE_TAG=
-REIGLUE_COMMIT=e867fdd1a2f11fd93d60cbedcab12f88eb271e5f  # 0435 (#607), on top of ReIGlue main (0427-0430)
+REIGLUE_COMMIT=5d838fff38ebacd2b067c4a24ef3ffc82222ea41  # 0436 (#659), on top of ReIGlue main (0427-0435)
 REIGLUE_URL="${REIGLUE_URL:-https://github.com/FH1-ReImagined/ReIGlue}"
 NIGHTLY="${REXSDK_NIGHTLY:-$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64}"
 SRC="${REXSDK_SRC:-$HOME/rexglue-sdk-src-forza/sdk}"

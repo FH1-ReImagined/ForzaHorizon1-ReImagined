@@ -1,7 +1,8 @@
 // Texture pack DDS files (#384): src/graphics/pipeline/texture/pack_format.cpp of the patched SDK
 // source (patch 0280). Padded rows of uncompressed images (the header's pitch, per mip level),
 // headers that do not match their data, the DX10 header, and every format written by the dump
-// read back unchanged. The DDS files are made here. Also the texture_packs order (patch 0310).
+// read back unchanged. The DDS files are made here. Also the texture_packs order (patch 0310)
+// and pack.toml's preload (patch 0436).
 // Build with the patched SDK source:
 //   c++ -std=c++20 -I ~/rexglue-sdk-src-forza/sdk/include
 //       ~/rexglue-sdk-src-forza/sdk/src/graphics/pipeline/texture/pack_format.cpp
@@ -311,6 +312,21 @@ int main() {
     const auto names = tp::ParsePackOrder(".|hd-pack|Rocks v2||hd-pack|../up|a/b|c\\d|C:|.|..|Dump|x", refused);
     CHECK((names == std::vector<std::string>{".", "hd-pack", "Rocks v2", "x"}));
     CHECK(refused == 6);
+  }
+
+  // A pack's pack.toml asking for its files at start (patch 0436, #659): a top-level boolean only.
+  {
+    CHECK(tp::ManifestPreload("name = \"Decal pack\"\npreload = true\n"));
+    CHECK(tp::ManifestPreload("  preload=true   # the paint job is drawn once\r\n"));
+    CHECK(!tp::ManifestPreload(""));
+    CHECK(!tp::ManifestPreload("name = \"HD pack\"\nscale = 2\n"));
+    CHECK(!tp::ManifestPreload("preload = false\n"));
+    CHECK(!tp::ManifestPreload("preload = \"true\"\n"));
+    CHECK(!tp::ManifestPreload("preload = trueish\n"));
+    CHECK(!tp::ManifestPreload("# preload = true\n"));
+    CHECK(!tp::ManifestPreload("preloaded = true\n"));
+    CHECK(!tp::ManifestPreload("[extra]\npreload = true\n"));
+    CHECK(!tp::ManifestPreload("preload = true\npreload = false\n"));   // the last one counts
   }
 
   std::printf("texture pack DDS: PASS\n");

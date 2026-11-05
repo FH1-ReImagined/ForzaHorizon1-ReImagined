@@ -637,6 +637,12 @@ model's licences with links. Details, the licences and
 the measurements: [texture packs](texture_packs.md). Tests: `launcher/test_texture_packs.py`,
 `launcher/test_hd_pack.py`.
 
+**Make decal pack** (`decal_pack.py`, #659) reads the Paint Shop's decals from the game's own
+`media/Livery.zip` (no dump), names each by the fingerprint the game gives it and upscales them
+with the same upscaler and job (`hd_pack.upscale`) into `textures/decal-pack`, 2x (default) or
+4x, in the same background `Task`. Details: [texture packs](texture_packs.md#make-decal-pack).
+Tests: `launcher/test_decal_pack.py`.
+
 ## Toolchain (pinned in `launcher/forza_launcher/pins.py`, every archive checked by sha256)
 
 * Linux: the system `clang` (>= 21; the project is tested with 23), `cmake` (>= 3.25) and
