@@ -752,6 +752,47 @@ benchmark at render scale 1 (1280x720, 240 fps cap, four runs each, alternating)
 run-to-run spread: median 141.2 fps (120.2 to 148.1) against 143.3 (136.6 to 146.7) on main, 1% low
 93.9 against 92.8, p99 9.71 against 9.60 ms. The D3D12 path was not run.
 
+## Photo mode's FOCUS picked the wrong object (#665)
+
+Report: RTX 3080 Ti, Windows 11, render scale 2. With SHUTTER SPEED above 0, FOCUS (X in photo
+mode's camera) did not keep the car sharp: focused on the car, the car smeared and the scenery
+stayed sharp, and after focusing elsewhere the car could not be picked again. Not NVIDIA's:
+reproduced on Linux/RADV (RX 9060 XT, TU4, render scale 1, free roam, the car moving towards the
+camera, SHUTTER SPEED 50). FOCUS on the car kept the scenery sharp and smeared the car; on the
+guard rail it worked by chance; back on the car the scenery stayed sharp. With
+`readback_resolve = full` all three were right.
+
+Cause: FOCUS reads the world depth target on the CPU when X is pressed. It is "WorldDepth" in
+the renderer's render target table (TU4 0x833D4728: entries of a name, a size and an address;
+the target is 1280x720, 3,768,320 bytes at physical 0x1DAC5000), and the game resolves it every
+frame. `readback_resolve = some` copied it back to guest memory once, when its key was new, so
+FOCUS read the depth of an old frame. Found by halving `readback_resolve_wait_range` while
+pressing FOCUS in one session: 0x1DAC4000 + 16 KB (the first page of the target) was the
+smallest range that fixed it. Turning the range on 50 ms, 0.3 s or 1 s after X did not help,
+turning it on just before X did: the depth is read as X is handled, from what is already in
+guest memory.
+
+Fix: `src/hooks/photo_focus.cpp` puts the world depth target (from the table, by its name) in
+`readback_resolve_wait_range` while photo mode's camera screen is up (`sub_827DBE70`, state 0),
+and takes it out in Effects Mode (state 1), at the shutter (state 3 while the photo is shown, so a
+Big Shot keeps the front buffers to itself) and 250 ms after the screen's last frame (leaving
+photo mode). The setting holds one range, so the Big Shot, the online photo and FOCUS now ask
+for theirs through `src/platform/readback_wait.h`, which sets the range that covers all of them
+(`tests/readback_wait_test.cpp`). `FORZA_PHOTO_FOCUS_READBACK=0` switches it off.
+
+Cost: the depth's resolves wait for the GPU while the camera is up, and only there. In the
+camera, holding still (the preview accumulates), RX 9060 XT at render scale 1: at the default 60 fps
+cap 60.0 fps with and without the range (30 s each, twice); at a 144 cap 92.6 to 102.6 fps with it
+against 143.6 to 144.0 without. Outside the camera the range is not held.
+
+Checked (TU4, RADV, render scale 1, `some`): FOCUS on the car, then on the guard rail, then back on
+the car gives the car sharp, the rail sharp, the car sharp, as with `full`. A photo taken at
+SHUTTER SPEED 100 focused on the car is the car sharp on a smeared background. The FOCUS slider
+(with APERTURE 68) at 0, 50 and 100 and SHUTTER SPEED 50 and 0 moves the depth of field as before
+(it is a shader input, not a CPU read). Entering and leaving Effects Mode, the shutter and leaving
+photo mode release the range (log lines `Photo focus:`). The same FOCUS sequence at render
+scale 2 (the reporter's) is right too.
+
 ## Festival video flashes purple (#91, open)
 
 Report: RX 9070 XT, Windows 11, Vulkan, v0.1.12, `frame_rate` 240, render scale 2, AF 16x,

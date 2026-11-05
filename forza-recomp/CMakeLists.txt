@@ -175,6 +175,7 @@ set(FORZA_SOURCES
     src/hooks/resource_stream_trace.cpp
     src/hooks/bigshot_readback.cpp
     src/hooks/online_photo.cpp
+    src/hooks/photo_focus.cpp
     src/hooks/thumbnail_sync.cpp
     src/hooks/world_challenge.cpp
     src/hooks/ambient_leaderboard.cpp
@@ -223,6 +224,7 @@ set(FORZA_SOURCES
     src/platform/benchmark_session.cpp
     src/platform/hud_overlay.cpp
     src/platform/motion_blur_fix.cpp
+    src/platform/readback_wait.cpp
     src/platform/world_ao.cpp
     src/platform/native_quit.cpp
     src/platform/resume.cpp

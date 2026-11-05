@@ -144,6 +144,11 @@ jobs:
           g++ -std=c++20 -O2 -pthread -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/driving_gate_test.cpp -o "$RUNNER_TEMP/driving-gate-test"
           "$RUNNER_TEMP/driving-gate-test"
       - if: runner.os == 'Linux'
+        name: Readback wait range owners
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/readback_wait_test.cpp -o "$RUNNER_TEMP/readback-wait-test"
+          "$RUNNER_TEMP/readback-wait-test"
+      - if: runner.os == 'Linux'
         name: The frame after a stopped game
         run: |
           g++ -std=c++20 -O2 -pthread -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/resume_gap_test.cpp -o "$RUNNER_TEMP/resume-gap-test"
