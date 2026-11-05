@@ -48,9 +48,18 @@ extern "C" void __llvm_profile_reset_counters(void);
 // plugin. The game's graphics screen sets them, and saves nothing when one is missing; the plugin
 // follows them (FollowGraphicsMenu). Registered after ReXGlue read the command line, so their
 // starting values are read from it again (StartingFlag).
-REXCVAR_DEFINE_BOOL(vsync, false, "Display", "Wait for the display's refresh (ReGPU)");
-REXCVAR_DEFINE_INT32(anisotropic_override, -1, "Display",
+// Their defaults are ReXGlue's (vsync on, 4x filtering), which the launcher leaves out of forza.toml.
+REXCVAR_DEFINE_BOOL(vsync, true, "Display", "Wait for the display's refresh (ReGPU)");
+REXCVAR_DEFINE_INT32(anisotropic_override, 3, "Display",
                      "Texture filtering: -1 the game's, 0 off, 1-5 1x-16x anisotropic (ReGPU)");
+// ReIGlue's readback_resolve_wait_range ((address << 32) | length, 0 for none; its command processor's,
+// not loaded with this plugin either): a guest physical range the game resolves every frame and reads on
+// the CPU now and then, so "some" would leave an old picture there. Forza sets it for photo mode's FOCUS
+// (the world depth target, #665), the Big Shot (the front buffers, #552) and the online photo (#576),
+// src/platform/readback_wait.h; without the setting they log that the SDK has none. ResolveWriteback
+// copies such resolves back every time, as the SDK's backends do.
+REXCVAR_DEFINE_UINT64(readback_resolve_wait_range, 0, "GPU",
+                      "Guest physical range whose resolves are always written back (ReGPU)");
 
 namespace glue2gpu
 {
@@ -576,6 +585,15 @@ void GuestCall(PPCContext& ctx, uint32_t address)
     g_dispatcher->ExecuteInterrupt(thread->thread_state(), address, args, 2);
 }
 
+// Whether the resolve meets readback_resolve_wait_range (above).
+bool InWaitRange(const regpu::ResolveCopy& copy)
+{
+    const uint64_t r = REXCVAR_GET(readback_resolve_wait_range);
+    const uint64_t start = r >> 32, length = uint32_t(r);
+    const uint64_t bytes = uint64_t(copy.width) * copy.height * 4; // 32-bit pixels (depth: D24FS8 words)
+    return length && copy.base < start + length && start < copy.base + bytes;
+}
+
 // GLUE2GPU_WRITEBACK: which resolves are also written to guest memory, for titles that read them
 // on the CPU. "some" (the default, as stock ReXGlue's readback_resolve=some): an image the first
 // time it is resolved, and again after 60 frames without it; "all" (every resolve, deferred: ~4 fps
@@ -587,6 +605,12 @@ regpu::Writeback ResolveWriteback(const regpu::ResolveCopy& copy)
     regpu::Writeback w;
     if (mode == "none")
         return w;
+    if (InWaitRange(copy))
+    {
+        // ReGPU writes a depth copy only deferred (a frame or two late); colour at once, as the SDK waits.
+        w.mode = copy.depth ? regpu::Writeback::Mode::Deferred : regpu::Writeback::Mode::Now;
+        return w;
+    }
     if (mode == "some")
     {
         static std::mutex mutex;
