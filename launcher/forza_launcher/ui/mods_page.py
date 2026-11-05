@@ -459,15 +459,19 @@ class ModsPage(FolderListPage):
     def _fm4_pick(self, title):
         ask = QMessageBox(self)
         ask.setWindowTitle(title)
-        ask.setText(f"{title}: a disc image (.iso) or Games on Demand package, or a folder with the "
-                    "disc's files?")
-        iso = ask.addButton("Disc image or package…", QMessageBox.AcceptRole)
+        ask.setText(f"{title}: a disc image (.iso, or any of its parts), a Games on Demand package or an "
+                    "archive (.zip, .7z, .rar), or a folder with the disc's files or packages?")
+        iso = ask.addButton("Disc image, package or archive…", QMessageBox.AcceptRole)
         folder = ask.addButton("Folder…", QMessageBox.AcceptRole)
         skip = ask.addButton("Skip" if "2" in title else "Cancel", QMessageBox.RejectRole)
         ask.exec()
         if ask.clickedButton() is iso:
-            path, _ = QFileDialog.getOpenFileName(self, title, str(Path.home()), "Disc images (*.iso);;"
-                                                  "Games on Demand packages and all files (*)")
+            # all files first: a Games on Demand package's file has no extension
+            path, _ = QFileDialog.getOpenFileName(
+                self, title, str(Path.home()),
+                "Disc images, Games on Demand packages, archives (*);;"
+                "Disc images (*.iso *.xiso *.img *.bin *.dvd *.iso.* *.001 *.part*);;"
+                "Archives (*.zip *.7z *.rar *.tar *.tar.gz *.tgz *.7z.001 *.zip.001)")
             return path or None
         if ask.clickedButton() is folder:
             return QFileDialog.getExistingDirectory(self, title, str(Path.home())) or None
