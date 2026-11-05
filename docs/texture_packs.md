@@ -434,14 +434,15 @@ Measured on a Ryzen 7 7800X3D with a Radeon RX 9060 XT (16 GB, Linux, RADV; limi
 720p, 60 fps cap, nothing else running), with a test pack of 2,712 textures from a dump of that
 drive, upscaled 2x (6.9 GB of graphics memory as PNGs, 1.7 GB as BC7). The game's own textures
 stay under its cache's 384 MB the whole time, so none of them is destroyed. "Before" is SDK patch
-0436, "0437 (no idle)" the patch without the 30-second rule, and "256 MB" it with
-`texture_replace_memory_limit_mb=256`:
+0436, "0437 (no idle)" the patch without the 30-second rule, "0437" the patch as it ships, and
+"256 MB" the no-idle build with `texture_replace_memory_limit_mb=256`:
 
 | | Replacements' graphics memory at 5 / 10 / 15 min | Files read | Freed | Held back | Game's graphics memory at 15 min | fps, p99, worst frame |
 | --- | --- | --- | --- | --- | --- | --- |
 | No pack | | | | | 1.3 GB | 59.9, 18.9 ms, 70 ms |
 | PNG, before | 2,803 / 4,028 / 5,041 MiB (still growing) | 2,197 | 0 | 0 | 6.4 GB | 60.0, 17.2 ms, 41 ms |
 | PNG, 0437 (no idle) | 2,386 / 2,853 / 3,297 MiB | 2,205 | 286 | 0 | 4.6 GB | 60.0, 17.1 ms, 33 ms |
+| PNG, 0437 | 658 / 692 / 890 MiB (peak 1,132) | 3,318 | 3,010 | 0 | 2.4 GB | 60.0, 17.0 ms, 52 ms |
 | BC7, before | 713 / 967 / 1,236 MiB | 2,170 | 0 | 0 | 2.6 GB | 60.0, 17.1 ms, 40 ms |
 | BC7, 0437 (no idle) | 591 / 733 / 853 MiB | 2,148 | 237 | 0 | 2.1 GB | 59.7, 17.4 ms, 100 ms (one burst of slow frames with no upload or wait behind it) |
 | PNG, 0437, 256 MB | 256 / 256 / 256 MiB | 9,654 | 1,615 | 7,933 | 1.6 GB | 60.0, 17.0 ms, 26 ms |
