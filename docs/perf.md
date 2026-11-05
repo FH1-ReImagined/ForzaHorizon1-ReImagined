@@ -1901,6 +1901,19 @@ ultrawide path, `docs/ultrawide.md`, gave up on fractional heights for that reas
    (`sub_82C3E310`, from `sub_82586170`) copies the last 720p front buffer this way into the
    `Shared` 2:10:10:10 texture in `WorldDepth`.
 7. The D3D device keeps a 1280x720 back buffer (it is made with the first scenario's size).
+8. The sun's shadow mask (`sub_824532F0`, TU4 `sub_824829D8`; docs/graphics-detail.md "Shadow
+   softness") is drawn at the scene size. Its code sets a 1280x720 viewport
+   (`D3DDevice_SetViewport`, `sub_82410C30`, TU4 `sub_82440BE0`) and passes 1280x720 to the
+   cascades' volume quad (`sub_82DDDEE0`, TU4 `sub_82EA04E8`) and the blur's taps (`sub_823E2C48`,
+   TU4 `sub_82412BD8`). While the mask is drawn, those three get the scene size. Before this
+   (#682, from 0.2.7, when entry GPUs got 540p by default) the mask passes covered 1280x720 of a
+   surface whose depth and stencil came from the 960x540 pre-pass. The mask was then resolved
+   cropped to 960x540, so the car's shadow became a streak running up and to the left of the car,
+   and its real shadow was missing (RenderDoc: the pre-pass at 960x540, the 11 mask passes and the
+   blur at 1280x720). It is the same on Vulkan and ReGPU, on AMD and NVIDIA, because it is in the
+   guest's draws. The same spot in free roam at 540p and 720p: the shadow pixels' centre was
+   (-71, -56) px off at 1280x720 and the shadow overlapped 720p's by 44%. With the fix it is
+   (+1, +2) px off and overlaps by 91%; the remaining difference is the lower resolution.
 
 It stays at 720p with the SDK's scene reconstruction (`fh1_upscaler`: FSR 3, DLSS, SMAA), separate
 scene anti-aliasing or ultrawide gameplay, which find the scene by its 720p targets (logged).
