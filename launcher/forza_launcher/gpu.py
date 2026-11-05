@@ -279,8 +279,9 @@ DECK_SETTINGS = {"frame_rate": 30, "resolution_scale": 1, "present_effect": "fsr
 PRESETS = {
     NVIDIA: Preset(
         "NVIDIA",
-        {**_FSR, "frame_rate": 60, "gpu_backend": "vulkan"},
-        "Vulkan, render scale 1 to 2 with AMD FSR 1, 60 fps, background shader compilation on.",
+        {**_FSR, "frame_rate": 60, "gpu_backend": "vulkan", "vulkan_store_pipeline_cache": False},
+        "Vulkan, render scale 1 to 2 with AMD FSR 1, 60 fps, background shader compilation on; the driver "
+        "keeps compiled pipelines in its own cache.",
         [Known("gpu_backend", lambda v: v == "d3d12",
                "Direct3D 12 flickers on NVIDIA and turns reflections on glass and paint green.", 46,
                "flickers on NVIDIA, #46", "d3d12"),
@@ -290,7 +291,10 @@ PRESETS = {
          Known("async_shader_compilation", lambda v: not v,
                "Vulkan stutters on NVIDIA while shaders compile; keep background compilation on.", 49),
          Known("store_shaders", lambda v: not v,
-               "Without the shader cache every start stutters again (worse on NVIDIA, Vulkan).", 49)],
+               "Without the shader cache every start stutters again (worse on NVIDIA, Vulkan).", 49),
+         Known("vulkan_store_pipeline_cache", lambda v: bool(v),
+               "NVIDIA's driver never reuses the pipelines kept here (it has its own cache): the file grows to "
+               "512 MB, takes that much RAM while playing and slows every start.", 640)],
         [("Vulkan can still stutter with a warm shader cache; play a session so the cache fills.", 49)]),
     AMD: Preset(
         "AMD",

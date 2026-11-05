@@ -58,7 +58,8 @@ def _default():
         # website account, so the card asks the service for the link's state.
         "web_account": {"linked": False},
         # One-time fixes of values an older launcher saved: done once, so a later choice sticks.
-        "migrated": {"discord_application_id": False, "gpu_wait_blocking": False},
+        "migrated": {"discord_application_id": False, "gpu_wait_blocking": False,
+                     "nvidia_pipeline_cache": False},
     }
 
 
@@ -100,7 +101,8 @@ class Config:
             data = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             # A new launcher.json starts with today's defaults: nothing to migrate later.
-            self.d["migrated"].update(discord_application_id=True, gpu_wait_blocking=True)
+            self.d["migrated"].update(discord_application_id=True, gpu_wait_blocking=True,
+                                      nvidia_pipeline_cache=True)
             return
         if isinstance(data, dict):
             _merge(self.d, data)
@@ -128,6 +130,12 @@ class Config:
         if not migrated.get("gpu_wait_blocking"):
             self.d["settings"]["gpu_wait_blocking"] = True
             migrated["gpu_wait_blocking"] = True
+        # NVIDIA's driver never reused the stored driver pipelines (#640); up to 0.2.6 the NVIDIA preset kept
+        # them, so every NVIDIA launcher.json holds that on.
+        if not migrated.get("nvidia_pipeline_cache"):
+            if self.d["gpu"].get("vendor") == gpu.NVIDIA:
+                self.d["settings"]["vulkan_store_pipeline_cache"] = False
+            migrated["nvidia_pipeline_cache"] = True
         self.d['haptics'] = normalize_haptics(self.d.get('haptics'))
         prefs = self.d.get('save_manager')
         if not isinstance(prefs, dict):
