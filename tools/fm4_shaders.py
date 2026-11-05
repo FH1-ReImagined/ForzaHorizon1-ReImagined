@@ -4,7 +4,8 @@ the converted track's archive. FM4's pixel shaders read inputs FH1 does not give
 
 - s_grayscaleShadowMap (FM4's shadow map): FH1 binds no texture to it, so every lookup reads
   0, "in shadow", and the road and shoulders draw flat dark grey up to the shadows' range.
-  Each fetch from it is made to return 1 (unshadowed).
+  Each fetch from it is made to return 1 (unshadowed). The same for projTrackLightmap, on the
+  sampler FH1 gives its shadow mask.
 - The vertex colour: TERR_BLND_SPEC_3 multiplies its colour by an interpolator that FH1's
   draws leave dark. Where a blend shader multiplies its colour (.xyz) by an interpolator it
   reads nowhere else, the multiply becomes a copy.
@@ -25,7 +26,10 @@ import struct
 import sys
 
 PS_MAGIC = 0x102A1100
-SHADOW_SAMPLERS = ("s_grayscaleShadowMap",)
+# projTrackLightmap (FM4's projected track lightmap, sampler 13 in SHLDR_BLND_SKIDSPEC_2 and
+# CO_DIFF_1_noLM): FH1 binds its shadow mask there, so those surfaces took FH1's shadows
+# through FM4's lightmap lookup; it is made to return 1 as well.
+SHADOW_SAMPLERS = ("s_grayscaleShadowMap", "projTrackLightmap")
 MUL, MAX = 1, 3
 
 

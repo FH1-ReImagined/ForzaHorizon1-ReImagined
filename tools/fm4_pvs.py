@@ -453,6 +453,15 @@ def convert(F, files):
         P["models"][insts[i]["model"]]["extent"] = [SKY_EXTENT] * 3
         for cell in grid.cells:
             members[cell].append(i)
+    # A ground under everything (see GROUND): one flat terrain piece of FM4's own, placed
+    # again stretched GROUND_SCALE times across, below the lowest ground, in every zone.
+    if GROUND:
+        g = ground_instance(F, used)
+        if g is not None:
+            insts = insts + [g]
+            P["instances"].append(fh1_instance_of(g))
+            for cell in grid.cells:
+                members[cell].append(len(insts) - 1)
     zones = []
     for cell in grid.cells:
         zi = members[cell]
@@ -474,6 +483,66 @@ def convert(F, files):
         biggest = max(z[0] for z in P["zones"])
         P["zones"].append((POOL_ZONES * biggest, 0, 0))
     return P, zones, grid
+
+
+# FM4_PVS_GROUND=0 leaves out the ground under the circuit. FM4 has none: where its sky
+# dome's lower half stood in, FH1 showed holes past crests and edges (the dome's horizon band
+# or grey). The ground is FM4's flattest grass piece (terr_blnd, 50 m or more across), placed
+# again GROUND_SCALE times wider and GROUND_BELOW m under the lowest ground, centred on the
+# circuit; FM4_PVS_GROUND_MODEL=n picks the model instead.
+GROUND = os.environ.get("FM4_PVS_GROUND", "1") == "1"
+GROUND_SCALE = float(os.environ.get("FM4_PVS_GROUND_SCALE", "15"))
+GROUND_BELOW = float(os.environ.get("FM4_PVS_GROUND_BELOW", "4"))
+
+
+def ground_instance(F, used):
+    """A new FM4-style instance (see read_fm4) of a terrain model, or None."""
+    insts = F["instances"]
+    by_model = {}
+    for i in used:
+        if not any(insts[i]["pos"]):
+            by_model.setdefault(insts[i]["model"], i)
+    pick = os.environ.get("FM4_PVS_GROUND_MODEL")
+    if pick:
+        model = int(pick)
+    else:
+        best = None
+        for m, i in by_model.items():
+            M = F["models"][m]
+            if not any("terr_blnd" in F["shaders"][s] for s in M["shaders"]):
+                continue
+            ex, ey, ez = M["extent"][:3]
+            if min(ex, ez) < 25:
+                continue
+            flat = ey / max(ex, ez)
+            if best is None or flat < best[0]:
+                best = (flat, m)
+        if best is None:
+            return None
+        model = best[1]
+    if model not in by_model:
+        return None
+    src = insts[by_model[model]]
+    # Lowest ground and the circuit's centre (drawn positions, x and z as placed).
+    low, xs, zs = None, [], []
+    for m, i in by_model.items():
+        M = F["models"][m]["matrix"]
+        y0 = M[13] - F["models"][m]["extent"][1]
+        if any("terr_blnd" in F["shaders"][s] or "road" in F["shaders"][s]
+               for s in F["models"][m]["shaders"]):
+            low = y0 if low is None else min(low, y0)
+            xs.append(M[12]); zs.append(-M[14])
+    cx, cz = (min(xs) + max(xs)) / 2, (min(zs) + max(zs)) / 2
+    M = F["models"][model]["matrix"]
+    k = GROUND_SCALE
+    # Drawn at (k x, y, -k z) + pos (FM4's 1, 1, -1 turn, stretched): its centre to the
+    # circuit's, its lowest point GROUND_BELOW m under the lowest ground.
+    pos = [cx - k * M[12], low - GROUND_BELOW - (M[13] - F["models"][model]["extent"][1]),
+           cz + k * M[14]]
+    h = lambda v: struct.unpack(">H", struct.pack(">e", v))[0]
+    return {"model": model, "flags": src["flags"], "idx": 0, "u12": 0xFFFFFFFF,
+            "v16": [0.0, 0.0, 0.0, 0.0], "u32": src["u32"], "lod": src["lod"], "pos": pos,
+            "rot": [h(k), 0, 0, 0, h(1.0), 0, 0, 0, h(-k)]}
 
 
 # FM4_PVS_POOL_ZONES=n: the zone pools' size, in largest zones (0: FH1's own sizing).
@@ -604,6 +673,56 @@ def surfaces(fh1_disc):
     return fm4_col.surface_map(fm4, fh1)
 
 
+# FH1 lights a track from its ribbons' time-of-day curves (Tracks\<track>\Ribbon_NN\
+# TimeOfDay.xml, TimeOfDayA.xml, TimeOfDayB.xml, TimeOfDayNeutral.xml: sun, sky, clouds, haze
+# and the clock's speed, keyed by minutes after midnight); FM4's circuits have none, and the
+# sky and lighting came out dark blue, as at night. The converter copies Colorado's, each
+# curve held at FM4_PVS_TOD minutes (default 780, 13:00; "off" copies nothing, "keep" copies
+# them as they are), so the circuit stays at that time of day whatever the clock says.
+TOD = os.environ.get("FM4_PVS_TOD", "780")
+TOD_FILES = ("TimeOfDay.xml", "TimeOfDayA.xml", "TimeOfDayB.xml", "TimeOfDayNeutral.xml")
+
+
+def hold_time_of_day(xml, minutes):
+    """Every <Name numKeys=...> curve of a TOD file as one key: its value at minutes."""
+    import re
+
+    def held(m):
+        name, body = m.group(1), m.group(2)
+        keys = [dict(re.findall(r'(\w+)="([^"]*)"', k)) for k in re.findall(r"<Key ([^>]*)>", body)]
+        if not keys:
+            return m.group(0)
+        ts = [float(k["time"]) for k in keys]
+        attrs = [a for a in keys[0] if a != "time"]
+        if minutes <= ts[0]:
+            vals = {a: float(keys[0][a]) for a in attrs}
+        elif minutes >= ts[-1]:
+            vals = {a: float(keys[-1][a]) for a in attrs}
+        else:
+            j = next(i for i in range(1, len(ts)) if ts[i] >= minutes)
+            f = (minutes - ts[j - 1]) / ((ts[j] - ts[j - 1]) or 1.0)
+            vals = {a: float(keys[j - 1][a]) + f * (float(keys[j][a]) - float(keys[j - 1][a]))
+                    for a in attrs}
+        key = " ".join(f'{a}="{vals[a]:.6f}"' for a in attrs)
+        return (f' <{name} numKeys="2">\n  <Key time="0.000000" {key}></Key>\n'
+                f'  <Key time="1439.000000" {key}></Key>\n </{name}>')
+    return re.sub(r' *<(\w+) numKeys="\d+">(.*?)</\1>', held, xml, flags=re.S)
+
+
+def write_time_of_day(fh1_disc, ribbon_dir):
+    if TOD == "off":
+        return
+    src = os.path.join(fh1_disc, "media", "tracks", "colorado", "Ribbon_00")
+    for name in TOD_FILES:
+        path = os.path.join(src, name)
+        if not os.path.exists(path):
+            continue
+        xml = open(path, encoding="utf-8", errors="replace").read()
+        if TOD != "keep" and "<TOD" in xml:
+            xml = hold_time_of_day(xml, float(TOD))
+        open(os.path.join(ribbon_dir, name), "w", encoding="utf-8").write(xml)
+
+
 def convert_mod(mod, fh1_disc, loose):
     tracks = os.path.join(mod, "media", "tracks")
     (track,) = [d for d in os.listdir(tracks) if os.path.isdir(os.path.join(tracks, d))]
@@ -631,6 +750,7 @@ def convert_mod(mod, fh1_disc, loose):
             print(f"{path}: not FM4's version 27, left alone")
             continue
         ribbons.append((ribbon, path, data, None))
+        write_time_of_day(fh1_disc, os.path.join(root, ribbon))
         # The ribbon's collision in FH1's cell layout, still read whole from the .col file
         # (tools/fm4_col.py).
         for f in os.listdir(os.path.join(root, ribbon)):

@@ -18,7 +18,12 @@ converted files next to a copy of the game folder. Nothing from either game is i
      names, instance flags (high half 0x083F, FM4's low 16 bits, bit 28 dropped);
    - the sky dome as an object of every zone; one padding zone-table entry that sizes FH1's
      zone pools (`FM4_PVS_POOL_ZONES`);
-   - FM4's track shaders patched for FH1's inputs (`tools/fm4_shaders.py`);
+   - a ground under the circuit, in every zone: FM4's flattest terrain piece placed again 15
+     times wider, 4 m under the lowest ground (`FM4_PVS_GROUND*`);
+   - each ribbon's time-of-day curves (`TimeOfDay*.xml`): Colorado's, every curve held at
+     13:00 (`FM4_PVS_TOD`, minutes; `keep`, `off`);
+   - FM4's track shaders patched for FH1's inputs (`tools/fm4_shaders.py`: the shadow map and
+     the projected track lightmap, whose sampler 13 holds FH1's shadow mask, read as 1);
    - each ribbon's `.col` in FH1's cell layout (`tools/fm4_col.py`);
    - the track archive `media/tracks/<track>/bin.zip` in FH1's layout (stored members, data
      offset in extra field 0x1123, files ordered by CRC-32 of the lower-case path) and a
@@ -47,6 +52,7 @@ converted files next to a copy of the game folder. Nothing from either game is i
 Converter test switches: `FM4_PVS_FLAGS`, `FM4_PVS_FLAGMASK`, `FM4_PVS_SHADERS`,
 `FM4_PVS_PROJLM`, `FM4_PVS_SKY`, `FM4_PVS_SHADER_PATCHES`, `FM4_PVS_LIGHTMAPS`, `FM4_PVS_HEX`,
 `FM4_PVS_EXTENT`, `FM4_PVS_VISIBLE`, `FM4_PVS_VISIBLE_NEAR`, `FM4_PVS_VISIBLE_CELLS`, `FM4_PVS_VISIBLE_SIZE`,
+`FM4_PVS_TOD`, `FM4_PVS_GROUND`, `FM4_PVS_GROUND_SCALE`, `FM4_PVS_GROUND_BELOW`, `FM4_PVS_GROUND_MODEL`,
 `FM4_COL_NORMALS`, `FM4_COL_WALL`, `FM4_COL_EDGES`, `FM4_COL_REMAP`, `FM4_COL_GRID`,
 `FM4_COL_SURFACE`, `FM4_COL_KEEP_DEGENERATE`; `FM4_DISC` (FM4's disc folder) for the
 surface map.
@@ -81,14 +87,21 @@ surface map.
   (everything over 25 m from them) gave a flat black road, missing ground and cyan, green
   or blue kerbs and verges that change from run to run, so only pieces of 120 m and over
   are added. The cause (a per-zone or live-set limit) isn't known.
+- FH1 lights a track from `Tracks\<track>\Ribbon_NN\TimeOfDay{,A,B,Neutral}.xml` (sun,
+  sky, clouds, haze, the clock's speed, keyed by minutes after midnight). FM4's circuits have
+  none, and Suzuka came out with a deep blue night sky and a moon. With Colorado's curves
+  held at 13:00 it reads as day whatever the clock says.
+- A placement's rotation may scale: the ground is a terrain piece placed with (15, 1, -15).
+- Kerbside walls and barriers sometimes draw flat cyan, green or blue, differently from run to
+  run with the same files (seen with and without the ground). Cause not known.
 - Shots for comparisons: a shared shader cache for one's own runs and 25 s after loading;
   with a fresh cache, draws are skipped while pipelines build and pieces go missing.
 
 ## Open
 
-- (c) The road, terrain and buildings now draw with FM4's own shaders. Still to do: the
-  scene is darker than FM4's and the sky stays FH1's deep blue (FH1's time of day and
-  lighting constants feed FM4's shaders); holes where FM4 has no ground (its sky dome's
-  lower half), seen past some crests and corners; the zone-size glitch above.
+- (c) The road, terrain and buildings draw with FM4's own shaders, at 13:00, over a ground.
+  Still to do: the track surfaces are darker than FM4's (FM4's shaders take FH1's sun and
+  lightmap constants); the stretched ground shows its blend texture's sandy channel more
+  than grass; the zone-size and barrier colour glitches above.
 - The streaming block pool still needs `FORZA_FM4_STREAM_POOL`.
 - AI, the airport entry, ribbons 01 and 02, other circuits.
