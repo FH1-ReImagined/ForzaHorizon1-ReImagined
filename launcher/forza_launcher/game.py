@@ -325,6 +325,7 @@ def content_warnings(cfg: Config, game: GameInstall, home: Path, root: Path, ext
     error, #79), or a known DLC package there that is damaged or incomplete (dlccheck: the Rally pack's
     bad copy crashes Kettle Hills stage 1, #422)."""
     from . import datafolder, dlccheck
+    from .fm4cars import PACKAGE as FM4_CARS  # Import FM4 cars' own package is not DLC (#648)
     out = []
     if cfg["tu_package"].strip() and not extra_update and not (game.dir / "update").is_dir():
         out.append(f"Title Update 4 is chosen in Setup, but this build has none ({game.dir / 'update'} is "
@@ -332,8 +333,8 @@ def content_warnings(cfg: Config, game: GameInstall, home: Path, root: Path, ext
                    "Rebuild.")
     if not check_dlc:
         return out
-    seen = datafolder.dlc_packages(root)
-    installed = datafolder.dlc_packages(home)
+    seen = datafolder.dlc_packages(root) - {FM4_CARS}
+    installed = datafolder.dlc_packages(home) - {FM4_CARS}
     if not seen and (installed or cfg["dlc_dir"].strip()):
         where = f"{root / datafolder.DLC_DIR / '00000002'}"
         out.append(f"No DLC in the game's folder ({where})" +

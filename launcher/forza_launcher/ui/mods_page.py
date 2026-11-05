@@ -7,10 +7,10 @@ from pathlib import Path
 
 from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtWidgets import (QAbstractItemView, QFileDialog, QHBoxLayout, QHeaderView,
-                               QMessageBox, QPushButton, QTableWidget, QTableWidgetItem,
-                               QVBoxLayout, QWidget)
+                               QMessageBox, QProgressBar, QPushButton, QTableWidget,
+                               QTableWidgetItem, QVBoxLayout, QWidget)
 
-from .. import GITHUB_URL, mods
+from .. import GITHUB_URL, fm4cars, mods
 from .pages import open_folder, scroll_page
 from .widgets import card, label
 from . import theme
@@ -398,6 +398,8 @@ class ModsPage(FolderListPage):
         self.build_list(cl, "Add mod…", "Open mods folder")
         lay.addWidget(c)
 
+        lay.addWidget(self._fm4_card())
+
         c, cl = card(spacing=8)
         cl.addWidget(label("How mods work", "cardTitle"))
         cl.addWidget(label("A mod is a folder (or a .zip of one) with its files under media/, at the "
@@ -409,6 +411,125 @@ class ModsPage(FolderListPage):
         lay.addWidget(c)
         lay.addStretch()
         self.refresh()
+
+    # ---- Forza Motorsport 4 cars (#648) ---------------------------------------------------------
+    def _fm4_card(self):
+        c, cl = card(spacing=10)
+        cl.addWidget(label("Forza Motorsport 4 cars", "cardTitle"))
+        cl.addWidget(label("Add the cars of your own Forza Motorsport 4 discs that FH1 lacks, with FH1's "
+                           "handling. Choose Disc 1 (a disc image or its files), then Disc 2 for its car "
+                           "packs, or skip it. The cars are converted on this PC and appear as the "
+                           "\"FM4 cars\" mod: untick it to hide them, remove it to delete them.", "muted"))
+        row = QHBoxLayout()
+        row.setSpacing(12)
+        self.fm4_button = QPushButton("Import FM4 cars…")
+        self.fm4_button.clicked.connect(self._fm4_import)
+        row.addWidget(self.fm4_button)
+        self.fm4_remove = QPushButton("Remove FM4 cars")
+        self.fm4_remove.clicked.connect(self._fm4_remove)
+        row.addWidget(self.fm4_remove)
+        self.fm4_cancel = QPushButton("Cancel")
+        self.fm4_cancel.clicked.connect(lambda: self.fm4_task and self.fm4_task.cancel())
+        self.fm4_cancel.hide()
+        row.addWidget(self.fm4_cancel)
+        row.addStretch()
+        cl.addLayout(row)
+        self.fm4_progress = QProgressBar()
+        self.fm4_progress.hide()
+        cl.addWidget(self.fm4_progress)
+        self.fm4_message = label("", "muted")
+        cl.addWidget(self.fm4_message)
+        self.fm4_task = None
+        self._fm4_state()
+        return c
+
+    def _fm4_state(self):
+        info = fm4cars.status(self.cfg)
+        self.fm4_remove.setEnabled(bool(info) and self.fm4_task is None)
+        if self.fm4_task is None:
+            if info:
+                text = f"{len(info.get('cars', []))} FM4 car(s) imported."
+                if fm4cars.stale(self.cfg):
+                    text += " Your DLC changed since: import again so the DLC cars keep their names."
+                self.fm4_message.setText(text)
+            else:
+                self.fm4_message.setText("")
+
+    def _fm4_pick(self, title):
+        ask = QMessageBox(self)
+        ask.setWindowTitle(title)
+        ask.setText(f"{title}: a disc image (.iso) or a folder with the disc's files?")
+        iso = ask.addButton("Disc image…", QMessageBox.AcceptRole)
+        folder = ask.addButton("Folder…", QMessageBox.AcceptRole)
+        skip = ask.addButton("Skip" if "2" in title else "Cancel", QMessageBox.RejectRole)
+        ask.exec()
+        if ask.clickedButton() is iso:
+            path, _ = QFileDialog.getOpenFileName(self, title, str(Path.home()), "Disc images (*.iso);;All files (*)")
+            return path or None
+        if ask.clickedButton() is folder:
+            return QFileDialog.getExistingDirectory(self, title, str(Path.home())) or None
+        del skip
+        return None
+
+    def _fm4_import(self):
+        if self._game_running():
+            self.fm4_message.setText("Close the game before importing cars.")
+            return
+        disc1 = self._fm4_pick("Forza Motorsport 4 Disc 1")
+        if not disc1:
+            return
+        disc2 = self._fm4_pick("Forza Motorsport 4 Disc 2")
+        from .workers import Task
+
+        def job(task):
+            try:
+                return fm4cars.build(self.cfg, disc1, disc2, lambda n, total, text: task.progress.emit(
+                    n / total if total else 0, text), task.cancelled)
+            except (OSError, ValueError) as exc:
+                from ..installer import InstallError
+                raise InstallError(f"Import FM4 cars stopped: {exc}") from exc
+        self.fm4_task = Task(job, "import FM4 cars")
+        self.fm4_task.progress.connect(self._fm4_progress)
+        self.fm4_task.done.connect(self._fm4_done)
+        for b in (self.fm4_button, self.fm4_remove):
+            b.setEnabled(False)
+        self.fm4_cancel.show()
+        self.fm4_progress.setValue(0)
+        self.fm4_progress.show()
+        self.fm4_message.setText("Converting… Cars imported before stay until this finishes.")
+        self.fm4_task.start()
+
+    def _fm4_progress(self, fraction, text):
+        self.fm4_progress.setValue(int(fraction * 100))
+        self.fm4_message.setText(text)
+
+    def _fm4_done(self, ok, message):
+        self.fm4_task.wait()
+        self.fm4_task.deleteLater()
+        self.fm4_task = None
+        self.fm4_button.setEnabled(True)
+        self.fm4_cancel.hide()
+        self.fm4_progress.hide()
+        self.refresh()
+        self._fm4_state()
+        self.fm4_message.setText(message)
+
+    def _fm4_remove(self):
+        if self._game_running():
+            self.fm4_message.setText("Close the game before removing the FM4 cars.")
+            return
+        if not self._confirm("Remove FM4 cars", "Remove the imported Forza Motorsport 4 cars? Cars of them "
+                                                "in your garage show as missing content until you import "
+                                                "them again."):
+            return
+        try:
+            fm4cars.remove(self.cfg)
+        except (mods.InstallError, OSError) as e:
+            self.fm4_message.setText(str(e))
+            return
+        self.refresh()
+        self._fm4_state()
+        self.fm4_message.setText("Removed the FM4 cars.")
 
     @property
     def mods(self):
@@ -427,7 +548,11 @@ class ModsPage(FolderListPage):
         return mods.install(path, mods.mods_dir(self.cfg), replace=replace, media_of_game=mods.game_media(self.cfg))
 
     def remove_folder(self, folder):
-        mods.remove(self.cfg, folder)
+        if folder == fm4cars.MOD:  # the imported FM4 cars: the mod and the package of their files
+            fm4cars.remove(self.cfg)
+            self._fm4_state()
+        else:
+            mods.remove(self.cfg, folder)
 
     def row_texts(self, m):
         return [m.version, m.author, f"{m.files} ({_size(m.size)})"]
