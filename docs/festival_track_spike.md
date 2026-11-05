@@ -279,6 +279,34 @@ instances; 33446 streaming blocks asked for). Suzuka-specific assumptions found 
   format FH1 has not streamed from a track before), with flag 0x4 set on the record: more than
   a few hours. The alternative, giving each tile's own texture object the atlas's texture in
   the game, needs the texture object's layout instead.
+- Giving each tile its atlas's texture in the game (option 1, time-boxed, parked; Laguna Seca's
+  road stays black, the default path is unchanged). What was found:
+  - The tile's rectangle does reach the draw: the road's Light_Map_uvOS (c116) is the tile
+    record's rectangle, e.g. (0.9648, 0.5293, 0.0078, 0.0039), written into the command
+    buffer from the record. So a tile only lacks its texture.
+  - A texture object (the table at presentation+2812, one per record): +0 vtable 820016F8,
+    +4 the record's UV rectangle (in the PVS record array), +0xC the record's flags (0x104,
+    0x101...), +0x10 its user count (u16) and +0x14 the users (8 bytes: u16 model, u32 texture
+    slot; sub_82E18FC8 adds a model's slots, into arrays sized when the lists are made, so
+    objects cannot be shared: that was the crash), +0x18 user indices, +0x1C the streaming
+    resource id of its texture (a streamed record's file; -1 for a tile).
+  - The pack loop (sub_82E323A0) maps each entry's record to the entry (sub_82E66690, a map
+    local to the loop) and registers the entry's texture as a streaming resource under the
+    record number (sub_82E2EAD8 -> sub_82E2E890); when a texture is there, the users' models
+    are bound again (the loop in sub_82E2B8F8).
+  - Tried, each a test switch, off: registering the atlas texture again under each tile's number
+    (models vanished: those ids are the archive's own resources too; removed);
+    `FORZA_FM4_ATLAS_IDS=1`, a tile object's +0x1C set to its atlas entry's resource id (no
+    change, nothing broken); `FORZA_FM4_ATLAS_MAP=1`, the tiles added to the loop's record map
+    with their atlas's entry (no change). So the record-to-texture step FH1 uses for a pack
+    texture is still to be found: the binding that takes a model slot's record to a GPU
+    texture (inside the rebind the streaming loop calls), next to trace with the PS trace's
+    fetch constants on a tile's draw while each switch is on.
+  - `FORZA_FM4_TEXDUMP=1` logs the objects of an atlas's record and its tiles, and the
+    presentation's fields round the object table, at track load and as zones go live.
+- The pack's numbers now take, for a file shared by lightmap records and atlas tiles, the
+  first lightmap record (default). A 9-spot pass on Suzuka with it and the 25 m set drew the
+  same as before at every spot (shots/suzuka-spots-recheck-before-after.png in trk-spike).
 - Still one converted track at a time: the converter writes FH1's zipmanifest.xml with one
   line for its track, so the last converted circuit is the one mounted
   (`reconvert_track.sh` copies it into the game folder).

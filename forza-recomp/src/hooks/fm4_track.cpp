@@ -267,6 +267,7 @@ extern "C" REX_FUNC(sub_82CC3180) {
   }
 }
 
+namespace { void DumpTexObjectsLive(uint8_t* base, uint32_t t); }
 // A zone being made live (sub_82E1CA20: r3 the track presentation, r4 the zone record):
 // the presentation's model and instance tables, for FORZA_TRACK_SPAWN runs.
 namespace { void LogZones(uint8_t* base, uint32_t pres, const char* what, uint32_t zone); }
@@ -316,6 +317,10 @@ extern "C" REX_FUNC(sub_82E1CA20) {
   }
   const uint32_t live_pres = ctx.r3.u32, live_zone = GuestReadable(ctx.r4.u32 + 12) ? Load32(base, ctx.r4.u32 + 12) : 0;
   __imp__sub_82E1CA20(ctx, base);
+  {
+    static std::atomic<int> dumps{0};
+    { const int d = dumps.fetch_add(1); if (std::getenv("FORZA_FM4_TEXDUMP") && (d == 0 || d == 4 || d == 15)) DumpTexObjectsLive(base, live_pres); }
+  }
   if (std::getenv("FORZA_ZONE_TRACE")) LogZones(base, live_pres, "live", live_zone);
 }
 
@@ -528,8 +533,84 @@ const Fm4Stx& Fm4StxConfig() {
 // A test only (FORZA_FM4_ATLAS_ALIAS=1): with the objects shared, the per-model texture
 // binding (sub_82E18FC8's callee, lr 82E18E80) read a null pointer at +0xC soon after the
 // track loaded. The tiles need the atlas's texture in their own objects instead.
+void DumpTexObjects(uint8_t* base, uint32_t t, const char* when) {
+  const Fm4Stx& c = Fm4StxConfig();
+  const uint32_t texs = Load32(base, t + 2812), n = Load32(base, t + 2816);
+  if (c.atlas_of.size() != n || !texs) return;
+  int shown = 0;
+  for (uint32_t i = 0; i < n && shown < 3; ++i) {
+    const uint32_t k = c.atlas_of[i];
+    if (k >= c.ids.size() || c.ids[k] >= n) continue;
+    ++shown;
+    for (uint32_t r : {c.ids[k], i}) {
+      const uint32_t obj = Load32(base, texs + 4 * r);
+      std::string b;
+      for (uint32_t o = 0; o < 96; o += 4) b += fmt::format(" {:08X}", GuestReadable(obj + o) ? Load32(base, obj + o) : 0);
+      REXLOG_INFO("FM4TEX {} record {} (pack {}) object {:08X}:{}", when, r, k, obj, b);
+      for (uint32_t o = 0; o < 96; o += 4) {
+        const uint32_t p = GuestReadable(obj + o) ? Load32(base, obj + o) : 0;
+        if (p < 0x10000 || (p >> 24) == 0x82 || !GuestReadable(p) || !GuestReadable(p + 60)) continue;
+        std::string q;
+        for (uint32_t u = 0; u < 64; u += 4) q += fmt::format(" {:08X}", Load32(base, p + u));
+        REXLOG_INFO("FM4TEX   +{:02X} -> {:08X}:{}", o, p, q);
+      }
+    }
+  }
+}
+
+void DumpTexObjectsLive(uint8_t* base, uint32_t t) {
+  DumpTexObjects(base, t, "zone live");
+  // The presentation round its texture object table (+2812): pointers and counts, and for
+  // each pointer to an array, its first entries and the entries of a pack record and a tile.
+  const Fm4Stx& c = Fm4StxConfig();
+  uint32_t pack = 0xFFFFFFFF, tile = 0xFFFFFFFF;
+  for (uint32_t i = 0; i < c.atlas_of.size(); ++i) {
+    const uint32_t k = c.atlas_of[i];
+    if (k < c.ids.size() && c.ids[k] != i) { pack = c.ids[k]; tile = i; break; }
+  }
+  for (uint32_t o = 2700; o < 2960; o += 4) {
+    const uint32_t v = Load32(base, t + o);
+    std::string q;
+    if (v > 0x10000 && GuestReadable(v) && GuestReadable(v + 4 * std::max(pack, tile) + 4) && pack != 0xFFFFFFFF) {
+      for (uint32_t u = 0; u < 16; u += 4) q += fmt::format(" {:08X}", Load32(base, v + u));
+      q += fmt::format(" | [pack {}] {:08X} [tile {}] {:08X}", pack, Load32(base, v + 4 * pack), tile,
+                       Load32(base, v + 4 * tile));
+    }
+    REXLOG_INFO("FM4PRES +{} = {:08X}{}", o, v, q);
+  }
+}
+
+// FM4's atlas tiles get their atlas's texture: a texture object's +0x1C is the id of the
+// streaming resource that holds its texture (a streamed record's file; -1 for a record that
+// no pack entry names). The pack loop registers each entry's texture under the id the numbers
+// list gives it (sub_82E2EAD8 -> sub_82E2E890), so a tile's object takes its atlas entry's id:
+// the tile keeps its own object and UV rectangle and draws from the atlas. (Registering the
+// texture again under each tile's number overwrote the archive's own resources: models
+// vanished.)
+void AtlasTileResources(uint8_t* base, uint32_t t) {
+  const Fm4Stx& c = Fm4StxConfig();
+  const uint32_t texs = Load32(base, t + 2812), n = Load32(base, t + 2816);
+  if (c.atlas_of.empty() || c.atlas_of.size() != n || !texs || !GuestReadable(texs)) return;
+  uint32_t done = 0;
+  for (uint32_t i = 0; i < n; ++i) {
+    const uint32_t k = c.atlas_of[i];
+    if (k >= c.ids.size() || c.ids[k] >= n || c.ids[k] == i) continue;
+    const uint32_t obj = Load32(base, texs + 4 * i);
+    if (!obj || !GuestReadable(obj + 0x1C) || Load32(base, obj + 0x1C) != 0xFFFFFFFF) continue;
+    uint8_t* p = forza::GuestPtr(base, obj + 0x1C);
+    const uint32_t id = c.ids[k];
+    p[0] = uint8_t(id >> 24); p[1] = uint8_t(id >> 16); p[2] = uint8_t(id >> 8); p[3] = uint8_t(id);
+    ++done;
+  }
+  REXLOG_INFO("FM4TRACK: {} atlas tiles draw from their atlas's texture", done);
+}
+
 void AliasAtlasTiles(uint8_t* base, uint32_t t) {
-  if (!std::getenv("FORZA_FM4_ATLAS_ALIAS")) return;
+  if (std::getenv("FORZA_FM4_TEXDUMP")) DumpTexObjects(base, t, "before users");
+  if (!std::getenv("FORZA_FM4_ATLAS_ALIAS")) {
+    if (std::getenv("FORZA_FM4_ATLAS_IDS")) AtlasTileResources(base, t);  // a test
+    return;
+  }
   const Fm4Stx& c = Fm4StxConfig();
   const uint32_t texs = Load32(base, t + 2812), n = Load32(base, t + 2816);
   if (c.atlas_of.empty() || c.atlas_of.size() != n || !texs || !GuestReadable(texs)) return;
@@ -607,6 +688,38 @@ extern "C" REX_FUNC(sub_82D099E0) {
 }
 
 extern "C" REX_FUNC(sub_82D09648) { __imp__sub_82D09648(ctx, base); }
+
+// The pack loop also maps each entry's record to the entry (sub_82E66690(map, &record) gives
+// the map's slot, the loop stores the entry's index k there). A test (FORZA_FM4_ATLAS_MAP=1):
+// while FM4's pack is read, each atlas tile of the entry goes into the map with that k too.
+extern "C" REX_FUNC(__imp__sub_82E66690);
+extern "C" REX_FUNC(sub_82E66690) {
+  static const bool on = std::getenv("FORZA_FM4_ATLAS_MAP") != nullptr;
+  if (!on || !fm4_stx_active) return __imp__sub_82E66690(ctx, base);
+  const uint32_t map = ctx.r3.u32, keyp = ctx.r4.u32, key = Load32(base, keyp);
+  __imp__sub_82E66690(ctx, base);
+  const uint64_t ret = ctx.r3.u64;
+  const Fm4Stx& c = Fm4StxConfig();
+  uint32_t k = 0xFFFFFFFF;
+  for (uint32_t e = 0; e < c.ids.size(); ++e) if (c.ids[e] == key) { k = e; break; }
+  if (k != 0xFFFFFFFF) {
+    static uint32_t tmp = REX_KERNEL_MEMORY()->SystemHeapAlloc(4);
+    uint32_t added = 0;
+    for (uint32_t i = 0; i < c.atlas_of.size(); ++i) {
+      if (c.atlas_of[i] != k || i == key) continue;
+      uint8_t* p = forza::GuestPtr(base, tmp);
+      p[0] = uint8_t(i >> 24); p[1] = uint8_t(i >> 16); p[2] = uint8_t(i >> 8); p[3] = uint8_t(i);
+      ctx.r3.u64 = map; ctx.r4.u64 = tmp;
+      __imp__sub_82E66690(ctx, base);
+      uint8_t* slot = forza::GuestPtr(base, ctx.r3.u32);
+      slot[0] = uint8_t(k >> 24); slot[1] = uint8_t(k >> 16); slot[2] = uint8_t(k >> 8); slot[3] = uint8_t(k);
+      ++added;
+    }
+    if (added) REXLOG_INFO("FM4TRACK: pack entry {}: {} atlas tiles mapped to it", k, added);
+  }
+  ctx.r3.u64 = ret;
+}
+
 
 extern "C" REX_FUNC(sub_82D095C0) {
   __imp__sub_82D095C0(ctx, base);
