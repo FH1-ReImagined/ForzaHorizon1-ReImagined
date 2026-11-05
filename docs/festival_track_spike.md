@@ -198,11 +198,14 @@ surface map.
   pass ran with three games on the PC; a shot 25 s after loading may also have caught
   pipelines still building.) The vertex shaders now read them as 0 (the literal's 0, from
   the VS blob's own literal block, first register below 256; `FM4_SHADERS_SHADOW_CLIP`, on by
-  default): 252 reads in 12 files, every VS that uses them has a literal 0. First pass with it
-  (cut short when the runs were stopped for the PC's load; spots 1-5, 7, 8 shot): all right,
-  spot 4 included. Still to do: two full passes and three spot-4 runs (45 s after loading),
-  then the zone-size glitch (`FM4_PVS_VISIBLE_SIZE=25`, which once gave black road and
-  coloured kerbs). Runs now at `--frame_rate=30` (run.sh, `FRAME_RATE`).
+  default): 252 reads in 12 files, every VS that uses them has a literal 0. With it, two
+  9-spot passes in a row and three more runs at spot 4 (shot 45 s after loading) drew the
+  same everywhere: grey road, green grass, red-and-white kerbs, no black. The zone-size
+  glitch is gone too: converted with `FM4_PVS_VISIBLE_SIZE=25` (every FM4 piece of 25 m and
+  over in a zone's visible set; the largest zone 504 instances instead of 404), two passes
+  drew the same and right, with more of the circuit (stands at the grid). So that glitch was
+  the same stale constants; 25 m could be the default once the streaming pool and frame
+  time are checked with it. Runs at `--frame_rate=30` (run.sh, `FRAME_RATE`).
 - FM4's `TrackSettings.xml` (version 59) lacks FH1's renderer settings (Brightness, Contrast,
   ExposureBias, LightHemiTop/Bottom, WorldClear, bloom, height fog); read as it is, the
   circuit drew far too dark. The converter writes Colorado's with FM4's sun gain, lightmap,
@@ -213,9 +216,8 @@ surface map.
 ## Open
 
 - (c) The road, terrain and buildings draw with FM4's own shaders, at 13:00, over a ground.
-  Still to do: retest the black road once at spot 4 with the VS shadow clip constants made 0
-  (above); FM4's shadows (the shadow map reads 1 and `shad_color`
-  1: no shadows on the circuit); the stretched ground shows its blend texture's sandy channel more
-  than grass; the zone-size glitch above (to retest: it may have been the same NaN).
+  Still to do: FM4's shadows (the shadow map reads 1, `shad_color` 1 and the shadow clip
+  constants 0: no shadows on the circuit); the stretched ground shows its blend texture's
+  sandy channel more than grass; `FM4_PVS_VISIBLE_SIZE` 25 as the default (above).
 - The streaming block pool still needs `FORZA_FM4_STREAM_POOL`.
 - AI, the airport entry, ribbons 01 and 02, other circuits.
