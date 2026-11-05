@@ -8,6 +8,7 @@ the mod hides the cars; remove() deletes both.
 Nothing is downloaded and nothing leaves this PC. docs/modding/fm4-cars.md has the details.
 """
 import copy
+import errno
 import json
 import re
 import shutil
@@ -65,9 +66,11 @@ def stale(cfg):
 
 
 # ---- What the player chose (#681) --------------------------------------------------------------
-# Disc 1 can be a disc image, a Games on Demand package (its data parts hold the same XDVDFS
-# volume as the disc) or a folder with the disc's files; Disc 2 also its car packs themselves.
-# Anything else is named in plain words: another game's package, a title update, a lone XEX.
+# Disc 1 can be a disc image (whole, trimmed or split into parts), a Games on Demand or hard drive
+# install package (its data parts hold the same XDVDFS volume as the disc), a folder with the
+# disc's files, or an archive of any of these; Disc 2 also its car packs themselves. A folder is
+# searched (the parent of the disc's folder, an Xbox 360 or Xenia content folder). Anything else
+# is named in plain words: another game's package, a title update, a lone XEX.
 
 TITLES = {0x4D5309C9: "Forza Horizon", FM4_TITLE: "Forza Motorsport 4", 0x4D53084D: "Forza Motorsport 3",
           0x4D530AA4: "Forza Horizon 2"}
@@ -77,11 +80,16 @@ CONTENT_TYPES = {0x1: "saved game", 0x2: "content package (DLC)", 0x4000: "hard 
                  0x20000: "gamer picture", 0x30000: "theme", 0x80000: "demo",
                  0xB0000: "title update", 0xD0000: "Xbox Live Arcade game"}
 CHOOSE = {1: "Choose your FM4 Disc 1 (the play disc): its disc image (.iso), its Games on Demand "
-             "package or a folder with its files.",
-          2: "Choose your FM4 Disc 2 (the content install disc): its disc image (.iso), a folder with "
-             "its files or its car packs, or Skip."}
+             "package, a folder with its files, or an archive (.zip, .7z, .rar) holding one of them.",
+          2: "Choose your FM4 Disc 2 (the content install disc): its disc image (.iso), its Games on "
+             "Demand package, a folder with its files or its car packs, an archive holding one of "
+             "them, or Skip."}
 DISC2_AS_DISC1 = ("This is Forza Motorsport 4's Disc 2 (the content install disc), not Disc 1. Choose "
                   "Disc 1 (the play disc) first: Disc 2 comes at the next step.")
+PACK_MIN = 1 << 20  # Disc 2's car packs are hundreds of MB; smaller FM4 packages are offers and such
+SCAN_DEPTH, SCAN_DIRS = 8, 5000  # how far a chosen folder is searched
+IMAGE_NAME = re.compile(r"(?i)\.(iso|xiso|img|bin)(\.(part)?\d{1,3})?$|\.\d{3}$|\.part\d{1,3}(\.(iso|xiso|img|bin))?$")
+SKIP_DIRS = {"$systemupdate"}  # a disc's console update: nothing to find there
 
 
 def _game_thing(title, thing):
@@ -129,6 +137,12 @@ def describe(path: Path, disc=1):
         if title == FM4_TITLE and content_type == 0x2 and disc == 1:
             return (f"{path.name} is one of Forza Motorsport 4's Disc 2 car packs{named}, not Disc 1. "
                     "Choose Disc 1 first: the car packs come at the next step (Disc 2).")
+        if title == FM4_TITLE and content_type == 0xB0000:
+            return (f"{path.name} is a Forza Motorsport 4 title update{named}, not a disc: the import "
+                    "does not need it (the cars are on the discs). " + CHOOSE[disc])
+        if title == FM4_TITLE and content_type == 0x80000:
+            return (f"{path.name} is the Forza Motorsport 4 demo{named}, which has only a few of the "
+                    "game's cars and not their database. " + CHOOSE[disc])
         thing = CONTENT_TYPES.get(content_type, f"content package (type {content_type:X})")
         return f"{path.name} is {_game_thing(title, thing)}{named}, not a Forza Motorsport 4 disc. " + CHOOSE[disc]
     title = _xex_title(path)
@@ -141,58 +155,412 @@ def describe(path: Path, disc=1):
         hint = (f" Its name is the kind a {TITLES[int(m.group(1), 16)]} content package has "
                 f"({m.group(1).upper()} is that game's title id): renaming a package to .iso does not "
                 "make it a disc image.")
-    return (f"{path.name} is not an Xbox 360 disc image, Games on Demand package or content package."
-            f"{hint} " + CHOOSE[disc])
+    return (f"{path.name} is not an Xbox 360 disc image, Games on Demand package, content package or "
+            f"archive.{hint} " + CHOOSE[disc])
 
 
-def _god_packages(folder: Path):
-    """Forza Motorsport 4 Games on Demand packages (the file next to its <name>.data folder) in a
-    folder, its 00007000 folder or the title folders' (up to Content/0000000000000000)."""
-    bases = [folder, folder / "00007000", *folder.glob("*/00007000"), *folder.glob("*/*/00007000")]
+# ---- Archives -----------------------------------------------------------------------------------
+# .zip and .tar are read with the standard library; .7z and .rar (and split or unusual zips) with
+# 7-Zip, unrar, unar or bsdtar when one is installed. The archive is unpacked into the import's
+# temporary folder and what it holds is then taken like a chosen folder.
+
+ARCHIVE_MAGIC = ((b"PK\x03\x04", "zip"), (b"PK\x05\x06", "zip"), (b"PK\x07\x08", "zip"),
+                 (b"7z\xbc\xaf\x27\x1c", "7z"), (b"Rar!\x1a\x07", "rar"))
+ARCHIVE_NAMES = {"zip": "zip", "7z": "7z", "rar": "RAR", "tar": "tar"}
+ARCHIVE_TOOLS = {"7z": ("7zz", "7z", "7za", "7zr", "bsdtar"),
+                 "rar": ("7zz", "7z", "unrar", "unar", "bsdtar"),
+                 "zip": ("7zz", "7z", "7za", "bsdtar", "unar")}
+
+
+def _first_volume(p: Path):
+    """(the first volume of a split archive p is part of, True), or (p, False)."""
+    name = p.name
+    m = re.fullmatch(r"(?i)(.+\.(?:7z|zip|rar))\.(\d{3})", name)
+    if m:
+        return p.with_name(m.group(1) + ".001"), True
+    m = re.fullmatch(r"(?i)(.+\.part)(\d+)(\.rar)", name)
+    if m:
+        return p.with_name(m.group(1) + "1".zfill(len(m.group(2))) + m.group(3)), True
+    m = re.fullmatch(r"(?i)(.+)\.z\d\d", name)
+    if m:
+        return p.with_name(m.group(1) + ".zip"), True
+    if p.suffix.lower() == ".zip" and any(p.with_suffix(f".z{k:02d}").exists() for k in (1,)):
+        return p, True
+    return p, False
+
+
+def archive_kind(p: Path):
+    """'zip', '7z', 'rar' or 'tar' when the file is an archive (by its first bytes), else None."""
+    try:
+        with open(p, "rb") as f:
+            head = f.read(265)
+    except OSError:
+        return None
+    for magic, kind in ARCHIVE_MAGIC:
+        if head.startswith(magic):
+            return kind
+    if head[257:262] == b"ustar":
+        return "tar"
+    if re.search(r"(?i)\.(tar\.(gz|bz2|xz)|tgz|tbz2?|txz)$", p.name):
+        return "tar"
+    return None
+
+
+def _gb(n):
+    return f"{n / (1 << 30):.1f} GB"
+
+
+def _need_space(out: Path, size, name):
+    try:
+        free = shutil.disk_usage(out).free
+    except OSError:
+        return
+    if size + (256 << 20) > free:
+        raise Fm4Error(f"Unpacking {name} needs {_gb(size)} of free space on the drive of the mods "
+                       f"folder, and it has {_gb(free)}. Free some space, or extract the archive "
+                       "yourself and choose what it holds.")
+
+
+def _copy_stream(src, dest, label, progress, cancelled, done, total):
+    with open(dest, "wb") as out:
+        while True:
+            if cancelled():
+                raise Cancelled()
+            chunk = src.read(1 << 22)
+            if not chunk:
+                return done
+            out.write(chunk)
+            done += len(chunk)
+            progress(done, total, label)
+
+
+def _safe_dest(out: Path, name):
+    import xcontent_extract
+    try:
+        return Path(xcontent_extract.extraction_path(str(out), name.replace("\\", "/").strip("/")))
+    except SystemExit:
+        raise Fm4Error(f"The archive holds a file with an unsafe name ({name!r}): extract it yourself "
+                       "and choose what it holds.") from None
+
+
+def _unpack_zip(p: Path, out: Path, progress, cancelled):
+    import zipfile
+    with zipfile.ZipFile(p) as z:
+        members = [i for i in z.infolist() if not i.is_dir()]
+        total = sum(i.file_size for i in members)
+        _need_space(out, total, p.name)
+        done = 0
+        for i in members:
+            dest = _safe_dest(out, i.filename)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            with z.open(i) as src:
+                done = _copy_stream(src, dest, f"Unpacking {p.name}: {i.filename}", progress,
+                                    cancelled, done, total)
+
+
+def _unpack_tar(p: Path, out: Path, progress, cancelled):
+    import tarfile
+    with tarfile.open(p) as t:
+        members = [m for m in t.getmembers() if m.isfile()]  # no links or devices
+        total = sum(m.size for m in members)
+        _need_space(out, total, p.name)
+        done = 0
+        for m in members:
+            dest = _safe_dest(out, m.name)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            with t.extractfile(m) as src:
+                done = _copy_stream(src, dest, f"Unpacking {p.name}: {m.name}", progress,
+                                    cancelled, done, total)
+
+
+def _tool_paths(kind):
+    import os
+    import sys
     found = []
-    for base in bases:
-        try:
-            files = sorted(f for f in base.iterdir() if f.is_file())
-        except OSError:
-            continue
-        for f in files:
-            hdr = package_header(f)
-            if (f.with_name(f.name + ".data").is_dir() and hdr and hdr[1] == FM4_TITLE
-                    and hdr[2] == 1 and f not in found):
-                found.append(f)
+    for name in ARCHIVE_TOOLS[kind]:
+        exe = shutil.which(name)
+        if exe and exe not in found:
+            found.append(exe)
+    if sys.platform == "win32":
+        for env in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"):
+            if os.environ.get(env):
+                exe = Path(os.environ[env]) / "7-Zip" / "7z.exe"
+                if exe.is_file() and str(exe) not in found:
+                    found.insert(0, str(exe))
+        tar = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "tar.exe"
+        if tar.is_file():  # Windows' own tar is bsdtar: it reads zip, 7z and rar
+            found.append(str(tar))
     return found
 
 
-def _source(path, disc):
-    """What was chosen for Disc `disc`: ("folder", folder), ("image", disc image),
-    ("god", [Games on Demand packages]) or ("pack", a Disc 2 car pack). Anything else raises
-    Fm4Error saying what it is."""
+def _tool_command(exe, p: Path, out: Path):
+    stem = Path(exe).name.lower().removesuffix(".exe")
+    if stem in ("7zz", "7z", "7za", "7zr"):
+        return [exe, "x", "-y", "-bso0", "-bsp1", f"-o{out}", str(p)]
+    if stem == "unrar":
+        return [exe, "x", "-y", "-o+", "-idq", str(p), str(out) + "/"]
+    if stem == "unar":
+        return [exe, "-q", "-f", "-o", str(out), str(p)]
+    return [exe, "-x", "-f", str(p), "-C", str(out)]  # bsdtar, Windows' tar.exe
+
+
+def _tool_size(exe, p: Path):
+    """The unpacked size 7-Zip lists for the archive, or None."""
+    import subprocess
+    if Path(exe).name.lower().removesuffix(".exe") not in ("7zz", "7z", "7za", "7zr"):
+        return None
+    try:
+        r = subprocess.run([exe, "l", "-slt", "-ba", str(p)], capture_output=True, text=True, timeout=120,
+                           creationflags=0x08000000 if paths.IS_WINDOWS else 0)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    sizes = [int(m) for m in re.findall(r"(?m)^Size = (\d+)$", r.stdout)]
+    return sum(sizes) if r.returncode == 0 and sizes else None
+
+
+def _run_tool(exe, p: Path, out: Path, progress, cancelled):
+    """Runs one extractor; returns None when it worked, else its last error line."""
+    import subprocess
+    import threading
+    proc = subprocess.Popen(_tool_command(exe, p, out), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, creationflags=0x08000000 if paths.IS_WINDOWS else 0)
+    state = {"pct": 0, "err": b""}
+
+    def read_out():
+        for chunk in iter(lambda: proc.stdout.read1(4096), b""):
+            m = re.findall(rb"(\d{1,3})%", chunk)
+            if m:
+                state["pct"] = min(100, int(m[-1]))
+
+    def read_err():
+        state["err"] = proc.stderr.read()
+    threads = [threading.Thread(target=read_out, daemon=True), threading.Thread(target=read_err, daemon=True)]
+    for t in threads:
+        t.start()
+    try:
+        while True:
+            try:
+                proc.wait(timeout=0.25)
+                break
+            except subprocess.TimeoutExpired:
+                pass
+            if cancelled():
+                proc.kill()
+                proc.wait()
+                raise Cancelled()
+            progress(state["pct"], 100, f"Unpacking {p.name}")
+    finally:
+        for t in threads:
+            t.join(timeout=5)
+        proc.stdout.close()
+        proc.stderr.close()
+    if proc.returncode == 0:
+        return None if any(out.iterdir()) else "it unpacked nothing"
+    lines = [ln.strip() for ln in state["err"].decode("utf-8", "replace").splitlines() if ln.strip()]
+    return lines[-1] if lines else f"exit code {proc.returncode}"
+
+
+def unpack_archive(p: Path, kind, split, out: Path, progress, cancelled):
+    """Unpacks an archive into out (made here)."""
+    out.mkdir(parents=True, exist_ok=True)
+    label = ARCHIVE_NAMES[kind]
+    if not split and kind in ("zip", "tar"):
+        import tarfile
+        import zipfile
+        import zlib
+        try:
+            (_unpack_zip if kind == "zip" else _unpack_tar)(p, out, progress, cancelled)
+            return out
+        except NotImplementedError:  # a zip compression the standard library does not read
+            shutil.rmtree(out, ignore_errors=True)
+            out.mkdir(parents=True)
+        except OSError as e:
+            if e.errno == errno.ENOSPC:
+                raise Fm4Error(f"The drive of the mods folder is full: {p.name} could not be unpacked. "
+                               "Free some space, or extract it yourself and choose what it holds.") from None
+            raise Fm4Error(f"{p.name} could not be read ({e}). Extract it yourself and choose what it "
+                           "holds.") from None
+        except (zipfile.BadZipFile, tarfile.TarError, zlib.error, EOFError) as e:
+            raise Fm4Error(f"{p.name} could not be read as a {label} archive ({e}): is it complete? "
+                           "Extract it yourself and choose what it holds.") from None
+    tools = _tool_paths(kind)
+    if not tools:
+        need = "7-Zip or unrar" if kind == "rar" else "7-Zip"
+        raise Fm4Error(f"{p.name} is a {label} archive, and no program that unpacks it was found on this "
+                       f"PC ({need}). Extract it first (for example with 7-Zip), then choose the disc "
+                       "image, Games on Demand package or folder it holds.")
+    size = _tool_size(tools[0], p)
+    if size:
+        _need_space(out, size, p.name)
+    errors = []
+    for exe in tools:
+        err = _run_tool(exe, p, out, progress, cancelled)
+        if err is None:
+            return out
+        errors.append(f"{Path(exe).name}: {err}")
+        shutil.rmtree(out, ignore_errors=True)
+        out.mkdir(parents=True)
+    raise Fm4Error(f"{p.name} could not be unpacked ({'; '.join(errors)}). Is it complete (all its parts "
+                   "next to it)? Extract it yourself, then choose the disc image, Games on Demand "
+                   "package or folder it holds.")
+
+
+# ---- Finding the discs in what was chosen ------------------------------------------------------
+
+class Found:
+    """What a choice holds. discs: [(kind, path)] tried in order, kind "folder" (a disc's files
+    around its default.xex), "image" (a disc image, a split one by its first part) or "god" (a
+    Games on Demand or hard drive install package next to its .data folder); packs: Forza
+    Motorsport 4 content packages (Disc 2's car packs); unpacked: unpacked car packs (their
+    Media/DLCZips folders); others: content packages of other games or kinds; archives; broken:
+    messages about a package without its data or the other way round."""
+
+    def __init__(self, root, label=None):
+        self.root, self.label = root, label or root.name or str(root)
+        self.discs, self.packs, self.unpacked, self.others, self.archives, self.broken = [], [], [], [], [], []
+
+
+def _scan(folder: Path, found=None):
+    """Searches a folder (shallowest first, SCAN_DEPTH levels, SCAN_DIRS folders at most)."""
+    import xiso_extract
+    found = found or Found(folder)
+    queue, seen, images = [(folder, 0)], 0, set()
+    while queue and seen < SCAN_DIRS:
+        d, depth = queue.pop(0)
+        seen += 1
+        try:
+            children = sorted(d.iterdir(), key=lambda c: c.name.lower())
+        except OSError:
+            continue
+        names = {c.name.lower() for c in children}
+        if "default.xex" in names and _find_ci(d, "default.xex").is_file():
+            found.discs.append(("folder", d))
+            # a disc's own folder: only its content folder (Disc 2's car packs) is searched further
+            children = [c for c in children if c.name.lower() == "content"]
+        if d.name.lower() == "dlczips" and any(re.fullmatch(r"\d+_pri_65\.zip", n) for n in names):
+            found.unpacked.append(d.parent.parent)  # <pack>/Media/DLCZips
+            continue
+        for c in children:
+            low = c.name.lower()
+            try:
+                is_dir = c.is_dir()
+            except OSError:
+                continue
+            if is_dir:
+                if low.endswith(".data"):
+                    if low[:-5] not in names:
+                        found.broken.append(f"{c.name} is the data folder of a Games on Demand package, "
+                                            f"but the package file ({c.name[:-5]}) is not next to it: "
+                                            "copy it too.")
+                    continue
+                if depth < SCAN_DEPTH and low not in SKIP_DIRS:
+                    queue.append((c, depth + 1))
+                continue
+            try:
+                if not c.is_file():
+                    continue
+                size = c.stat().st_size
+            except OSError:
+                continue
+            hdr = package_header(c)
+            if hdr:
+                if hdr[2] == 1:  # Games on Demand or a hard drive install: data next to it
+                    if hdr[1] != FM4_TITLE:
+                        found.others.append(c)
+                    elif (d / (c.name + ".data")).is_dir():
+                        found.discs.append(("god", c))
+                    else:
+                        found.broken.append(f"{c.name} is Forza Motorsport 4's Games on Demand package, "
+                                            f"but the {c.name}.data folder with its data is not next to it.")
+                elif hdr[1] == FM4_TITLE and hdr[0] == 0x2 and size > PACK_MIN:
+                    found.packs.append(c)
+                else:
+                    found.others.append(c)
+                continue
+            if archive_kind(c):
+                first, _ = _first_volume(c)
+                if first == c or not first.exists():
+                    found.archives.append(c)
+                continue
+            if IMAGE_NAME.search(c.name) or size >= 64 << 20:
+                try:
+                    first = Path(xiso_extract.split_parts(c)[0])
+                except xiso_extract.IsoError as e:
+                    found.broken.append(str(e))
+                    continue
+                if first not in images and xiso_extract.is_iso(c):
+                    images.add(first)
+                    found.discs.append(("image", c))
+    return found
+
+
+def _choice(path, disc, work: Path, archives, progress, cancelled):
+    """What was chosen for Disc `disc` (a Found). An archive is unpacked into work (once: archives
+    maps what was unpacked to where). A file that is no disc raises Fm4Error saying what it is."""
+    import xiso_extract
     p = Path(path)
-    if p.is_file() and p.parent.name.lower().endswith(".data") and re.fullmatch(r"Data\d+", p.name, re.I):
+    if p.is_file() and p.parent.name.lower().endswith(".data") and re.fullmatch(r"Data[0-9A-F]{4}", p.name, re.I):
         p = p.parent  # one of a Games on Demand package's parts: the package is next to the folder
-    if p.is_dir() and p.name.lower().endswith(".data") and p.with_name(p.name[:-5]).is_file():
-        p = p.with_name(p.name[:-5])
+    if p.is_dir() and p.name.lower().endswith(".data"):
+        if p.with_name(p.name[:-5]).is_file():
+            p = p.with_name(p.name[:-5])
+        elif any(re.fullmatch(r"(?i)data[0-9a-f]{4}", c.name) for c in p.iterdir()):
+            raise Fm4Error(f"{p.name} is the data folder of a Games on Demand package, but the package "
+                           f"file ({p.name[:-5]}) is not next to it: copy it too, then choose it.")
+    if p.is_file() and p.suffix.lower() == ".dvd":  # the layer break file next to a disc image
+        try:
+            lines = [ln.strip() for ln in p.read_text("latin-1").splitlines() if ln.strip()]
+        except OSError:
+            lines = []
+        image = next((p.with_name(ln) for ln in reversed(lines) if "=" not in ln), None)
+        if image and image.is_file():
+            p = image
     if p.is_dir():
-        if (p / "default.xex").is_file():
-            return "folder", p
-        gods = _god_packages(p)
-        return ("god", gods) if gods else ("folder", p)
+        return _scan(p)
     if not p.is_file():
         raise Fm4Error(f"{p} does not exist.")
-    import xiso_extract
+    found = Found(p.parent)
+    first, split = _first_volume(p)
+    if split and not first.is_file():
+        raise Fm4Error(f"{p.name} is one part of a split archive, but its first part ({first.name}) "
+                       "is not next to it: put all the parts in one folder.")
+    kind = archive_kind(first)
+    if kind:
+        key = first.resolve()
+        if key not in archives:
+            archives[key] = unpack_archive(first, kind, split, work / f"archive{len(archives) + 1}",
+                                           progress, cancelled)
+        inside = _scan(archives[key], Found(archives[key], p.name))
+        if not (inside.discs or inside.packs or inside.unpacked):
+            if inside.archives:
+                raise Fm4Error(f"{p.name} holds another archive ({inside.archives[0].name}): extract it "
+                               "yourself and choose what it holds.")
+        return inside
+    try:
+        xiso_extract.split_parts(p)
+    except xiso_extract.IsoError as e:
+        raise Fm4Error(str(e)) from None
     if xiso_extract.is_iso(p):
-        return "image", p
+        found.discs.append(("image", p))
+        return found
+    part = xiso_extract.part_number(p)
+    if part and part > 1 and not package_header(p):
+        raise Fm4Error(f"{p.name} looks like part {part} of a split disc image, but its first part is "
+                       "not next to it: put all the parts in one folder.")
     hdr = package_header(p)
     if hdr and hdr[1] == FM4_TITLE:
         if hdr[2] == 1:
             if not p.with_name(p.name + ".data").is_dir():
                 raise Fm4Error(f"{p.name} is Forza Motorsport 4's Games on Demand package, but the "
                                f"{p.name}.data folder with its data is not next to it.")
-            return "god", [p]
+            found.discs.append(("god", p))
+            return found
         if hdr[0] == 0x2 and disc == 2:
-            return "pack", p
+            found.packs.append(p)
+            return found
     if _xex_title(p) == FM4_TITLE:
-        return "folder", p.parent  # FM4's default.xex: the disc's files are around it
+        found.discs.append(("folder", p.parent))  # FM4's default.xex: the disc's files are around it
+        return found
     raise Fm4Error(describe(p, disc))
 
 
@@ -212,12 +580,12 @@ def _close(volume):
         f.close()
 
 
-def _names(volume):
+def _names(volume, path):
     import xiso_extract
     try:
         return {e.path.replace("\\", "/").lower() for e in volume.entries()}
     except (SystemExit, xiso_extract.IsoError) as e:
-        raise Fm4Error(f"The disc's files could not be read: {e}") from None
+        raise Fm4Error(f"The files of {path.name} could not be read: {e}") from None
 
 
 def _extract(volume, out, wanted, label, progress, cancelled):
@@ -254,93 +622,139 @@ def _find_ci(root: Path, *parts):
 
 
 def _check_disc1(root: Path):
-    if not (root / "default.xex").is_file():
+    xex = _find_ci(root, "default.xex")
+    if not xex or not xex.is_file():
         if _find_ci(root, "content", "0000000000000000"):
             raise Fm4Error(DISC2_AS_DISC1)
         raise Fm4Error("This folder is not Forza Motorsport 4's Disc 1: it has no default.xex. " + CHOOSE[1])
-    _check_xex(root / "default.xex")
+    _check_xex(xex)
     if not _find_ci(root, "Media", "db", "gamedb.slt"):
         if _find_ci(root, "content", "0000000000000000"):
             raise Fm4Error(DISC2_AS_DISC1)
         raise Fm4Error("This is not Forza Motorsport 4's Disc 1: it has no Media/db/gamedb.slt.")
 
 
-def _unpack_disc1(kind, found, out, progress, cancelled):
+def _unpack_disc1(kind, path, out, progress, cancelled):
     """Unpacks what the cars need from a disc image or a Games on Demand package into out:
     default.xex first, so another game or Disc 2 is refused before the long copy."""
-    for n, path in enumerate(found):
-        volume = _open_volume(kind, path)
+    shutil.rmtree(out, ignore_errors=True)
+    volume = _open_volume(kind, path)
+    try:
+        names = _names(volume, path)
+        if "default.xex" not in names:
+            if any(x.startswith("content/") for x in names):
+                raise Fm4Error(DISC2_AS_DISC1)
+            raise Fm4Error(f"{path.name} is not Forza Motorsport 4's Disc 1: it has no default.xex. "
+                           + CHOOSE[1])
+        _extract(volume, out, ("default.xex",), "Reading Disc 1: ", progress, cancelled)
+        _check_xex(out / "default.xex")
+        if "media/db/gamedb.slt" not in names:
+            if any(x.startswith("content/") for x in names):
+                raise Fm4Error(DISC2_AS_DISC1)
+            raise Fm4Error(f"{path.name} is not Forza Motorsport 4's Disc 1: it has no Media/db/gamedb.slt.")
+        _extract(volume, out, DISC1_PATHS[1:], "Reading Disc 1: ", progress, cancelled)
+        return out
+    finally:
+        _close(volume)
+
+
+def _nothing(found: Found, disc):
+    """The message for a choice that holds no disc `disc`."""
+    if found.broken:
+        return found.broken[0]
+    if found.others:
+        return describe(found.others[0], disc)
+    if found.archives:
+        return (f"{found.archives[0].name} is an archive: choose that file itself (the import unpacks "
+                "it), or extract it first.")
+    return (f"{found.label} holds no Forza Motorsport 4 Disc {disc}: no default.xex, disc "
+            "image or Games on Demand package was found in it or its subfolders. " + CHOOSE[disc])
+
+
+def _disc1(found: Found, out, progress, cancelled):
+    """Disc 1's folder: the first of the found discs that is FM4's Disc 1 (unpacked into out)."""
+    errors = []
+    for kind, path in found.discs:
         try:
-            names = _names(volume)
-            if "media/db/gamedb.slt" not in names and n + 1 < len(found):
-                continue  # Disc 2 of a Games on Demand copy: try the next package
-            if "default.xex" not in names:
-                if any(x.startswith("content/") for x in names):
-                    raise Fm4Error(DISC2_AS_DISC1)
-                raise Fm4Error(f"{path.name} is not Forza Motorsport 4's Disc 1: it has no default.xex. "
-                               + CHOOSE[1])
-            _extract(volume, out, ("default.xex",), "Reading Disc 1: ", progress, cancelled)
-            _check_xex(out / "default.xex")
-            if "media/db/gamedb.slt" not in names:
-                if any(x.startswith("content/") for x in names):
-                    raise Fm4Error(DISC2_AS_DISC1)
-                raise Fm4Error(f"{path.name} is not Forza Motorsport 4's Disc 1: it has no Media/db/gamedb.slt.")
-            _extract(volume, out, DISC1_PATHS[1:], "Reading Disc 1: ", progress, cancelled)
-            return out
-        finally:
-            _close(volume)
+            if kind == "folder":
+                _check_disc1(path)
+                return path
+            disc1 = _unpack_disc1(kind, path, out, progress, cancelled)
+            _check_disc1(disc1)
+            return disc1
+        except Fm4Error as e:
+            errors.append(str(e))
+    if errors:
+        raise Fm4Error(DISC2_AS_DISC1 if DISC2_AS_DISC1 in errors else errors[0])
+    if found.packs or found.unpacked:
+        raise Fm4Error(f"{found.label} holds Forza Motorsport 4's Disc 2 car packs, not Disc 1. "
+                       "Choose Disc 1 (the play disc) first: the car packs come at the next step (Disc 2).")
+    raise Fm4Error(_nothing(found, 1))
 
 
 def _car_packs(folder: Path):
     """FM4's car packs in a folder: its STFS packages of content type 2 (Disc 2 has four)."""
     out = []
     for p in sorted(folder.rglob("*")):
-        if p.is_file() and p.stat().st_size > 1 << 20:
+        if p.is_file() and p.stat().st_size > PACK_MIN:
             hdr = package_header(p)
             if hdr and hdr[1] == FM4_TITLE and hdr[0] == 0x2 and hdr[2] != 1:
                 out.append(p)
     return out
 
 
+def _disc2(found: Found, work, progress, cancelled):
+    """(car packages to unpack, or None, and a folder of unpacked car packs or None)."""
+    import os
+    if found.packs:
+        packs, seen = [], set()
+        for p in found.packs:  # the same pack found twice (a disc's copy and an installed one)
+            key = (p.name.lower(), p.stat().st_size)
+            if key not in seen:
+                seen.add(key)
+                packs.append(p)
+        return packs, None
+    if found.unpacked:
+        return None, Path(os.path.commonpath([str(p) for p in found.unpacked]))
+    disc1 = None
+    for kind, path in found.discs:
+        if kind == "folder":
+            if _find_ci(path, "Media", "db", "gamedb.slt"):
+                disc1 = disc1 or f"{path.name} is Forza Motorsport 4's Disc 1, chosen again for Disc 2. "
+            continue
+        volume = _open_volume(kind, path)
+        try:
+            names = _names(volume, path)
+            if not any(x.startswith("content/") for x in names):
+                if "media/db/gamedb.slt" in names:
+                    disc1 = disc1 or f"{path.name} has no Forza Motorsport 4 car packs: is it Disc 1? "
+                continue
+            out = work / "disc2"
+            shutil.rmtree(out, ignore_errors=True)
+            _extract(volume, out, ("content",), "Reading Disc 2: ", progress, cancelled)
+        finally:
+            _close(volume)
+        packs = _car_packs(out)
+        if packs:
+            return packs, None
+    if disc1:
+        raise Fm4Error(disc1 + CHOOSE[2])
+    raise Fm4Error(_nothing(found, 2))
+
+
 def prepare(disc1, disc2, work: Path, progress, cancelled):
     """Folders the converter reads: (disc 1 folder, disc 2 packages folder or None). A disc
-    image or Games on Demand package is unpacked into work (only what the cars need); a folder
-    is used as it is."""
+    image, Games on Demand package or archive is unpacked into work (only what the cars need); a
+    folder is used as it is."""
     paths.ensure_tools_importable()
     import xcontent_extract
-    kind, found = _source(disc1, 1)
-    if kind == "folder":
-        disc1 = found
-    else:
-        disc1 = _unpack_disc1(kind, found if kind == "god" else [found], work / "disc1", progress, cancelled)
-    _check_disc1(disc1)
+    archives = {}
+    disc1 = _disc1(_choice(disc1, 1, work, archives, progress, cancelled), work / "disc1", progress, cancelled)
     if not disc2:
         return disc1, None
-    kind, found = _source(disc2, 2)
-    if kind == "pack":
-        packages = [found]
-    else:
-        if kind != "folder":
-            for path in (found if kind == "god" else [found]):
-                volume = _open_volume(kind, path)
-                try:
-                    names = _names(volume)
-                    if not any(x.startswith("content/") for x in names):
-                        if kind == "god" and path is not found[-1]:
-                            continue
-                        raise Fm4Error(f"{path.name} has no Forza Motorsport 4 car packs: is it Disc 1? "
-                                       + CHOOSE[2])
-                    _extract(volume, work / "disc2", ("content",), "Reading Disc 2: ", progress, cancelled)
-                    break
-                finally:
-                    _close(volume)
-            found = work / "disc2"
-        disc2 = found
-        packages = _car_packs(disc2)
-        if not packages:
-            if _find_ci(disc2, "Media", "db", "gamedb.slt"):
-                raise Fm4Error("This folder is Forza Motorsport 4's Disc 1, chosen again for Disc 2. " + CHOOSE[2])
-            return disc1, disc2  # already unpacked packages (each with Media/DLCZips)
+    packages, unpacked = _disc2(_choice(disc2, 2, work, archives, progress, cancelled), work, progress, cancelled)
+    if unpacked:
+        return disc1, unpacked  # already unpacked packages (each with Media/DLCZips)
     out = work / "content"
     for k, pkg in enumerate(packages):
         if cancelled():

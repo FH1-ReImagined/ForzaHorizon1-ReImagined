@@ -17,34 +17,47 @@ player's PC from their discs and stay there.
 ## For players
 
 1. **Mods → Forza Motorsport 4 cars → Import FM4 cars…**
-2. Choose FM4's **Disc 1** (the play disc): a disc image (`.iso`), a Games on Demand package
-   or a folder with its files ([what is accepted](#what-the-import-accepts)).
+2. Choose FM4's **Disc 1** (the play disc): a disc image (`.iso`), a Games on Demand package,
+   a folder with its files or an archive of one of them ([what is accepted](#what-the-import-accepts)).
 3. Choose **Disc 2** (the content install disc) for its three car packs, or **Skip**.
 4. The launcher checks that Disc 1 is FM4 (title `4D530910`), unpacks what it needs into a
    temporary folder next to the mods folder, converts every car, and adds the **FM4 cars** mod
    and a package of the cars' files (below). With the discs' files already unpacked it takes
    about 2 seconds a car; it needs about 5 GB for the result and as much again while it runs
-   from disc images.
+   from disc images (and room for what an archive holds, unpacked, while it runs from one).
 5. Start the game: the cars are in the **Autoshow** with the other cars of their makes (and
    in **Change Car** once bought).
 
 ### What the import accepts
 
-| Disc 1 (the play disc) | Disc 2 (the content install disc) |
-|---|---|
-| its disc image (`.iso`) | its disc image (`.iso`) |
-| a folder with its files (`default.xex`, `Media`); choosing that `default.xex` also works | a folder with its files, or with its car packs (unpacked or not) |
-| FM4's Games on Demand package: the package file, its `.data` folder, a `DataNNNN` file in it, or the `00007000` or `4D530910` folder above it (a two-disc copy: the Disc 1 package is used) | one car pack (`4d53091000000001`…) |
+| Form | Disc 1 (the play disc) | Disc 2 (the content install disc) |
+|---|---|---|
+| Disc image | a full (Redump) image, the game partition at the XGD3 `0x2080000` (or `0x2090000`), XGD2 `0xFD90000` or XGD1 `0x18300000` offset, or a rebuilt or trimmed image (extract-xiso, XDVDFS tools) with it at 0; any name (`.iso`, `.xiso`, `.img`, `.bin`, none); its `.dvd` file | the same |
+| Split image | any of its parts, named `fm4.iso.1`, `fm4.iso.001`, `fm4.001`, `fm4.part1.iso`, `fm4.iso.part1` or `fm4.1.iso`: the other parts are found next to it (a missing part is named) | the same |
+| Games on Demand | the package file, its `.data` folder, a `DataNNNN` file in it, the folder that holds them (`00007000`, `4D530910`, `Content` or the drive above it), from the console or a converter (iso2god and the like); a hard drive install (`00004000`) the same way | the Disc 2 package the same way, or the folder holding both discs' packages (each disc takes its own) |
+| Car packs | refused: they are Disc 2's | the packages (`4d53091000000001`…, any name), in a folder or the console's `4D530910/00000002`, or one of them; unpacked ones (each with `Media/DLCZips`) |
+| Folder | extract-xiso or Xenia output with `default.xex` at its root (any letter case), that `default.xex` itself, or a folder above it: the parent of the disc folders, Xenia's `content` folder or its own folder | the same, with its `content` folder |
+| Archive | a `.zip` or `.tar` (`.tar.gz`, `.tgz`...) holding any of the above, read by the launcher itself; a `.7z` or `.rar` (or a split one: `.7z.001`, `.part1.rar`, `.z01`), unpacked with 7-Zip, unrar, unar or bsdtar when one is installed, else the import says to extract it first | the same: one archive with both discs is unpacked once |
 
-Disc 1 is checked by its `default.xex` title id before anything is copied, and must have
-`Media/db/gamedb.slt` (Disc 2 has a `default.xex` of FM4 too). Car packs are found by their
-package header (FM4's title, content type 2), not by their names. Anything else is named
-instead of converted: another game's disc or Games on Demand package (Forza Horizon
-`4D5309C9`, Forza Horizon 2 `4D530AA4`, Forza Motorsport 3 `4D53084D`, or the title id), a
-content package (DLC, title update, save and so on, with its title), a lone XEX, Disc 2 chosen
-as Disc 1 and the other way round. A file named like `4D5309C900003061` is an Xbox 360 content
-package of that title (here Forza Horizon's), and renaming one to `.iso` does not make it a disc
-image (#681).
+A folder is searched 8 levels down, the shallowest find first; each disc takes the first thing
+that is that disc. Disc 1 is checked by its `default.xex` title id before anything is copied, and
+must have `Media/db/gamedb.slt` (Disc 2 has a `default.xex` of FM4 too). Car packs are found by
+their package header (FM4's title, content type 2), not by their names. A title update
+(`000B0000`, `TU_...`), DLC, saves or another game's files next to the discs are left alone.
+
+FM4 has one title id, `4D530910`, on its discs and its Games on Demand copy; the regions and
+editions (the Limited Collector's Edition, the later reprints) share the game data and are told
+apart by the discs' media id, which the import does not check. The demo's package is refused.
+
+Anything else is named instead of converted: another game's disc or Games on Demand package
+(Forza Horizon `4D5309C9`, Forza Horizon 2 `4D530AA4`, Forza Motorsport 3 `4D53084D`, or the
+title id), a content package (DLC, title update, save and so on, with its title), FM4's demo or
+a title update chosen as a disc, a lone XEX, Disc 2 chosen as Disc 1 and the other way round, a
+Games on Demand package without its `.data` folder (or the other way round) or with parts
+missing, a truncated image, a damaged or unsafe archive, an archive bigger than the free space,
+and an archive with no program here to unpack it. A file named like `4D5309C900003061` is an
+Xbox 360 content package of that title (here Forza Horizon's), and renaming one to `.iso` does
+not make it a disc image (#681).
 
 The result is in two parts: the **FM4 cars** mod in the mods folder (the database and the car
 names, a few MB) and a DLC-style package with the cars' files, `464D34434152530...4D` in the
