@@ -4,9 +4,9 @@ import copy
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
-                               QLineEdit, QListWidget, QProgressBar, QPushButton,
-                               QScrollArea, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
+                               QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QProgressBar,
+                               QPushButton, QScrollArea, QVBoxLayout, QWidget)
 
 from .. import radio
 from .widgets import label
@@ -56,15 +56,21 @@ class RadioPage(QWidget):
         choose.clicked.connect(self._logo)
         clear = QPushButton("Use original logo")
         clear.clicked.connect(lambda: self._set_logo(""))
+        export = QPushButton("Export original logos…")
+        export.setToolTip("Saves the game's own station logos from your game files as PNGs, "
+                          "with their size, format and transparency, to match your logo to them.")
+        export.clicked.connect(self._export_logos)
         logos.addWidget(choose)
         logos.addWidget(clear)
+        logos.addWidget(export)
         form.addRow("", logos)
         self.songs = QListWidget()
         self.songs.setSelectionMode(QListWidget.ExtendedSelection)
+        self.songs.itemDoubleClicked.connect(self._edit)
         form.addRow("Songs", self.songs)
         buttons = QHBoxLayout()
         for text, callback in (("Add songs…", self._songs), ("Add folder…", self._folder),
-                               ("Remove selected", self._remove)):
+                               ("Edit artist and title…", self._edit), ("Remove selected", self._remove)):
             button = QPushButton(text)
             button.clicked.connect(callback)
             buttons.addWidget(button)
@@ -134,8 +140,10 @@ class RadioPage(QWidget):
         station = self.spec["stations"].get(self._slot, {})
         self.name.setText(station.get("name", radio.TITLES[radio.SLOTS.index(self._slot)]))
         self.mode.setCurrentIndex(1 if station.get("mode") == "add" else 0)
+        self._tags = copy.deepcopy(station.get("tags", {}))
         self.songs.clear()
-        self.songs.addItems(station.get("songs", []))
+        for song in station.get("songs", []):
+            self._add_item(song)
         self._logo_path = station.get("logo", "")
         self.logo.clear()
         if self._logo_path:
@@ -160,12 +168,14 @@ class RadioPage(QWidget):
                 or self.name.text().strip() != radio.TITLES[radio.SLOTS.index(self._slot)]):
             self.spec["stations"][self._slot] = {
                 "name": self.name.text().strip(), "mode": self.mode.currentData(),
-                "songs": [self.songs.item(i).text() for i in range(self.songs.count())],
-                "logo": self._logo_path}
+                "songs": self._paths(),
+                "logo": self._logo_path, "tags": copy.deepcopy(self._tags)}
         try:
             self.cfg.d["custom_radio"] = self.spec
             self.spec = radio.settings(self.cfg)
             self.cfg.save()
+            for i in range(self.songs.count()):  # A new station name is the default artist.
+                self._show(self.songs.item(i))
             return True
         except (OSError, ValueError) as exc:
             if previous is None:
@@ -205,13 +215,92 @@ class RadioPage(QWidget):
             extensions = {".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac", ".opus"}
             self._add([str(p) for p in sorted(Path(folder).glob("*")) if p.is_file() and p.suffix.lower() in extensions])
 
+    def _paths(self):
+        return [self.songs.item(i).data(Qt.UserRole) for i in range(self.songs.count())]
+
+    def _add_item(self, song):
+        item = QListWidgetItem()
+        item.setData(Qt.UserRole, song)
+        self.songs.addItem(item)
+        self._show(item)
+
+    def _show(self, item):
+        song = item.data(Qt.UserRole)
+        tag = self._tags.get(song)
+        if tag:
+            station = {"name": self.name.text().strip(), "tags": self._tags}
+            title, artist = radio.song_names(station, song)
+            item.setText(f"{artist} – {title}    ({Path(song).name})")
+        else:
+            item.setText(song)
+        item.setToolTip(song)
+
     def _add(self, files):
-        existing = {self.songs.item(i).text() for i in range(self.songs.count())}
-        self.songs.addItems([f for f in dict.fromkeys(files) if f not in existing])
+        existing = set(self._paths())
+        for song in dict.fromkeys(files):
+            if song not in existing:
+                self._add_item(song)
         self._save()
+
+    def _edit(self, item=None):
+        """Artist and title the in-game radio shows for one song (#678)."""
+        if not isinstance(item, QListWidgetItem):
+            items = self.songs.selectedItems() or ([self.songs.currentItem()] if self.songs.currentItem() else [])
+            if len(items) != 1:
+                self.message.setText("Select one song to edit its artist and title.")
+                return
+            item = items[0]
+        song = item.data(Qt.UserRole)
+        names = self._tags.get(song) or radio.read_tags(song, radio.ffprobe_path(self.ffmpeg.text().strip()))
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Artist and title")
+        form = QFormLayout(dialog)
+        form.addRow(label(f"Shown on the in-game radio for {Path(song).name}. "
+                          "Leave a field empty to use the default.", "muted"))
+        artist, title = QLineEdit(names.get("artist", "")), QLineEdit(names.get("title", ""))
+        for field, default in ((artist, self.name.text().strip()), (title, Path(song).stem)):
+            field.setMaxLength(radio.MAX_TAG)
+            field.setPlaceholderText(default)
+        form.addRow("Artist", artist)
+        form.addRow("Title", title)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        self._edit_dialog = dialog  # Tests answer the dialog through this handle.
+        accepted = dialog.exec() == QDialog.Accepted
+        self._edit_dialog = None
+        if accepted:
+            self._set_tags(song, artist.text(), title.text())
+        dialog.deleteLater()
+
+    def _set_tags(self, song, artist, title):
+        previous = copy.deepcopy(self._tags)
+        tag = {k: " ".join(v.split()) for k, v in (("artist", artist), ("title", title)) if v.strip()}
+        if tag:
+            self._tags[song] = tag
+        else:
+            self._tags.pop(song, None)
+        if not self._save():
+            self._tags = previous
+            for i in range(self.songs.count()):
+                self._show(self.songs.item(i))
+
+    def _export_logos(self):
+        folder = QFileDialog.getExistingDirectory(self, "Folder for the original logos", str(Path.home()))
+        if not folder:
+            return
+        try:
+            count = radio.export_stock_logos(self.cfg, folder)
+        except (OSError, ValueError) as exc:
+            self.message.setText(f"Could not export the logos: {exc}")
+            return
+        self.message.setText(f"Saved {count} original logos and stock-logos.json (sizes, format and "
+                             f"transparency) to {folder}. They come from your game files: keep them to yourself.")
 
     def _remove(self):
         for item in self.songs.selectedItems():
+            self._tags.pop(item.data(Qt.UserRole), None)
             self.songs.takeItem(self.songs.row(item))
         self._save()
 
