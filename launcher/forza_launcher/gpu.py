@@ -14,6 +14,8 @@ import json
 import os
 import re
 import subprocess
+import sys
+import tempfile
 from dataclasses import dataclass, field
 
 from . import cleanenv
@@ -241,6 +243,106 @@ def detect() -> Detected:
         return detect_windows() if IS_WINDOWS else detect_linux()
     except Exception:  # detection must never stop the launcher
         return Detected()
+
+
+# --- the Vulkan driver (#672) ----------------------------------------------------------------------
+# Intel integrated graphics on a Vulkan 1.2 driver can't run the game's Vulkan renderer: an HD 520 on
+# Vulkan 1.2.203 lost the device before the title screen (#669), a UHD on 1.2.131 ran at about 1 fps
+# (#640). Only Intel iGPUs: an AMD driver's Vulkan version says nothing about its age (Vega iGPUs
+# report 1.3.2xx on current drivers, #268).
+VK_INTEGRATED, VK_DISCRETE = 1, 2
+PCI_INTEL = 0x8086
+INTEL_VULKAN_MIN = (1, 3)
+_vk_devices = []
+
+
+def vulkan_probe_command(out_file) -> list:
+    from . import paths
+    if paths.FROZEN:
+        return [sys.executable, "--vulkan-devices", str(out_file)]
+    return [sys.executable, "-I", os.path.join(os.path.dirname(os.path.abspath(__file__)), "vulkan_probe.py"),
+            str(out_file)]
+
+
+def parse_vulkan_devices(text: str):
+    """[{name, vendor_id, device_id, type, api, driver}] from vulkan_probe's JSON; None when it found nothing."""
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return None
+    devices = data.get("devices") if isinstance(data, dict) else None
+    if not isinstance(devices, list):
+        return None
+    out = []
+    for d in devices:
+        if not isinstance(d, dict) or not isinstance(d.get("vendor_id"), int) or not isinstance(d.get("type"), int):
+            continue
+        out.append({"name": str(d.get("name") or ""), "vendor_id": d["vendor_id"],
+                    "device_id": d.get("device_id") if isinstance(d.get("device_id"), int) else 0,
+                    "type": d["type"], "api": str(d.get("api") or ""),
+                    "driver": d.get("driver") if isinstance(d.get("driver"), int) else 0})
+    return out or None
+
+
+def vulkan_devices(timeout=15):
+    """This PC's Vulkan devices (parse_vulkan_devices), or None when unknown. Asked once per launcher
+    session, in a process of its own. FORZA_VULKAN_DEVICES='{"devices": [...]}' overrides (testing)."""
+    forced = os.environ.get("FORZA_VULKAN_DEVICES", "").strip()
+    if forced:
+        return parse_vulkan_devices(forced)
+    if not _vk_devices:
+        found = None
+        try:
+            with tempfile.TemporaryDirectory(prefix="forza-vk-") as tmp:
+                out = os.path.join(tmp, "devices.json")
+                _run(vulkan_probe_command(out), timeout=timeout)
+                found = parse_vulkan_devices(_read(out))
+        except Exception:  # detection must never stop the launcher
+            found = None
+        _vk_devices.append(found)
+    return _vk_devices[0]
+
+
+def api_tuple(text):
+    """(1, 2, 203) from '1.2.203'; None when it is not a version."""
+    m = re.fullmatch(r"\s*(\d+)\.(\d+)(?:\.(\d+))?\s*", str(text or ""))
+    return tuple(int(x or 0) for x in m.groups()) if m else None
+
+
+def game_vulkan_device(devices, vendor: str, index: int = -1):
+    """The device the game's Vulkan renderer takes: the one at vulkan_device when set, else the chosen
+    vendor's (--gpu_vendor), discrete before integrated; without a vendor, any discrete one first."""
+    devices = [d for d in devices or [] if isinstance(d, dict)]
+    if 0 <= index < len(devices):
+        return devices[index]
+    if vendor in SDK_VENDORS:
+        devices = [d for d in devices if vendor_from_pci_id(d.get("vendor_id", 0)) == vendor]
+    rank = {VK_DISCRETE: 0, VK_INTEGRATED: 1}
+    return min(devices, key=lambda d: rank.get(d.get("type"), 2), default=None)
+
+
+def old_intel_vulkan(devices, vendor: str, index: int = -1):
+    """The game's Vulkan device when it is an Intel integrated GPU whose driver reports a Vulkan API below
+    1.3, else None (also when the version is not known)."""
+    d = game_vulkan_device(devices, vendor, index)
+    if d is None or d.get("vendor_id") != PCI_INTEL or d.get("type") != VK_INTEGRATED:
+        return None
+    api = api_tuple(d.get("api"))
+    return d if api is not None and api[:2] < INTEL_VULKAN_MIN else None
+
+
+def old_intel_vulkan_text(device, windows=None) -> str:
+    """What the player reads on Setup, Play and next to Graphics API."""
+    windows = IS_WINDOWS if windows is None else windows
+    name = device.get("name") or "Your Intel graphics"
+    api = ".".join(str(x) for x in (api_tuple(device.get("api")) or ())) or device.get("api", "")
+    text = (f"The Intel graphics driver is too old for the game's Vulkan renderer: {name} reports Vulkan {api}, "
+            "and the game needs 1.3 (on 1.2 it closes before the title screen or runs at about 1 fps). ")
+    if windows:
+        return text + ("Update the Intel graphics driver from intel.com, or use Direct3D 12 "
+                       "(Settings > Display > Graphics API).")
+    return text + ("Update Mesa: install your distribution's updates (with the Flatpak launcher, run "
+                   "flatpak update).")
 
 
 # --- what is known per vendor ----------------------------------------------------------------

@@ -8,6 +8,7 @@
   forza-launcher --extract PACKAGE [--root DIR]   extract your Games on Demand package without the window
   forza-launcher --build [--root DIR] [--jobs N] [--clean]   build the game without the window
   forza-launcher --version
+  forza-launcher --vulkan-devices FILE   write this PC's Vulkan devices to FILE (the launcher runs it, #672)
 """
 import runpy
 import sys
@@ -126,6 +127,9 @@ def main(argv=None):
     if argv[:1] == ["--run-script"]:
         run_live_server(argv[1:])  # the same runner: a script with its folder on sys.path
         return 0
+    if argv[:1] == ["--vulkan-devices"]:
+        from . import vulkan_probe
+        return vulkan_probe.main(argv[1:])
     if argv[:1] == ["--version"]:
         print(__version__)
         return 0
