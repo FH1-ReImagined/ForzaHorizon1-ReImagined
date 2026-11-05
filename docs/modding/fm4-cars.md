@@ -83,7 +83,7 @@ from unpacked files; 5.6 GB of package, 10 MB of mod).
 | `Thumbnail_<id>.xds` | FM4 | none (the same 884,788-byte format); the game draws a new one after a paint job |
 | database rows | FM4 | [below](#the-database) |
 | names (`data_car.str`, `list_carmake.str`) | FM4 | added to FH1's tables ([strings](#strings)) |
-| engine sound | FH1 | FH1 has the sound banks, harmonic tuning, `CarModelTuning` and `EngineTuning` of the FM4 cars checked; what it lacks would be taken from FM4's archives |
+| engine sound | FH1 | FH1 has the sound banks, harmonic tuning, `CarModelTuning` and `EngineTuning` of all 381 cars ([checked](#checked-in-the-game)); what it lacks would be taken from FM4's archives |
 
 `interior_emissive_LOD0.xds` and `zlights*.xds` are not made: 19 of FH1's own 175 cars have no
 `interior_emissive_LOD0.xds` either, and FM4's cockpit materials do not sample it.
@@ -105,9 +105,47 @@ For the Alfa Romeo 8C, which both games ship, positions, UVs and the tangent fra
 for byte the same in 23,099 of 23,103 compared vertices, and FH1's SH0 is
 `round(s16 / 32767 × 127)` of FM4's wherever the lighting was not re-baked. The game keeps
 loaded buffers by key, so every converted buffer gets a key of its own (a CRC-32 of the car,
-file and buffer number). The light list is written empty: FH1's own cockpit models have none,
-and the converted cars' headlights still light the road at night (their light sprites and
-FH1's indicator lamps are what is missing).
+file and buffer number). The light list is made from the model ([below](#the-light-list)).
+
+### The light list
+
+FH1's car models (`<car>.carbin` and its `stripped_` copy; not `_lod0` or `_cockpit`) carry a
+list of the car's lamp sprites, the glows other cars show at night from a distance: 4-24
+records of 32 bytes in FH1's cars. FM4 has no such list (it has no night) and no other file
+with it; its lamps are only meshes with the `head_light`, `tail_light` and `reverse_light`
+techniques. The record, from all of FH1's cars:
+
+| Bytes | Field |
+|---|---|
+| 0-11 | position, 3 × `f32`: the model's x and y, and its z negated (the list's z points forward) |
+| 12-17 | direction, 3 × `s16` normalized: (0, 0, 32767) forward, (0, 0, −32767) backward |
+| 18 | not decoded (0-9; FH1's most common value is used) |
+| 19 | sprite kind: 1, 2 (bluish, on cars from 2010), 3 (warm, older cars) headlights; 4 the halo of a headlight (front) or the tail light (rear); 0 the others |
+| 20 | side: 1 the car's left (x < 0), 2 its right (2,398 of FH1's 2,444 records) |
+| 21 | when it shines: 1 lights on, 2 braking, 4 braking (a second sprite), 8 indicators, 16 reversing |
+| 22-24 | colour, RGB |
+| 25 | size |
+| 26 | 0-7 by kind: 1, 2 or 4 headlights, 5 brake, 6 indicator and reverse, 7 halos (probably which of `media/carlights/headlight_glow_1-7.xds`) |
+| 27-29 | an aim offset, 3 × `s8` (0 in most records) |
+| 30, 31 | 30 and 50 in most records (70 for a headlight's halo), 255 and 255 in some; not decoded |
+
+The converter finds each lamp, on each side: the lamp technique's meshes in the lamp's own
+sections (`headlightL`, `taillightR`, ...), else its lens (`glassLHL`, `glassRTL`, ...), else
+the technique's meshes in the stock parts (not the race or other optional parts such as
+`bumperFrace`, `bumperFb`, `hoodc`, nor a pop-up lamp's lowered position). Vertices 4 cm or
+more apart are separate lamps (up to two a side). Each lamp gets FH1's most common records of its kind,
+3 cm inside the lens: a headlight and its halo 2 cm ahead of it (kind 3 before 2000, 1 from
+2000, 2 from 2010, as FH1 gives its own cars), a tail light, a brake light and the second
+brake sprite, a reverse light. A lamp in the middle (a third brake light) is left out, as on
+most of FH1's cars. Indicators are left out: only 18 of FH1's cars have indicator records, and
+every one is a traffic car (`IsSelectable` 0).
+
+Checked on the 77 cars both games ship (FM4's model through the converter against FH1's own
+list): an FH1 headlight sprite is a median 4 cm (sideways), 1 cm (height) and 6 cm (depth)
+from the nearest generated one of its side, a brake sprite 5, 1 and 3 cm.
+Of the 381 cars the import adds, 374 get headlight sprites and 375 brake sprites (4-24 records
+a car); the others have no lamp meshes the converter knows (the two NASCAR cars' lamps are
+decals, for example) and get fewer or none.
 
 ### The database
 
@@ -217,7 +255,21 @@ Thunderbird (an old car):
 | Paint | the Veyron's body painted green and saved; its garage picture was redrawn green |
 | Save | quit to the title screen, restarted: the Veyron is the current car, green, with the intake. Without the import the same save loads into free roam (the car is FH1's placeholder for missing content); imported again, everything is back |
 | Night | the Veyron's headlights light the road |
-| Sound | not heard (muted runs); the cars' tuning and banks are FH1's own files of the same names |
+
+Lights and engine sound, the Title Update 4 build of this branch, a copied save, with the
+2007 Murciélago LP640 (FM4 only) against FH1's own Aventador LP700-4:
+
+| What | Result |
+|---|---|
+| Light list | the LP640 gets 22 records (two headlights a side with their halos, two tail lamps a side with tail, brake and second brake sprites, a reverse light a side), the Veyron 12 |
+| Close up, at night (22:00 held) | headlights light the road; tail lamps lit, brighter with the brake, reverse lamps when reversing: the same with an empty list (the lamp meshes do that, not the list) |
+| From a distance | with every free roam rival (`FreeRoamDrivers`) made an LP640 in a test database: with the list the oncoming rivals' headlights glow down the road, as FH1's cars' do; with an empty list an oncoming LP640 shows none |
+| Engine bank | the game opened `12N2_LP640_Exh.fsb`, `12N2_LP640_Int.fsb` and `6N0_Boxster_EngAmb.fsb` (watched with inotify on a private copy of the game files), the three its `EngineTuning` names; the Aventador uses `12N2_LP640_Int`, `12N2_Murc_Exh` and `6N3_GT3R_EngAmb` |
+| Engine sound | the game's mix as it submits it (a local dump of the samples `FORZA_AUDIOLOG` measures, no output device), 3 s idle then 10 s full throttle from the spawn: LP640 −15.6 dBFS idle, −13.5 full throttle; Aventador −19.0 and −12.4. No dropped frames (187.7 a second for 55 s), no silence (quietest 50 ms at full throttle −16.7 dBFS; Aventador −26.7). The strongest partial near the V12's firing frequency (rpm / 60 × 6) follows the rpm from telemetry: r = 0.85 over 1,550-8,700 rpm (Aventador 0.88 over 2,000-8,500) |
+
+Every FM4 car the import adds has its `CarModelTuning` and `EngineTuning` in FH1, and every
+sound bank those name is one of FH1's (`NA.fsb`, named for five of the cars, is FH1's own
+placeholder bank of its `NA_*_HT.xml` files).
 
 Then all 381 cars (`--all`, the cars' files in the package): the Autoshow's makes include the
 ones FH1 lacked (Acura, listed with its RSX Type-S, TSX and Integra from the Disc 2 car packs);
@@ -233,7 +285,8 @@ folder removed). A game started on that data folder lists the new makes in the A
 
 ## Not done yet
 
-- The light list of `CCarModelData` (light sprites, indicators) is empty.
+- Indicators: FH1 gives indicator sprites only to its traffic cars, so the converted cars get
+  none.
 - The physicsdefinition.bin rigid-body fields are a scaled stand-in, not decoded semantics.
 - Career events, online (other players without the import see FH1's placeholder car, as for a
   car mod) and the 381 cars one by one were not checked; the three above and the RSX were.

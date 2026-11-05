@@ -250,6 +250,15 @@ def convert(data, key_seed, lights=b"\0\0\0\0"):
     return _Converter(data, key_seed, lights=lights).run()
 
 
+def set_lights(data, lights):
+    """An FH1 car model (root 5) with its light list replaced by lights (u32 count + 32-byte
+    records)."""
+    if struct.unpack_from(">I", data, 0)[0] != 5:
+        raise CarbinError("not a car model")
+    n = struct.unpack_from(">I", data, 0x154)[0]
+    return data[:0x154] + lights + data[0x158 + 32 * n:]
+
+
 def strip(data):
     """The stripped_ companion of an FH1 .carbin: the same file, every buffer flagged as not in
     the file (vertex and morph buffers keep their keys, index buffers have none)."""

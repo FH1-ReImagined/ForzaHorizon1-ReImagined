@@ -31,6 +31,8 @@ installed FH1 DLC folder (.../4D5309C9/00000002), so their car names are kept an
 are not added twice. Standard library only (LZX through tools/fxobj_shaders.py).
 """
 import argparse
+import itertools
+import math
 import os
 import re
 import sqlite3
@@ -790,6 +792,136 @@ def model_points(data):
     return pts
 
 
+# The car's light list (CCarModelData, docs/modding/fm4-cars.md#the-light-list): FH1's sprites
+# for the lamps, which FM4 does not have. Each lamp gets FH1's most common records of its kind.
+LIGHT_MATERIALS = {
+    "head": {"head_light", "head_light2", "hidhead", "xenonhead", "oldhead", "fullbeam"},
+    "tail": {"tail_light", "tail_light2", "tail_light_on", "tail_light_lod0", "taillight2s",
+             "taillightst"},
+    "reverse": {"reverse_light", "reverse_light_lod0"},
+}
+# (byte 18, kind, function, rgb, size, glow, bytes 30-31) per record; function bits: 1 lights
+# on, 2 brake, 4 a second brake sprite, 8 indicator, 16 reverse. glow is probably which of
+# media/carlights/headlight_glow_<n>.xds; byte 18 and bytes 30-31 are not decoded.
+HEAD_LAMP = {  # by the headlight kind FH1 gives cars of the car's age
+    3: (0, 3, 1, (155, 140, 95), 19, 2, (30, 50)),    # before 2000
+    1: (1, 1, 1, (160, 160, 140), 15, 4, (30, 50)),   # 2000-2009
+    2: (0, 2, 1, (220, 220, 255), 19, 1, (30, 50)),   # 2010 on (xenon)
+}
+HEAD_FLARE = {3: (230, 230, 125), 1: (230, 230, 125), 2: (150, 150, 255)}
+TAIL_LAMP = [
+    (2, 4, 1, (100, 0, 0), 57, 7, (30, 50)),          # tail light (lights on)
+    (0, 0, 2, (255, 0, 0), 32, 5, (30, 50)),          # brake
+    (0, 0, 4, (255, 0, 0), 25, 5, (30, 50)),          # brake, second sprite
+]
+REVERSE_LAMP = (0, 0, 16, (128, 128, 128), 15, 6, (255, 255))
+LIGHT_INSET = 0.03    # FH1's sprites sit 2-7 cm inside the lens's outer face
+FLARE_AHEAD = 0.02    # the headlight's flare 2 cm ahead of it
+LIGHT_MIDDLE = 0.2    # a lamp whose centre is this close to the middle (a third brake light)
+LAMP_GAP = 0.04       # vertices this far apart belong to separate lamps
+LAMPS_PER_SIDE = 2    # FH1's cars have one or two of each lamp a side
+LAMP_RANK = {"own": 2, "lens": 1, "other": 0}  # where a lamp is found, the best used
+# Lamps in these sections are not the stock car's: race and optional parts (bumperFb, hoodc,
+# wingrace...), pop-up headlights' lowered position and the interior.
+LIGHT_SKIP_SECTION = re.compile(r"^(bumper[FR]|hood|wing|trunk|(head|tail)light[LR])([b-z]|race)$|(?i:down$|^interior)")
+
+
+def light_record(pos, front, side, rec):
+    b18, kind, func, rgb, size, glow, tail = rec
+    x, y, z = pos
+    # The list's z axis points forward (the model's -z); the direction is s16 normalized.
+    return struct.pack(">3f3h14B", x, y, -z, 0, 0, 32767 if front else -32767,
+                       b18, kind, side, func, rgb[0], rgb[1], rgb[2], size, glow, 0, 0, 0, tail[0], tail[1])
+
+
+def _lamp_clusters(pts):
+    """The separate lamps among a side's lamp vertices: groups of vertices LAMP_GAP apart at most
+    (a grid's connected cells), the LAMPS_PER_SIDE biggest by face area; small bits (less than
+    a fifth of the biggest) are left out."""
+    cells = {}
+    for p in pts:
+        cells.setdefault(tuple(int(math.floor(v / LAMP_GAP)) for v in p), []).append(p)
+    seen, groups = set(), []
+    for start in cells:
+        if start in seen:
+            continue
+        seen.add(start)
+        todo, group = [start], []
+        while todo:
+            cell = todo.pop()
+            group += cells[cell]
+            for d in itertools.product((-1, 0, 1), repeat=3):
+                n = (cell[0] + d[0], cell[1] + d[1], cell[2] + d[2])
+                if n in cells and n not in seen:
+                    seen.add(n)
+                    todo.append(n)
+        lo = [min(q[k] for q in group) for k in range(3)]
+        hi = [max(q[k] for q in group) for k in range(3)]
+        groups.append(((hi[0] - lo[0] + 0.01) * (hi[1] - lo[1] + 0.01), lo, hi))
+    groups.sort(key=lambda g: -g[0])
+    return [(lo, hi) for area, lo, hi in groups[:LAMPS_PER_SIDE] if area >= groups[0][0] / 5]
+
+
+def car_lights(data, year):
+    """The light list (u32 count + 32-byte records) for a converted FH1 .carbin: for each lamp
+    on each side, a head lamp's headlight and flare, a tail lamp's tail light, brake and second
+    brake sprite, a reverse lamp's sprite, at the lamp's centre. A lamp is the meshes of its
+    shader technique in its own sections (headlightL, taillightR...), else its lens (the glassLHL,
+    glassRTL... sections), else the technique's meshes in the stock parts (body, bumperFa,
+    trunk...; not the race or other optional parts). A lamp in the middle (a third brake light)
+    is left out, as in most of FH1's cars, and so are indicators (FH1 gives those only to its
+    traffic cars)."""
+    import carbin_dump
+    m = carbin_dump.parse(data)
+    pts = {}  # (lamp, side) -> {rank: vertices}; the best rank is used
+    lod = m["base"].get("start_lod", 1)
+    for s in m["sections"]:
+        vb = s["vertex_buffer"]
+        name = s["name"]
+        name = name.decode("latin-1") if isinstance(name, bytes) else name
+        if not vb["count"] or not vb["has_data"] or LIGHT_SKIP_SECTION.search(name):
+            continue
+        c, h = s["center"], s["bounds_max"]
+        glass = re.match(r"(?i)glass[LR]([HT])L$", name)
+        for me in s["meshes"]:
+            mat = me["material"]
+            mat = (mat.decode("latin-1") if isinstance(mat, bytes) else mat).lower()
+            if glass:  # a lamp's lens
+                lamp, rank = "head" if glass.group(1).upper() == "H" else "tail", LAMP_RANK["lens"]
+            else:
+                lamp = next((k for k, v in LIGHT_MATERIALS.items() if mat in v), None)
+                rank = LAMP_RANK["own" if re.match(r"(?i)(head|tail)light[LR]", name) else "other"]
+            ib = me["index_buffer"]
+            if not lamp or me["lod"] != lod or not ib["has_data"] or not ib["count"]:
+                continue
+            fmt = ">%d%s" % (ib["count"], "I" if ib["index_size"] == 4 else "H")
+            for i in set(struct.unpack_from(fmt, data, ib["data_at"])):
+                if i >= vb["count"]:
+                    continue
+                x, y, z = struct.unpack_from(">3h", data, vb["data_at"] + vb["stride"] * i)
+                p = (c[0] + x / 32767.0 * h[0], c[1] + y / 32767.0 * h[1], c[2] + z / 32767.0 * h[2])
+                if (lamp == "head") == (p[2] < 0) and abs(p[0]) > 0.01:  # the model's front is -z
+                    pts.setdefault((lamp, 1 if p[0] < 0 else 2), {}).setdefault(rank, []).append(p)
+    kind = 3 if year < 2000 else 1 if year < 2010 else 2
+    recs = []
+    for (lamp, side), ranks in sorted(pts.items()):
+        for lo, hi in _lamp_clusters(ranks[max(ranks)]):
+            x, y = (lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2
+            if abs(x) < LIGHT_MIDDLE:
+                continue
+            if lamp == "head":
+                z = lo[2] + LIGHT_INSET
+                recs.append(light_record((x, y, z), True, side, HEAD_LAMP[kind]))
+                flare = (HEAD_LAMP[kind][0], 4, 1, HEAD_FLARE[kind], 179, 7, (30, 70))
+                recs.append(light_record((x, y, z - FLARE_AHEAD), True, side, flare))
+            elif lamp == "tail":
+                for rec in TAIL_LAMP:
+                    recs.append(light_record((x, y, hi[2] - LIGHT_INSET), False, side, rec))
+            else:
+                recs.append(light_record((x, y, hi[2] - LIGHT_INSET / 3), False, side, REVERSE_LAMP))
+    return struct.pack(">I", len(recs)) + b"".join(recs)
+
+
 def carattribs_v21(fm4_xml, donor_xml):
     """FM4's CarAttribs.xml (version 16) as FH1's version 21: FH1's damage and shadow
     settings (from one of the player's FH1 cars, the same for FH1's cars) over FM4's file."""
@@ -993,9 +1125,11 @@ class Converter:
                 continue
             if low.endswith(".carbin"):
                 data = fm4_carbin.convert(m.read(), "car/%s/%s" % (name, low))
-                self.put(base + "stripped_" + low, fm4_carbin.strip(data))
                 if low == name.lower() + ".carbin":
+                    year = self.fm4db.execute("select Year from Data_Car where Id=?", (cid,)).fetchone()
+                    data = fm4_carbin.set_lights(data, car_lights(data, year[0] if year else 2000))
                     main_fh1 = data
+                self.put(base + "stripped_" + low, fm4_carbin.strip(data))
                 self.put(base + rel, data)
             elif low == "carattribs.xml":
                 self.put(base + rel, carattribs_v21(m.read(), self.donor_attribs))

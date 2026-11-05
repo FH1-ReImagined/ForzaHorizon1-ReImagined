@@ -15,32 +15,60 @@ def _string(s):
     return struct.pack(">I", len(s)) + s.encode()
 
 
-def fm4_carbin_file(vertices):
-    """A one-section, one-mesh FM4 car model (root 2, base 16, buffers v2/v3, 32-byte vertices)."""
+def fm4_carbin_file(vertices, sections=None):
+    """An FM4 car model (root 2, base 16, buffers v2/v3, 32-byte vertices): one "body" section
+    with one mesh of the given vertices, or sections [(name, [(material, [(x, y, z)...])...])]
+    with their vertices placed at those positions."""
+    if sections is None:
+        sections = [("body", [("body", vertices)], (0, 0.5, 0), (1, 1, 1))]
+    else:
+        out = []
+        for name, meshes in sections:
+            pts = [p for _, ps in meshes for p in ps]
+            c = [(min(p[k] for p in pts) + max(p[k] for p in pts)) / 2 for k in range(3)]
+            h = [max(abs(p[k] - c[k]) for p in pts) or 1.0 for k in range(3)]
+            enc = [(m, [struct.pack(">4h", *[round((p[k] - c[k]) / h[k] * 32767) for k in range(3)], 0) +
+                        bytes(16) + bytes(8) for p in ps]) for m, ps in meshes]
+            out.append((name, enc, c, h))
+        sections = out
     out = struct.pack(">I", 2) + bytes(0x150)
     out += struct.pack(">II", 16, 16)               # CBaseCarModelData 16, ShaderVersion
     out += struct.pack(">II", 1, 0)                 # Emitters: none
     out += struct.pack(">I", 1) + bytes(0x60)       # DriverControls v1
     out += struct.pack(">II", 1, 5) + bytes(15 * 36 + 8) + struct.pack(">I", 0)
     out += struct.pack(">II", 1, 0)                 # BoneMappingTable
+    entries = [(si, mi) for si, sec in enumerate(sections) for mi in range(len(sec[1]))]
     out += struct.pack(">III", 4, 4, 1)             # draw lists, one LOD
     out += struct.pack(">I", 0)                     # alpha list
-    out += struct.pack(">IHH", 1, 0, 0)             # opaque list: section 0 mesh 0
-    out += struct.pack(">II", 1, 1)                 # SubModel array
-    out += struct.pack(">I", 5) + struct.pack(">3f", 0, 0.5, 0) + struct.pack(">3f", -1, -1, -1)
-    out += struct.pack(">3f", 1, 1, 1) + struct.pack(">f", 1.0) + bytes(12) + bytes(4)
-    out += struct.pack(">IIIII", 1, 1, 0, 1, 0) + b"\0" + struct.pack(">I", 0)
-    out += struct.pack(">I", 1) + _string("body")
-    out += struct.pack(">III", 2, len(vertices), 32) + b"".join(vertices)
-    out += struct.pack(">II", 1, 1)                 # mesh array
-    out += struct.pack(">I", 3) + b"\0" + struct.pack(">16f", 0, 1, 0, 1, 0, 1, 0, 1, *([0] * 8))
-    out += struct.pack(">I", 2) + _string("body") + struct.pack(">III", 1, 6, 0)
-    out += struct.pack(">I", 1) + struct.pack(">12f", 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1)
-    out += struct.pack(">III", 3, 3, 2) + struct.pack(">3H", 0, 1, 2) + struct.pack(">I", 0)
-    out += struct.pack(">III", 2, 0, 0)             # VertexBuffer_LOD0, empty
-    out += struct.pack(">I", 1) + b"\0"             # MorphTargets
-    out += struct.pack(">III", 2, 0, 0) * 2
+    out += struct.pack(">I", len(entries)) + b"".join(struct.pack(">HH", *e) for e in entries)
+    out += struct.pack(">II", 1, len(sections))     # SubModel array
+    for name, meshes, c, h in sections:
+        verts = [v for _, vs in meshes for v in vs]
+        out += struct.pack(">I", 5) + struct.pack(">3f", *c) + struct.pack(">3f", *[-x for x in h])
+        out += struct.pack(">3f", *h) + struct.pack(">f", 1.0) + bytes(12) + bytes(4)
+        out += struct.pack(">IIIII", 1, 1, 0, 1, 0) + b"\0" + struct.pack(">I", 0)
+        out += struct.pack(">I", 1) + _string(name)
+        out += struct.pack(">III", 2, len(verts), 32) + b"".join(verts)
+        out += struct.pack(">II", 1, len(meshes))   # mesh array
+        first = 0
+        for material, vs in meshes:
+            idx = list(range(first, first + len(vs)))
+            first += len(vs)
+            out += struct.pack(">I", 3) + b"\0" + struct.pack(">16f", 0, 1, 0, 1, 0, 1, 0, 1, *([0] * 8))
+            out += struct.pack(">I", 2) + _string(material) + struct.pack(">III", 1, 6, 0)
+            out += struct.pack(">I", 1) + struct.pack(">12f", 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1)
+            out += struct.pack(">III", 3, len(idx), 2) + struct.pack(">%dH" % len(idx), *idx) + struct.pack(">I", 0)
+        out += struct.pack(">III", 2, 0, 0)         # VertexBuffer_LOD0, empty
+        out += struct.pack(">I", 1) + b"\0"         # MorphTargets
+        out += struct.pack(">III", 2, 0, 0) * 2
     return out + fm4_carbin.TAIL
+
+
+def lamp(x, y, z, w=0.1, hgt=0.06):
+    """A small lamp: a box centred at x, y, z with vertices every 2 cm across its face."""
+    nx, ny = int(round(w / 0.02)), int(round(hgt / 0.02))
+    return [(x - w / 2 + w * i / nx, y - hgt / 2 + hgt * j / ny, z + dz)
+            for i in range(nx + 1) for j in range(ny + 1) for dz in (-0.01, 0.01)]
 
 
 def vertex(sh):
@@ -87,6 +115,67 @@ class CarbinTests(unittest.TestCase):
         src = fm4_carbin_file([vertex((0, 0, 0, 0))] * 3)
         with self.assertRaises(fm4_carbin.CarbinError):
             fm4_carbin.convert(src[:-40], "x")
+
+
+class LightTests(unittest.TestCase):
+    def model(self):
+        return fm4_carbin.convert(fm4_carbin_file(None, [
+            ("body", [("body", lamp(0, 0.6, 0, 1.8, 1.0)), ("tail_light", lamp(0, 1.0, 2.0, 0.3))]),
+            ("headlightL", [("head_light", lamp(-0.7, 0.5, -2.0)), ("reflector", lamp(-0.6, 0.6, -1.8))]),
+            ("headlightR", [("head_light", lamp(0.7, 0.5, -2.0))]),
+            ("taillightL", [("tail_light", lamp(-0.6, 0.7, 2.1, 0.2)), ("reverse_light", lamp(-0.3, 0.7, 2.1))]),
+            ("taillightR", [("tail_light", lamp(0.6, 0.7, 2.1, 0.2))]),
+            ("bumperFrace", [("head_light", lamp(-0.8, 0.2, -2.2))]),
+        ]), "lights/car")
+
+    def records(self, data):
+        n = struct.unpack_from(">I", data, 0x154)[0]
+        return [data[0x158 + 32 * k:0x178 + 32 * k] for k in range(n)]
+
+    def test_lamps_become_records(self):
+        data = self.model()
+        out = fm4_carbin.set_lights(data, fm4_cars.car_lights(data, 2012))
+        m = carbin_dump.parse(out)
+        self.assertTrue(m["parsed_to_end"])
+        recs = self.records(out)
+        self.assertEqual(m["lights"], len(recs))
+        # (function, kind, side): headlight and flare per side, tail, brake and second brake
+        # sprite per side, one reverse lamp; the middle lamp and the race bumper's are left out
+        got = sorted((r[21], r[19], r[20]) for r in recs)
+        self.assertEqual(got, sorted([(1, 2, 1), (1, 4, 1), (1, 2, 2), (1, 4, 2),
+                                      (1, 4, 1), (2, 0, 1), (4, 0, 1), (1, 4, 2), (2, 0, 2), (4, 0, 2),
+                                      (16, 0, 1)]))
+        head = [r for r in recs if r[21] == 1 and r[19] == 2 and r[20] == 1][0]
+        x, y, z = struct.unpack_from(">3f", head)
+        self.assertAlmostEqual(x, -0.7, places=3)
+        self.assertAlmostEqual(y, 0.5, places=3)
+        self.assertAlmostEqual(z, 2.01 - fm4_cars.LIGHT_INSET, places=3)  # the list's z is forward
+        self.assertEqual(struct.unpack_from(">3h", head, 12), (0, 0, 32767))
+        brake = [r for r in recs if r[21] == 2 and r[20] == 2][0]
+        self.assertLess(struct.unpack_from(">f", brake, 8)[0], -2.0)
+        self.assertEqual(struct.unpack_from(">3h", brake, 12), (0, 0, -32767))
+        self.assertEqual(tuple(brake[22:25]), (255, 0, 0))
+
+    def test_headlight_kind_by_year(self):
+        data = self.model()
+        for year, kind in ((1969, 3), (2005, 1), (2011, 2)):
+            recs = self.records(fm4_carbin.set_lights(data, fm4_cars.car_lights(data, year)))
+            self.assertEqual({r[19] for r in recs if r[21] == 1 and r[19] != 4}, {kind})
+
+    def test_lens_when_no_lamp_sections(self):
+        data = fm4_carbin.convert(fm4_carbin_file(None, [
+            ("body", [("body", lamp(0, 0.6, 0, 1.8, 1.0)), ("head_light", lamp(0.3, 0.4, -2.2))]),
+            ("glassRHL", [("glass", lamp(0.75, 0.55, -1.6, 0.2, 0.1))]),
+        ]), "lights/lens")
+        recs = self.records(fm4_carbin.set_lights(data, fm4_cars.car_lights(data, 2002)))
+        self.assertEqual(len(recs), 2)
+        self.assertAlmostEqual(struct.unpack_from(">f", recs[0])[0], 0.75, places=3)
+        self.assertEqual(recs[0][20], 2)
+
+    def test_no_lamps_no_records(self):
+        data = fm4_carbin.convert(fm4_carbin_file([vertex((0, 0, 0, 0))] * 3), "x")
+        self.assertEqual(fm4_cars.car_lights(data, 2000), struct.pack(">I", 0))
+        self.assertEqual(fm4_carbin.set_lights(data, struct.pack(">I", 0)), data)
 
 
 class PhysdefTests(unittest.TestCase):
