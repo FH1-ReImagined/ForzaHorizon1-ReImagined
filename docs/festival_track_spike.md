@@ -23,7 +23,9 @@ converted files next to a copy of the game folder. Nothing from either game is i
    - each ribbon's time-of-day curves (`TimeOfDay*.xml`): Colorado's, every curve held at
      13:00 (`FM4_PVS_TOD`, minutes; `keep`, `off`);
    - FM4's track shaders patched for FH1's inputs (`tools/fm4_shaders.py`: the shadow map and
-     the projected track lightmap, whose sampler 13 holds FH1's shadow mask, read as 1);
+     the projected track lightmap, whose sampler 13 holds FH1's shadow mask, read as 1;
+     the lightmap colours and the shadow colour `shad_color` made constants, from each
+     shader's own literals);
    - each ribbon's `.col` in FH1's cell layout (`tools/fm4_col.py`);
    - the track archive `media/tracks/<track>/bin.zip` in FH1's layout (stored members, data
      offset in extra field 0x1123, files ordered by CRC-32 of the lower-case path) and a
@@ -53,7 +55,7 @@ Converter test switches: `FM4_PVS_FLAGS`, `FM4_PVS_FLAGMASK`, `FM4_PVS_SHADERS`,
 `FM4_PVS_PROJLM`, `FM4_PVS_SKY`, `FM4_PVS_SHADER_PATCHES`, `FM4_PVS_LIGHTMAPS`, `FM4_PVS_HEX`,
 `FM4_PVS_EXTENT`, `FM4_PVS_VISIBLE`, `FM4_PVS_VISIBLE_NEAR`, `FM4_PVS_VISIBLE_CELLS`, `FM4_PVS_VISIBLE_SIZE`,
 `FM4_PVS_TOD`, `FM4_PVS_TRACKSETTINGS`, `FM4_PVS_TRACKSETTINGS_FM4`, `FM4_SHADERS_LIGHTMAP`,
-`FM4_SHADERS_LIGHTMAP_COLOURS`, `FM4_SHADERS_TINTS`, `FM4_PVS_PASS_GROUPS`, `FM4_PVS_PASS_GROUP_DROP`, `FM4_PVS_GROUND`, `FM4_PVS_GROUND_SCALE`, `FM4_PVS_GROUND_BELOW`, `FM4_PVS_GROUND_MODEL`,
+`FM4_SHADERS_LIGHTMAP_COLOURS`, `FM4_SHADERS_SHADOW_COLOUR`, `FM4_SHADERS_TINTS`, `FM4_PVS_PASS_GROUPS`, `FM4_PVS_PASS_GROUP_DROP`, `FM4_PVS_GROUND`, `FM4_PVS_GROUND_SCALE`, `FM4_PVS_GROUND_BELOW`, `FM4_PVS_GROUND_MODEL`,
 `FM4_COL_NORMALS`, `FM4_COL_WALL`, `FM4_COL_EDGES`, `FM4_COL_REMAP`, `FM4_COL_GRID`,
 `FM4_COL_SURFACE`, `FM4_COL_KEEP_DEGENERATE`; `FM4_DISC` (FM4's disc folder) for the
 surface map.
@@ -164,6 +166,36 @@ surface map.
   FH1 draws FM4's colour pass with; the next step would be a run-time trace of the PS
   constants at each draw (a command-processor IssueDraw wrapper) to see which path draws
   them.
+- The run-time trace (ReIGlue, a scratch build only: `FORZA_GPU_PS_TRACE=FILE`, logging starts
+  when `FILE.trigger` appears; `_FILTER` a list of pixel-shader hashes from
+  `tools/fxobj_shaders.py list` of the converted `bin.zip`; per draw the pixel shader, PS
+  c0-c7, every float constant the two shaders read, and for each the packet and buffer that
+  last wrote it) settled where FM4's constants come from. Every FM4 track draw comes from
+  FM4's own command buffer: ring, FH1's indirect buffer, then the pass group's buffer
+  (depth 3), and PS c0-c7 at the draw are the ones that buffer wrote just before it
+  (TERR_SZKA_014: 0.503, 0.565, 0.485, 0.518 and 4, 4, 1, 50; age 0). So the material
+  constants were never the problem, and the c0-c6 conclusion above was wrong. What FH1 does
+  not set are FM4's globals, which keep FH1's own data in those registers: PS c240
+  `shad_color` reads (denormal, NaN, 2.99, denormal) in the road, shoulder, grass and
+  barrier shaders, and VS c149-c151 `shad_clip_near` and c220 `shad_clip_misc` the same kind
+  of bit patterns. These shaders end with lerp(shad_color, 1, shadow), so the NaN coloured
+  the whole road (flat teal at the grid in both traced runs). The other globals they read
+  (c214 SunGainScale, c223/c224 RoadSpecularParams, c242 FogColor, c249-c251 TimeGain, sunDir,
+  sunColor) hold finite values. Also found: the shaders' literal constants (c252-c255, from
+  the blob's definitions table) differ per shader; c255 is (1, 0, 0, 0) only in some, and
+  many shaders have none, so the lightmap-colour patch's "c255.x, c255.y" made some lightmaps
+  black, 1.5x or constant. Both patches now take the 1 and the 0 from the shader's own
+  literals (none: the shader is left alone; FH1 then left c247/c248 at (0, 0, 0, 1) and
+  (1, 1, 1, 1) in the traced frames, the identity lerp), and `shad_color` reads 1 (the
+  negate bits kept, so 1 - shad_color is 0). Result, two 9-spot passes in a row: grey road,
+  green grass, red-and-white kerbs, the same in both at 8 of the 9 spots (the grid was flat
+  teal before at both traced runs). Spot 4 drew right in the first pass and flat black
+  (road, kerbs, verge) in the second; a traced third run there drew right again, with no
+  NaN left in the pixel constants, only in VS c149-c151 and c220 (shad_clip_near/misc:
+  (8e-40, NaN, 25.18, 9e-40) there, (NaN, 2.99, ...) at the grid: FH1's data, which changes
+  by place and run). Those are the next suspect for the black: the vertex shader's shadow
+  coordinates feed the pixel shader's shadow selects (cndgt/cndeq on interpolators); make
+  them constants in the vertex shaders as well (the same literal approach) and retest spot 4.
 - FM4's `TrackSettings.xml` (version 59) lacks FH1's renderer settings (Brightness, Contrast,
   ExposureBias, LightHemiTop/Bottom, WorldClear, bloom, height fog); read as it is, the
   circuit drew far too dark. The converter writes Colorado's with FM4's sun gain, lightmap,
@@ -174,9 +206,9 @@ surface map.
 ## Open
 
 - (c) The road, terrain and buildings draw with FM4's own shaders, at 13:00, over a ground.
-  Still to do: the blend surfaces' stale constants (above), now for a hook that uploads
-  each material's float block per draw (the group reorder alone does not set them); the stretched ground shows its blend texture's sandy channel more than grass;
-  the zone-size glitch above (likely the same stale constants: more materials per zone, more
-  chances to draw after an unrelated effect).
+  Still to do: the black road once at spot 4 (above: likely the VS shadow clip constants
+  c149-c151, c220, still FH1's data); FM4's shadows (the shadow map reads 1 and `shad_color`
+  1: no shadows on the circuit); the stretched ground shows its blend texture's sandy channel more
+  than grass; the zone-size glitch above (to retest: it may have been the same NaN).
 - The streaming block pool still needs `FORZA_FM4_STREAM_POOL`.
 - AI, the airport entry, ribbons 01 and 02, other circuits.
