@@ -241,6 +241,14 @@ instances; 33446 streaming blocks asked for). Suzuka-specific assumptions found 
   (`fm4_shaders.ATLAS_MASK_SHADERS`, from `fm4_pvs.atlas_mask_shaders`): at Laguna Seca
   ROAD_BLND_TRILIN_2 and RDLINE_BLND_SPEC_OPAC_3, at Suzuka none. The real fix would cut the
   tiles out into textures of their own, or point FH1's fetch at the tile.
+- Not solved: Laguna Seca's road still draws black at most spots (the Corkscrew's draws right),
+  with the mask patch in and at the 120 m visible set as well. A texture trace (the PS trace now
+  logs each draw's texture fetch constants: base, size, format) shows why: the road's lightmap
+  sampler (s7) holds a 32 x 32 8888 texture, where Suzuka's road gets its lightmap atlas
+  (texture 783, _0x0000030F.bix, 128 x 512 DXT1). Laguna's road lightmap is texture 1323
+  (_0x0000052B.bix, 512 x 256 DXT1, the same format), so FH1 draws with a stand-in: that
+  texture is never loaded, or not found by its record. Next: trace the texture load for that
+  record (its number, file and zone list), against Suzuka's.
 - Still one converted track at a time: the converter writes FH1's zipmanifest.xml with one
   line for its track, so the last converted circuit is the one mounted
   (`reconvert_track.sh` copies it into the game folder).
