@@ -31,10 +31,43 @@ inline uint32_t ScaledSize(uint32_t size, uint32_t scale) { return size * scale;
 // (sub_82D4E9F0, as many bytes as its own layout holds).
 constexpr uint32_t kCopy = 2;
 
-// The size of a copy's layout: the size its source layout was saved at when that is the scale's
-// (a driving paint job drawn at 2x), else the game's (a save of unknown size included).
-inline uint32_t CopyLayoutSize(uint32_t scale, uint32_t saved_size) {
-  return scale > 1 && saved_size == ScaledSize(kGameSize, scale) ? saved_size : kGameSize;
+// Whether photo mode's copy, whose layout is `own` on a side, loads a save made at twice that
+// (a driving paint job drawn at the scale): it then reads the whole save and halves it.
+inline bool HalvesSave(uint32_t scale, uint32_t own, uint32_t saved_size) {
+  return scale > 1 && own == kGameSize && saved_size == ScaledSize(kGameSize, scale) &&
+         saved_size == 2 * own;
+}
+
+// Byte offset of texel (x, y) in a Xenos 2D-tiled 32-bit texture `width` texels wide
+// (XGAddress2DTiledOffset), the layout's memory as the game saves and loads it.
+inline uint32_t TiledOffset32(uint32_t x, uint32_t y, uint32_t width) {
+  constexpr uint32_t kLogBpp = 2;
+  const uint32_t aligned = (width + 31) & ~31u;
+  uint32_t macro = ((y >> 5) * (aligned >> 5)) << (kLogBpp + 7);
+  uint32_t micro = ((y & 6) << 2) << kLogBpp;
+  const uint32_t outer = macro + ((micro & ~0xFu) << 1) + (micro & 0xF) +
+                         ((y & 8) << (3 + kLogBpp)) + ((y & 1) << 4);
+  macro = (x >> 5) << (kLogBpp + 7);
+  micro = (x & 7) << kLogBpp;
+  const uint32_t off = outer + macro + ((micro & ~0xFu) << 1) + (micro & 0xF);
+  return ((off & ~0x1FFu) << 3) + ((off & 0x1C0) << 2) + (off & 0x3F) + ((y & 16) << 7) +
+         (((((y & 8) >> 2) + (x >> 3)) & 3) << 6);
+}
+
+// Halves a tiled 8:8:8:8 picture `size` texels on a side (size x size x 4 bytes at src) into a
+// tiled one of size / 2 at dst: each texel the rounded average of 2x2, per byte.
+inline void HalveTiled32(const uint8_t* src, uint32_t size, uint8_t* dst) {
+  const uint32_t half = size / 2;
+  for (uint32_t y = 0; y < half; ++y) {
+    for (uint32_t x = 0; x < half; ++x) {
+      const uint8_t* a = src + TiledOffset32(2 * x, 2 * y, size);
+      const uint8_t* b = src + TiledOffset32(2 * x + 1, 2 * y, size);
+      const uint8_t* c = src + TiledOffset32(2 * x, 2 * y + 1, size);
+      const uint8_t* d = src + TiledOffset32(2 * x + 1, 2 * y + 1, size);
+      uint8_t* o = dst + TiledOffset32(x, y, half);
+      for (int i = 0; i < 4; ++i) o[i] = uint8_t((a[i] + b[i] + c[i] + d[i] + 2) / 4);
+    }
+  }
 }
 
 struct Texture {

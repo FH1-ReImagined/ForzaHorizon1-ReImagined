@@ -29,11 +29,11 @@
 // (mode 7, 8:8:8:8 final textures) has no room at 2048 (see Scaled below).
 // Photo mode's paint job draws no sides: it loads the layout its driving paint job saved once
 // drawn (sub_82D4E7D0, compressed, the layout's size squared x 4 bytes; sub_82D4E9F0 reads as
-// many bytes as its own layout holds). At 2x that save is 2048x2048, so photo mode's layout is
-// made 2048x2048 too when its save is (in the heap the driving paint job's render copies came
-// from: photo mode's own heap has no room for it), and the photo's final textures stay
-// 1024x1024 (#680: read into a 1024x1024 layout, a quarter of the save came out cut into bands
-// and shifted, the decals gone or in the wrong place).
+// many bytes as its own layout holds). At 2x that save is 2048x2048: read into the 1024x1024
+// layout, a quarter of it came out cut into bands and shifted, the decals gone or in the wrong
+// place (#680). The copy keeps the game's 1024x1024 layout (a 2048x2048 one does not always fit
+// the memory photo mode has; the photo's final textures are 1024x1024 either way): the hook
+// reads the whole save and halves it into that layout (lb::HalveTiled32), 2x2 texels to one.
 // The CPU compresses the render copies' levels from guest memory, which the GPU's resolves
 // write. With readback_resolve = some a resolve is copied back only when its key is new, and at
 // 2x the damage copy's was not: LivDamageN came out the same as LivPristineN, so the car showed
@@ -44,8 +44,8 @@
 // room for them (the first 4096x4096 texture is not made and the game stops on the missing
 // livery). Memory: src/platform/livery_bake.h, docs/graphics-detail.md.
 // Disc build: sub_82C92390, sub_82C9A2D8, sub_82C8B028, sub_82C8D750, sub_82C38828,
-// sub_8252CC60, sub_82A40CB0, sub_82C90178, sub_82C8D7D8 and sub_8253C9D0; heap ids at
-// 0x832A85C8/CC.
+// sub_8252CC60, sub_82A40CB0, sub_82C90178, sub_82C8D7D8, sub_82C8D9F8, sub_82C7D618 and
+// sub_8253C9D0.
 // tu_address_map: TU4 addresses
 
 #include "../platform/guest_addr.h"
@@ -65,6 +65,7 @@
 #include <mutex>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 REXCVAR_DEFINE_INT32(livery_bake_scale, 1, "Display",
                      "Resolution of the textures each car's paint job (vinyls and decals) is drawn "
@@ -72,10 +73,6 @@ REXCVAR_DEFINE_INT32(livery_bake_scale, 1, "Display",
                      "sharper small decals, more memory per car with a paint job)");
 
 #if FORZA_TU4
-// The heap ids the layout (LivRenderTexture) and the render copies (LivRenderPristineN/DamageN)
-// are made from (photo mode sets its own).
-constexpr uint32_t kLayoutHeap = 0x83393FF8;
-constexpr uint32_t kRenderHeap = 0x83393FFC;
 #define RenderSetupStep sub_82D53420
 #define OriginalRenderSetupStep __imp__sub_82D53420
 #define CompressedSetupStep sub_82D5B3D0
@@ -94,11 +91,13 @@ constexpr uint32_t kRenderHeap = 0x83393FFC;
 #define OriginalBlitSection __imp__sub_82D511B8
 #define SaveLayout sub_82D4E7D0
 #define OriginalSaveLayout __imp__sub_82D4E7D0
+#define LoadLayout sub_82D4E9F0
+#define OriginalLoadLayout __imp__sub_82D4E9F0
+#define StreamRead sub_82D3E878
+#define OriginalStreamRead __imp__sub_82D3E878
 #define CompressTexture sub_825AC118
 #define OriginalCompressTexture __imp__sub_825AC118
 #else
-constexpr uint32_t kLayoutHeap = 0x832A85C8;
-constexpr uint32_t kRenderHeap = 0x832A85CC;
 #define RenderSetupStep sub_82C92390
 #define OriginalRenderSetupStep __imp__sub_82C92390
 #define CompressedSetupStep sub_82C9A2D8
@@ -117,6 +116,10 @@ constexpr uint32_t kRenderHeap = 0x832A85CC;
 #define OriginalBlitSection __imp__sub_82C90178
 #define SaveLayout sub_82C8D7D8
 #define OriginalSaveLayout __imp__sub_82C8D7D8
+#define LoadLayout sub_82C8D9F8
+#define OriginalLoadLayout __imp__sub_82C8D9F8
+#define StreamRead sub_82C7D618
+#define OriginalStreamRead __imp__sub_82C7D618
 #define CompressTexture sub_8253C9D0
 #define OriginalCompressTexture __imp__sub_8253C9D0
 #endif
@@ -129,6 +132,8 @@ extern "C" REX_FUNC(OriginalMakeScratchTextures);
 extern "C" REX_FUNC(OriginalTextureHeaderCore);
 extern "C" REX_FUNC(OriginalBlitSection);
 extern "C" REX_FUNC(OriginalSaveLayout);
+extern "C" REX_FUNC(OriginalLoadLayout);
+extern "C" REX_FUNC(OriginalStreamRead);
 extern "C" REX_FUNC(OriginalCompressTexture);
 
 namespace {
@@ -156,8 +161,8 @@ std::atomic<bool> g_unscaled_layout{false};
 
 std::atomic<uint32_t> g_logged{0};
 
-// The heap a scaled driving paint job's render copies came from (0 before the first).
-std::atomic<uint32_t> g_render_heap{0};
+// Set while photo mode's copy loads a layout saved at twice its own size: the save's size.
+thread_local uint32_t g_halve_from = 0;
 
 // The layouts driving paint jobs saved: the saved data's address and the size it was saved at.
 std::mutex g_saved_mutex;
@@ -250,13 +255,13 @@ void ScaleLayoutSize(uint8_t* base, uint32_t setup) {
   if (Load32(base, at) == lb::kGameSize) Store32(base, at, lb::ScaledSize(lb::kGameSize, scale));
 }
 
-// The size photo mode's copy of a paint job gets for its layout: its saved layout's (0 for any
-// other paint job).
-uint32_t CopyLayoutSize(uint8_t* base, uint32_t setup) {
+// The size the layout photo mode's copy of a paint job loads was saved at (0 for any other paint
+// job, or a save it has no size for).
+uint32_t CopySavedSize(uint8_t* base, uint32_t setup) {
   if (!setup || Load32(base, setup + kPaintShopOffset) != lb::kCopy) return 0;
   const uint32_t source = Load32(base, setup + kSourceOffset);
   const uint32_t data = source >= 0x10000 ? Load32(base, source + 8) : 0;
-  return lb::CopyLayoutSize(Scale(), data ? SavedSize(data) : 0);
+  return data ? SavedSize(data) : 0;
 }
 
 }  // namespace
@@ -264,10 +269,7 @@ uint32_t CopyLayoutSize(uint8_t* base, uint32_t setup) {
 // One step of a car livery's setup: makes at most one of LivRenderPristineN/DamageN (or 0).
 extern "C" REX_FUNC(RenderSetupStep) {
   g_in_livery = Scaled(base, ctx.r3.u32);
-  if (g_in_livery && Scale() > 1) {
-    g_render_heap = Load32(base, kRenderHeap);
-    HoldReadback(true);
-  }
+  if (g_in_livery && Scale() > 1) HoldReadback(true);
   OriginalRenderSetupStep(ctx, base);
   g_in_livery = false;
 }
@@ -292,26 +294,53 @@ extern "C" REX_FUNC(MakeLayoutTexture) {
                   scaled ? "scaled" : "the game's size");
     }
   }
-  // Photo mode's copy takes its save's size, from the render copies' heap (see the top).
-  const uint32_t copy = CopyLayoutSize(base, setup);
-  const uint32_t render_heap = g_render_heap.load();
-  const bool scaled_copy = copy > lb::kGameSize && render_heap;
-  const uint32_t layout_heap = Load32(base, kLayoutHeap);
-  const bool other_heap = scaled_copy;
   g_unscaled_layout = !scaled;
-  g_in_livery = scaled || scaled_copy;
-  if (other_heap) Store32(base, kLayoutHeap, render_heap);
+  g_in_livery = scaled;
   OriginalMakeLayoutTexture(ctx, base);
-  if (other_heap) Store32(base, kLayoutHeap, layout_heap);
   g_in_livery = false;
   if (scaled) ScaleLayoutSize(base, setup);
-  if (scaled_copy && Load32(base, setup + kLayoutSizeOffset) == lb::kGameSize) {
-    Store32(base, setup + kLayoutSizeOffset, copy);
+}
+
+// Photo mode's copy loads its layout from the save (r3 the paint job; one read of its layout's
+// size squared x 4 bytes, StreamRead below).
+extern "C" REX_FUNC(LoadLayout) {
+  const uint32_t setup = ctx.r3.u32;
+  const uint32_t own = Load32(base, setup + kLayoutSizeOffset);
+  const uint32_t saved = CopySavedSize(base, setup);
+  g_halve_from = lb::HalvesSave(Scale(), own, saved) ? saved : 0;
+  if (g_halve_from) {
     static std::atomic<uint32_t> logged{0};
     if (logged.fetch_add(1, std::memory_order_relaxed) < 4) {
-      REXLOG_INFO("livery_bake_scale: photo mode's paint job loads a {}x{} layout", copy, copy);
+      REXLOG_INFO("livery_bake_scale: photo mode's paint job: the {}x{} save halved into its {}x{} "
+                  "layout", saved, saved, own, own);
     }
   }
+  OriginalLoadLayout(ctx, base);
+  g_halve_from = 0;
+}
+
+// Reads r5 bytes of a stream (r3) to r4. For a copy whose save is twice its layout's size, the
+// whole save is read in four parts of the layout's size (through the layout's memory) and halved
+// into the layout.
+extern "C" REX_FUNC(StreamRead) {
+  const uint32_t from = g_halve_from;
+  const uint32_t to = from / 2;
+  const uint32_t bytes = to * to * 4;
+  if (!from || ctx.r5.u32 != bytes || ctx.r4.u32 < 0x10000) {
+    OriginalStreamRead(ctx, base);
+    return;
+  }
+  g_halve_from = 0;  // the load's one read
+  const uint32_t stream = ctx.r3.u32, dst = ctx.r4.u32;
+  std::vector<uint8_t> save(size_t(from) * from * 4);
+  for (uint32_t part = 0; part < 4; ++part) {
+    ctx.r3.u64 = stream;
+    ctx.r4.u64 = dst;
+    ctx.r5.u64 = bytes;
+    OriginalStreamRead(ctx, base);
+    std::memcpy(save.data() + size_t(part) * bytes, forza::GuestPtr(base, dst), bytes);
+  }
+  lb::HalveTiled32(save.data(), from, forza::GuestPtr(base, dst));
 }
 
 // Sets the layout size again (1024, or 2048 in the Paint Shop).

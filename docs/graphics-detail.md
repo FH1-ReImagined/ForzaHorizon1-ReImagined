@@ -283,12 +283,14 @@ bytes (`sub_82D4E7D0`, queued by the setup's steps in `sub_82D5C5F8`), and the c
 save into its own layout (`sub_82D4E9F0`), as many bytes as its own layout holds. At 2x the save
 is 2048x2048 (16 MB raw) and a 1024x1024 copy read its first 4 MB: a quarter of the design, cut
 into bands and moved, so in photo mode decals were gone or in the wrong place and vinyls had
-other diagonals and hard cuts (#680). The hook keeps each save's size with its address, and a
-copy whose save was 2048x2048 makes its layout 2048x2048 (its +60 too); the photo's final
-textures stay 1024x1024, drawn from it. Photo mode switches the layout's heap to its own, which
-has no room for 16 MB more (the layout was not made and the game stopped); the copy's layout is
-made from the heap the driving paint job's render copies came from (`0x83393FFC`; the layout's
-is `0x83393FF8`).
+other diagonals and hard cuts (#680). The hook keeps each save's size with its address. The copy
+keeps the game's 1024x1024 layout; when its save was 2048x2048, the hook reads the whole save in
+four 4 MB parts (`sub_82D3E878`, through the layout's own memory) and halves it into the layout,
+each texel the average of 2x2 through the Xenos tiling. The photo's final textures are
+1024x1024 either way. A first version made the copy's layout 2048x2048 instead: photo mode's
+heap has no room for that, and from the heap of the render copies it was not made once a
+damaged car's copies were there (the game stopped entering photo mode, 1 in 6 on Windows and on
+the first entry after a crash into a wall here).
 
 The CPU compresses the render copies (`LivRenderPristineN`/`DamageN`) from guest memory, which
 the GPU's resolves write. With `readback_resolve = some` (the default) a resolve is copied back
@@ -337,9 +339,9 @@ lobbies with many paint jobs, Windows, the frame time while a car loads, and the
 Photo mode's copy (#680), same save: the layout the car saved and the one photo mode loaded,
 dumped from guest memory and untiled. At Console both are the same 4 MB, byte for byte. At 2x
 before the fix the save was 16 MB and the copy's layout a cut-up quarter of it (the rear decal
-in four bands at the bottom of the layout, the side decal missing); after it the copy loads all
-16 MB, byte for byte the save, with the decals where the Console layout has them. Take Photo at
-2x with the decal pack ran without errors.
+in four bands at the bottom of the layout, the side decal missing); a 2048x2048 copy loaded all
+16 MB, byte for byte the save; the save halved as the hook does it differs from the Console layout
+by 0.013 on average per byte (0 to 255), so the design is where the Console one has it.
 
 Scratches (#680), same save, a texture dump of free roam: at Console `LivPristineN` and
 `LivDamageN` are two 1024x1024 DXT5 textures, the damage one with scratches over the body. At 2x

@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <initializer_list>
+#include <vector>
 
 namespace l = forza::livery_bake;
 
@@ -52,14 +53,51 @@ int main() {
   CHECK(l::ScaledSize(1024, 2) == 2048);
 
   // Photo mode's copy of a paint job loads the layout its driving paint job saved, as many bytes
-  // as its own layout holds: its layout takes the saved size at 2x (#680), the game's otherwise.
-  CHECK(l::CopyLayoutSize(1, 1024) == 1024);
-  CHECK(l::CopyLayoutSize(2, 2048) == 2048);
-  CHECK(l::CopyLayoutSize(2, 1024) == 1024);  // saved before the scale applied, or by another
-  CHECK(l::CopyLayoutSize(2, 0) == 1024);     // a save it has no size for
-  CHECK(l::CopyLayoutSize(1, 2048) == 1024);  // the scale is off: never larger than the game's
-  CHECK(l::CopyLayoutSize(2, 4096) == 1024);
+  // as its own layout holds: at 2x it reads the whole 2048x2048 save and halves it (#680).
+  CHECK(l::HalvesSave(2, 1024, 2048));
+  CHECK(!l::HalvesSave(1, 1024, 1024));
+  CHECK(!l::HalvesSave(2, 1024, 1024));  // saved before the scale applied
+  CHECK(!l::HalvesSave(2, 1024, 0));     // a save it has no size for
+  CHECK(!l::HalvesSave(1, 1024, 2048));  // the scale is off
+  CHECK(!l::HalvesSave(2, 2048, 4096));
+  CHECK(!l::HalvesSave(2, 1024, 4096));
   CHECK(l::kCopy == 2);
+
+  // The tiled layout: every texel of a 2048x2048 and a 1024x1024 picture at its own 4 bytes.
+  for (const uint32_t size : {1024u, 2048u}) {
+    std::vector<bool> used(size_t(size) * size, false);
+    bool ok = true;
+    for (uint32_t y = 0; y < size && ok; ++y) {
+      for (uint32_t x = 0; x < size; ++x) {
+        const uint32_t off = l::TiledOffset32(x, y, size);
+        if (off % 4 || off / 4 >= used.size() || used[off / 4]) { ok = false; break; }
+        used[off / 4] = true;
+      }
+    }
+    CHECK(ok);
+  }
+  CHECK(l::TiledOffset32(0, 0, 1024) == 0);
+  CHECK(l::TiledOffset32(1, 0, 1024) == 4);
+
+  // Halving: each texel of the half is the rounded average of its 2x2, read through the tiling.
+  {
+    const uint32_t size = 64, half = 32;
+    std::vector<uint8_t> src(size_t(size) * size * 4), dst(size_t(half) * half * 4);
+    auto value = [](uint32_t x, uint32_t y, int i) { return uint8_t((x * 3 + y * 5 + i * 40) & 0xFF); };
+    for (uint32_t y = 0; y < size; ++y)
+      for (uint32_t x = 0; x < size; ++x)
+        for (int i = 0; i < 4; ++i) src[l::TiledOffset32(x, y, size) + i] = value(x, y, i);
+    l::HalveTiled32(src.data(), size, dst.data());
+    bool ok = true;
+    for (uint32_t y = 0; y < half; ++y)
+      for (uint32_t x = 0; x < half; ++x)
+        for (int i = 0; i < 4; ++i) {
+          const int sum = value(2 * x, 2 * y, i) + value(2 * x + 1, 2 * y, i) +
+                          value(2 * x, 2 * y + 1, i) + value(2 * x + 1, 2 * y + 1, i);
+          if (dst[l::TiledOffset32(x, y, half) + i] != uint8_t((sum + 2) / 4)) ok = false;
+        }
+    CHECK(ok);
+  }
 
   // Memory: an 8:8:8:8 1024x1024 with 6 levels is 5.33 MB, its DXT5 copy a quarter of that.
   const uint64_t rgba_n = 4u * (1024 * 1024 + 512 * 512 + 256 * 256 + 128 * 128 + 64 * 64 + 32 * 32);
