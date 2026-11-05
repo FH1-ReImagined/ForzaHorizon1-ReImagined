@@ -55,7 +55,7 @@ Converter test switches: `FM4_PVS_FLAGS`, `FM4_PVS_FLAGMASK`, `FM4_PVS_SHADERS`,
 `FM4_PVS_PROJLM`, `FM4_PVS_SKY`, `FM4_PVS_SHADER_PATCHES`, `FM4_PVS_LIGHTMAPS`, `FM4_PVS_HEX`,
 `FM4_PVS_EXTENT`, `FM4_PVS_VISIBLE`, `FM4_PVS_VISIBLE_NEAR`, `FM4_PVS_VISIBLE_CELLS`, `FM4_PVS_VISIBLE_SIZE`,
 `FM4_PVS_TOD`, `FM4_PVS_TRACKSETTINGS`, `FM4_PVS_TRACKSETTINGS_FM4`, `FM4_SHADERS_LIGHTMAP`,
-`FM4_SHADERS_LIGHTMAP_COLOURS`, `FM4_SHADERS_SHADOW_COLOUR`, `FM4_SHADERS_TINTS`, `FM4_PVS_PASS_GROUPS`, `FM4_PVS_PASS_GROUP_DROP`, `FM4_PVS_GROUND`, `FM4_PVS_GROUND_SCALE`, `FM4_PVS_GROUND_BELOW`, `FM4_PVS_GROUND_MODEL`,
+`FM4_SHADERS_LIGHTMAP_COLOURS`, `FM4_SHADERS_SHADOW_COLOUR`, `FM4_SHADERS_SHADOW_CLIP`, `FM4_SHADERS_TINTS`, `FM4_PVS_PASS_GROUPS`, `FM4_PVS_PASS_GROUP_DROP`, `FM4_PVS_GROUND`, `FM4_PVS_GROUND_SCALE`, `FM4_PVS_GROUND_BELOW`, `FM4_PVS_GROUND_MODEL`,
 `FM4_COL_NORMALS`, `FM4_COL_WALL`, `FM4_COL_EDGES`, `FM4_COL_REMAP`, `FM4_COL_GRID`,
 `FM4_COL_SURFACE`, `FM4_COL_KEEP_DEGENERATE`; `FM4_DISC` (FM4's disc folder) for the
 surface map.
@@ -194,8 +194,15 @@ surface map.
   NaN left in the pixel constants, only in VS c149-c151 and c220 (shad_clip_near/misc:
   (8e-40, NaN, 25.18, 9e-40) there, (NaN, 2.99, ...) at the grid: FH1's data, which changes
   by place and run). Those are the next suspect for the black: the vertex shader's shadow
-  coordinates feed the pixel shader's shadow selects (cndgt/cndeq on interpolators); make
-  them constants in the vertex shaders as well (the same literal approach) and retest spot 4.
+  coordinates feed the pixel shader's shadow selects (cndgt/cndeq on interpolators). (That
+  pass ran with three games on the PC; a shot 25 s after loading may also have caught
+  pipelines still building.) The vertex shaders now read them as 0 (the literal's 0, from
+  the VS blob's own literal block, first register below 256; `FM4_SHADERS_SHADOW_CLIP`, on by
+  default): 252 reads in 12 files, every VS that uses them has a literal 0. First pass with it
+  (cut short when the runs were stopped for the PC's load; spots 1-5, 7, 8 shot): all right,
+  spot 4 included. Still to do: two full passes and three spot-4 runs (45 s after loading),
+  then the zone-size glitch (`FM4_PVS_VISIBLE_SIZE=25`, which once gave black road and
+  coloured kerbs). Runs now at `--frame_rate=30` (run.sh, `FRAME_RATE`).
 - FM4's `TrackSettings.xml` (version 59) lacks FH1's renderer settings (Brightness, Contrast,
   ExposureBias, LightHemiTop/Bottom, WorldClear, bloom, height fog); read as it is, the
   circuit drew far too dark. The converter writes Colorado's with FM4's sun gain, lightmap,
@@ -206,8 +213,8 @@ surface map.
 ## Open
 
 - (c) The road, terrain and buildings draw with FM4's own shaders, at 13:00, over a ground.
-  Still to do: the black road once at spot 4 (above: likely the VS shadow clip constants
-  c149-c151, c220, still FH1's data); FM4's shadows (the shadow map reads 1 and `shad_color`
+  Still to do: retest the black road once at spot 4 with the VS shadow clip constants made 0
+  (above); FM4's shadows (the shadow map reads 1 and `shad_color`
   1: no shadows on the circuit); the stretched ground shows its blend texture's sandy channel more
   than grass; the zone-size glitch above (to retest: it may have been the same NaN).
 - The streaming block pool still needs `FORZA_FM4_STREAM_POOL`.

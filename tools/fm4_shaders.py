@@ -25,7 +25,7 @@ import re
 import struct
 import sys
 
-PS_MAGIC = 0x102A1100
+PS_MAGIC, VS_MAGIC = 0x102A1100, 0x102A1101
 # projTrackLightmap (FM4's projected track lightmap, sampler 13 in SHLDR_BLND_SKIDSPEC_2 and
 # CO_DIFF_1_noLM): FH1 binds its shadow mask there, so those surfaces took FH1's shadows
 # through FM4's lightmap lookup; it is made to return 1 as well.
@@ -36,41 +36,45 @@ if __import__("os").environ.get("FM4_SHADERS_LIGHTMAP") == "one":
 MUL, MAX = 1, 3
 
 
-def blobs(data):
+def blobs(data, kind=PS_MAGIC):
     """(offset of the microcode, its size in bytes, samplers {name: register}, float constants
-    {name: register}, literal constants {register: 4 floats}) of each pixel shader blob."""
+    {name: (register, count)}, literal constants {register: 4 floats}) of each pixel shader
+    blob (kind VS_MAGIC: each vertex shader blob)."""
     out = []
     pos = 0
+    tag = struct.pack(">I", kind)
     while True:
-        pos = data.find(b"\x10\x2a\x11\x00", pos)
+        pos = data.find(tag, pos)
         if pos < 0 or pos + 0x24 > len(data):
             return out
         magic, vsize, psize, dbg, ct, _dt, desc = struct.unpack_from(">7I", data, pos)
-        if magic == PS_MAGIC and dbg in (0, 0x24) and pos + vsize + psize <= len(data):
+        if magic == kind and dbg in (0, 0x24) and pos + vsize + psize <= len(data):
             samplers, floats, literals = {}, {}, {}
             c = pos + ct + 4
             try:
                 n, info = struct.unpack_from(">II", data, c + 12)
                 for k in range(n):
-                    nm, regset, reg = struct.unpack_from(">IHH", data, c + info + 20 * k)
+                    nm, regset, reg, cnt = struct.unpack_from(">IHHH", data, c + info + 20 * k)
                     name = data[c + nm:c + nm + 64].split(b"\0")[0].decode("latin1")
                     if regset == 3:
                         samplers[name] = reg
                     elif regset == 2:
-                        floats[name] = reg
+                        floats[name] = (reg, cnt)
             except struct.error:
                 pass
             start, size = pos + vsize, psize
             if _dt:  # literal constants first: the microcode's offset and size in the table
                 off, size = struct.unpack_from(">II", data, pos + _dt + 0x28)
                 # One block (word 1 of the table) at word 5: u16 first register (256 + the
-                # pixel constant), u16 dwords; its values start the physical part.
+                # constant in a pixel shader, the constant in a vertex shader), u16 dwords;
+                # its values start the physical part.
                 count, block = struct.unpack_from(">I", data, pos + _dt + 4)[0], \
                     struct.unpack_from(">I", data, pos + _dt + 0x14)[0]
                 first, dwords = block >> 16, block & 0xFFFF
-                if count == 1 and first >= 256 and dwords % 4 == 0 and dwords * 4 <= off:
+                base = 256 if kind == PS_MAGIC else 0
+                if count == 1 and base <= first < base + 256 and dwords % 4 == 0 and dwords * 4 <= off:
                     for i in range(dwords // 4):
-                        literals[first - 256 + i] = struct.unpack_from(">4f", data, start + 16 * i)
+                        literals[first - base + i] = struct.unpack_from(">4f", data, start + 16 * i)
                 start += off
             out.append((start, size, samplers, floats, literals))
             pos += vsize + psize
@@ -182,26 +186,55 @@ def lightmap_colours(data, start, alus, literals):
 SHADOW_COLOUR = __import__("os").environ.get("FM4_SHADERS_SHADOW_COLOUR", "1") == "1"
 
 
-def shadow_colour(data, start, alus, floats, literals):
+def constant_reads(data, start, alus, regs, lit, comp, what, value):
+    """Every ALU read of a constant in regs becomes lit.comp, replicated (negate bits kept)."""
     done = []
+    for s, f, w in alus:
+        w1, w2 = w[1], w[2]
+        hit = []
+        for slot, (r, _, is_reg) in enumerate(f["src"]):
+            if not is_reg and r in regs:
+                shift = (16, 8, 0)[slot]
+                w2 = (w2 & ~(0xFF << shift)) | (lit << shift)
+                w1 = (w1 & ~(0xFF << shift)) | (swizzle(comp) << shift)
+                hit.append(r)
+        if hit:
+            struct.pack_into(">3I", data, start + 12 * s, w[0], w1, w2)
+            done.append(f"slot {s}: {what} c{hit[0]} -> {value}")
+    return done
+
+
+def shadow_colour(data, start, alus, floats, literals):
     reg = floats.get("shad_color")
     unit = one_and_zero(literals)
     if reg is None or unit is None:
-        return done
+        return []
     lit, one, _ = unit
-    for s, f, w in alus:
-        w1, w2 = w[1], w[2]
-        hit = 0
-        for slot, (r, _, is_reg) in enumerate(f["src"]):
-            if not is_reg and r == reg:
-                shift = (16, 8, 0)[slot]
-                w2 = (w2 & ~(0xFF << shift)) | (lit << shift)
-                w1 = (w1 & ~(0xFF << shift)) | (swizzle(one) << shift)
-                hit += 1
-        if hit:
-            struct.pack_into(">3I", data, start + 12 * s, w[0], w1, w2)
-            done.append(f"slot {s}: shad_color c{reg} -> 1")
-    return done
+    return constant_reads(data, start, alus, {reg[0]}, lit, one, "shad_color", 1)
+
+
+# FM4's shadow clip constants in the vertex shaders (shad_clip_near, c149-c151, and
+# shad_clip_misc, c220, in the road, shoulder and barrier shaders): FH1 never sets them
+# either, and its data there reads as NaNs, denormals and 2.99 or 25.18 depending on place and
+# run. The vertex shader turns them into the shadow coordinates the pixel shader selects its
+# shadow lookups with; with NaN there the road drew flat black at one spot in one run of two.
+# The shadow term is 1 anyway (the shadow map read as 1, shad_color 1), so they are made 0
+# (the literal's 0, replicated). FM4_SHADERS_SHADOW_CLIP=0 leaves them.
+SHADOW_CLIP = __import__("os").environ.get("FM4_SHADERS_SHADOW_CLIP", "1") == "1"
+SHADOW_CLIP_NAMES = ("shad_clip_near", "shad_clip_misc")
+
+
+def shadow_clip(data, start, alus, floats, literals):
+    regs = set()
+    for name in SHADOW_CLIP_NAMES:
+        if name in floats:
+            reg, cnt = floats[name]
+            regs.update(range(reg, reg + max(cnt, 1)))
+    unit = one_and_zero(literals)
+    if not regs or unit is None:
+        return []
+    lit, _, zero = unit
+    return constant_reads(data, start, alus, regs, lit, zero, "shadow clip", 0)
 
 
 # A texture's colour times a material constant (mul r.xyz = texel.xyz * cN.xyz, N 0 to 6,
@@ -306,6 +339,11 @@ def patch_fxobj(name, data):
                     struct.pack_into(">3I", data, start + 12 * s, w[0], w1, w2)
                     done.append(f"slot {s}: sky brightness multiply -> copy")
                     break
+    if SHADOW_CLIP:
+        for start, size, _, floats, literals in blobs(bytes(data), VS_MAGIC):
+            ins = instructions(bytes(data), start, size)
+            alus = [(s, alu_fields(w), w) for s, kind, w in ins if kind == "alu"]
+            done += ["VS " + d for d in shadow_clip(data, start, alus, floats, literals)]
     return bytes(data), done
 
 
