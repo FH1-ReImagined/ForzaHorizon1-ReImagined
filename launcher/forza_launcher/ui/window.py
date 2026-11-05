@@ -74,6 +74,14 @@ class MainWindow(QMainWindow):
                 cfg.save()   # a one-time change (cfg.notices) is saved at once, so it is never made again
             except OSError:
                 pass
+        # The Vulkan driver's API version (#672): before the first settings are written on a new
+        # launcher.json (an old Intel driver gets Direct3D 12), else at each start in the background.
+        self._vulkan_probe = None
+        if not cfg.loaded and cfg.detect_vulkan():
+            try:
+                cfg.save()
+            except OSError:
+                pass
         self.session = None
         self.session_plan = None
         self._last_start_error = None
@@ -216,6 +224,12 @@ class MainWindow(QMainWindow):
         self.refresh_all()
         if cfg.notices:   # one-time changes to the saved settings, e.g. the 540p scene on an entry card (#640)
             self.play.show_message(" ".join(cfg.notices))
+        if cfg.loaded:
+            from .. import gpu
+            from .workers import Probe
+            self._vulkan_probe = Probe(gpu.vulkan_devices, "Vulkan devices", self)
+            self._vulkan_probe.result.connect(self._vulkan_result)
+            self._vulkan_probe.start()
         if sys.platform == "win32":
             QTimer.singleShot(600, self.setup.offer_move)
         update_result = self.show_update_result()
@@ -281,6 +295,20 @@ class MainWindow(QMainWindow):
         and launcher.json and forza.toml are saved now."""
         self.settings.sync_server()
         self.settings.flush()
+
+    def _vulkan_result(self, devices):
+        if devices and self.cfg.detect_vulkan(devices):
+            try:
+                self.cfg.save()
+            except OSError:
+                pass
+        self.refresh_intel_driver_notices()
+
+    def refresh_intel_driver_notices(self):
+        """The old Intel Vulkan driver's notice on Play and Setup and next to Graphics API (#672)."""
+        self.play.intel_driver.refresh()
+        self.setup.intel_driver.refresh()
+        self.settings._refresh_gpu_warnings()
 
     def refresh_all(self):
         self.play.refresh()

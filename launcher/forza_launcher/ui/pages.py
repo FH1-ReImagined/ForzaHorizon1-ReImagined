@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QTimer, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QPixmap
-from PySide6.QtWidgets import (QCheckBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+from PySide6.QtWidgets import (QCheckBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
                                QPlainTextEdit, QProgressBar, QPushButton, QScrollArea,
                                QTabBar, QStackedWidget, QVBoxLayout, QWidget)
 
@@ -47,6 +47,51 @@ def human_time(seconds):
     return f"{m // 60} h {m % 60} min" if m >= 60 else f"{m} min"
 
 
+class IntelDriverNotice(QFrame):
+    """Setup and Play: the Intel iGPU's Vulkan driver is below 1.3 (#672). On Windows "Use Direct3D 12"
+    switches the Graphics API, as the Settings banner's "Use recommended" does; nothing changes by itself."""
+
+    def __init__(self, cfg: Config, window):
+        super().__init__()
+        self.cfg, self.window = cfg, window
+        self.setObjectName("intelDriverNotice")
+        self.setStyleSheet(f"#intelDriverNotice {{ border: 1px solid {theme.ORANGE}; border-radius: 8px; }}")
+        row = QHBoxLayout(self)
+        row.setContentsMargins(16, 10, 16, 10)
+        row.setSpacing(12)
+        self.text = label("", "")
+        self.text.setTextFormat(Qt.PlainText)
+        row.addWidget(self.text, 1)
+        self.use_d3d12 = QPushButton("Use Direct3D 12")
+        self.use_d3d12.clicked.connect(self.apply)
+        row.addWidget(self.use_d3d12, 0, Qt.AlignVCenter)
+        self.hide()
+
+    def refresh(self):
+        text = self.cfg.intel_vulkan_warning()
+        self.text.setText(text)
+        self.use_d3d12.setVisible(bool(self.cfg.intel_vulkan_fix()))
+        self.setVisible(bool(text))
+
+    def apply(self):
+        fix = self.cfg.intel_vulkan_fix()
+        if not fix:
+            return self.refresh()
+        from .. import schema
+        self.cfg.settings.update(fix)
+        settings = getattr(self.window, "settings", None)
+        if settings is not None:
+            settings.apply_external({k: v for k, v in fix.items() if k in schema.BY_KEY})   # shows it there
+            settings.flush()
+        else:
+            try:
+                self.cfg.save()
+            except OSError as e:
+                self.window.status(f"Could not save launcher settings: {e}", True)
+        self.window.refresh_intel_driver_notices()
+        self.window.status("Graphics API: Direct3D 12 (Settings > Display)", False)
+
+
 # ================================================================== Play ==================
 
 class PlayPage(QWidget):
@@ -70,6 +115,8 @@ class PlayPage(QWidget):
         # the title is part of the banner; hide the text title on this page
         lay.itemAt(0).widget().hide()
         lay.addWidget(Hero())
+        self.intel_driver = IntelDriverNotice(cfg, window)
+        lay.addWidget(self.intel_driver)
         self.warn = label("", "warn")
         self.warn.hide()
         lay.addWidget(self.warn)
@@ -186,6 +233,7 @@ class PlayPage(QWidget):
             self._clock_probe.result.connect(self._clock_result)
             self._clock_probe.start()
         cfg = self.cfg
+        self.intel_driver.refresh()
         root = cfg.game_files()
         if (root / "default.xex").is_file():
             files_ok, files_msg = installer.check_game_folder(root)
@@ -390,6 +438,8 @@ class SetupPage(QWidget):
         outer.addWidget(label("Setup", "pageTitle"))
         outer.addWidget(label("Build the game from your own copy of Forza Horizon. "
                               "No game code or data is included with the launcher.", "pageLead"))
+        self.intel_driver = IntelDriverNotice(cfg, window)
+        outer.addWidget(self.intel_driver)
         self.tabs = QTabBar()
         self.tabs.setExpanding(False)
         self.tabs.setDrawBase(False)
@@ -639,6 +689,7 @@ class SetupPage(QWidget):
 
     def refresh(self):
         cfg = self.cfg
+        self.intel_driver.refresh()
         self.refresh_folder()
         root = cfg.game_files()
         have = (root / "default.xex").is_file()
