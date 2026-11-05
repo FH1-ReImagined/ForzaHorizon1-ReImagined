@@ -69,9 +69,9 @@ class MainWindow(QMainWindow):
                 cfg.save()
             except OSError:
                 pass
-        if cfg.detect_specs():   # once, and again when the graphics card changed (#206)
+        if cfg.detect_specs() or cfg.notices:   # once, and again when the graphics card changed (#206)
             try:
-                cfg.save()
+                cfg.save()   # a one-time change (cfg.notices) is saved at once, so it is never made again
             except OSError:
                 pass
         self.session = None
@@ -214,6 +214,8 @@ class MainWindow(QMainWindow):
         ask_online = self._first_run()
         self.show_page(0)
         self.refresh_all()
+        if cfg.notices:   # one-time changes to the saved settings, e.g. the 540p scene on an entry card (#640)
+            self.play.show_message(" ".join(cfg.notices))
         if sys.platform == "win32":
             QTimer.singleShot(600, self.setup.offer_move)
         update_result = self.show_update_result()

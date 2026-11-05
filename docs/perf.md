@@ -3170,8 +3170,9 @@ The benchmark gains 10% and holds it from run to run; free roam, where the GPU i
 with 0.65 threads less CPU and a higher CPU clock. No freeze in the 24 runs with it on.
 
 **Fix 2: the 540p scene on entry cards** (`launcher/forza_launcher/specs.py`: a new launcher on integrated graphics,
-under 4 GB, or a GTX / RX 400-500-era card with 4 GB gets `scene_resolution = 540`; with existing settings it is a
-warning with "Use recommended" above 30 fps; not on a Steam Deck, whose CPU is its limit). Benchmark, render thread
+under 4 GB, or a GTX / RX 400-500-era card with 4 GB gets `scene_resolution = 540`, and an existing launcher.json
+there once, with a notice (`config.py`, `migrated.scene_540`), where 540p is drawn; not on a Steam Deck, whose CPU is
+its limit). Benchmark, render thread
 sleeping, 3 runs each, rotated:
 
 | Scene | fps | 1% low | p99 | Draws | Command processor a frame |

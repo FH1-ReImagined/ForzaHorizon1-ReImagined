@@ -59,7 +59,7 @@ def _default():
         "web_account": {"linked": False},
         # One-time fixes of values an older launcher saved: done once, so a later choice sticks.
         "migrated": {"discord_application_id": False, "gpu_wait_blocking": False,
-                     "nvidia_pipeline_cache": False},
+                     "nvidia_pipeline_cache": False, "scene_540": False},
     }
 
 
@@ -93,6 +93,7 @@ class Config:
         self.d = _default()
         self.loaded = False
         self.gamertag_cleaned = None
+        self.notices = []   # one-time notices of changes this launcher made to the saved settings (Play page)
         self.load()
 
     # --- persistence ---
@@ -102,7 +103,7 @@ class Config:
         except (OSError, ValueError):
             # A new launcher.json starts with today's defaults: nothing to migrate later.
             self.d["migrated"].update(discord_application_id=True, gpu_wait_blocking=True,
-                                      nvidia_pipeline_cache=True)
+                                      nvidia_pipeline_cache=True, scene_540=True)
             return
         if isinstance(data, dict):
             _merge(self.d, data)
@@ -151,6 +152,7 @@ class Config:
         self.gamertag_cleaned = None  # (saved, cleaned) when the saved Gamertag was not plain ASCII
         if isinstance(saved_tag, str) and saved_tag.strip() != self.d["settings"]["gamertag"]:
             self.gamertag_cleaned = (saved_tag, self.d["settings"]["gamertag"])
+        self._migrate_scene_540()
         online = self.d["online"]
         if online.get("mode") == "custom" and online.get("custom_server", "").strip() in OLD_PUBLIC_SERVERS:
             online["mode"], online["custom_server"] = "public", ""
@@ -200,7 +202,27 @@ class Config:
         cache.update(checked=True, fingerprint=specs.fingerprint(), values=asdict(found))
         if first and not self.loaded:
             self.settings.update(specs.recommended(found, display.effective(self.settings, found), self.gpu_vendor()))
+        elif self.loaded:
+            self._migrate_scene_540()   # a launcher.json from before the specs were detected (#206)
         return True
+
+    def _migrate_scene_540(self):
+        """Up to 0.2.6 every launcher.json saved the 720p scene; on an entry card the 540p one is the
+        recommendation since #640 (specs.entry_card, the benchmark 47 -> 54 fps on a GTX 1650 Ti laptop). Done
+        once, with a notice, so a player who sets 720p again keeps it. Only where 540p is drawn: FSR 3, DLSS, a
+        separate anti-aliasing method and Ultrawide gameplay keep 720p. Waits for the specs when a launcher.json
+        has none yet."""
+        migrated = self.d["migrated"]
+        if migrated.get("scene_540") or not self.d["specs"].get("values"):
+            return
+        s = self.pc_specs()
+        if not s.known():
+            return
+        migrated["scene_540"] = True
+        if (specs.entry_card(s) and str(self.settings.get("scene_resolution")) == "720"
+                and specs.scene_540_applies(self.settings)):
+            self.settings["scene_resolution"] = "540"
+            self.notices.append(specs.scene_540_notice(s))
 
     def effective_settings(self, log=None) -> dict:
         """The settings as the game will get them: "Match display" (frame_rate 0) as a number (#215)."""

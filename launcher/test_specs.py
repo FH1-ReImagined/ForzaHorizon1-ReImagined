@@ -226,16 +226,11 @@ class Warnings(unittest.TestCase):
         self.assertNotIn("forza_antialiasing", self.texts(S(8), forza_antialiasing="smaa"))
         self.assertNotIn("resolution_scale", self.texts(IRIS, resolution_scale=2, present_effect="fsr3"))
 
-    def test_540p_scene_on_an_entry_card(self):
-        t = self.texts(GTX1650TI)
-        self.assertEqual(list(t), ["scene_resolution"])
-        self.assertIn("GeForce GTX 1650 Ti (4 GB) sets the frame rate at the 720p scene", t["scene_resolution"])
-        fix = [w.fix for w in specs.warnings(GTX1650TI, {"frame_rate": 60})]
-        self.assertEqual(fix, [{"scene_resolution": "540"}])
-        self.assertEqual(self.texts(GTX1650TI, scene_resolution="540"), {})
-        self.assertEqual(self.texts(GTX1650TI, frame_rate=30), {})                # holds 30 at 720p
-        self.assertEqual(self.texts(GTX1650TI, forza_antialiasing="smaa"), {})    # 540p does not apply
-        self.assertIn("scene_resolution", self.texts(IRIS))
+    def test_no_540p_warning(self):
+        # #640: an existing launcher.json gets the 540p scene once (Flow below); a player who sets 720p again
+        # gets no banner about it
+        self.assertEqual(self.texts(GTX1650TI), {})
+        self.assertNotIn("scene_resolution", self.texts(IRIS))
 
     def test_old_cpu_and_low_ram(self):
         self.assertTrue([w for w in specs.warnings(S(4, avx2=False), {}) if "without AVX2" in w.text])
@@ -309,6 +304,55 @@ class Flow(unittest.TestCase):
             self.assertEqual((c.settings["frame_rate"], c.settings["resolution_scale"]), (60, 1))
             self.assertEqual(c.settings["anisotropic_override"], 5)           # only the keys that warn
             self.assertFalse(c.specs_banner_due())
+
+    def test_entry_card_gets_the_540p_scene_once(self):
+        old = {"gpu": {"vendor": "nvidia", "checked": True},
+               "specs": {"checked": True, "fingerprint": "x", "values": GTX1650TI.__dict__},
+               "settings": {"scene_resolution": "720", "frame_rate": 60, "present_effect": "fsr"},
+               "migrated": {"discord_application_id": True}}           # a launcher.json of 0.2.6
+        with tempfile.TemporaryDirectory() as t:
+            c = self.cfg(t, old)
+            self.assertEqual(c.settings["scene_resolution"], "540")
+            self.assertEqual(len(c.notices), 1)
+            self.assertIn("Settings > Display > 3D scene resolution", c.notices[0])
+            self.assertIn("GeForce GTX 1650 Ti", c.notices[0])
+            c.save()
+            c = Config(c.path)
+            self.assertEqual((c.settings["scene_resolution"], c.notices), ("540", []))
+            c.settings["scene_resolution"] = "720"                     # the player goes back: it stays
+            c.save()
+            c = Config(c.path)
+            self.assertEqual((c.settings["scene_resolution"], c.notices), ("720", []))
+            self.assertFalse(c.specs_banner_due())
+        for key, value in (("present_effect", "fsr3"), ("fh1_upscaler", "quality"),
+                           ("forza_antialiasing", "smaa"), ("forza_ultrawide", True)):
+            with tempfile.TemporaryDirectory() as t:                    # 540p is not drawn with these
+                c = self.cfg(t, {**old, "settings": {**old["settings"], key: value}})
+                if c.settings.get(key) != value:
+                    continue   # not a setting on this platform (DLSS: Windows only)
+                self.assertEqual((c.settings["scene_resolution"], c.notices), ("720", []), key)
+                self.assertTrue(c.d["migrated"]["scene_540"])
+        for card in (GTX1660, DECK):
+            with tempfile.TemporaryDirectory() as t:
+                c = self.cfg(t, {**old, "specs": {"checked": True, "fingerprint": "x", "values": card.__dict__}})
+                self.assertEqual((c.settings["scene_resolution"], c.notices), ("720", []), card.gpu_name)
+
+    def test_540p_migration_waits_for_the_specs(self):
+        with tempfile.TemporaryDirectory() as t:
+            c = self.cfg(t, {"settings": {"scene_resolution": "720"}})   # from before the specs were detected
+            self.assertEqual(c.settings["scene_resolution"], "720")
+            self.assertFalse(c.d["migrated"]["scene_540"])
+            c.detect_specs(GTX1650TI)
+            self.assertEqual(c.settings["scene_resolution"], "540")
+            self.assertEqual(len(c.notices), 1)
+
+    def test_new_launcher_needs_no_540p_migration(self):
+        with tempfile.TemporaryDirectory() as t:
+            c = self.cfg(t)
+            self.assertTrue(c.d["migrated"]["scene_540"])
+            c.detect_gpu(gpu.Detected(gpu.NVIDIA, "x"))
+            c.detect_specs(GTX1650TI)
+            self.assertEqual((c.settings["scene_resolution"], c.notices), ("540", []))   # the recommendation
 
     def test_no_banner_without_warnings_or_specs(self):
         with tempfile.TemporaryDirectory() as t:

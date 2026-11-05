@@ -919,7 +919,10 @@ Steam Deck, or "Other / not sure". The launcher detects the card once (first sta
   (low CPU) or 60 fps, and render scale 2 only with a high-end card, on top of the vendor preset (whose known problems
   always win). On an entry card (low graphics, or a GTX / RX 400-500-era card with 4 GB; not a Steam Deck) it also gets
   the 540p 3D scene (#640: a GTX 1650 Ti laptop is limited by its GPU at the 720p scene, 46.8 -> 54.3 fps in the
-  benchmark, docs/perf.md); with existing settings that is a warning with "Use recommended" above 30 fps. Settings that are heavy for the PC get an orange line with the numbers (render scale 2 renders 2560x1440
+  benchmark, docs/perf.md). An existing launcher.json on an entry card gets it too, once (`migrated.scene_540`),
+  with a notice on the Play page that says where to change it back (Settings > Display > 3D scene resolution);
+  a player who sets 720p again keeps it. Only where 540p is drawn: FSR 3, DLSS, a separate anti-aliasing method and
+  Ultrawide gameplay keep 720p. Settings that are heavy for the PC get an orange line with the numbers (render scale 2 renders 2560x1440
   ...). A launcher with existing settings is never changed silently: a banner on the Settings page offers "Use
   recommended" (only the settings that warn) or "Keep mine", and comes back only when the hardware changes.
   On a Steam Deck (#140) the banner offers the Deck preset itself (`gpu.DECK_SETTINGS`, below) whenever a setting
