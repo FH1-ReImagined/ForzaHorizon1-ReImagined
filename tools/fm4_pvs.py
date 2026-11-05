@@ -57,6 +57,7 @@ FM4's horizon landscape; tools/fm4_shaders.py makes the inputs FH1 does not give
 shaders neutral) and drives (collision: tools/fm4_col.py). FM4 has no ground where its sky
 dome's lower half stood in, so from above much of the infield is empty.
 """
+import math
 import os
 import shutil
 import struct
@@ -460,7 +461,7 @@ def convert(F, files):
         g = ground_instance(F, used)
         if g is not None:
             if GROUND_LAYER in ("A", "B"):
-                g["model"] = ground_model_copy(F, P, files, g["model"])
+                g["model"] = ground_model_copy(F, P, files, g["model"], g["reach"])
             insts = insts + [g]
             P["instances"].append(fh1_instance_of(g))
             for cell in grid.cells:
@@ -541,7 +542,7 @@ def stream_blocks(F, cells, grid, bin_dir):
     return (best + 1023) // 1024
 
 
-def ground_model_copy(F, P, files, model):
+def ground_model_copy(F, P, files, model, reach):
     """The number of a copy of model drawn with one blend layer (see GROUND_LAYER), or model
     itself if that cannot be done."""
     M = F["models"][model]
@@ -571,11 +572,13 @@ def ground_model_copy(F, P, files, model):
     if not renames:
         return model
     F["models"].append(dict(M, shaders=shaders))
-    # FH1 culls an instance by its model's extent, which does not grow with the placement's
-    # 15x scale: the ground was culled wherever the piece's own sphere was out of view (holes
-    # at the grid and behind the fence at spot 9, with any model but the one placed nearby).
-    # The copy, the ground's alone, gets the sky dome's extent (never culled).
-    P["models"].append(dict(P["models"][model], shaders=shaders, extent=[SKY_EXTENT] * 3))
+    # FH1 culls an instance by a sphere of its model's extent round its origin, and the
+    # ground's origin is 8 to 10 km off the circuit (the 15x scale moves the piece's own offset,
+    # its vertices sit hundreds of metres from their origin, with it): the ground was culled
+    # everywhere its model was not drawn for its own piece anyway (holes at the grid and behind
+    # the fence at spot 9). The copy, the ground's alone, gets an extent that reaches from its
+    # origin over the whole circuit.
+    P["models"].append(dict(P["models"][model], shaders=shaders, extent=[reach] * 3))
     P["rmodels"] = len(P["models"])
     if dst not in files:
         files.append(dst)
@@ -621,6 +624,8 @@ def ground_instance(F, used):
             low = y0 if low is None else min(low, y0)
             xs.append(M[12]); zs.append(-M[14])
     cx, cz = (min(xs) + max(xs)) / 2, (min(zs) + max(zs)) / 2
+    if os.environ.get("FM4_PVS_GROUND_AT"):  # a test: the ground's centre at x,z instead
+        cx, cz = (float(v) for v in os.environ["FM4_PVS_GROUND_AT"].split(","))
     M = F["models"][model]["matrix"]
     k = GROUND_SCALE
     # Drawn at (k x, y, -k z) + pos (FM4's 1, 1, -1 turn, stretched): its centre to the
@@ -628,7 +633,9 @@ def ground_instance(F, used):
     pos = [cx - k * M[12], low - GROUND_BELOW - (M[13] - F["models"][model]["extent"][1]),
            cz + k * M[14]]
     h = lambda v: struct.unpack(">H", struct.pack(">e", v))[0]
-    return {"model": model, "flags": src["flags"], "idx": 0, "u12": 0xFFFFFFFF,
+    ext = F["models"][model]["extent"]
+    reach = math.hypot(pos[0] - cx, pos[2] - cz) + k * max(ext[0], ext[2]) + 1000.0
+    return {"model": model, "flags": src["flags"], "idx": 0, "u12": 0xFFFFFFFF, "reach": reach,
             "v16": [0.0, 0.0, 0.0, 0.0], "u32": src["u32"], "lod": src["lod"], "pos": pos,
             "rot": [h(k), 0, 0, 0, h(1.0), 0, 0, 0, h(-k)]}
 

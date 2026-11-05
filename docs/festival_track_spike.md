@@ -54,7 +54,7 @@ Converter test switches: `FM4_PVS_FLAGS`, `FM4_PVS_FLAGMASK`, `FM4_PVS_SHADERS`,
 `FM4_PVS_PROJLM`, `FM4_PVS_SKY`, `FM4_PVS_SHADER_PATCHES`, `FM4_PVS_LIGHTMAPS`, `FM4_PVS_HEX`,
 `FM4_PVS_EXTENT`, `FM4_PVS_VISIBLE`, `FM4_PVS_VISIBLE_NEAR`, `FM4_PVS_VISIBLE_CELLS`, `FM4_PVS_VISIBLE_SIZE`,
 `FM4_PVS_TOD`, `FM4_PVS_TRACKSETTINGS`, `FM4_PVS_TRACKSETTINGS_FM4`, `FM4_SHADERS_LIGHTMAP`,
-`FM4_SHADERS_LIGHTMAP_COLOURS`, `FM4_SHADERS_SHADOW_COLOUR`, `FM4_SHADERS_SHADOW_CLIP`, `FM4_SHADERS_TINTS`, `FM4_PVS_PASS_GROUPS`, `FM4_PVS_PASS_GROUP_DROP`, `FM4_PVS_GROUND`, `FM4_PVS_GROUND_SCALE`, `FM4_PVS_GROUND_BELOW`, `FM4_PVS_GROUND_MODEL`, `FM4_PVS_GROUND_LAYER`, `FM4_PVS_STREAM_MARGIN`,
+`FM4_SHADERS_LIGHTMAP_COLOURS`, `FM4_SHADERS_SHADOW_COLOUR`, `FM4_SHADERS_SHADOW_CLIP`, `FM4_SHADERS_TINTS`, `FM4_PVS_PASS_GROUPS`, `FM4_PVS_PASS_GROUP_DROP`, `FM4_PVS_GROUND`, `FM4_PVS_GROUND_SCALE`, `FM4_PVS_GROUND_BELOW`, `FM4_PVS_GROUND_MODEL`, `FM4_PVS_GROUND_LAYER`, `FM4_PVS_GROUND_AT`, `FM4_PVS_STREAM_MARGIN`,
 `FM4_COL_NORMALS`, `FM4_COL_WALL`, `FM4_COL_EDGES`, `FM4_COL_REMAP`, `FM4_COL_GRID`,
 `FM4_COL_SURFACE`, `FM4_COL_KEEP_DEGENERATE`; `FM4_DISC` (FM4's disc folder) for the
 surface map.
@@ -282,10 +282,20 @@ What a player would need, beyond the spike (none of this is built yet):
     or 1 (`FM4_PVS_GROUND_LAYER=A|B`, `fm4_shaders.one_layer`; TERR_BLND_SPEC_3 blends Blend_A,
     tinted by c0, and Blend_B by the mask's green channel, fetched at slot 7 into r0.w): not
     drawn at spots 1 and 9 at all, also with the copy given the sky dome's extent (never culled).
-    So a model that is not also placed in the zone, or a model drawn with a shader name the
-    track did not have, is not drawn there; why (the zone's file list, the material table's
-    shader reference) is the next thing to trace, with FORZA_ZONE_TRACE and the model loads.
-    `FM4_PVS_GROUND_LAYER` stays, off. Sheets (trk-spike, not in the repo):
+    Traced further, and ruled out: the converted zone data (the spot-1 zone lists model 866
+    and the ground instance, and its file is in the zone's file list); the instance objects
+    (all made when the zone goes live, 0 null of 3757, in the 900, 866 and copy runs alike);
+    the instance's own fields (the same flags, LOD half-floats -1, no lightmap for every
+    candidate); culling by distance: the ground's origin is 8 to 10 km off the circuit (the
+    15x scale moves the piece's own vertex offset), but neither a copy with an extent reaching
+    over the whole circuit (`ground_model_copy`, kept) nor 866 centred on spot 1
+    (`FM4_PVS_GROUND_AT=x,z`, a test) at scale 15 or 1.5 drew there. What holds in every run:
+    the ground draws only with a model that also has its own, normal placement in that zone
+    (900 at spots 1 and 9). A second, unscaled placement of the ground's model in every zone
+    (tried, removed) did not make the copy draw, and turned the road at spot 9 flat grey.
+    Next: the draw itself, with the PS trace (TERR_BLND draws with the ground's world matrix,
+    scale 15, at spot 1 for 900 and for 866): whether FH1 submits the draw at all, then its
+    per-zone model batches. `FM4_PVS_GROUND_LAYER` stays, off. Sheets (trk-spike, not in the repo):
     shots/suzuka-ground-mask.png, suzuka-spots-25m-mask-off-on.png,
     suzuka-ground-layer-unculled.png.
 - The visible set's 25 m default (`FM4_PVS_VISIBLE_SIZE`, 120 before): two autopilot runs from
