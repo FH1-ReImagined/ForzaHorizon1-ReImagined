@@ -412,7 +412,10 @@ PRESETS = {
                "Integrated Intel graphics are slow at render scale 2 and above (not measured).", 0),
          Known("gpu_backend", lambda v: v == "d3d12",
                "Direct3D 12 takes a different render target path on Intel and was never tested.", 0,
-               "untested on Intel", "d3d12")],
+               "untested on Intel", "d3d12"),
+         Known("gpu_backend", lambda v: v == "regpu",
+               "ReGPU (experimental) was never tested on Intel graphics; with an old Intel driver Direct3D 12 "
+               "is the advice.", 0, "untested on Intel", "regpu")],
         [("Nobody has reported a run on Intel graphics yet; please say how it goes (GitHub issues).", 0)]),
     DECK: Preset(
         "Steam Deck",

@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFileDialog,
                                QMessageBox, QPushButton, QRadioButton, QScrollArea, QSlider, QStackedWidget,
                                QToolTip, QVBoxLayout, QWidget)
 
-from .. import PUBLIC_SERVER, display, dlss, fsr3, game, gamertag, gpu, power, schema, specs, vr
+from .. import PUBLIC_SERVER, display, dlss, fsr3, game, gamertag, gpu, power, regpu, schema, specs, vr
 from ..config import Config, render_toml, validate_extras
 from . import theme
 from .settings_search import SettingsSearch
@@ -737,7 +737,9 @@ class SettingsPage(QWidget):
             # The 3x allocation belongs to the native UI; these modes render
             # the scene at 2x, so the ordinary 3x-scene warning does not apply.
             warning_settings["resolution_scale"] = 2
-        old_intel = self.cfg.old_intel_vulkan() is not None   # Direct3D 12 is the advice there (#672)
+        # Direct3D 12 is the advice there (#672): its "untested on Intel" note goes; ReGPU's stays.
+        old_intel = (self.cfg.old_intel_vulkan() is not None and
+                     warning_settings.get("gpu_backend", "vulkan") != regpu.CHOICE)
         for key, text, issue in gpu.warnings(vendor, warning_settings):
             if not (old_intel and key == "gpu_backend"):
                 found.setdefault(key, []).append(text + gpu.issue_text(issue))

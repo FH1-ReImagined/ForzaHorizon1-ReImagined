@@ -215,9 +215,9 @@ class Config:
 
     def intel_vulkan_warning(self) -> str:
         """The warning for Setup and Play: '' when the driver is fine or unknown, or when the game already
-        uses Direct3D 12 (Windows)."""
+        uses Direct3D 12 or ReGPU (Windows): neither needs the Vulkan driver."""
         device = self.old_intel_vulkan()
-        if device is None or (gpu.IS_WINDOWS and self.settings.get("gpu_backend", "vulkan") == "d3d12"):
+        if device is None or (gpu.IS_WINDOWS and self.settings.get("gpu_backend", "vulkan") != "vulkan"):
             return ""
         return gpu.old_intel_vulkan_text(device, gpu.IS_WINDOWS)
 
