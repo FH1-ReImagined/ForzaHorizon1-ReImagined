@@ -145,6 +145,21 @@ class ConfigFlow(unittest.TestCase):
             c.settings.update(c.intel_vulkan_fix())
             self.assertEqual((c.intel_vulkan_warning(), c.intel_vulkan_fix()), ("", {}))
 
+    def test_regpu_needs_no_vulkan_driver_and_is_never_the_advice(self):
+        # ReGPU is Direct3D 12 too: no Vulkan driver warning with it; the notice offers Direct3D 12 only.
+        with tempfile.TemporaryDirectory() as t, mock.patch.object(gpu, "IS_WINDOWS", True):
+            c = self.cfg(t, {"settings": {"gpu_backend": "vulkan"}})
+            c.detect_vulkan([HD520])
+            self.assertNotIn("ReGPU", c.intel_vulkan_warning())
+            self.assertEqual(c.intel_vulkan_fix(), {"gpu_backend": "d3d12"})
+            c.settings["gpu_backend"] = "regpu"
+            self.assertEqual((c.intel_vulkan_warning(), c.intel_vulkan_fix()), ("", {}))
+            # untested on Intel: said next to the choice and as the setting's warning
+            self.assertEqual(gpu.choice_note(gpu.INTEL, "gpu_backend", "regpu"), "untested on Intel")
+            self.assertIn("gpu_backend", [k for k, _, _ in gpu.warnings(gpu.INTEL, c.settings)])
+            nvidia = [k for k, _, _ in gpu.warnings(gpu.NVIDIA, c.settings)]
+            self.assertNotIn("gpu_backend", nvidia)   # not the SDK's Direct3D 12 (#46)
+
     def test_no_default_or_warning_elsewhere(self):
         cases = [([UHD_2020, GTX1650TI], gpu.NVIDIA), ([VEGA_12], gpu.AMD), ([IRIS_13], gpu.INTEL)]
         for devices, vendor in cases:
@@ -219,6 +234,14 @@ class Pages(unittest.TestCase):
         win.setup.intel_driver.use_d3d12.click()
         self.assertEqual(cfg.settings.get("gpu_backend", "vulkan"), "d3d12")
         self.assertEqual(json.loads(cfg.path.read_text())["settings"]["gpu_backend"], "d3d12")   # saved
+        self.assertTrue(win.play.intel_driver.isHidden())
+        self.assertTrue(win.setup.intel_driver.isHidden())
+
+    def test_regpu_chosen_hides_the_notice(self):
+        win, cfg = self.window(True)
+        cfg.settings["gpu_backend"] = "regpu"
+        win.play.refresh()
+        win.setup.refresh()
         self.assertTrue(win.play.intel_driver.isHidden())
         self.assertTrue(win.setup.intel_driver.isHidden())
 

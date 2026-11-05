@@ -102,7 +102,15 @@ def store_key(plan) -> dict:
 
 
 def uses_vulkan(plan) -> bool:
-    return (_arg(plan.argv, "--gpu_backend") or "vulkan") == "vulkan"
+    """The Direct3D 12 backends (and ReGPU) are chosen in forza.toml, the command line can override it."""
+    backend = _arg(plan.argv, "--gpu_backend")
+    if backend is None:
+        from .config import parse_toml
+        try:
+            backend = parse_toml(getattr(plan, "toml_text", "") or "").get("gpu_backend")
+        except ValueError:
+            backend = None
+    return (backend or "vulkan") == "vulkan"
 
 
 def _file_id(path: Path) -> str:

@@ -1000,3 +1000,93 @@ and time): Mercedes 300SL Gullwing, Aston Martin DB5 and Plymouth Cuda 426 HEMI 
 the setting on and dark without; the Cuda's tail lights and the rest of the picture unchanged;
 at dusk with the headlights on the gauges look as the game draws them. The Lamborghini
 Aventador's digital display (drawn from a UI texture) is lit either way.
+
+## ReGPU (Direct3D 12, experimental, Windows)
+
+ReGPU is a second Direct3D 12 renderer (FH1-ReImagined/ReGPU, `forza-recomp/thirdparty/ReGPU`), built as
+the GPU plugin `rexgpu-regpu.dll` (`forza-recomp/regpu-plugin`). The launcher's Windows build always
+compiles it (`-DFORZA_REGPU_PLUGIN=ON`). When only the plugin fails to compile, the build warns and
+builds the game without it. Players turn it on in Settings > Display > Picture > Graphics API >
+ReGPU (experimental) (`launcher/forza_launcher/regpu.py`). forza.toml then gets
+`gpu_backend = "d3d12"` and `gpu_plugin = "regpu"`. A build without the plugin plays with Vulkan
+and shows a note. The Vulkan-only features (DLSS, FSR 3, SMAA, HDR, VR, ultrawide, shader prebuild)
+are off with it, as on the SDK's own Direct3D 12 backend.
+
+- **GPU:** ReGPU uses the first adapter in DXGI's high-performance order. Laptops with an integrated
+  GPU and a GeForce (Optimus) otherwise drew on the integrated one: `forza.exe` exports no
+  `NvOptimusEnablement`, and a plugin DLL can't export it for the exe. `REGPU_ADAPTER=<n>` picks
+  another adapter. regpu.log (`<cache_root>/regpu/`) names the one in use.
+- **Resolution:** the output size, upscaler and MSAA scene size come from the in-game Graphics
+  screen's saved choices (`graphics-settings.json`), and otherwise from the launcher's settings.
+- **First start:** ReGPU compiles every shader in the game files (1,688) behind a boot screen, then
+  builds the 1,183 pipelines from its recorded seed. Both are stored, and later starts load them in
+  about 20 s. The first drives also compile the shaders the game makes in play (about 125). Until
+  they are ready, the ground they draw is plain white.
+
+Measured on 2026-11-04 on a GTX 1650 Ti laptop (Core i5-10300H, 8 GB, Windows 11, driver 555.97):
+- **First start:** shaders 488 s for 1,341 of them, plus seed pipelines 70 s, so about 10 minutes
+  on this 4-core CPU.
+- **Test drive:** a scripted free-roam drive from the 1000 Club save (full throttle for 90 s,
+  measured from 5 s to 80 s after the car moves, `FORZA_FRAMETIME_CSV`).
+- **Settings:** 1080p borderless, frame cap 240, vsync off, warm caches.
+
+| Renderer | fps | 1% low | p99 frame time |
+| --- | --- | --- | --- |
+| Vulkan (scene 1280x720, bilinear to 1080p), 2 runs | 54.9, 58.4 | 29.5, 41.6 | 28.8, 21.8 ms |
+| ReGPU, native 1920x1080 scene, 2 runs | 40.7, 39.8 | 19.7, 21.0 | 45.8, 42.3 ms |
+| ReGPU, FSR 1 Quality (1280x720 scene), 2 runs | 39.7, 39.2 | 21.3, 21.2 | 42.1, 41.7 ms |
+
+The GPU was 95-100% busy with ReGPU and 90-98% with Vulkan. ReGPU's frame rate didn't change when
+FSR 1 cut the scene to 1280x720, so on this card its cost is per frame or per draw, not per pixel.
+At the main menu the main loop's frame time was 18.8 ms on ReGPU and 7.3 ms on Vulkan. The Graphics
+screen applies changes live on ReGPU (a preset change to a 2560x1440 scene was saved). On the SDK's
+own Direct3D 12 backend it answers "Live graphics requires the updated Vulkan renderer." without
+hanging (#611's review).
+
+**Checked again for 0.2.8 (2026-11-05)**, same laptop, with main's ReGPU 65502dd (#663) and its larger
+seed (#653), built by the launcher like a player's build, at the launcher's settings for this PC (60 fps,
+vsync, the 540p scene since #640, fullscreen; each run a fresh start of the golden TU4 save, offline):
+
+- **First start:** 1,722 shaders compiled in 552 s and 1,490 seed pipelines built in 36 s, so about
+  10 minutes again. Later starts show the boot screen at 100% while the stored shaders load: the
+  benchmark's event loaded 39 s after the start, against 25 s on Vulkan.
+- **Benchmark and free roam** (the built-in benchmark; the #640 free-roam drive, measured while the car
+  moves; runs alternating):
+
+| | Benchmark fps | 1% low | p99 | Free roam fps | 1% low | p99 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Vulkan, 3 runs | 51.3, 53.7, 51.5 | 33.0, 33.8, 31.5 | 27.3, 26.8, 28.1 ms | 60.0, 59.3, 59.0 | 59.2, 36.8, 35.6 | 16.7, 24.6, 25.1 ms |
+| ReGPU, 3 runs | 26.5, 35.0, 37.6 | 13.6, 20.2, 20.4 | 57.1, 46.4, 45.1 ms | 50.7, 54.1, 55.3 | 24.2, 28.0, 29.2 | 35.0, 32.9, 31.7 ms |
+
+  ReGPU's first benchmark built the race's shaders as it ran. In the benchmark the GPU was 63-82% busy
+  at 35-41 W with ReGPU and 64-86% at 47-50 W with Vulkan: ReGPU's limit there is its CPU side.
+- **Night** (#660): free roam held at 01:00 at the spawn, standing: mean brightness 46.9 (ReGPU)
+  against 46.0 (Vulkan) of 255, the headlights lighting the road on both.
+- **Photo mode** opens and its camera works. FOCUS read stale depth on ReGPU (below, fixed). The in-game
+  Graphics screen opens from the pause menu and saves.
+- **Photo mode's FOCUS (#665):** ReIGlue's `readback_resolve_wait_range` belongs to its command processor,
+  which isn't loaded with the plugin, so FOCUS logged "the SDK has no readback_resolve_wait_range" and
+  the world depth target in guest memory kept one picture from free roam to the end. The plugin now
+  defines the setting and writes resolves in that range back every time (depth deferred, colour at
+  once). With it the target changed every 0.5 s while the camera moved, as on Vulkan (61 changes
+  there, 60 on ReGPU). The Big Shot and the online photo take the same path; they were not run.
+- **Vsync and texture filtering:** the plugin's own `vsync` and `anisotropic_override` defaulted to off
+  and the game's filtering, where ReIGlue's are on and 4x. The launcher leaves both out of forza.toml at
+  those defaults, so ReGPU ran without vsync and with the game's filtering whatever Settings showed, and
+  the Graphics screen saved those into graphics-settings.json. The plugin's defaults are now ReIGlue's.
+- **Old Intel drivers (#672):** with ReGPU chosen there is no Vulkan driver warning, as with Direct3D 12.
+  The notice still offers only Direct3D 12: ReGPU was never tested on Intel graphics, which the Intel
+  preset says next to the choice.
+- **Open, for ReGPU:** in the main menu's car scenes the cars are much darker than on Vulkan, as if in
+  shadow (the Pagani, the Reventon and the roadster at the dam), at both the 540p and 720p scene and with
+  the plugin's shadow-pass changes off (`GLUE2GPU_STALE_SHADOW_MASK=1`, `GLUE2GPU_GAME_DEPTH_TAP=1`,
+  `GLUE2GPU_GUEST_DITHER=1`). Free roam at noon and at 17:30, standing, from behind and from the side, and
+  photo mode's default camera match Vulkan at the same scene size.
+- **Not ReGPU's:** at 17:30 in free roam the car's shadow is out of place with the 540p scene on both
+  renderers, and in place at 720p on both (#682, #551): from behind, the shadow left of the car at 720p
+  is gone at 540p and a long streak runs from the car's roof across the road to the upper left instead,
+  about 470 pixels away at 1920x1080; from the side, a large dark patch lies behind the car.
+- **Paint job detail 2x** ran with ReGPU without a problem, but the test save's car has no paint job,
+  so nothing was drawn at 2048.
+- **ReGPU at the 720p scene:** benchmark 31.9 fps (one run), so the 540p scene helps it too. With the
+  plugin's old defaults (vsync off, the game's filtering) one benchmark gave 39.8 fps.

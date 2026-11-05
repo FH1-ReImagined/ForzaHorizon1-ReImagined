@@ -531,10 +531,13 @@ def _build_plan(cfg: Config, game: GameInstall, write, refresh_xenia, log, saver
     home = cfg.data_home()
     data = cfg.game_files()
     toml_path = game.dir / "forza.toml"
+    # (cfg.d["settings"] is this start's copy, build_plan: launcher.json keeps the player's choice)
+    from . import regpu
+    regpu_note = regpu.fall_back(cfg.d["settings"], game.dir)
     toml_text = write_toml(cfg, toml_path) if write else render_toml(cfg)
 
     args = [f"--game_data_root={data}"]
-    notes = []
+    notes = [regpu_note] if regpu_note else []
     env, unset = {}, []
     env["FORZA_GRAPHICS_SETTINGS"] = str(home / ingame.FILENAME)
 

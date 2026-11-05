@@ -7,7 +7,7 @@ import tempfile
 from dataclasses import asdict
 from pathlib import Path
 
-from . import OLD_PUBLIC_SERVERS, PUBLIC_SERVER, display, gpu, languages, paths, schema, specs
+from . import OLD_PUBLIC_SERVERS, PUBLIC_SERVER, display, gpu, languages, paths, regpu, schema, specs
 from .haptics.settings import DEFAULTS as HAPTICS_DEFAULTS, normalize as normalize_haptics
 
 # Settings of the launcher itself: not game cvars, never written to forza.toml.
@@ -215,9 +215,9 @@ class Config:
 
     def intel_vulkan_warning(self) -> str:
         """The warning for Setup and Play: '' when the driver is fine or unknown, or when the game already
-        uses Direct3D 12 (Windows)."""
+        uses Direct3D 12 or ReGPU (Windows): neither needs the Vulkan driver."""
         device = self.old_intel_vulkan()
-        if device is None or (gpu.IS_WINDOWS and self.settings.get("gpu_backend", "vulkan") == "d3d12"):
+        if device is None or (gpu.IS_WINDOWS and self.settings.get("gpu_backend", "vulkan") != "vulkan"):
             return ""
         return gpu.old_intel_vulkan_text(device, gpu.IS_WINDOWS)
 
@@ -389,7 +389,9 @@ def render_toml(cfg: Config) -> str:
             v = dict(zip(("user_language", "user_country"), languages.resolve(
                 settings.get("game_language", ""), settings.get("user_language", s.default),
                 settings.get("user_country", s.default))))[s.key]
-        if v != s.default:
+        if s.key == "gpu_backend" and v == regpu.CHOICE:   # ReGPU: the d3d12 backend with its plugin
+            lines += [f"{k} = {toml_value(x)}" for k, x in regpu.toml_entries(v)]
+        elif v != s.default:
             lines.append(f"{s.key} = {toml_value(v)}")
     # public and custom servers are named here too; local (an environment variable at start)
     # and offline leave live_server empty.
@@ -423,6 +425,10 @@ def import_toml(cfg: Config, text: str) -> None:
         flat.update(fh1_upscaler="off", forza_antialiasing="dlaa")
     if flat.get("present_effect") == "fsr3" and flat.get("fsr3_mode") == "native":
         flat.update(present_effect="bilinear", fsr3_mode="quality", forza_antialiasing="fsr3_native")
+    backend = regpu.backend_from_toml(flat)
+    if backend is not None and "gpu_backend" in schema.BY_KEY:
+        flat.pop("gpu_plugin")
+        flat["gpu_backend"] = backend
     extras = []
     for key, val in flat.items():
         s = schema.BY_KEY.get(key)
