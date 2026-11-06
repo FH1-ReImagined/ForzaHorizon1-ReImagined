@@ -9,11 +9,13 @@ the next (a camera that would make a detour is dropped), moved to the middle of 
 across it. It is resampled every STEP metres and given a speed: at most VMAX, at most what
 LAT_ACC allows in its bends, and slowing down in time at DECEL.
 
-Usage: tools/fm4_line.py TRACK.col TRACKSEGCAMS.xml OUT.txt [VMAX_KMH]
+Usage: tools/fm4_line.py TRACK.col TRACKSEGCAMS.xml|TRACK_NN.geo OUT.txt [VMAX_KMH]
+  with FM4's AI line (.geo) in place of the cameras, the line follows it
   OUT.txt: a line per point, "x y z speed_m_s"
 """
 import heapq
 import math
+import os
 import re
 import struct
 import sys
@@ -114,6 +116,14 @@ def main(argv):
         return 2
     vmax = (float(argv[4]) if len(argv) > 4 else 90.0) / 3.6
     tris = road_triangles(argv[1])
+    if argv[2].lower().endswith(".geo"):
+        # FM4's own AI line (media/AI/Tracks/<track>_NN.geo, tools/fm4_spawn.py): the way its
+        # drivers take, so no asphalt search between cameras and no centring. For circuits
+        # whose collision has no asphalt path between the cameras (Fujimi Kaido's roads are
+        # another surface, Sunset Infield's oval is walled off its infield cameras).
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import fm4_spawn
+        return finish(argv, vmax, fm4_spawn.waypoints(argv[2]), tris, 0, centre=False)
     cen, nb = graph(tris)
     xml = open(argv[2], encoding="utf-8", errors="replace").read()
     cams = sorted(tuple(map(float, m.groups())) for m in re.finditer(
@@ -156,6 +166,10 @@ def main(argv):
             print(f"no asphalt path from {cen[a]} to {cen[b]}")
             return 1
         pts += [cen[k] for k in p[:-1]]
+    return finish(argv, vmax, pts, tris, len(anchors))
+
+
+def finish(argv, vmax, pts, tris, anchors, centre=True):
     # Resample every STEP m, smoothed over a few points.
     out, acc = [pts[0]], 0.0
     for p, q in zip(pts, pts[1:] + pts[:1]):
@@ -200,7 +214,7 @@ def main(argv):
         return False
 
     centred = []
-    for i in range(n):
+    for i in range(n if centre else 0):
         p, a, b = out[i], out[i - 1], out[(i + 1) % n]
         dx, dz = b[0] - a[0], b[2] - a[2]
         m = math.hypot(dx, dz) or 1.0
@@ -221,7 +235,7 @@ def main(argv):
         best = min(runs, key=lambda r: min(abs(o) for o in r))
         mid = (best[0] + best[-1]) / 2
         centred.append((p[0] + px * mid, p[1], p[2] + pz * mid))
-    out = smooth(centred, 4)
+    out = smooth(centred if centre else out, 4)
     # Keep CLEARANCE m from walls at the car's height (the pit wall's end beside the straight).
     wbins = {}
     for w in WALLS:
@@ -267,7 +281,8 @@ def main(argv):
         for p, v in zip(out, speed):
             f.write(f"{p[0]:.2f} {p[1]:.2f} {p[2]:.2f} {v:.2f}\n")
     length = sum(math.dist(out[i - 1], out[i]) for i in range(n))
-    print(f"{argv[3]}: {n} points, {length:.0f} m, {len(anchors)} cameras")
+    print(f"{argv[3]}: {n} points, {length:.0f} m, {anchors} cameras" if centre else
+          f"{argv[3]}: {n} points, {length:.0f} m, from FM4's AI line")
     return 0
 
 

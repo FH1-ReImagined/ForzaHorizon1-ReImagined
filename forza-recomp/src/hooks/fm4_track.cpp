@@ -271,6 +271,10 @@ extern "C" REX_FUNC(sub_82CC3180) {
 }
 
 namespace { void DumpTexObjectsLive(uint8_t* base, uint32_t t); }
+// The track presentation, from the last zone made live (sub_82E1CA20's r3).
+static std::atomic<uint32_t> fm4_presentation{0};
+// The streaming resource manager (sub_82E2EAD8's r3; +16 its 12-byte entries by id).
+static std::atomic<uint32_t> fm4_resource_manager{0};
 // A zone being made live (sub_82E1CA20: r3 the track presentation, r4 the zone record):
 // the presentation's model and instance tables, for FORZA_TRACK_SPAWN runs.
 namespace { void LogZones(uint8_t* base, uint32_t pres, const char* what, uint32_t zone); }
@@ -318,6 +322,7 @@ extern "C" REX_FUNC(sub_82E1CA20) {
                   mx, first5);
     }
   }
+  fm4_presentation = ctx.r3.u32;
   const uint32_t live_pres = ctx.r3.u32, live_zone = GuestReadable(ctx.r4.u32 + 12) ? Load32(base, ctx.r4.u32 + 12) : 0;
   __imp__sub_82E1CA20(ctx, base);
   {
@@ -489,23 +494,17 @@ extern "C" REX_FUNC(__imp__sub_82D099E0);
 extern "C" REX_FUNC(__imp__sub_82D09648);
 extern "C" REX_FUNC(__imp__sub_82D095C0);
 namespace {
-// The rectangles of n texture slots (4 u32 each) as a key.
-inline uint64_t Fm4RectKey(const uint32_t* rect, uint32_t n) {
-  uint64_t k = 1469598103934665603ull ^ n;
-  for (uint32_t i = 0; i < 4 * n; ++i) k = (k ^ rect[i]) * 1099511628211ull;
-  return k;
-}
 struct Fm4Stx {
   std::string track;
   std::vector<uint32_t> ids;
   // Per texture record: the pack entry an FM4 atlas tile is drawn from, -1 for none
   // (<track>_stx_files.bin next to the numbers file; tools/fm4_pvs.py).
   std::vector<uint32_t> atlas_of;
-  // <track>_stx_tiles.bin: per model with an atlas tile slot, its slots: pack entry (-1: not a
-  // tile) and UV rectangle; found by the rectangles of a model texture table's slots.
+  // <track>_stx_tiles.bin: per model (the game's model numbers), its slots: pack entry (-1:
+  // not a tile; top bit: a streamed tile) and UV rectangle. Empty for a model with no tile.
   struct TileModel { std::vector<uint32_t> entry; std::vector<uint32_t> rect; };
   std::vector<TileModel> tile_models;
-  std::unordered_map<uint64_t, uint32_t> tile_model_by_rects;
+  uint32_t tiled_models = 0;
 };
 const Fm4Stx& Fm4StxConfig() {
   static const Fm4Stx c = [] {
@@ -553,13 +552,13 @@ const Fm4Stx& Fm4StxConfig() {
             tm.entry.push_back(w[p++]);
             for (int q = 0; q < 4; ++q) tm.rect.push_back(w[p++]);
           }
-          c.tile_model_by_rects[Fm4RectKey(tm.rect.data(), uint32_t(tm.entry.size()))] = uint32_t(c.tile_models.size());
+          if (!tm.entry.empty()) ++c.tiled_models;
           c.tile_models.push_back(std::move(tm));
         }
       }
     }
     REXLOG_INFO("FM4TRACK: {} static texture pack: {} texture numbers, {} records, {} models with atlas tiles",
-                c.track, c.ids.size(), c.atlas_of.size(), c.tile_models.size());
+                c.track, c.ids.size(), c.atlas_of.size(), c.tiled_models);
     return c;
   }();
   return c;
@@ -742,6 +741,7 @@ std::vector<uint32_t> fm4_pack_headers;
 extern "C" REX_FUNC(__imp__sub_82E2EAD8);
 extern "C" REX_FUNC(sub_82E2EAD8) {
   const uint32_t mgr = ctx.r3.u32, id = ctx.r4.u32;
+  fm4_resource_manager = mgr;
   __imp__sub_82E2EAD8(ctx, base);
   if (!fm4_stx_active) return;
   const Fm4Stx& c = Fm4StxConfig();
@@ -763,15 +763,23 @@ static void FillAtlasTiles(uint8_t* base, uint32_t tbl) {
   uint32_t rect[4 * 32];
   for (uint32_t j = 0; j < count; ++j)
     for (uint32_t q = 0; q < 4; ++q) rect[4 * j + q] = Load32(base, entries + 32 * j + 16 + 4 * q);
-  // The model's slots, or all but a last one (an instance's own lightmap).
+  // The table's model: its +4 points at the model's record (presentation +55368, 84 bytes
+  // each, the count at +55372's high half); the rectangles must agree with the converter's.
   const Fm4Stx::TileModel* tm = nullptr;
-  for (uint32_t n : {count, count - 1}) {
-    if (!n) continue;
-    auto it = c.tile_model_by_rects.find(Fm4RectKey(rect, n));
-    if (it != c.tile_model_by_rects.end() &&
-        std::memcmp(c.tile_models[it->second].rect.data(), rect, 16 * n) == 0) {
-      tm = &c.tile_models[it->second];
-      break;
+  const uint32_t pres = fm4_presentation.load();
+  const uint32_t models = pres ? Load32(base, pres + 55368) : 0, nm = pres ? Load32(base, pres + 55372) >> 16 : 0;
+  const uint32_t rec = Load32(base, tbl + 4);
+  if (models && rec >= models && (rec - models) % 84 == 0 && (rec - models) / 84 < nm &&
+      (rec - models) / 84 < c.tile_models.size()) {
+    const Fm4Stx::TileModel& cand = c.tile_models[(rec - models) / 84];
+    const uint32_t n = std::min<uint32_t>(count, uint32_t(cand.entry.size()));
+    if (n && std::memcmp(cand.rect.data(), rect, 16 * n) == 0) {
+      tm = &cand;
+    } else if (n) {
+      static std::atomic<int> told{0};
+      if (told.fetch_add(1) < 5)
+        REXLOG_INFO("FM4TRACK: model {}'s texture table {:08X} has other rectangles than the converter's: left alone",
+                    (rec - models) / 84, tbl);
     }
   }
   static const bool diag = std::getenv("FORZA_FM4_FILLDIAG") != nullptr;
@@ -806,9 +814,50 @@ static void FillAtlasTiles(uint8_t* base, uint32_t tbl) {
     static std::mutex mm;
     static std::set<uint32_t> told;
     std::lock_guard<std::mutex> lock(mm);
-    if (told.size() < 60 && told.insert(tbl).second)
-      REXLOG_INFO("FM4MATCH table {:08X} +8 {} row {} count {}", tbl, Load32(base, tbl + 8),
-                  uint32_t(tm - c.tile_models.data()), count);
+    if (told.size() < 60 && told.insert(tbl).second) {
+      // What the table's +4 points at: a model record (presentation +55368, 84 bytes each),
+      // an instance object (+2556), or something else; and the words there.
+      const uint32_t pres = fm4_presentation.load(), p4 = Load32(base, tbl + 4);
+      const uint32_t models = pres ? Load32(base, pres + 55368) : 0, nm = pres ? Load32(base, pres + 55372) >> 16 : 0;
+      const uint32_t insts = pres ? Load32(base, pres + 2556) : 0, ni = pres ? Load32(base, pres + 2560) : 0;
+      int64_t inst = -1;
+      for (uint32_t i = 0; i < ni && i < 100000; ++i) if (Load32(base, insts + 4 * i) == p4) { inst = i; break; }
+      std::string w;
+      for (uint32_t o = 0; o < 32; o += 4) w += fmt::format(" {:08X}", Load32(base, p4 + o));
+      REXLOG_INFO("FM4MATCH table {:08X} +8 {} row {} count {} | +4 {:08X} model rec {} rem {} (of {}) inst obj {}:{}",
+                  tbl, Load32(base, tbl + 8), uint32_t(tm - c.tile_models.data()), count, p4,
+                  models && p4 >= models ? int64_t((p4 - models) / 84) : -1,
+                  models && p4 >= models ? int64_t((p4 - models) % 84) : -1, nm, inst, w);
+    }
+  }
+  if (diag && models && rec >= models && (rec - models) % 84 == 0) {
+    // Slots whose texture is 32 x 32 or smaller (the pack's resident mips): model, slot, size.
+    static std::mutex sm;
+    static std::set<uint64_t> told;
+    for (uint32_t j = 0; j < count; ++j) {
+      const uint32_t hp = Load32(base, entries + 32 * j);
+      if (!hp) continue;
+      const uint32_t d2 = Load32(base, hp + 0x24), w = (d2 & 0x1FFF) + 1, hh = ((d2 >> 13) & 0x1FFF) + 1;
+      if (w > 32 || hh > 32) continue;
+      std::lock_guard<std::mutex> lock(sm);
+      if (told.size() < 400 && told.insert(uint64_t((rec - models) / 84) << 8 | j).second)
+      {
+        // The slot's record (the model's texture list, presentation +55368 record +60) and
+        // its texture object (+2812): flags, resource id, and that resource's entry.
+        const uint32_t mr = models + 84 * ((rec - models) / 84);
+        const uint32_t list = Load32(base, mr + 60), nl = Load32(base, mr + 64);
+        const uint32_t ri = j < nl ? Load32(base, list + 4 * j) & 0xFFFFFF : 0xFFFFFFFF;
+        const uint32_t texs = Load32(base, pres + 2812), nt = Load32(base, pres + 2816);
+        const uint32_t obj = ri < nt ? Load32(base, texs + 4 * ri) : 0;
+        const uint32_t rid = obj ? Load32(base, obj + 0x1C) : 0xFFFFFFFF;
+        const uint32_t mgr = fm4_resource_manager.load(), rt = mgr ? Load32(base, mgr + 16) : 0;
+        const bool ok = rt && rid < 0x100000;
+        REXLOG_INFO("FM4SMALL model {} slot {} {}x{} header {:08X} record {} object {:08X} +C {:08X} +1C {} res {:08X} {:08X} {:08X}",
+                    (rec - models) / 84, j, w, hh, hp, ri, obj, obj ? Load32(base, obj + 0xC) : 0, int32_t(rid),
+                    ok ? Load32(base, rt + 12 * rid) : 0, ok ? Load32(base, rt + 12 * rid + 4) : 0,
+                    ok ? Load32(base, rt + 12 * rid + 8) : 0);
+      }
+    }
   }
   if (!tm) return;
   static std::atomic<uint32_t> filled{0};

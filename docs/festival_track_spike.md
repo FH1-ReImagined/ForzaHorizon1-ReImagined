@@ -383,11 +383,13 @@ for the Nordschleife (27366 instances), past anything converted yet.
   resource registration (sub_82E2EAD8) is hooked to keep each pack entry's texture header;
   just before the binder copies a table's textures, every tile slot gets the header of its
   atlas's pack entry. The rectangle was already right (the trace: c116 holds the tile's).
-- Which table is which model: the table names none (+8 is neither the instance nor the model,
-  checked against 40 tables), so the converter writes `<track>_stx_tiles.bin`: per model with
-  a tile slot, each slot's pack entry (-1: not a tile) and rectangle; the game finds a table's
-  model by its slots' rectangles (all of them, or all but a last one). One rectangle alone is
-  ambiguous (the grid is shared by the atlases), a model's sequence of them mostly is not.
+- Which table is which model: the table's +4 points at its model's record (presentation
+  +55368, 84 bytes each; the index is the converter's model number, checked on 60 tables at
+  Sunset Infield). The converter writes `<track>_stx_tiles.bin`: per model (ribbon 0's), each
+  slot's pack entry (-1: not a tile) and rectangle; the game takes the model from +4 and fills
+  only if the slots' rectangles agree with the file (else it logs the table and leaves it).
+  First tried, and replaced: finding the model by its slots' rectangles. The atlases share one
+  grid, so 13 of 60 sampled tables got another model's atlases that way.
 - Streamed tiles (flag 0xC: a file of their own, 128 x 64 for Laguna's lightmaps, the atlas in
   the pack until it streams in) also get the atlas, but only while their slot is null, so the
   own texture wins once it is there.
@@ -418,6 +420,26 @@ Fujimi Kaido's other ribbons are left alone, as before).
   building and grandstands, the oval and infield (shots/spots-sunX1). Left: at spot 2 the
   infield grass is a flat red and green, the road there flat grey, and a few billboards black;
   the asphalt looks pale and soft at several spots.
+- Lines and laps: `fm4_line.py` takes FM4's AI line (`<track>_NN.geo`) in place of the
+  cameras (`fm4_line.py TRACK.col TRACK_NN.geo OUT.txt`): Fujimi Kaido's collision has no
+  asphalt path the camera way, Sunset Infield none between its cameras. 420 s autopilot laps
+  at 30 fps, 0 crashes, no streaming block ran out:
+
+  | Circuit | Driven | Frame ms mean / p99 | CPU ms mean / p99 | Draws mean / p99 | Blocks at most / pool |
+  | --- | --- | --- | --- | --- | --- |
+  | Laguna Seca | 4.23 km | 33.34 / 33.77 | 2.39 / 3.63 | 1473 / 1799 | 27171 / 33446 |
+  | Fujimi Kaido | 4.15 km | 33.34 / 33.78 | 2.15 / 3.27 | 1354 / 2034 | 16285 / 29439 |
+  | Sunset Infield | 4.79 km | 33.34 / 33.76 | 2.65 / 4.18 | 1558 / 2187 | 50377 / 62411 |
+- The flat grey road and red-green grass at Sunset Infield's spot 2 (and Laguna's spot 2 road)
+  are not the tiles: they stay the same with the model-number match and with a 75 s wait. The
+  trace has the near road's diffuse at 32 x 32 and its detail at 32 x 16 where the same
+  1024 x 512 texture draws full size on another piece: streamed records (flag 0x4, a .bix and
+  a _B.bix of their own) left on the pack's resident mips. In the texture objects of those
+  slots the resource id is set but its resource entry is empty (0, 0, 0: never loaded), the
+  records listed in the spot's zone texture list. Fujimi Kaido has slots in the same state
+  (290 of 400 logged) and looks sharp, so the log alone does not tell a budget from a missing
+  request; next is the code that asks for a zone's textures (`FORZA_FM4_FILLDIAG`'s FM4SMALL
+  lines name model, slot, record and resource state).
 - Suzuka re-checked with the tile fill on and the mask patch off (spots-suzX1 against
   spots-suzR): the same at all 9 spots, 0.05% to 3.7% of pixels differ by more than 24 levels
   (clouds, the far trackside), 0 crashes.
