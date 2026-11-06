@@ -487,18 +487,24 @@ Fujimi Kaido's other ribbons are left alone, as before).
 
   | Circuit | Ribbon 0 | Zones | Tiles | Blocks asked | 9-spot pass |
   | --- | --- | --- | --- | --- | --- |
-  | Alps | 2040 instances, 1301 models | 238 | 54 | 62555 | crashes loading, every spot |
+  | Alps | 2040 instances, 1301 models | 238 | 54 | 62555 | crashed loading (fixed below) |
   | Nordschleife | 27367 instances, 6314 models | 2226 | 1420 | 37640 | all 9 drawn, 0 crashes |
   | Autopark | 2214 instances, 2555 models | 1026 | 2374 | 53935 | all 9 drawn, 0 crashes |
   | Maple Valley | 1915 instances, 984 models | 176 | 456 | 26308 | all 9 drawn, 0 crashes |
 
   - The Nordschleife's 27367 instances stream within the pool: its largest zone is 752
     instances, and the blocks asked for (37640) are under the hook's 65536.
-  - Alps crashes while the circuit loads, before the spawn teleport, the same way at every
-    spot and with `FORZA_FM4_ATLAS_FILL=0` too: a write to guest 0xD0 in 82EADA68 (a setter,
-    `*(this + 16) + 208 = f1`, with this + 16 null), called from a deferred call queue at
-    8247F9E0 (lr 8247F9E4). Its Ribbon_03 and 04 are PVS version 26 (left out); its files
-    are otherwise the other circuits' set. Not looked into further.
+  - Alps crashed while the circuit loaded, at every spot, with or without the tile fill and
+    without its PVS version 26 ribbons (03, 04) too: a track element's float setter (vtable
+    820019BC slot 14, sub_82EADA68: *(this + 16) + 208 = f1) has no null check, unlike its
+    sibling (slot 4, sub_82EACA20), and two of Alps' elements have no block at +16 (their
+    words 820019BC, a parent, 083F0004, 0, 0); FH1's deferred call queue (8247F9E0) calls it
+    for them and writes to guest 0xD0. Not traced which data the elements come from (not
+    the collision objects: Alps' are 39 cones, as the Nordschleife's 53 that load; nor
+    TrackSettings: the same elements as Fujimi Kaido's). The fix (fm4_track.cpp): on a
+    converted track the setter returns when the block is null, as slot 4 does (logged).
+    Alps then loads and draws at all 9 spots, 0 crashes (shots/alps-spots.png; a flat grey
+    patch beside the road at spot 8).
   - Autopark: the stands, pit wall and road are there; the near road is flat grey and there
     are black patches beside it at several spots, as at Laguna's spot 2 and Sunset's spot 2.
     Maple Valley: dark patches beside the road at spots 2 and 3.

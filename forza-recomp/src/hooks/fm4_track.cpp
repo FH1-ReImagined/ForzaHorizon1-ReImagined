@@ -1711,3 +1711,23 @@ extern "C" REX_FUNC(sub_82D81300) {
     REXLOG_INFO("FM4ALLOC2 {} calls, {} failed:{}", calls, fails, s);
   }
 }
+
+// A track element's float setter (vtable 820019BC slot 14, sub_82EADA68: *(this + 16) + 208 =
+// f1) has no null check, unlike its sibling (slot 4, sub_82EACA20). Alps loads an element
+// whose block (+16) is null and FH1's deferred call queue (8247F9E0) then writes to guest 0xD0
+// and crashes. On a converted track the setter returns when the block is null, as slot 4 does
+// (logged once with the element's fields).
+extern "C" REX_FUNC(__imp__sub_82EADA68);
+extern "C" REX_FUNC(sub_82EADA68) {
+  if (converted_track && !Load32(base, ctx.r3.u32 + 16)) {
+    static std::atomic<int> told{0};
+    if (told.fetch_add(1) < 3) {
+      std::string s;
+      for (uint32_t o = 0; o < 24; o += 4) s += fmt::format(" {:08X}", Load32(base, ctx.r3.u32 + o));
+      REXLOG_WARN("FM4TRACK: track element {:08X} has no parameter block: its float {} left unset (from {:08X}):{}",
+                  ctx.r3.u32, ctx.f1.f64, uint32_t(ctx.lr), s);
+    }
+    return;
+  }
+  __imp__sub_82EADA68(ctx, base);
+}
