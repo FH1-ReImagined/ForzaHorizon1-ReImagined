@@ -3310,3 +3310,74 @@ sends this laptop to the GeForce (#89). Not measured: a current Intel driver.
 
 **For #607.** On this CPU the command processor costs 3.7-4.6 us a draw (12-18 ms a frame at 3,000-4,400 draws)
 and is 65-77% busy; with the GPU relieved it is the next limit at 54-55 fps in the benchmark.
+
+## The GTX 1650 Ti laptop at 0.2.8, and its Intel UHD (#640, 2026-11-06)
+
+**Setup.** The laptop of the section above (i5-10300H, GTX 1650 Ti 4 GB on driver 555.97, Intel UHD on its 2020
+driver, 8 GB), on a "High performance" plan with the fans on Turbo. Main 64ea381 (0.2.8 and #713) built by the
+launcher, with the launch plan the launcher makes for this PC on a first start: the 540p scene (one pass with 2x
+MSAA), AMD FSR 1, 60 fps, vsync, 1920x1080 fullscreen, Vulkan, the driver pipeline file off. The golden TU4 save in a
+fresh user folder for each run, offline, audio muted, a warm shader cache shared by the runs of a setting (one
+warm-up session first). Scripted input through the SDK's keyboard pad from a helper in the signed-in session.
+**Benchmark**: the built-in one (its result.json). **Free roam**: 3 minutes of `tools/autodrive.py` on County Route
+203 at noon. **Race**: Goodyear Mountain Blast, 120 s of autodrive following the AI. Frame times from
+`FORZA_FRAMETIME_CSV`, command processor counters from `--fh1_frame_cost_csv`, CPU time of every thread every 15 s
+and process memory every 5 s (Win32: Toolhelp, GetThreadTimes, GetProcessMemoryInfo), `nvidia-smi` every 0.5 s.
+
+| | Benchmark (6 runs) | Free roam (3) | Race (3) |
+| --- | --- | --- | --- |
+| fps | 54.7 [52.8-56.0] | 59.4 (60 cap) | 59.7 (60 cap) |
+| 1% low, p99 | 37.9, 25.0 ms | 39.3, 22.9 ms | 40.3, 22.5 ms |
+| GPU busy | 95-97% | 97% | 93% |
+| Command processor: share of a thread, CPU a frame, draws | 68-70%, 12.0-13.0 ms, 3,300-3,700 | 59-60%, 10.7-10.8 ms, 2,630 | 57-59%, 10.2-10.5 ms, 2,810 |
+| Command processor waiting for the GPU / for the game, a frame | 1.3-2.1 / 2.2-2.5 ms | 2.1-2.4 / 2.7-2.9 ms | 0-0.1 / 5.0-5.3 ms |
+| Next busiest threads | three game threads 39-48%, Vulkan submission 26% | game threads 31-46%, submission 27% | game threads 34-38%, submission 21-22% |
+| Game process CPU | 3.2 threads (of 8) | 3.15 | 2.8-2.9 |
+| Working set, private bytes | 1.26-1.36 GB, 2.74-2.76 GB | 1.04-1.14 GB, 2.74 GB | 0.82-0.85 GB, 2.74 GB |
+| RAM free (least), system commit | 3.3-3.5 GB, 7.7 of 11.4 GB | 3.5-3.6 GB, 7.7 GB | 3.7 GB, 7.8 GB |
+| VRAM (`nvidia-smi`) | 1.31 GB | 1.31 GB | 1.31 GB |
+
+Against 0.2.7 (the 540p row of fix 2 above: 54.3 fps, 1% low 34.3, p99 27.0 ms) the benchmark holds its frame rate,
+with better lows. Free roam and the race stay at the cap. The GPU is the limit: 95-97% busy at its 50 W in the
+benchmark and free roam, with the command processor at two thirds of a thread and 2-3 ms a frame of waits.
+
+**Cuts tried on the benchmark.** One warm-up and one measured run each, on a copy of the warm cache:
+
+| Change | fps | 1% low |
+| --- | --- | --- |
+| Scene anti-aliasing Off (`scene_msaa=off`) | 51.6 | 35.9 |
+| Motion blur off | 54.7 | 38.0 |
+| Anisotropic filtering off | 54.4 | 38.3 |
+| Bilinear upscaling instead of FSR 1 | 57.1 | 39.3 |
+| `vulkan_present_on_submission_thread=true` (#613) | 56.0 | 40.3 |
+| `render_target_path_vulkan=fsi` | crash at start | |
+
+All within the run-to-run spread of the benchmark (52.8-56.0 at the same settings; its AI race draws 3,150-3,750
+draws a frame from run to run). The upscaler, the most promising, alternated 3 runs each: FSR 1 55.6 [55.0-56.0],
+bilinear 56.4 [55.7-56.8], CAS 55.9 [54.9-56.6], so FSR 1 costs under 1 fps and stays. #613 (the presenter's step on
+the submission thread), 3 runs each alternating on its rebased branch: benchmark 54.5 against 54.7 fps off, free roam
+p99 16.7-21.6 ms against 20.3-21.5 ms and 1% low 46.8 against 42.7 (scratchpad note for #613). Nothing cheap is left on
+the GPU here; what remains is the GPU's own work at 540p, which the SDK cannot split per pass yet (no GPU timestamps).
+
+`render_target_path_vulkan=fsi` (experimental) stops at once on this NVIDIA card: `Unhandled read fault at host 0x15
+(pc rexgpu-xenos.dll+0x30E00)` on the command processor thread (guest thread F8000018), the host chain
+`rexgpu-xenos.dll+0x30E00`, `+0xC9858`. On an Iris Xe it froze after the first frame (#201).
+
+**The Intel UHD.** With "Intel" chosen as the graphics card the launcher plans Direct3D 12 (#672: its Vulkan driver
+is 1.2.131), the 540p scene and 30 fps. On Vulkan the game still shows no frame (`FORZA_STALL: no frame for 59 s`), now
+without running out of memory.
+- On Direct3D 12 the picture is right (none of #201's Vulkan artifacts in free roam, the cockpit or the race), but
+  slow: 5.5-5.7 fps in free roam (`FORZA_FPSLOG` 7.2-7.4 over the session), 4.9 fps in the benchmark, with frames of
+  0.5-1.2 s. Private bytes 2.1-2.3 GB, working set 1.6-1.7 GB, 2.9 GB of RAM free.
+- `FORZA_FRAMETIME_CSV` wrote nothing at 30 fps: the frame time hook leaves the game's own timing at the console
+  rate before the CSV. It now writes a row per guest swap there (`frame_time.cpp`); rows of the main loop would be
+  wrong there, as the main loop keeps running at 30 when the render thread stops (it did, below).
+- The benchmark did not start in 2 of 3 runs with the defaults (`benchmark_start_timeout`), and a race froze at its
+  start: the render thread waited forever in the HUD command buffer's slot wait (`FORZA_STALL` chain `82419284
+  8249E108 824A1E6C 8247F9E4 82616BFC 8261E1C0`, sub_824A1E40), right after `FFCB: woke the HUD command buffer
+  worker: slot ready, after 41-77 ms` (2 ms on the GeForce). That is #512's wake (`ffcb_wake.cpp`), which wakes the
+  worker after 2 ms there and falls back to the game's infinite wait after 2 s. With `FORZA_FFCB_WAKE=0` the
+  benchmark completed (4.9 fps) and a race ran; with the first wake after 250 ms (`FORZA_FFCB_WAKE_AFTER_MS`, test
+  only) the benchmark completed (4.9 fps); one more run with the defaults completed too (5.0 fps). So the hang is
+  intermittent, and 5 runs do not prove the wake is its cause. On the GeForce the benchmark starts at 30 fps (30.0)
+  and on Direct3D 12 (44.8, 45.0 fps).

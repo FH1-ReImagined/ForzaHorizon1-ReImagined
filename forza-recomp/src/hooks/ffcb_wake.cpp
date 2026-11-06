@@ -39,6 +39,16 @@ uint32_t Load32(uint8_t* base, uint32_t address) {
   const uint8_t* p = forza::GuestPtr(base, address);
   return uint32_t(p[0]) << 24 | p[1] << 16 | p[2] << 8 | p[3];
 }
+// FORZA_FFCB_WAKE_AFTER_MS: how long the slot may stay not ready before the worker is woken
+// (default 2 ms, the #512 fix). Testing slow GPUs (Intel UHD, #640), where a slot takes 40-80 ms.
+int64_t WakeAfterMs() {
+  static const int64_t ms = [] {
+    const char* v = std::getenv("FORZA_FFCB_WAKE_AFTER_MS");
+    const long n = v && *v ? std::strtol(v, nullptr, 10) : 0;
+    return int64_t(n > 0 ? n : 0);
+  }();
+  return ms;
+}
 bool Enabled() {
   static const bool on = [] {
     const char* v = std::getenv("FORZA_FFCB_WAKE");
@@ -115,6 +125,8 @@ extern "C" REX_FUNC(SlotWait) {
           std::chrono::steady_clock::now() - start).count());
       return;
     }
+    if (std::chrono::steady_clock::now() - start < std::chrono::milliseconds(WakeAfterMs()))
+      continue;
     call = ctx;
     call.r1.u64 = ctx.r1.u32 - 0x400;
     call.r3.u64 = Load32(base, wake);
