@@ -23,10 +23,10 @@ class VrSettingTest(unittest.TestCase):
         self.assertEqual((mode.group, mode.section, mode.kind, mode.default), ("VR", "VR (experimental)", "choice", "cockpit"))
         self.assertEqual([v for v, _ in mode.choices], ["cockpit", "screen"])
         self.assertIn("VR", schema.GROUPS)
-        for key in ("vr_picture", "vr_seat_height_cm"):
+        for key in ("vr_picture", "vr_seat_height_cm", "vr_swap_eyes"):
             self.assertEqual(schema.BY_KEY[key].group, "VR")
         self.assertEqual([v for v, _ in schema.BY_KEY["vr_picture"].choices], ["game", "sharp", "sharpest"])
-        for key in ("vr_mode", "vr_picture", "vr_seat_height_cm"):   # never written to forza.toml
+        for key in ("vr_mode", "vr_picture", "vr_seat_height_cm", "vr_swap_eyes"):   # never written to forza.toml
             self.assertIn(key, config.LAUNCHER_ONLY)
 
     def test_the_game_knows_the_values(self):
@@ -40,6 +40,8 @@ class VrSettingTest(unittest.TestCase):
             self.assertIn(value, allowed)
         seat = re.search(r"REXCVAR_DEFINE_DOUBLE\(vr_seat_height_cm, (-?[\d.]+),", text)
         self.assertEqual(float(seat.group(1)), schema.BY_KEY["vr_seat_height_cm"].default)
+        swap = re.search(r"REXCVAR_DEFINE_BOOL\(vr_swap_eyes, (true|false),", text)
+        self.assertEqual(swap.group(1) == "true", schema.BY_KEY["vr_swap_eyes"].default)
 
     def test_play_stays_flat_and_the_mode_is_not_in_the_toml(self):
         cfg = self.config()
@@ -65,6 +67,10 @@ class VrSettingTest(unittest.TestCase):
                                 "--resolution_scale=2"])
         self.assertIn("Cockpit", notes[0])
         self.assertEqual(cfg.settings["frame_rate"], 144)   # the saved flat settings stay
+        self.assertNotIn("--vr_swap_eyes=true", args)
+        cfg.settings["vr_swap_eyes"] = True   # #705: a headset that shows the eyes the wrong way
+        args, _ = self.args_of(cfg)
+        self.assertIn("--vr_swap_eyes=true", args)
 
     def test_screen_mode_and_old_off(self):
         cfg = self.config()

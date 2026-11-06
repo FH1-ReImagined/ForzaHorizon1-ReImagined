@@ -50,6 +50,7 @@
 #include <string>
 #include <thread>
 #include <typeinfo>
+#include <utility>
 #include <vector>
 
 REXCVAR_DEFINE_STRING(vr_mode, "off", "VR",
@@ -126,6 +127,14 @@ REXCVAR_DEFINE_STRING(vr_stereo, "true", "VR",
                       "approximate, filled edges beside near objects) or off (both eyes see the "
                       "same picture: no depth)")
     .allowed({"off", "depth", "true"})
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// #705: a player on Windows (Meta Quest Link, AMD) saw each eye's picture in the other eye while
+// the views came in OpenXR's order; Meta Link with AMD drivers has shown other apps' eyes the
+// wrong way round too. The game gives each view the eye at its pose (xr_math.h LeftView); this
+// turns them round for a runtime or driver that then shows them the wrong way.
+REXCVAR_DEFINE_BOOL(vr_swap_eyes, false, "VR",
+                    "Cockpit: show each eye the other eye's picture (only for a headset that shows the "
+                    "left eye's picture to the right eye)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(vr_stereo_eye_parts, true, "VR",
                     "True stereo: draw each eye's scene only across the part of the picture that eye "
@@ -370,6 +379,15 @@ struct State {
   float ipd = 0.064f;  // the eyes' distance (xrLocateViews), handed to the SDK for the eyes
   bool picture_stereo = false;  // the picture swapchain holds both eyes side by side
   float picture_ipd = 0.064f;  // the eye distance those eyes were made with
+  // The runtime's view that is the left eye (xr_math.h LeftView, #705): the picture's left half
+  // and the left eye's pose go to that view, the right eye's to the other.
+  int left_view = 0;
+  bool view_order_logged = false;
+  bool swap_eyes = false;  // vr_swap_eyes: the left eye's picture goes to the other view
+  // FORZA_VR_TEST_SWAP_VIEWS=1 (a test aid): the runtime's two views as a runtime that numbered
+  // them the other way round would give them (xrLocateViews' results and the projection layer's
+  // views exchanged at the runtime's side).
+  bool test_swap_views = false;
 
   // The session (OpenXR thread; the spaces are also read by CockpitView under pose_mutex).
   VulkanDevice* device = nullptr;
@@ -686,6 +704,11 @@ bool CreateCopySlots() {
   if (g.vk.CreateFence(device, &fence_info, nullptr, &g.end_fence) != VK_SUCCESS) g.end_fence = VK_NULL_HANDLE;
   const char* locked = std::getenv("FORZA_VR_LOCKED_END_FRAME");
   g.locked_end_frame = locked && *locked == '1';
+  const char* swap_views = std::getenv("FORZA_VR_TEST_SWAP_VIEWS");
+  g.test_swap_views = swap_views && *swap_views == '1';
+  if (g.test_swap_views) REXLOG_WARN("VR: test: the runtime's views exchanged (FORZA_VR_TEST_SWAP_VIEWS)");
+  g.swap_eyes = REXCVAR_GET(vr_swap_eyes);
+  if (g.swap_eyes) REXLOG_INFO("VR: eyes swapped (vr_swap_eyes): each eye gets the other eye's picture");
   return true;
 }
 
@@ -1522,11 +1545,23 @@ bool Frame() {
   if (g.mode == Mode::kCockpit &&
       XR_SUCCEEDED(g.xr.LocateViews(g.session, &locate, &view_state, 2, &eye_count, eyes)) &&
       eye_count == 2) {
+    if (g.test_swap_views) std::swap(eyes[0], eyes[1]);
+    // From here on eyes[0] is the left eye and eyes[1] the right, whichever view the runtime gave
+    // each as (the eye passes, their parts of the picture and the log are per eye).
+    const bool positions = view_state.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT;
+    const int left_view = LeftView(eyes[0].pose.position.x, eyes[1].pose.position.x, positions, g.left_view);
+    if (left_view != g.left_view || (positions && !g.view_order_logged)) {
+      g.view_order_logged = positions;
+      REXLOG_INFO("VR: view {} is the left eye (views at x {:.1f} and {:.1f} mm)", left_view,
+                  eyes[0].pose.position.x * 1000, eyes[1].pose.position.x * 1000);
+    }
+    g.left_view = left_view;
+    if (left_view != int(g.swap_eyes)) std::swap(eyes[0], eyes[1]);
     const Fov fovs[2] = {
         {eyes[0].fov.angleLeft, eyes[0].fov.angleRight, eyes[0].fov.angleUp, eyes[0].fov.angleDown},
         {eyes[1].fov.angleLeft, eyes[1].fov.angleRight, eyes[1].fov.angleUp, eyes[1].fov.angleDown}};
     const bool oriented = view_state.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT;
-    if (g.stereo && (view_state.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT)) {
+    if (g.stereo && positions) {
       const XrVector3f a = eyes[0].pose.position, b = eyes[1].pose.position;
       const float ipd = std::sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) + (a.z - b.z) * (a.z - b.z));
       if (ipd > 0.04f && ipd < 0.09f && std::fabs(ipd - g.ipd) > 0.0005f) {
@@ -1689,19 +1724,23 @@ bool Frame() {
     // the field of view it was rendered with.
     // With depth stereo (ReIGlue 0394) each eye gets its half of the picture, made for that eye
     // (the head's pose moved half the eye distance along its x axis).
+    // Each view gets the eye the runtime put it at (g.left_view; the other one with vr_swap_eyes):
+    // the left half of the picture is the left eye's.
     const Fov fov = g.shown_tag.frustum.ImageFov();
     for (int i = 0; i < 2; ++i) {
       XrCompositionLayerProjectionView& view = views[i];
+      const int eye = (i == g.left_view) != g.swap_eyes ? 0 : 1;
       view.fov = {fov.left, fov.right, fov.up, fov.down};
       if (g.picture_stereo) {
         const int32_t half = rect.extent.width / 2;
-        view.pose = ToXr(EyePose(g.shown_tag.head, i, g.picture_ipd));
-        view.subImage = {g.picture.swapchain, {{i * half, 0}, {half, rect.extent.height}}, 0};
+        view.pose = ToXr(EyePose(g.shown_tag.head, eye, g.picture_ipd));
+        view.subImage = {g.picture.swapchain, {{eye * half, 0}, {half, rect.extent.height}}, 0};
       } else {
         view.pose = ToXr(g.shown_tag.head);
         view.subImage = {g.picture.swapchain, rect, 0};
       }
     }
+    if (g.test_swap_views) std::swap(views[0], views[1]);
     projection.space = g.local;
     projection.viewCount = 2;
     projection.views = views;

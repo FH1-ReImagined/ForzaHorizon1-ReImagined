@@ -305,6 +305,15 @@ void TestEyePose() {
   Check(Near(left.q.y, view.q.y) && Near(right.q.w, view.q.w), "both look where the view looks");
 }
 
+void TestLeftView() {
+  // #705: the left eye is the view further left, whichever index the runtime gives it.
+  Check(LeftView(-0.032f, 0.032f, true, 0) == 0, "view 0 left: as OpenXR numbers them");
+  Check(LeftView(0.032f, -0.032f, true, 0) == 1, "view 0 right: the eyes taken from the poses");
+  Check(LeftView(-0.032f, 0.032f, true, 1) == 0, "back to view 0 once the poses say so");
+  Check(LeftView(0.032f, -0.032f, false, 0) == 0, "positions not valid: kept");
+  Check(LeftView(0.0f, 0.0002f, true, 1) == 1, "no distance across: kept");
+}
+
 void TestEyePictureRange() {
   // True stereo draws each eye only across its part of the cockpit picture: a Quest 3's eyes (54
   // out, 40 in) with the cockpit's 5 degree margin each see 0 to 80 % (left) and 20 to 100 %
@@ -359,6 +368,7 @@ int main() {
   TestCullScale();
   TestHudPanel();
   TestEyePose();
+  TestLeftView();
   TestEyePictureRange();
   TestLatency();
   TestRefreshRate();
