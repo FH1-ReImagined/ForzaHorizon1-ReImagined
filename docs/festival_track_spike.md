@@ -387,7 +387,10 @@ for the Nordschleife (27366 instances), past anything converted yet.
   +55368, 84 bytes each; the index is the converter's model number, checked on 60 tables at
   Sunset Infield). The converter writes `<track>_stx_tiles.bin`: per model (ribbon 0's), each
   slot's pack entry (-1: not a tile) and rectangle; the game takes the model from +4 and fills
-  only if the slots' rectangles agree with the file (else it logs the table and leaves it).
+  each tile slot whose rectangle agrees with the file. A streamed tile whose own file is in
+  has the identity rectangle (the game's own doing) and its texture, so it is not filled; a
+  slot with any other rectangle is logged and left alone (Suzuka: a few plain tiles the game
+  gives the identity rectangle, model 265's slots 6 and 7).
   First tried, and replaced: finding the model by its slots' rectangles. The atlases share one
   grid, so 13 of 60 sampled tables got another model's atlases that way.
 - Streamed tiles (flag 0xC: a file of their own, 128 x 64 for Laguna's lightmaps, the atlas in
@@ -443,8 +446,32 @@ Fujimi Kaido's other ribbons are left alone, as before).
 - Suzuka re-checked with the tile fill on and the mask patch off (spots-suzX1 against
   spots-suzR): the same at all 9 spots, 0.05% to 3.7% of pixels differ by more than 24 levels
   (clouds, the far trackside), 0 crashes.
+- Four more circuits, from the survey, with no tool changes (FM4's AI line gives the spots
+  for every one; `--free-roam` ribbon 0 each):
+
+  | Circuit | Ribbon 0 | Zones | Tiles | Blocks asked | 9-spot pass |
+  | --- | --- | --- | --- | --- | --- |
+  | Alps | 2040 instances, 1301 models | 238 | 54 | 62555 | crashes loading, every spot |
+  | Nordschleife | 27367 instances, 6314 models | 2226 | 1420 | 37640 | all 9 drawn, 0 crashes |
+  | Autopark | 2214 instances, 2555 models | 1026 | 2374 | 53935 | all 9 drawn, 0 crashes |
+  | Maple Valley | 1915 instances, 984 models | 176 | 456 | 26308 | all 9 drawn, 0 crashes |
+
+  - The Nordschleife's 27367 instances stream within the pool: its largest zone is 752
+    instances, and the blocks asked for (37640) are under the hook's 65536.
+  - Alps crashes while the circuit loads, before the spawn teleport, the same way at every
+    spot and with `FORZA_FM4_ATLAS_FILL=0` too: a write to guest 0xD0 in 82EADA68 (a setter,
+    `*(this + 16) + 208 = f1`, with this + 16 null), called from a deferred call queue at
+    8247F9E0 (lr 8247F9E4). Its Ribbon_03 and 04 are PVS version 26 (left out); its files
+    are otherwise the other circuits' set. Not looked into further.
+  - Autopark: the stands, pit wall and road are there; the near road is flat grey and there
+    are black patches beside it at several spots, as at Laguna's spot 2 and Sunset's spot 2.
+    Maple Valley: dark patches beside the road at spots 2 and 3.
+- Suzuka re-checked after the model-number match and the per-slot check (spots-suzX3 against
+  spots-suzR, shots/suzuka-recheck-2.png): the same at all 9 spots, 0.3% to 3.3% of pixels
+  differ, 0 crashes.
 - Sheets (trk-spike shots/): laguna-atlas-before-after.png, fujimikaido-spots.png,
-  sunsetinfield-spots.png, suzuka-atlas-recheck.png.
+  sunsetinfield-spots.png, suzuka-atlas-recheck.png, nordschleife-spots.png, autopark-spots.png,
+  maplevalley-spots.png, suzuka-recheck-2.png.
 
 ## Towards players: a plan
 

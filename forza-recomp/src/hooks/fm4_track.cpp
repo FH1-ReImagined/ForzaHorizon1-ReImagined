@@ -766,6 +766,7 @@ static void FillAtlasTiles(uint8_t* base, uint32_t tbl) {
   // The table's model: its +4 points at the model's record (presentation +55368, 84 bytes
   // each, the count at +55372's high half); the rectangles must agree with the converter's.
   const Fm4Stx::TileModel* tm = nullptr;
+  bool skip[32] = {};
   const uint32_t pres = fm4_presentation.load();
   const uint32_t models = pres ? Load32(base, pres + 55368) : 0, nm = pres ? Load32(base, pres + 55372) >> 16 : 0;
   const uint32_t rec = Load32(base, tbl + 4);
@@ -773,13 +774,32 @@ static void FillAtlasTiles(uint8_t* base, uint32_t tbl) {
       (rec - models) / 84 < c.tile_models.size()) {
     const Fm4Stx::TileModel& cand = c.tile_models[(rec - models) / 84];
     const uint32_t n = std::min<uint32_t>(count, uint32_t(cand.entry.size()));
-    if (n && std::memcmp(cand.rect.data(), rect, 16 * n) == 0) {
-      tm = &cand;
-    } else if (n) {
+    // A streamed tile's slot (top bit) gets the identity rectangle from the game once its own
+    // file (the tile alone) is in: that agrees too.
+    static const uint32_t identity[4] = {0x3F800000, 0x3F800000, 0, 0};
+    auto agrees = [&](uint32_t j) {
+      return std::memcmp(&cand.rect[4 * j], &rect[4 * j], 16) == 0 ||
+             (cand.entry[j] != 0xFFFFFFFF && (cand.entry[j] & 0x80000000) &&
+              std::memcmp(identity, &rect[4 * j], 16) == 0);
+    };
+    bool all = n > 0;
+    for (uint32_t j = 0; j < n; ++j) {
+      skip[j] = !agrees(j);
+      if (skip[j]) all = false;
+    }
+    if (n) tm = &cand;  // the model is certain from +4: slots that disagree are left alone
+    if (!all && n) {
       static std::atomic<int> told{0};
-      if (told.fetch_add(1) < 5)
-        REXLOG_INFO("FM4TRACK: model {}'s texture table {:08X} has other rectangles than the converter's: left alone",
-                    (rec - models) / 84, tbl);
+      if (told.fetch_add(1) < 5) {
+        std::string d;
+        for (uint32_t j = 0; j < n; ++j)
+          if (!agrees(j))
+            d += fmt::format(" slot {} entry {:08X}: {:08X} {:08X} {:08X} {:08X} here, {:08X} {:08X} {:08X} {:08X} converted;",
+                             j, cand.entry[j], rect[4 * j], rect[4 * j + 1], rect[4 * j + 2], rect[4 * j + 3],
+                             cand.rect[4 * j], cand.rect[4 * j + 1], cand.rect[4 * j + 2], cand.rect[4 * j + 3]);
+        REXLOG_INFO("FM4TRACK: model {}'s texture table {:08X} ({} slots, {} converted): slots with other rectangles left alone:{}",
+                    (rec - models) / 84, tbl, count, cand.entry.size(), d);
+      }
     }
   }
   static const bool diag = std::getenv("FORZA_FM4_FILLDIAG") != nullptr;
@@ -862,7 +882,7 @@ static void FillAtlasTiles(uint8_t* base, uint32_t tbl) {
   if (!tm) return;
   static std::atomic<uint32_t> filled{0};
   for (uint32_t j = 0; j < tm->entry.size() && j < count; ++j) {
-    if (tm->entry[j] == 0xFFFFFFFF) continue;
+    if (tm->entry[j] == 0xFFFFFFFF || skip[j]) continue;
     const uint32_t k = tm->entry[j] & 0x7FFFFFFF;
     if (k >= fm4_pack_headers.size() || !fm4_pack_headers[k]) continue;
     const uint32_t h = fm4_pack_headers[k], now = Load32(base, entries + 32 * j);
