@@ -472,6 +472,10 @@ Fujimi Kaido's other ribbons are left alone, as before).
   Valley the same (Laguna's spot 7 and Maple Valley's spot 3 dark patches stay: another
   cause); Fujimi Kaido and Suzuka the same or with more detail (Suzuka's spot 1 trees, spot 3
   grass and fence).
+- Sunset Infield lap with both (420 s autopilot): 4.80 km, frame 33.34 ms mean / 33.77 p99,
+  CPU 2.58 / 4.37 ms, draws 1584 / 2219, 50377 streaming blocks at most, none ran out, 0
+  crashes; the same as before the two fixes (4.79 km, 33.34 / 33.76, 2.65 / 4.18), guest
+  physical memory 356 MB as before.
 - Tried and left off: listing each zone's textures' files in its file list as Colorado does
   (`FM4_PVS_ZONE_TEXTURES=1`): no change (FH1 asks for a streamed texture itself), and about
   three times the streaming pool.
