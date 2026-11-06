@@ -311,6 +311,74 @@ instances; 33446 streaming blocks asked for). Suzuka-specific assumptions found 
   line for its track, so the last converted circuit is the one mounted
   (`reconvert_track.sh` copies it into the game folder).
 
+## Which circuits convert today (survey)
+
+`tools/fm4_track_survey.py` (offline) over every circuit on FM4's disc 1. The predictor is the
+share of road pieces that take a texture from an atlas tile with no file of its own (Laguna
+Seca's black road; Suzuka 1%):
+
+| Circuit | Layouts | Atlas-only records | Models using one | Road pieces using one | AI line | Unseen shaders |
+| --- | --- | --- | --- | --- | --- | --- |
+| Suzuka | 3 | 32% | 38% | 1% | all | 0 |
+| Alps | 3 (+2 PVS v26) | 4% | 21% | 13% | none | 39 |
+| FujimiKaido | 1 | 8% | 33% | 15% | all | 17 |
+| SunsetInfield | 3 | 25% | 34% | 15% | all | 21 |
+| Nurburgring (Nordschleife) | 1 | 27% | 56% | 20% | all | 10 |
+| Autopark | 7 | 60% | 51% | 20% | all | 15 |
+| MapleValley | 2 | 34% | 26% | 21% | all | 16 |
+| AmalfiGP | 1 | 30% | 33% | 26% | none | 20 |
+| Infin | 4 | 41% | 23% | 28% | all | 22 |
+| LeMans | 2 | 46% | 28% | 41% | some | 32 |
+| RoadAtlanta | 2 | 45% | 68% | 42% | all | 13 |
+| RoadAmerica | 1 | 69% | 75% | 51% | all | 10 |
+| Indi | 2 | 48% | 37% | 51% | all | 24 |
+| CrownJewel | 10 | 24% | 59% | 52% | all | 36 |
+| LagunaSeca | 1 | 50% | 53% | 55% | all | 12 |
+| Sebring | 3 | 78% | 72% | 59% | all | 9 |
+| Catalunya | 3 | 59% | 67% | 65% | all | 14 |
+| Silverstone | 3 | 9% | 26% | 68% | all | 10 |
+| Motegi | 4 | 34% | 62% | 73% | all | 17 |
+| Tsukuba | 2 | 28% | 54% | 74% | all | 24 |
+| Hockenheim | 4 | 26% | 39% | 75% | none | 21 |
+| NurburgringF1 | 2 | 43% | 52% | 78% | none | 21 |
+| Mugello | 2 | 34% | 51% | 87% | all | 10 |
+| TopGear | 7 | 35% | 63% | 93% | none | 19 |
+
+(Road share: the worst layout. "AI line": FM4's media/AI/Tracks/<track>_NN.geo for the spawn;
+without it the grid is found by hand. "Unseen shaders": names Suzuka's conversion has no patch
+experience with, each a possible new stale-constant case.) Every circuit but Suzuka has a road
+share of 13% or more, most over 40%: the atlas tiles gate nearly all of them, so they came
+first (below). No other blocker showed: every layout is PVS version 27 (Alps' 03 and 04 are 26),
+every circuit has its static pack, and the model counts (903 to 6314) are in Suzuka's range or,
+for the Nordschleife (27366 instances), past anything converted yet.
+
+## Atlas tiles: the texture path, as far as traced (parked)
+
+- A model's draw (sub_82D1B080) fills an 800-byte binding block through the track binder's
+  vtable slot 1 (sub_82EAF1B0; vtable 82256734, a sub-object of the track presentation at
+  +59700, built in sub_82EB5A40), then applies it as fixups (sub_8248C200: 9, 10;
+  sub_8248B2D8: 3 textures, 8 UV offsets; sub_8248B5D0: buffers). The binder reads each slot
+  from the model's own texture table (*(draw setup + 1192), entries at +32, their count at +36,
+  32 bytes each: +0 the texture's header, +4 a count, +8 8242950C, +16..+28 the rectangle).
+- On Laguna Seca the tile slot's entry has a null texture (+0 = 0) and the tile's rectangle
+  (e.g. 0.0078, 0.0039, 0.9648, 0.5293), so the binder takes its stand-in: the black road.
+- The texture object (+0x1C resource id, its users list) is not where the texture is: even a
+  pack entry's own record has +0x1C = -1 and nothing in the 52-byte block at +44 the
+  constructor (sub_82EB2BE8) zeroes. The pack loop registers each entry's texture in the
+  streaming resource table (manager +16, 12-byte entries by id: +0 the texture, +4 its memory,
+  +8 a count; an id already there only counts up) under the numbers file's id.
+- Tried, all off: the tiles' objects given the pack's resource id (`FORZA_FM4_ATLAS_IDS`), the
+  tiles added to the pack loop's record map (`FORZA_FM4_ATLAS_MAP`), and pack ids moved past
+  the archive's file numbers with every pack-drawn record taking its entry's id
+  (`FM4_PVS_PACK_IDS=1` with `FORZA_FM4_PACK_IDS=1`: the road stayed black and the terrain lost
+  its pack textures too, so the resource id is not what a pack record's slot reads either).
+- Rectangles cannot pick the atlas: 99% of tiles share their rectangle with tiles of other
+  atlases (a common grid), and a model texture table carries no record number.
+- Next: what fills a model texture table's +0 for a pack-drawn record (the code that writes
+  those entries when a model's zone goes live, likely next to sub_82E18FC8's user
+  registration); a write watch on one entry, as the hook already does for the texture table
+  (FM4TRACK: watch), would name it. Then fill a tile's entry from its atlas's the same way.
+
 ## Towards players: a plan
 
 What a player would need, beyond the spike (none of this is built yet):

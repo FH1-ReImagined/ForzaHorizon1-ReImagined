@@ -545,7 +545,7 @@ void DumpTexObjects(uint8_t* base, uint32_t t, const char* when) {
     for (uint32_t r : {c.ids[k], i}) {
       const uint32_t obj = Load32(base, texs + 4 * r);
       std::string b;
-      for (uint32_t o = 0; o < 96; o += 4) b += fmt::format(" {:08X}", GuestReadable(obj + o) ? Load32(base, obj + o) : 0);
+      for (uint32_t o = 0; o < 100; o += 4) b += fmt::format(" {:08X}", GuestReadable(obj + o) ? Load32(base, obj + o) : 0);
       REXLOG_INFO("FM4TEX {} record {} (pack {}) object {:08X}:{}", when, r, k, obj, b);
       for (uint32_t o = 0; o < 96; o += 4) {
         const uint32_t p = GuestReadable(obj + o) ? Load32(base, obj + o) : 0;
@@ -592,13 +592,16 @@ void AtlasTileResources(uint8_t* base, uint32_t t) {
   const uint32_t texs = Load32(base, t + 2812), n = Load32(base, t + 2816);
   if (c.atlas_of.empty() || c.atlas_of.size() != n || !texs || !GuestReadable(texs)) return;
   uint32_t done = 0;
+  // FM4_PVS_PACK_IDS=1 conversions: atlas_of holds the resource id itself (>= the record count).
+  const bool ids_given = std::getenv("FORZA_FM4_PACK_IDS") != nullptr;
   for (uint32_t i = 0; i < n; ++i) {
     const uint32_t k = c.atlas_of[i];
-    if (k >= c.ids.size() || c.ids[k] >= n || c.ids[k] == i) continue;
+    if (!ids_given && (k >= c.ids.size() || c.ids[k] >= n || c.ids[k] == i)) continue;
+    if (ids_given && k == 0xFFFFFFFF) continue;
     const uint32_t obj = Load32(base, texs + 4 * i);
     if (!obj || !GuestReadable(obj + 0x1C) || Load32(base, obj + 0x1C) != 0xFFFFFFFF) continue;
     uint8_t* p = forza::GuestPtr(base, obj + 0x1C);
-    const uint32_t id = c.ids[k];
+    const uint32_t id = ids_given ? k : c.ids[k];
     p[0] = uint8_t(id >> 24); p[1] = uint8_t(id >> 16); p[2] = uint8_t(id >> 8); p[3] = uint8_t(id);
     ++done;
   }
@@ -688,6 +691,63 @@ extern "C" REX_FUNC(sub_82D099E0) {
 }
 
 extern "C" REX_FUNC(sub_82D09648) { __imp__sub_82D09648(ctx, base); }
+
+// FORZA_FM4_TEXDUMP: the track model draw setup (sub_82D1B080) fills an 800-byte binding
+// block through a virtual call on the object at +1188 (vtable slot 1), then applies it as
+// command-buffer fixups (sub_8248C200: 9, 10; sub_8248B2D8: 3 textures, 8 UV offsets;
+// sub_8248B5D0: buffers). Logs that object, its vtable and slot 1 once.
+extern "C" REX_FUNC(__imp__sub_82D1B080);
+extern "C" REX_FUNC(sub_82D1B080) {
+  static std::atomic<int> logged{0};
+  if (std::getenv("FORZA_FM4_TEXDUMP") && logged.fetch_add(1) < 3) {
+    const uint32_t self = ctx.r3.u32, binder = Load32(base, self + 1188);
+    const uint32_t vt = binder && GuestReadable(binder) ? Load32(base, binder) : 0;
+    std::string slots;
+    for (uint32_t k = 0; k < 8 && vt; ++k) slots += fmt::format(" {:08X}", Load32(base, vt + 4 * k));
+    REXLOG_INFO("FM4TEX vtable {:08X}:{}", vt, slots);
+    REXLOG_INFO("FM4TEX draw setup {:08X}: binder {:08X} vtable {:08X} slot1 {:08X} +1192 {:08X} r4 {:08X} r5 {:08X} r6 {:08X} r7 {:08X}",
+                self, binder, vt, vt ? Load32(base, vt + 4) : 0,
+                Load32(base, self + 1192), ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32);
+  }
+  if (std::getenv("FORZA_FM4_TEXDUMP")) {
+    static std::atomic<int> tl{0};
+    const uint32_t tbl = Load32(base, ctx.r3.u32 + 1192);
+    if (tbl && GuestReadable(tbl + 40) && tl.fetch_add(1) % 500 == 0) {
+      const Fm4Stx& c = Fm4StxConfig();
+      const uint32_t entries = Load32(base, tbl + 32), count = Load32(base, tbl + 36);
+      std::string q;
+      int shown = 0;
+      for (uint32_t i = 0; i < c.atlas_of.size() && shown < 3; ++i) {
+        const uint32_t k = c.atlas_of[i];
+        if (k >= c.ids.size() || c.ids[k] == i || c.ids[k] >= count || i >= count) continue;
+        ++shown;
+        for (uint32_t r : {c.ids[k], i}) {
+          const uint32_t e = entries + 32 * r;
+          q += fmt::format(" [{}] {:08X} {:08X} {:08X} {:08X} | {:08X} {:08X} {:08X} {:08X};", r, Load32(base, e),
+                           Load32(base, e + 4), Load32(base, e + 8), Load32(base, e + 12), Load32(base, e + 16),
+                           Load32(base, e + 20), Load32(base, e + 24), Load32(base, e + 28));
+        }
+      }
+      for (uint32_t j = 0; j < count && j < 8; ++j) {
+        const uint32_t e = entries + 32 * j;
+        q += fmt::format(" <{}> {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}", j, Load32(base, e),
+                         Load32(base, e + 4), Load32(base, e + 8), Load32(base, e + 12), Load32(base, e + 16),
+                         Load32(base, e + 20), Load32(base, e + 24), Load32(base, e + 28));
+      }
+      std::string head;
+      for (uint32_t o = 0; o < 48; o += 4) head += fmt::format(" {:08X}", Load32(base, tbl + o));
+      for (uint32_t o : {16u, 24u}) {
+        const uint32_t p = Load32(base, tbl + o);
+        if (!p || !GuestReadable(p + 32)) continue;
+        head += fmt::format(" [+{} ->", o);
+        for (uint32_t u = 0; u < 32; u += 4) head += fmt::format(" {:08X}", Load32(base, p + u));
+        head += "]";
+      }
+      REXLOG_INFO("FM4TEX binder table {:08X}:{} | entries {:08X} count {}:{}", tbl, head, entries, count, q);
+    }
+  }
+  __imp__sub_82D1B080(ctx, base);
+}
 
 // The pack loop also maps each entry's record to the entry (sub_82E66690(map, &record) gives
 // the map's slot, the loop stores the entry's index k there). A test (FORZA_FM4_ATLAS_MAP=1):

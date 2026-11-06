@@ -1068,16 +1068,26 @@ def convert_mod(mod, fh1_disc, loose):
               f"{max(len(c['textures']) for c in cells)} textures")
     # The static pack's texture numbers: pack entry k is texture file k; its record is the
     # first texture record of that file.
-    # A file shared by a lightmap's records (flag 0x4) and others is the lightmaps' atlas: its
-    # entry takes the first lightmap record. Laguna Seca's lightmap atlas (file 857) is shared
-    # by 126 records, the first of them a flag-9 one (an atlas tile, not a lightmap): with that
-    # record's flags FH1 drew every road piece's lightmap as a 32 x 32 stand-in, the road black.
+    # A file shared by records with a texture file of their own (flag 0x4: streamed) and atlas
+    # tiles (0x8 without 0x4: drawn from the pack) gives its entry to the first tile: the pack's
+    # texture is registered under that record's number, which only a pack-drawn record's object
+    # looks up (a streamed record's object holds its own file's resource id instead). An entry
+    # given to a streamed record (tried: Laguna Seca's file 857 to a lightmap) leaves the pack
+    # texture where no object finds it.
     first = {}
     for i, t in enumerate(F["textures"]):
         k = first.get(t[1])
-        if k is None or (t[6] & 0x4 and not F["textures"][k][6] & 0x4):
+        if k is None or (F["textures"][k][6] & 0x4 and not t[6] & 0x4):
             first[t[1]] = i
     numbers = [first.get(k, 0xFFFFFFFF) for k in range(max(first) + 1)]
+    # A test (FM4_PVS_PACK_IDS=1): pack entry k is registered under the id len(archive) + k, past
+    # every archive file's (the streaming resource table holds both; a record number can equal a
+    # model file's index), and every record with no file of its own takes its entry's id
+    # (<track>_stx_files.bin then holds the id, the game sets the record object's resource id).
+    pack_ids = os.environ.get("FM4_PVS_PACK_IDS") == "1"
+    own_files = {int(p.split("_0x")[1][:8], 16) for p in order if "_0x" in p and p.lower().endswith(".bix")}
+    if pack_ids:
+        numbers = [len(order) + k if v != 0xFFFFFFFF else 0xFFFFFFFF for k, v in enumerate(numbers)]
     os.makedirs(loose, exist_ok=True)
     with open(os.path.join(loose, f"{track}_stx_numbers.bin"), "wb") as f:
         f.write(struct.pack(f">{len(numbers)}I", *numbers))
@@ -1088,8 +1098,12 @@ def convert_mod(mod, fh1_disc, loose):
     # road lightmaps and masks, flag 9; drawn black). <track>_stx_files.bin, a u32 per record,
     # gives such a record the pack entry it is drawn from (-1 for the others); the game
     # (hooks/fm4_track.cpp) points those records at their atlas's texture object.
-    files_of = [t[1] if (t[6] & 0xC) == 0x8 and numbers[t[1]] != i else 0xFFFFFFFF
-                for i, t in enumerate(F["textures"])]
+    if pack_ids:
+        files_of = [numbers[t[1]] if t[1] < len(numbers) and t[0] not in own_files else 0xFFFFFFFF
+                    for t in F["textures"]]
+    else:
+        files_of = [t[1] if (t[6] & 0xC) == 0x8 and numbers[t[1]] != i else 0xFFFFFFFF
+                    for i, t in enumerate(F["textures"])]
     with open(os.path.join(loose, f"{track}_stx_files.bin"), "wb") as f:
         f.write(struct.pack(f">{len(files_of)}I", *files_of))
     print(f"{track}: {sum(v != 0xFFFFFFFF for v in files_of)} atlas tiles drawn from their atlas")
