@@ -695,6 +695,30 @@ Followed further:
   does) with the instance lightmap record's (ou, ov, su, sv). Needs the binding code, the
   device and the instance's record found first.
 
+### The fix attempt (3-hour box): not fixed
+
+- The converter now lists the affected models (`<track>_stx_lmuv.bin`, `lightmap_uv_models`
+  in tools/fm4_pvs.py): a model whose shader reads Light_Map_uvOS at c116 and whose file has no
+  PM4 write of PS constants covering c116 (only block-aligned writes count: a c114 run in
+  model 59 was data). Tsukuba 65 of 1091 models, Infineon 110, Hockenheim 365, Top Gear 38,
+  Indianapolis 79, Suzuka 118 (where it shows no fault). Checked: Tsukuba's model 59 and 272
+  are in, road model 208 (c116..c127 written) is not.
+- These models' shaders are shared with healthy models (ROAD_BLND_2 at Hockenheim: 207 broken,
+  74 healthy), so patching the shader files in place is out; per-model shader copies would be.
+- For these models the binder's sampler 7 is -1 (no slot) and the model texture table holds
+  exactly the model's slots: the instance lightmap is bound by FH1's per-instance path, not
+  through the table, so its rectangle is not in the binder's reach.
+- Tried, no effect (reverted): calling the device's pixel constant setter (sub_82465E28 with
+  the device at draw setup +1196, register 116, mask 1 << 34) from the binder during the draw
+  setup (which runs when a zone goes live: the draws are recorded); and overriding c116 in
+  FH1's per-pass global write (82E4D308). The trace showed c116 unchanged both times: the
+  value these draws read comes from a fixed place in FH1's depth-2 buffer (+0xF490 at Tsukuba,
+  written together with c148), the constant upload of another object, not found.
+- Next: find what writes PS c116 and c148 at that depth-2 spot (a write watch on the guest
+  ring, or the ReIGlue trace extended to log the writer's PM4 packet and the guest code
+  emitting it), or give the listed models shader copies that read Light_Map_uvOS as the
+  identity, or as their instances' rectangle passed another way.
+
 ## Towards players: a plan
 
 What a player would need, beyond the spike (none of this is built yet):

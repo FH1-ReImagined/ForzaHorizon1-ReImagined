@@ -58,6 +58,7 @@ shaders neutral) and drives (collision: tools/fm4_col.py). FM4 has no ground whe
 dome's lower half stood in, so from above much of the infield is empty.
 """
 import math
+import re
 import os
 import shutil
 import struct
@@ -557,6 +558,53 @@ def atlas_mask_shaders(F):
                 c = count.setdefault(n, [0, 0])
                 c[atlas] += 1
     return {n for n, (plain, atlas) in count.items() if atlas > plain}
+
+
+# A PM4 type-0 write of pixel-shader constants (registers 0x4400 + 4 * n): header word
+# (count - 1) << 16 | register, count a whole number of registers.
+_PS_WRITE = re.compile(rb"(?=\x00([\x00-\xff])([\x44-\x47])([\x00-\xff]))", re.S)
+
+
+def writes_ps_constant(data, reg):
+    """Whether a model file holds a PM4 write of pixel constant reg (any alignment)."""
+    for m in _PS_WRITE.finditer(data):
+        cnt = m.group(1)[0] + 1
+        low = (m.group(2)[0] << 8) | m.group(3)[0]
+        if low & 3 or cnt % 4:
+            continue
+        first = (low - 0x4400) // 4
+        if first % 4:  # FM4's constant blocks start on 4-register boundaries (c0, c116, c120)
+            continue
+        if first <= reg < first + cnt // 4:
+            return True
+    return False
+
+
+def lightmap_uv_models(F, bin_dir):
+    """The models of F whose shaders read Light_Map_uvOS at c116 and whose files write no
+    pixel constant c116 (see <track>_stx_lmuv.bin)."""
+    shader_files = {}
+    sdir = os.path.join(bin_dir, "shaders", "track")
+    if os.path.isdir(sdir):
+        shader_files = {n.upper(): os.path.join(sdir, n) for n in os.listdir(sdir)}
+    reads = {}
+
+    def reads_lmuv(name):
+        if name not in reads:
+            p = shader_files.get(name.upper() + ".FXOBJ")
+            reads[name] = bool(p) and any(
+                floats.get("Light_Map_uvOS", (0,))[0] == 116
+                for _, _, _, floats, _ in fm4_shaders.blobs(open(p, "rb").read()))
+        return reads[name]
+    out = []
+    for mi, M in enumerate(F["models"]):
+        names = [F["shaders"][s].split("\\")[-1] for s in M["shaders"]]
+        if not any(reads_lmuv(n) for n in names):
+            continue
+        p = os.path.join(bin_dir, f"{F['prefix']}.{mi:05d}.rmb.bin")
+        if os.path.exists(p) and not writes_ps_constant(open(p, "rb").read(), 116):
+            out.append(mi)
+    return out
 
 
 def stream_blocks(F, cells, grid, bin_dir):
@@ -1170,6 +1218,19 @@ def convert_mod(mod, fh1_disc, loose):
             words += [e] + [struct.unpack(">I", struct.pack(">f", v))[0] for v in r[2:6]]
     with open(os.path.join(loose, f"{track}_stx_tiles.bin"), "wb") as f:
         f.write(struct.pack(f">{len(words)}I", *words))
+    # <track>_stx_lmuv.bin: the models (ribbon 0's numbers) whose pixel shaders read
+    # Light_Map_uvOS (PS c116) but whose command buffers never write it: FM4 sets their
+    # instance lightmap's rectangle there at run time, FH1 does not (its shaders read their
+    # lightmap with no uvOS). The game (hooks/fm4_track.cpp, InstanceLightmapUv) writes c116
+    # for those models' draws from the lightmap slot's rectangle. u32 count, then per model
+    # its number and texture slot count.
+    lmuv = lightmap_uv_models(F0, bin_dir)
+    words = [len(lmuv)]
+    for m in lmuv:  # the model and its texture slot count (the table holds one more: the
+        words += [m, len(F0["models"][m]["textures"])]  # instance's own lightmap)
+    with open(os.path.join(loose, f"{track}_stx_lmuv.bin"), "wb") as f:
+        f.write(struct.pack(f">{len(words)}I", *words))
+    print(f"{track}: {len(lmuv)} models get their lightmap rectangle from the game")
     print(f"{track}: {sum(v != 0xFFFFFFFF for v in files_of)} atlas tiles drawn from their atlas")
     members = [(p, zones[p] if p in zones else open(stand_in, "rb").read()
                 if p.lower().endswith(".stx.bin") and stand_in
