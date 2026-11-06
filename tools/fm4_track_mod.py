@@ -213,6 +213,37 @@ def add_stand_ins(root, track, fh1_disc, loose):
     print(f"{count} stand-in files")
 
 
+def ribbon_as_zero(root, track, layout):
+    """A circuit with no Ribbon_00 (Le Mans: 01 and 02): FH1 crashed loading its free roam
+    on ribbon 1 (in the collision manager, right after the collision index). The layout's
+    ribbon becomes ribbon 0: Ribbon_NN to Ribbon_00, its files' _NN to _00, the PVS's ribbon
+    field to 0, <track>_ribbonNN.sh to ribbon00. Gives the layout to use (0 if moved)."""
+    names = {d.lower(): d for d in os.listdir(root)}
+    if "ribbon_00" in names:
+        return layout
+    nums = sorted(int(d[7:]) for d in names if d.startswith("ribbon_") and d[7:].isdigit())
+    if not nums:
+        return layout
+    n = layout if layout in nums else nums[0]
+    src = os.path.join(root, names[f"ribbon_{n:02d}"])
+    dst = os.path.join(root, "Ribbon_00")
+    os.rename(src, dst)
+    for name in os.listdir(dst):
+        new = name.replace(f"_{n:02d}.", "_00.")
+        if new != name:
+            os.rename(os.path.join(dst, name), os.path.join(dst, new))
+        if new.lower().endswith(".pvs"):
+            p = os.path.join(dst, new)
+            d = bytearray(open(p, "rb").read())
+            struct.pack_into(">H", d, 16, 0)  # FPVS, version, header (8 bytes), ribbon u16
+            open(p, "wb").write(d)
+    for name in list(os.listdir(root)):
+        if name.lower() == f"{track.lower()}_ribbon{n:02d}.sh":
+            os.rename(os.path.join(root, name), os.path.join(root, name[:-5] + "00.sh"))
+    print(f"Ribbon_{n:02d} moved to Ribbon_00 (the circuit has no ribbon 0)")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("track_dir")
@@ -242,6 +273,9 @@ def main():
                 shutil.copyfile(os.path.join(dirpath, n), dst)
                 files += 1
         print(f"{files} loose files")
+        layout = a.layout
+        if a.free_roam is not None:
+            layout = ribbon_as_zero(root, track, layout)
         bz = os.path.join(a.track_dir, "bin.zip")
         zf = zipfile.ZipFile(bz)
         members = 0
@@ -256,7 +290,7 @@ def main():
                 members += 1
         print(f"{members} bin.zip members")
         write_db(a.update_zip, os.path.join(a.out, "media", "db", "gamedb.slt"), track,
-                 a.fm4_db, a.free_roam, a.layout, tmp)
+                 a.fm4_db, a.free_roam, layout, tmp)
         if a.fh1_disc:
             add_stand_ins(root, track, a.fh1_disc, a.loose)
         if a.fh1_disc and a.free_roam is not None:

@@ -515,6 +515,34 @@ Fujimi Kaido's other ribbons are left alone, as before).
   sunsetinfield-spots.png, suzuka-atlas-recheck.png, nordschleife-spots.png, autopark-spots.png,
   maplevalley-spots.png, suzuka-recheck-2.png.
 
+## More circuits, batch 1: Infineon, Le Mans, Road Atlanta, Road America
+
+Same steps as before (`fm4_track_mod.py`, spots from FM4's AI line, `reconvert_track.sh`,
+`spots_track.sh`); with the streaming fixes (physical-heap fallback, zone texture flag 1).
+
+| Circuit | Ribbon 0 | Zones | Tiles | Blocks asked | 9-spot pass |
+| --- | --- | --- | --- | --- | --- |
+| Infineon (Infin) | 2551 instances, 903 models | 130 | 725 | 46051 | 9/9 drawn, 0 crashes |
+| Le Mans | 10634 instances, 4975 models | 805 | 2036 | 37808 | 9/9 drawn, 0 crashes |
+| Road Atlanta | 5038 instances, 2071 models | 154 | 888 | 26141 | 9/9 drawn, 0 crashes |
+| Road America | 8581 instances, 2179 models | 169 | 2655 | 21850 | 9/9 drawn, 0 crashes |
+
+- Le Mans has no ribbon 0 (layouts 01 and 02, AI line for 01 and 02 only). Its free roam on
+  ribbon 1 crashed while loading, in the collision manager just after the collision index
+  (a read of guest 0, lr 82DD8FEC). With the same ribbon as ribbon 0 it loads and draws (pit
+  straight, stands, crowds): `fm4_track_mod.py` now moves the free-roam layout's ribbon to
+  Ribbon_00 when a circuit has none (its files' _NN to _00, the PVS's ribbon field, a u16 at
+  16, to 0, and <track>_ribbonNN.sh to ribbon00).
+- No new shaders with stale constants seen, no pool near the 65536 cap (46051 the most).
+- Left for the polish pass: black ground beside the road at Le Mans spots 2 and 5, Infineon 3
+  and 8, Road America 2 (the same look as Laguna's spot 7, Maple Valley's 3, Alps' 8); a flat
+  grey road at Infineon spots 5 and 6.
+- Lost runs, not the circuits': Road Atlanta's spots 1-6 and Infineon's 9 died at start-up
+  with SIGBUS (another session's script removed every unmapped xenia_memory file in /dev/shm,
+  a just-started game's too); rerun, all drawn.
+- Sheets (trk-spike shots/): infin-spots.png, lemans-spots.png, roadatlanta-spots.png,
+  roadamerica-spots.png.
+
 ## Towards players: a plan
 
 What a player would need, beyond the spike (none of this is built yet):
