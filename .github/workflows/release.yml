@@ -164,6 +164,11 @@ jobs:
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/car_view_test.cpp -o "$RUNNER_TEMP/car-view-test"
           "$RUNNER_TEMP/car-view-test"
       - if: runner.os == 'Linux'
+        name: Club garage cars named from the game's car list
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/club_garage_test.cpp -o "$RUNNER_TEMP/club-garage-test"
+          "$RUNNER_TEMP/club-garage-test"
+      - if: runner.os == 'Linux'
         name: Title service request header and its nonblocking stream
         run: |
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src tools/test_lsp_request_header.cpp -o "$RUNNER_TEMP/lsp-request-header-test"
