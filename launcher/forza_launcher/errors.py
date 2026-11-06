@@ -46,6 +46,8 @@ def next_step(error, operation):
             return "Free space on the drive containing the selected data/output folder, then retry."
         if winerror in (32, 33):
             return "Close the program using the file named above, then retry."
+        if number == errno.EROFS and winerror is None:
+            return read_only_step()
         if isinstance(current, PermissionError) or number in (errno.EACCES, errno.EPERM):
             return "Check access to the file or folder named above. Choose a writable data folder in Setup if needed."
         if number == errno.ENOMEM or winerror in (8, 14, 1455):
@@ -74,6 +76,20 @@ def next_step(error, operation):
             continue
         current = current.__cause__ or current.__context__
     return "Follow any specific instructions above. If the cause is still unclear, send the launcher log with your version and the steps that failed."
+
+
+def read_only_step(in_flatpak=None):
+    """A write refused by a read-only mount (EROFS). Inside the Flatpak that is a folder the sandbox
+    may only read (#717): the player allows it, the Windows wording does not apply."""
+    from . import datafolder, paths
+    in_flatpak = paths.IN_FLATPAK if in_flatpak is None else in_flatpak
+    if in_flatpak:
+        return ("The Flatpak may only read the folder named above. Allow it to write there (in Flatseal: "
+                "Filesystem > Other files; or in a terminal: "
+                f"flatpak override --user --filesystem=FOLDER {datafolder.flatpak_app_id()}), then close and "
+                f"reopen the launcher; or choose another folder in {datafolder.CHANGE_FOLDER_UI}.")
+    return ("The folder named above is on a read-only drive. Mount it with write access, or choose another "
+            f"folder in {datafolder.CHANGE_FOLDER_UI}.")
 
 
 def message(error, operation, log, stage=""):

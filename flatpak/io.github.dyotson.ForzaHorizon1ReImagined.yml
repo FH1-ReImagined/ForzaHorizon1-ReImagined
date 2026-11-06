@@ -23,11 +23,16 @@ finish-args:
   - --socket=pulseaudio
   - --device=all                   # GPU (Vulkan), game controllers
   # The player's own game files (a Games on Demand package is a file plus a <name>.data folder,
-  # which the file chooser portal would not hand over together), title update and DLC. Read only.
+  # which the file chooser portal would not hand over together), title update and DLC. Read only,
+  # except removable drives: the game and save folder (Setup, "Change folder"; about 15 GB with the
+  # build) may be put on an SD card or USB drive, which udisks mounts under /run/media (SteamOS,
+  # Fedora, Arch) or /media (Debian, Ubuntu) (#717). The default folder is the app's own
+  # ~/.var/app/<id>, writable without any of these; other folders: flatpak override (the launcher
+  # names the command when it cannot write one).
   - --filesystem=home:ro
   - --filesystem=xdg-download      # verified launcher bundles for manual installation
-  - --filesystem=/media:ro
-  - --filesystem=/run/media:ro
+  - --filesystem=/media
+  - --filesystem=/run/media
   - --filesystem=/mnt:ro
   - --talk-name=org.freedesktop.ScreenSaver
   # Local Rich Presence (on by default; Settings > Online > "Share activity on Discord" and the
