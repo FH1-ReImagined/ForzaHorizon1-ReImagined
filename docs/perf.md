@@ -3372,12 +3372,22 @@ without running out of memory.
 - `FORZA_FRAMETIME_CSV` wrote nothing at 30 fps: the frame time hook leaves the game's own timing at the console
   rate before the CSV. It now writes a row per guest swap there (`frame_time.cpp`); rows of the main loop would be
   wrong there, as the main loop keeps running at 30 when the render thread stops (it did, below).
-- The benchmark did not start in 2 of 3 runs with the defaults (`benchmark_start_timeout`), and a race froze at its
-  start: the render thread waited forever in the HUD command buffer's slot wait (`FORZA_STALL` chain `82419284
-  8249E108 824A1E6C 8247F9E4 82616BFC 8261E1C0`, sub_824A1E40), right after `FFCB: woke the HUD command buffer
-  worker: slot ready, after 41-77 ms` (2 ms on the GeForce). That is #512's wake (`ffcb_wake.cpp`), which wakes the
-  worker after 2 ms there and falls back to the game's infinite wait after 2 s. With `FORZA_FFCB_WAKE=0` the
-  benchmark completed (4.9 fps) and a race ran; with the first wake after 250 ms (`FORZA_FFCB_WAKE_AFTER_MS`, test
-  only) the benchmark completed (4.9 fps); one more run with the defaults completed too (5.0 fps). So the hang is
-  intermittent, and 5 runs do not prove the wake is its cause. On the GeForce the benchmark starts at 30 fps (30.0)
-  and on Direct3D 12 (44.8, 45.0 fps).
+- The benchmark did not start in 2 of 3 runs on the first day (`benchmark_start_timeout`), and a race froze at its
+  start: the render thread waited in the HUD command buffer's slot wait (`FORZA_STALL` chain `82419284 8249E108
+  824A1E6C 8247F9E4 82616BFC 8261E1C0`, sub_824A1E40), right after `FFCB: woke the HUD command buffer worker: slot
+  ready, after 41-77 ms` (2 ms on the GeForce): #512's wake (`ffcb_wake.cpp`) wakes the worker every 2 ms while a slot
+  is not ready and falls back to the game's infinite wait after 2 s.
+- Those runs were the first with an empty Direct3D shader cache of the driver (`%LOCALAPPDATA%\D3DSCache`). With it
+  warm, 24 benchmarks alternating (8 each) did not freeze in any arm: the defaults 7 completed (4.8-5.1 fps), with
+  `FORZA_FFCB_WAKE=0` 6, with the first wake after 250 ms (`FORZA_FFCB_WAKE_AFTER_MS`, test only) 7; the 4 others, in
+  all three arms, ended in `Graphics device lost` as the race started (frames of up to 1.2 s; Windows resets a GPU
+  that runs 2 s). 12 more with the game's cache emptied each time (4 each: the defaults, the wake off, the wakes paced
+  to one per 250 ms): 11 completed, 1 device lost.
+- With the driver's cache moved aside before each run, 11 of 12 benchmarks (4 per arm; the 12th: device lost) ended in
+  `benchmark_start_timeout`, the wake off included, with no wake logged: the game kept presenting at about 10 fps
+  after 7-12 s frames of shader compiles, and the event did not load within the benchmark's 5 minutes. Race sign-ups
+  on a cold driver cache (3 per arm): 22 s without a frame after the move; with the wake off 0 of 3 crashed, with the
+  defaults 0 of 3, with the wakes paced (one per 250 ms) 3 of 4 crashed with `Unhandled read fault ... guest
+  0x00000004` on the render thread (chain `8249E118 824A1E6C 8247F9E4 82616BFC 8261E1C0`, lr 824469B8, r4 = 0: the
+  slot's state applied as null, the signature of #66). Pacing the wakes is therefore not the fix; the defaults stay.
+- On the GeForce the benchmark starts at 30 fps (30.0) and on Direct3D 12 (44.8, 45.0 fps).

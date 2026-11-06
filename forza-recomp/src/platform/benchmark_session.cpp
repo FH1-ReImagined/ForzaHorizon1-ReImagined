@@ -1,4 +1,5 @@
 #include "benchmark.h"
+#include "benchmark_label.h"
 #include "benchmark_profile.h"
 #include "guest_memory.h"
 #include <atomic>
@@ -45,10 +46,12 @@ void Environment(const char *name, const std::string &value) {
 #endif
 }
 std::string Settings() {
-  return rex::cvar::GetFlagByName("fh1_output_width") + " x " +
-         rex::cvar::GetFlagByName("fh1_output_height") + "  /  " +
-         rex::cvar::GetFlagByName("fh1_upscaler") + "  /  " +
-         rex::cvar::GetFlagByName("frame_rate") + " FPS cap";
+  const auto get = [](const char *name) { return rex::cvar::GetFlagByName(name); };
+  const std::string upscaler = get("fh1_upscaler"), width = get("fh1_output_width"),
+                    height = get("fh1_output_height"), scale = get("resolution_scale"),
+                    scene = get("scene_resolution"), effect = get("present_effect"),
+                    rate = get("frame_rate");
+  return SettingsLabel({upscaler, width, height, scale, scene, effect, rate});
 }
 void Status(const std::string &status, Screen next) {
   std::lock_guard lock(view_mutex);
