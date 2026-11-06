@@ -396,6 +396,33 @@ for the Nordschleife (27366 instances), past anything converted yet.
 - Laguna Seca spot 2 before and after: the black ground left of the road and the black hills
   are sand and grass now (trk-spike shots/spots-lagF4/2.png, spots-lagFD/2.png); 3 null slots
   were left in that view, against 40+ before.
+- Laguna Seca, 9-spot pass (lagX1 against lagA, the mask patch run): the black verges, hills
+  and run-off are sand, grass and kerbs at every spot, the road has its asphalt and lines
+  (it read the mask as 1 before); left: a flat grey road stretch at spot 2 and a dark patch at
+  spot 7. A 420 s autopilot lap: 4.23 km, 0 crashes, 33.3 ms mean frame (p99 33.8) at the
+  30 fps cap, 27171 streaming blocks at most, none ran out.
+
+## More circuits: Fujimi Kaido and Sunset Infield
+
+Converted with the same steps and no tool changes (`fm4_track_mod.py` as for Laguna Seca,
+`reconvert_track.sh NAME`, spots from `fm4_spawn.py <track>_00.geo 9` in
+trk-spike/lines/<track>_spots.txt, `spots_track.sh NAME TAG`). Only the converter's tile file
+now takes every converted ribbon's models (Sunset Infield converts three layouts, 00, 01, 04;
+Fujimi Kaido's other ribbons are left alone, as before).
+
+- Fujimi Kaido (Ribbon_00: 7770 instances, 2231 models, 875 zones of 100 m, the largest 629
+  instances; 159 atlas tiles; 29439 streaming blocks asked for): drawn at all 9 spots, 0
+  crashes, town, mountain road, guard rails, trees, the tunnel (trk-spike shots/spots-fujX1).
+- Sunset Infield (3 layouts, about 2000 instances each, 120 zones; 520 atlas tiles; 62411
+  streaming blocks asked for, under the hook's 65536): drawn at all 9 spots, 0 crashes, pit
+  building and grandstands, the oval and infield (shots/spots-sunX1). Left: at spot 2 the
+  infield grass is a flat red and green, the road there flat grey, and a few billboards black;
+  the asphalt looks pale and soft at several spots.
+- Suzuka re-checked with the tile fill on and the mask patch off (spots-suzX1 against
+  spots-suzR): the same at all 9 spots, 0.05% to 3.7% of pixels differ by more than 24 levels
+  (clouds, the far trackside), 0 crashes.
+- Sheets (trk-spike shots/): laguna-atlas-before-after.png, fujimikaido-spots.png,
+  sunsetinfield-spots.png, suzuka-atlas-recheck.png.
 
 ## Towards players: a plan
 
