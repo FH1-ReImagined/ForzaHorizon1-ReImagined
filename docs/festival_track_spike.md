@@ -564,6 +564,32 @@ Same steps as before (`fm4_track_mod.py`, spots from FM4's AI line, `reconvert_t
 - Sheets (trk-spike shots/): indi-spots.png, crownjewel-spots.png, sebring-spots.png,
   catalunya-spots.png.
 
+## More circuits, batch 3a: Silverstone, Motegi, Tsukuba, Hockenheim
+
+| Circuit | Ribbon 0 | Zones | Tiles | Blocks asked | 9-spot pass |
+| --- | --- | --- | --- | --- | --- |
+| Silverstone | 3190 instances, 1417 models | 304 | 177 | 50633 | 9/9 drawn, 0 crashes |
+| Motegi | 3524 instances, 2226 models | 324 | 796 | 54095 | 9/9 drawn, 0 crashes |
+| Tsukuba | 1719 instances, 1091 models | 176 | 401 | 42603 | 9/9 drawn, 0 crashes |
+| Hockenheim | 4415 instances, 1990 models | 144 | 471 | 50141 | 9/9 drawn, 0 crashes |
+
+- Left: Silverstone's road black at spots 3 and 4 (patches at 7, 8); Tsukuba dark ground at
+  2, a white haze at 9; Motegi a little dark ground at 1 and 7; Hockenheim flat red ground at
+  spots 7 and 8 (new: not black).
+- The black roads (Sebring, Catalunya, Indianapolis, Crown Jewel, Silverstone), traced at
+  Sebring's spot 2: the road (ROAD_BLND_2: Blend_BSampler s0, Blend_ValueSampler s1,
+  Light_MapSampler s7 with Light_Map_uvOS c116, layer A the constant c0 = 0) is black from
+  its lightmap. With every lightmap fetch read as 1 (`FM4_SHADERS_NO_LIGHTMAP=1`, a test
+  that breaks other surfaces) the road has its asphalt and skid marks; neither the blend
+  mask read as 1 (`FM4_PVS_ATLAS_MASK=1`), the tile fill off (`FORZA_FM4_ATLAS_FILL=0`: the
+  stand-in, as black) nor texture flag 0 changes it. The road's lightmap is an atlas tile
+  drawn from the pack (record 3131, flag 9, 1/128 x 1/256 of atlas file 697, which has no
+  file of its own: only the static pack holds it). Next: what that part of the pack's atlas
+  holds (decode it from <track>.stx.bin), and whether Light_Map_uvOS's order (offset, scale)
+  reaches the shader as the shader reads it.
+- Sheets (trk-spike shots/): silverstone-spots.png, motegi-spots.png, tsukuba-spots.png,
+  hockenheim-spots.png; shots/spots-sebL1/2.png (Sebring spot 2, lightmaps read as 1).
+
 ## Towards players: a plan
 
 What a player would need, beyond the spike (none of this is built yet):

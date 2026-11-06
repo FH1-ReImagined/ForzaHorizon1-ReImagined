@@ -22,6 +22,7 @@ Xenia's ucode.h).
 Usage: tools/fm4_shaders.py FILE.fxobj ...   print what would be patched
 """
 import re
+import os
 import struct
 import sys
 
@@ -332,6 +333,20 @@ def patch_fxobj(name, data):
     data = bytearray(data)
     done = []
     base = name.split("/")[-1].split("\\")[-1].upper()
+    if os.environ.get("FM4_SHADERS_NO_LIGHTMAP") == "1":  # a test: every lightmap fetch reads 1
+        for start, size, samplers, _, _ in blobs(bytes(data)):
+            if "Light_MapSampler" not in samplers:
+                continue
+            reg = samplers["Light_MapSampler"]
+            for s, kind, w in instructions(bytes(data), start, size):
+                if kind == "fetch" and (w[0] & 0x1F) == 1 and ((w[0] >> 20) & 0x1F) == reg:
+                    swz = w[1] & 0xFFF
+                    out = 0
+                    for c in range(4):
+                        sel = (swz >> (3 * c)) & 7
+                        out |= (7 if sel == 7 else 5) << (3 * c)
+                    struct.pack_into(">3I", data, start + 12 * s, w[0], (w[1] & ~0xFFF) | out, w[2])
+        done.append("lightmap -> 1 (test)")
     if base.endswith(".FXOBJ") and base[:-6] in ATLAS_MASK_SHADERS:
         data = bytearray(atlas_mask_one(bytes(data)))
         done.append("atlas blend mask -> 1")
