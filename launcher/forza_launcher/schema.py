@@ -340,6 +340,9 @@ add("vr_picture", "Sharpness", "VR", "choice", "game",
 add("vr_seat_height_cm", "Seat height (cm)", "VR", "float", -4.0,
     "Raises or lowers your eye in the cockpit. Lower it if your head pokes through the roof.",
     "VR (experimental)", lo=-30, hi=30, step=1)
+add("vr_swap_eyes", "Swap eyes", "VR", "bool", False,
+    "Turn on only if each eye sees the other eye's picture (the depth looks inside out). "
+    "Some headset apps and graphics drivers show the eyes the wrong way round.", "VR (experimental)")
 
 # --- Controls --------------------------------------------------------------------------
 add("mnk_mode", "Keyboard and mouse", "Controls", "bool", False,

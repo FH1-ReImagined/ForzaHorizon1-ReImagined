@@ -159,6 +159,8 @@ def configure(cfg, env: dict, args: list, notes: list, in_flatpak=None, home=Non
     own_scale = cfg.settings.get("present_effect") == "fsr3" or cfg.settings.get("fh1_upscaler", "off") != "off"
     wanted = {"frame_rate": "72", "scene_msaa": "off", "vr_mode": chosen, "vr_stereo": "true",
               "vr_trace": "false", "vr_seat_height_cm": f"{float(cfg.settings.get('vr_seat_height_cm', -4.0)):g}"}
+    if cfg.settings.get("vr_swap_eyes") is True:   # off: the game's default, no argument
+        wanted["vr_swap_eyes"] = "true"
     scale = []
     if own_scale:
         notes.append("VR: AMD FSR 3 and NVIDIA DLSS keep their own scale; the Sharpness setting is not applied.")

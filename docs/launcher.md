@@ -773,8 +773,9 @@ in `XR_RUNTIME_JSON`), so the saved flat settings stay as they are; an extra fla
 The first time a checklist asks to start the VR app, connect and put on the headset, then press Play in VR
 (**Don't show again**, `vr.checklist_hidden` in launcher.json). Settings has a **VR** tab: a status line
 (runtime found, or links to WiVRn and SteamVR), **Mode** (Cockpit, recommended / Big screen; `vr_mode`),
-**Sharpness** (Standard / Sharp / Sharpest; `vr_picture`), **Seat height (cm)** (`vr_seat_height_cm`), the
-recentre hint and an **Advanced** expander listing what VR overrides. The three settings are launcher-only
+**Sharpness** (Standard / Sharp / Sharpest; `vr_picture`), **Seat height (cm)** (`vr_seat_height_cm`),
+**Swap eyes** (`vr_swap_eyes`, off; passed only when on), the recentre hint and an **Advanced** expander
+listing what VR overrides. The four settings are launcher-only
 (never written to forza.toml); an older config's `vr_mode` is just the chosen mode ([vr.md](vr.md)).
 On Windows, Display also offers DLSS Quality, Balanced, Performance and DLAA,
 with independent 1080p/1440p/4K output and automatic NVIDIA runtime setup. See [`native_dlss.md`](native_dlss.md).
