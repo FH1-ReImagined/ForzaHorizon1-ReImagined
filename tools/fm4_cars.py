@@ -237,6 +237,14 @@ def zip_member(path, name):
     return None
 
 
+def logo_members(path):
+    """Lowercase name -> Member of the make logos (UI4/Logos/<size>/L_MAN_*.xds) in a UI
+    textures zip."""
+    z = ZIPS.get(path)
+    return {i.filename.lower(): Member(z, path, i) for i in z.infolist()
+            if re.match(r"(?i)ui4/logos/[^/]+/l_man_[^/]+\.xds$", i.filename)}
+
+
 class FM4:
     """The player's FM4 files: disc 1 and the disc 2 car packs."""
 
@@ -307,6 +315,11 @@ class FM4:
     def thumbnail(self, car_id):
         z = find_ci(self.media, "UI", "Textures.zip")
         return zip_member(z, "Thumbnails/Thumbnail_%d.xds" % car_id)
+
+    def logos(self):
+        """Lowercase member name -> Member: the make logos in UI/Textures.zip (UI4/Logos/...)."""
+        z = find_ci(self.media, "UI", "Textures.zip")
+        return logo_members(z) if z else {}
 
     def languages(self):
         st = find_ci(self.media, "StringTables")
@@ -386,6 +399,11 @@ class FH1:
                     except sqlite3.Error:
                         pass
         return names, ids
+
+    def logos(self):
+        """Lowercase member names of the make logos FH1 has (ui/Textures.zip, UI4/Logos/...)."""
+        z = find_ci(self.media, "ui", "Textures.zip")
+        return set(logo_members(z)) if z else set()
 
     def has_car_files(self, name):
         return bool(find_ci(self.media, "cars", name + ".zip"))
@@ -664,11 +682,41 @@ class Retune:
         row["ClassID"] = cls
 
 
-class Database:
-    """Builds the DB patch: the selected cars' rows from FM4's database in FH1's tables."""
+def _make_key(text):
+    return re.sub(r"[^0-9a-z]", "", (text or "").casefold())
 
-    def __init__(self, fm4db, fh1db):
+
+def make_merges(fm4db, fh1db, fm4_names, fh1_names):
+    """{FM4 make id: FH1 make id} for the FM4 makes FH1 has under another id: the same English
+    name. FM4's Eagle (87, the Talon's) is FH1's Eagle (102, the Speedster's); as a make of its
+    own it was a second "Eagle" in the Autoshow (#710). fm4_names and fh1_names are the two
+    games' List_CarMake string tables."""
+    fh = {}
+    fh_ids = set()
+    for mid, name in fh1db.execute("select ID, DisplayName from List_CarMake order by ID"):
+        fh_ids.add(mid)
+        key = _make_key(fh1_names.text(name))
+        if key:
+            fh.setdefault(key, mid)
+    out = {}
+    for mid, name in fm4db.execute("select ID, DisplayName from List_CarMake order by ID"):
+        if mid in fh_ids:
+            continue
+        hit = fh.get(_make_key(fm4_names.text(name)))
+        if hit is not None:
+            out[mid] = hit
+    return out
+
+
+class Database:
+    """Builds the DB patch: the selected cars' rows from FM4's database in FH1's tables.
+    merges: {FM4 make id: FH1 make id} (make_merges), the cars of those makes join FH1's."""
+
+    def __init__(self, fm4db, fh1db, merges=None):
         self.fm4, self.fh1 = fm4db, fh1db
+        self.merges = dict(merges or {})
+        # "_&N" references the rows take from FH1's own tables, not FM4's (strings() skips them)
+        self.fh1_refs = set()
         self.fh1_tables = set(tables(fh1db))
         self.fm4_tables = set(tables(fm4db))
         self.rows = {}  # table -> {key tuple: dict row}
@@ -698,6 +746,8 @@ class Database:
         return out
 
     def _add(self, table, rows):
+        if not rows:
+            return
         pk = columns(self.fh1, table)[0]
         have = self.rows.setdefault(table, {})
         for r in rows:
@@ -727,7 +777,16 @@ class Database:
                             rows = self._select(table, col[0], keys)
                             self._add(table, rows)
                             level2 += rows
+        for r in first.get("Data_Car", []):
+            to = self.merges.get(r.get("MakeID"))
+            if to is not None:
+                name = self.fh1.execute("select DisplayName from List_CarMake where ID=?", (to,)).fetchone()
+                r["MakeID"] = to
+                if name and "MakeName" in r:
+                    r["MakeName"] = name[0]
+                    self.fh1_refs.add(name[0])
         makes = {r["MakeID"] for r in first.get("Data_Car", []) if r.get("MakeID") is not None}
+        makes -= set(self.merges.values())  # FH1's own rows
         self._add("List_CarMake", self._select("List_CarMake", "ID", makes))
         all_rows = [r for rows in first.values() for r in rows] + level2
         for pat, table, col in REFS:
@@ -1171,10 +1230,10 @@ class Converter:
             self.put("media/ui/textures/thumbnails/thumbnail_%d.xds" % cid, thumb)
         return donor
 
-    def strings(self, rows, report):
+    def strings(self, rows, report, fh1_refs=()):
         """<table>.str for each of FH1's languages: FH1's strings (with the DLC's) plus the new
         rows'. Rewrites the rows' references when a key had to move (another string of FH1's
-        table has it)."""
+        table has it). fh1_refs: references to FH1's own strings, left as they are."""
         fm_langs = self.fm4.languages()
         langs = sorted(l for l in self.fh1.languages() if l not in ("dev", "loc"))
         moved_total = 0
@@ -1184,7 +1243,7 @@ class Converter:
                 for r in rows.get(t, []):
                     for c in cols:
                         ref = r.get(c)
-                        if isinstance(ref, str) and re.match(r"_&\d+$", ref):
+                        if isinstance(ref, str) and re.match(r"_&\d+$", ref) and ref not in fh1_refs:
                             refs.append(int(ref[2:]))
             if not refs:
                 continue
@@ -1214,11 +1273,32 @@ class Converter:
                 for r in rows.get(t, []):
                     for c in cols:
                         ref = r.get(c)
-                        if isinstance(ref, str) and re.match(r"_&\d+$", ref) and int(ref[2:]) in moved:
+                        if isinstance(ref, str) and re.match(r"_&\d+$", ref) and ref not in fh1_refs \
+                                and int(ref[2:]) in moved:
                             n = int(ref[2:])
                             r[c] = "_&%d" % ((n & ~0xFFFF) | moved[n])
             moved_total += len(moved)
         report["moved_string_keys"] = moved_total
+
+    def logos(self, makes, report):
+        """The logos of the makes FH1 lacks, from FM4 (UI4/Logos/<size>/L_MAN_<make>_Logo.xds,
+        the same format in both games): the Autoshow's manufacturer tile was black for Renault,
+        whose logos FH1 does not ship (#710). Those FH1 has (Acura, Saab, ...) are kept."""
+        stems = set()
+        for r in makes:
+            for c in ("IconPath", "IconPathLight", "IconPathBase"):
+                m = re.search(r"(?i)(l_man_[^\\/]+)\.tga$", str(r.get(c) or ""))
+                if m:
+                    stems.add(m.group(1).lower())
+        if not stems:
+            return
+        have = self.fh1.logos()
+        added = []
+        for low, member in sorted(self.fm4.logos().items()):
+            if low.rsplit("/", 1)[1][:-4] in stems and low not in have:
+                self.put("media/ui/textures/" + member.info.filename, member=member)
+                added.append(member.info.filename)
+        report["logos"] = added
 
     def run(self, car_ids, progress=None, cancelled=lambda: False):
         """Convert the cars into self.out. progress(done, total, text) is called before each
@@ -1235,7 +1315,9 @@ class Converter:
                 report["skipped"].append((cid, "%s: %s" % (name, reason)))
                 continue
             chosen.append((cid, name))
-        db = Database(self.fm4db, self.fh1db)
+        db = Database(self.fm4db, self.fh1db, make_merges(
+            self.fm4db, self.fh1db, self.fm4.strings("List_CarMake", "en"),
+            self.fh1.strings_raw("List_CarMake", "en")[1]))
         db.collect([c for c, _ in chosen])
         rows = db.finish(report)
         wheels = {r["StockWheelID"] for r in rows.get("Data_Car", [])}
@@ -1271,8 +1353,9 @@ class Converter:
         keep = set(done)
         rows = {t: [r for r in rs if t not in dict(CAR_TABLES) or r.get(dict(CAR_TABLES)[t]) in keep]
                 for t, rs in rows.items()}
+        self.logos(rows.get("List_CarMake", []), report)
         self.finish_package(report)
-        self.strings(rows, report)
+        self.strings(rows, report, db.fh1_refs)
         dbdir = os.path.join(self.out, "media", "db")
         os.makedirs(dbdir, exist_ok=True)
         write_full_db(self.fh1.db_file, self.fh1db, rows, os.path.join(dbdir, "gamedb.slt"))

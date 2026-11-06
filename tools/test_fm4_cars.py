@@ -1,8 +1,12 @@
 """Synthetic tests of the FM4 car converter (#648): no game file is read or included."""
 import os
+import sqlite3
 import struct
 import sys
+import tempfile
 import unittest
+import zipfile
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import carbin_dump  # noqa: E402
@@ -253,6 +257,114 @@ class FitTests(unittest.TestCase):
         a, b = fm4_cars._lstsq(X, y)
         self.assertAlmostEqual(a, 2)
         self.assertAlmostEqual(b, 3)
+
+
+MAKE_COLS = "ID INTEGER, DisplayName TEXT, ManufacturerCode TEXT, CountryID INT, IconPath TEXT, " \
+            "IconPathLight TEXT, IconPathBase TEXT, Profile TEXT"
+LOGO = "GAME:\\Media\\UI\\Textures\\UI4\\Logos\\Manufacturer_Logos_%s\\L_MAN_%s_Logo.tga"
+
+
+def names(texts):
+    """A string table holding {key: text}."""
+    t = fm4_cars.StringTable()
+    t.entries = {k: [v, "IDS_%d" % k, i, 0] for i, (k, v) in enumerate(sorted(texts.items()))}
+    return t
+
+
+def make_db(makes, cars):
+    """A game database with List_CarMake rows (id, name key, profile) and Data_Car rows
+    (id, MediaName, make id, make name key)."""
+    db = sqlite3.connect(":memory:")
+    db.execute("create table List_CarMake (%s)" % MAKE_COLS)
+    db.execute("create table Data_Car (Id INTEGER, MediaName TEXT, MakeID INT, MakeName TEXT)")
+    for mid, key, prof in makes:
+        db.execute("insert into List_CarMake values (?,?,?,?,?,?,?,?)",
+                   (mid, "_&%d" % (0x33230000 | key), prof[:3].upper(), 10, LOGO % ("I", prof),
+                    LOGO % ("SM", prof), prof, "_&1"))
+    for cid, name, mid, key in cars:
+        db.execute("insert into Data_Car values (?,?,?,?)", (cid, name, mid, "_&%d" % (0x33230000 | key)))
+    return db
+
+
+class _NoRetune:
+    def __init__(self, *a):
+        pass
+
+    def apply(self, row):
+        pass
+
+
+class MakeTests(unittest.TestCase):
+    """#710: an FM4 make FH1 has under another id (Eagle) joins FH1's; one FH1 lacks is added."""
+
+    def setUp(self):
+        self.fm4 = make_db([(3, 1, "Audi"), (41, 2, "Renault"), (87, 3, "Eagle")],
+                           [(462, "EAG_Talon_98", 87, 3), (453, "REN_Clio_03", 41, 2),
+                            (100, "AUD_A1_10", 3, 1)])
+        self.fh1 = make_db([(3, 1, "Audi"), (102, 9, "Eagle")], [(1519, "EAE_Speedster_12", 102, 9)])
+        self.fm4_names = names({1: "Audi", 2: "Renault", 3: "Eagle"})
+        self.fh1_names = names({1: "Audi", 9: "EAGLE "})
+
+    def test_same_name_under_another_id_is_merged(self):
+        merges = fm4_cars.make_merges(self.fm4, self.fh1, self.fm4_names, self.fh1_names)
+        self.assertEqual(merges, {87: 102})
+
+    def test_merged_cars_take_fh1s_make_and_its_name(self):
+        merges = fm4_cars.make_merges(self.fm4, self.fh1, self.fm4_names, self.fh1_names)
+        with mock.patch.object(fm4_cars, "Retune", _NoRetune):
+            db = fm4_cars.Database(self.fm4, self.fh1, merges)
+        db.collect([462, 453, 100])
+        rows = db.finish({})
+        cars = {r["Id"]: r for r in rows["Data_Car"]}
+        self.assertEqual(cars[462]["MakeID"], 102)
+        self.assertEqual(cars[462]["MakeName"], "_&%d" % (0x33230000 | 9))
+        self.assertEqual(cars[453]["MakeID"], 41)
+        self.assertEqual(cars[100]["MakeID"], 3)
+        self.assertEqual([r["ID"] for r in rows["List_CarMake"]], [41])  # no second Eagle
+        self.assertEqual(db.fh1_refs, {"_&%d" % (0x33230000 | 9)})
+
+
+class LogoTests(unittest.TestCase):
+    """#710: the logos of a make FH1 lacks come from FM4 (Renault's tile was black); FH1's own
+    logos are not replaced."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(lambda: fm4_cars.ZIPS.close(self.tmp))
+
+    def textures(self, name, members):
+        path = os.path.join(self.tmp, name)
+        with zipfile.ZipFile(path, "w") as z:
+            for m in members:
+                z.writestr(m, name.encode() + m.encode())
+        return path
+
+    def test_missing_logos_are_copied(self):
+        fm4_zip = self.textures("fm4.zip", [
+            "UI4/Logos/Manufacturer_Logos_LG/L_MAN_Renault_Logo.xds",
+            "UI4/Logos/Manufacturer_Logos_SM/L_MAN_Renault_Logo.xds",
+            "UI4/Logos/Manufacturer_Logos_LG/L_MAN_Acura_Logo.xds",
+            "UI4/Logos/Manufacturer_Logos_LG/L_MAN_Peugeot_Logo.xds",
+            "Thumbnails/Thumbnail_453.xds"])
+        fh1_zip = self.textures("fh1.zip", [
+            "UI4/Logos/Manufacturer_Logos_LG/L_MAN_Acura_Logo.xds",
+            "UI4/Logos/Manufacturer_Logos_LG/L_MAN_Peugeot_Logo.xds"])
+        conv = fm4_cars.Converter.__new__(fm4_cars.Converter)
+        conv.out, conv.pack = os.path.join(self.tmp, "out"), None
+        conv.fm4 = mock.Mock(logos=lambda: fm4_cars.logo_members(fm4_zip))
+        conv.fh1 = mock.Mock(logos=lambda: set(fm4_cars.logo_members(fh1_zip)))
+        makes = [{"IconPath": LOGO % ("I", "Renault"), "IconPathLight": LOGO % ("SM", "Renault")},
+                 {"IconPath": LOGO % ("I", "Acura"), "IconPathLight": LOGO % ("SM", "Acura")}]
+        report = {}
+        conv.logos(makes, report)
+        self.assertEqual(sorted(report["logos"]), [
+            "UI4/Logos/Manufacturer_Logos_LG/L_MAN_Renault_Logo.xds",
+            "UI4/Logos/Manufacturer_Logos_SM/L_MAN_Renault_Logo.xds"])
+        got = os.path.join(conv.out, "media", "ui", "textures", "UI4", "Logos", "Manufacturer_Logos_LG",
+                           "L_MAN_Renault_Logo.xds")
+        with open(got, "rb") as f:
+            self.assertEqual(f.read(), b"fm4.zipUI4/Logos/Manufacturer_Logos_LG/L_MAN_Renault_Logo.xds")
+        self.assertFalse(os.path.exists(got.replace("Renault", "Acura")))
 
 
 if __name__ == "__main__":
