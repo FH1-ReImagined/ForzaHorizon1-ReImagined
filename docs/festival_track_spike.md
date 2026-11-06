@@ -239,8 +239,8 @@ instances; 33446 streaming blocks asked for). Suzuka-specific assumptions found 
   lightmaps, flag 0xC, which do get their rectangle as Light_Map_uvOS). Now a blend shader most
   of whose models take an atlas mask reads the mask as 1, its asphalt layer
   (`fm4_shaders.ATLAS_MASK_SHADERS`, from `fm4_pvs.atlas_mask_shaders`): at Laguna Seca
-  ROAD_BLND_TRILIN_2 and RDLINE_BLND_SPEC_OPAC_3, at Suzuka none. The real fix would cut the
-  tiles out into textures of their own, or point FH1's fetch at the tile.
+  ROAD_BLND_TRILIN_2 and RDLINE_BLND_SPEC_OPAC_3, at Suzuka none. Replaced since: the game
+  gives the tiles their atlas (below, "Atlas tiles"), and the patch is off by default.
 - Not solved: Laguna Seca's road still draws black at most spots (the Corkscrew's draws right),
   with the mask patch in and at the 120 m visible set as well. A texture trace (the PS trace now
   logs each draw's texture fetch constants: base, size, format) shows why: the road's lightmap
@@ -352,7 +352,7 @@ first (below). No other blocker showed: every layout is PVS version 27 (Alps' 03
 every circuit has its static pack, and the model counts (903 to 6314) are in Suzuka's range or,
 for the Nordschleife (27366 instances), past anything converted yet.
 
-## Atlas tiles: the texture path, as far as traced (parked)
+## Atlas tiles: drawn from their atlas
 
 - A model's draw (sub_82D1B080) fills an 800-byte binding block through the track binder's
   vtable slot 1 (sub_82EAF1B0; vtable 82256734, a sub-object of the track presentation at
@@ -374,10 +374,28 @@ for the Nordschleife (27366 instances), past anything converted yet.
   its pack textures too, so the resource id is not what a pack record's slot reads either).
 - Rectangles cannot pick the atlas: 99% of tiles share their rectangle with tiles of other
   atlases (a common grid), and a model texture table carries no record number.
-- Next: what fills a model texture table's +0 for a pack-drawn record (the code that writes
-  those entries when a model's zone goes live, likely next to sub_82E18FC8's user
-  registration); a write watch on one entry, as the hook already does for the texture table
-  (FM4TRACK: watch), would name it. Then fill a tile's entry from its atlas's the same way.
+- What writes a texture table's +0: the streaming bind loop (sub_82E2B8F8, at 82EB4ED8 through
+  sub_82E18E78, lr 82E18E80; found with the write watch, `FORZA_FM4_TEXWATCH`). It rewrites the
+  entries every frame, a tile's back to null (a fill made once was undone by the next frame),
+  and the binder is called before the draw setup's own body, so the fill has to sit in the
+  binder itself.
+- The fix (fm4_track.cpp `FillAtlasTiles`, on unless `FORZA_FM4_ATLAS_FILL=0`): the pack loop's
+  resource registration (sub_82E2EAD8) is hooked to keep each pack entry's texture header;
+  just before the binder copies a table's textures, every tile slot gets the header of its
+  atlas's pack entry. The rectangle was already right (the trace: c116 holds the tile's).
+- Which table is which model: the table names none (+8 is neither the instance nor the model,
+  checked against 40 tables), so the converter writes `<track>_stx_tiles.bin`: per model with
+  a tile slot, each slot's pack entry (-1: not a tile) and rectangle; the game finds a table's
+  model by its slots' rectangles (all of them, or all but a last one). One rectangle alone is
+  ambiguous (the grid is shared by the atlases), a model's sequence of them mostly is not.
+- Streamed tiles (flag 0xC: a file of their own, 128 x 64 for Laguna's lightmaps, the atlas in
+  the pack until it streams in) also get the atlas, but only while their slot is null, so the
+  own texture wins once it is there.
+- With the tiles drawn the converter no longer patches the blend masks to 1
+  (`FM4_PVS_ATLAS_MASK=1` brings that back).
+- Laguna Seca spot 2 before and after: the black ground left of the road and the black hills
+  are sand and grass now (trk-spike shots/spots-lagF4/2.png, spots-lagFD/2.png); 3 null slots
+  were left in that view, against 40+ before.
 
 ## Towards players: a plan
 

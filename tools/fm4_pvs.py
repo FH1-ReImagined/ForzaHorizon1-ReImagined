@@ -1086,6 +1086,8 @@ def convert_mod(mod, fh1_disc, loose):
     # (<track>_stx_files.bin then holds the id, the game sets the record object's resource id).
     pack_ids = os.environ.get("FM4_PVS_PACK_IDS") == "1"
     own_files = {int(p.split("_0x")[1][:8], 16) for p in order if "_0x" in p and p.lower().endswith(".bix")}
+    own_tile_files = {int(p.split("_0x")[1][:8], 16) for p in order
+                      if "_0x" in p and p.lower().endswith(".bix") and "_b.bix" not in p.lower()}
     if pack_ids:
         numbers = [len(order) + k if v != 0xFFFFFFFF else 0xFFFFFFFF for k, v in enumerate(numbers)]
     os.makedirs(loose, exist_ok=True)
@@ -1106,6 +1108,34 @@ def convert_mod(mod, fh1_disc, loose):
                     for i, t in enumerate(F["textures"])]
     with open(os.path.join(loose, f"{track}_stx_files.bin"), "wb") as f:
         f.write(struct.pack(f">{len(files_of)}I", *files_of))
+    # <track>_stx_tiles.bin: for the game to fill a model's texture slots that are atlas tiles
+    # (hooks/fm4_track.cpp, FillAtlasTiles): u32 model count, then per model with a tile slot:
+    # its slot count and per slot its pack entry (-1: not a tile) and UV rectangle (4 floats as
+    # u32: scale u, v, offset u, v). The game finds a model texture table's model by the
+    # rectangles of its slots, the table holding nothing else that names it.
+    # A streamed tile (0xC: a file of its own with the tile alone, the atlas in the pack until
+    # it streams in) has its entry with the top bit set: filled only while it holds nothing.
+    # Every ribbon's models (a layout is one ribbon; the same model rows repeat across them).
+    rows, seen = [], set()
+    for c in converted:
+        Fr = c[2]
+        tile_entry = [(t[1] | (0x80000000 if t[6] & 0x4 or t[0] in own_tile_files else 0))
+                      if t[6] & 0x8 and t[1] < len(numbers) and numbers[t[1]] != 0xFFFFFFFF
+                      else 0xFFFFFFFF for t in Fr["textures"]]
+        for M in Fr["models"]:
+            ents = [tile_entry[t & 0xFFFFFF] for t in M["textures"]]
+            if all(e == 0xFFFFFFFF for e in ents):
+                continue
+            row = [len(ents)]
+            for t, e in zip(M["textures"], ents):
+                r = Fr["textures"][t & 0xFFFFFF]
+                row += [e] + [struct.unpack(">I", struct.pack(">f", v))[0] for v in r[2:6]]
+            if tuple(row) not in seen:
+                seen.add(tuple(row))
+                rows.append(row)
+    words = [len(rows)] + [w for row in rows for w in row]
+    with open(os.path.join(loose, f"{track}_stx_tiles.bin"), "wb") as f:
+        f.write(struct.pack(f">{len(words)}I", *words))
     print(f"{track}: {sum(v != 0xFFFFFFFF for v in files_of)} atlas tiles drawn from their atlas")
     members = [(p, zones[p] if p in zones else open(stand_in, "rb").read()
                 if p.lower().endswith(".stx.bin") and stand_in
@@ -1114,7 +1144,9 @@ def convert_mod(mod, fh1_disc, loose):
     # (tools/fm4_shaders.py; FM4_PVS_SHADER_PATCHES=0 leaves them as they are).
     if os.environ.get("FM4_PVS_SHADER_PATCHES", "1") == "1":
         fm4_shaders.ATLAS_MASK_SHADERS.clear()
-        for c in converted:
+        # The game gives atlas tiles their atlas (FillAtlasTiles, <track>_stx_tiles.bin), so the
+        # masks are drawn as FM4 draws them; FM4_PVS_ATLAS_MASK=1 patches them to 1 as before.
+        for c in (converted if os.environ.get("FM4_PVS_ATLAS_MASK", "0") == "1" else []):
             fm4_shaders.ATLAS_MASK_SHADERS.update(atlas_mask_shaders(c[2]))
         if fm4_shaders.ATLAS_MASK_SHADERS:
             print(f"{track}: blend masks from an atlas in {sorted(fm4_shaders.ATLAS_MASK_SHADERS)}")

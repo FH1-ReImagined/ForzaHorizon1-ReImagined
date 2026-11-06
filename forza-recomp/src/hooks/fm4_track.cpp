@@ -124,6 +124,9 @@ void OnTeleport(PPCContext& ctx, uint8_t* base) {
 #include <cstring>
 #include <chrono>
 #include <mutex>
+#include <unordered_map>
+#include <set>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -486,12 +489,23 @@ extern "C" REX_FUNC(__imp__sub_82D099E0);
 extern "C" REX_FUNC(__imp__sub_82D09648);
 extern "C" REX_FUNC(__imp__sub_82D095C0);
 namespace {
+// The rectangles of n texture slots (4 u32 each) as a key.
+inline uint64_t Fm4RectKey(const uint32_t* rect, uint32_t n) {
+  uint64_t k = 1469598103934665603ull ^ n;
+  for (uint32_t i = 0; i < 4 * n; ++i) k = (k ^ rect[i]) * 1099511628211ull;
+  return k;
+}
 struct Fm4Stx {
   std::string track;
   std::vector<uint32_t> ids;
   // Per texture record: the pack entry an FM4 atlas tile is drawn from, -1 for none
   // (<track>_stx_files.bin next to the numbers file; tools/fm4_pvs.py).
   std::vector<uint32_t> atlas_of;
+  // <track>_stx_tiles.bin: per model with an atlas tile slot, its slots: pack entry (-1: not a
+  // tile) and UV rectangle; found by the rectangles of a model texture table's slots.
+  struct TileModel { std::vector<uint32_t> entry; std::vector<uint32_t> rect; };
+  std::vector<TileModel> tile_models;
+  std::unordered_map<uint64_t, uint32_t> tile_model_by_rects;
 };
 const Fm4Stx& Fm4StxConfig() {
   static const Fm4Stx c = [] {
@@ -521,8 +535,31 @@ const Fm4Stx& Fm4StxConfig() {
         std::fclose(f);
       }
     }
-    REXLOG_INFO("FM4TRACK: {} static texture pack: {} texture numbers, {} records", c.track,
-                c.ids.size(), c.atlas_of.size());
+    std::string tiles = v.substr(bar + 1);
+    const auto tat = tiles.rfind("_stx_numbers.bin");
+    if (tat != std::string::npos) {
+      tiles.replace(tat, std::strlen("_stx_numbers.bin"), "_stx_tiles.bin");
+      if (std::FILE* f = std::fopen(tiles.c_str(), "rb")) {
+        std::vector<uint32_t> w;
+        uint8_t b[4];
+        while (std::fread(b, 1, 4, f) == 4) w.push_back(uint32_t(b[0]) << 24 | b[1] << 16 | b[2] << 8 | b[3]);
+        std::fclose(f);
+        size_t p = 0;
+        const uint32_t nm = p < w.size() ? w[p++] : 0;
+        for (uint32_t m = 0; m < nm && p < w.size(); ++m) {
+          Fm4Stx::TileModel tm;
+          const uint32_t cnt = w[p++];
+          for (uint32_t j = 0; j < cnt && p + 4 < w.size(); ++j) {
+            tm.entry.push_back(w[p++]);
+            for (int q = 0; q < 4; ++q) tm.rect.push_back(w[p++]);
+          }
+          c.tile_model_by_rects[Fm4RectKey(tm.rect.data(), uint32_t(tm.entry.size()))] = uint32_t(c.tile_models.size());
+          c.tile_models.push_back(std::move(tm));
+        }
+      }
+    }
+    REXLOG_INFO("FM4TRACK: {} static texture pack: {} texture numbers, {} records, {} models with atlas tiles",
+                c.track, c.ids.size(), c.atlas_of.size(), c.tile_models.size());
     return c;
   }();
   return c;
@@ -692,6 +729,160 @@ extern "C" REX_FUNC(sub_82D099E0) {
 
 extern "C" REX_FUNC(sub_82D09648) { __imp__sub_82D09648(ctx, base); }
 
+// FM4's atlas tiles (FORZA_FM4_ATLAS_FILL=1, a test): a model's draw takes each texture slot's
+// texture from the model's texture table (the object at draw setup +1192: +8 the instance,
+// entries at +32, count +36, 32 bytes each: +0 the texture header, +16..+28 the UV rectangle).
+// FH1 fills +0 when a slot's record has a texture (sub_82E18E78); an atlas tile's never does,
+// so its draws take a stand-in (Laguna Seca's black road). The pack loop registers each
+// entry's texture in the streaming resource table (sub_82E2EAD8: r3 the manager, r4 the id;
+// manager +16: 12-byte entries, +0 the 52-byte header); those headers are kept per pack entry
+// here, and before a model's draw is set up its empty tile slots get their atlas's header
+// (their rectangle is the tile's already).
+std::vector<uint32_t> fm4_pack_headers;
+extern "C" REX_FUNC(__imp__sub_82E2EAD8);
+extern "C" REX_FUNC(sub_82E2EAD8) {
+  const uint32_t mgr = ctx.r3.u32, id = ctx.r4.u32;
+  __imp__sub_82E2EAD8(ctx, base);
+  if (!fm4_stx_active) return;
+  const Fm4Stx& c = Fm4StxConfig();
+  if (fm4_pack_headers.size() != c.ids.size()) fm4_pack_headers.assign(c.ids.size(), 0);
+  const uint32_t table = Load32(base, mgr + 16);
+  if (!table) return;
+  const uint32_t header = Load32(base, table + 12 * id);
+  for (uint32_t k = 0; k < c.ids.size(); ++k)
+    if (c.ids[k] == id) { fm4_pack_headers[k] = header; break; }
+}
+
+static inline uint8_t base_byte(uint8_t* base, uint32_t a) { return *forza::GuestPtr(base, a); }
+static uint32_t tm_entry_size(const Fm4Stx::TileModel* tm) { return tm ? uint32_t(tm->entry.size()) : 0; }
+static void FillAtlasTiles(uint8_t* base, uint32_t tbl) {
+  const Fm4Stx& c = Fm4StxConfig();
+  if (!tbl || c.tile_models.empty() || fm4_pack_headers.empty()) return;
+  const uint32_t entries = Load32(base, tbl + 32), count = Load32(base, tbl + 36);
+  if (!entries || !count || count > 32) return;
+  uint32_t rect[4 * 32];
+  for (uint32_t j = 0; j < count; ++j)
+    for (uint32_t q = 0; q < 4; ++q) rect[4 * j + q] = Load32(base, entries + 32 * j + 16 + 4 * q);
+  // The model's slots, or all but a last one (an instance's own lightmap).
+  const Fm4Stx::TileModel* tm = nullptr;
+  for (uint32_t n : {count, count - 1}) {
+    if (!n) continue;
+    auto it = c.tile_model_by_rects.find(Fm4RectKey(rect, n));
+    if (it != c.tile_model_by_rects.end() &&
+        std::memcmp(c.tile_models[it->second].rect.data(), rect, 16 * n) == 0) {
+      tm = &c.tile_models[it->second];
+      break;
+    }
+  }
+  static const bool diag = std::getenv("FORZA_FM4_FILLDIAG") != nullptr;
+  if (diag) {
+    // Tables with a slot of the road's tile size (1/128 by 1/256): matched or not, every slot.
+    static std::mutex dm;
+    static std::set<uint32_t> shown;
+    bool road = false;
+    for (uint32_t j = 0; j < count; ++j)
+      for (uint32_t q = 0; q + 1 < 4; ++q)
+        if (rect[4 * j + q] == 0x3C000000 && rect[4 * j + q + 1] == 0x3B800000) road = true;
+    std::lock_guard<std::mutex> lock(dm);
+    if (road && shown.size() < 3 && shown.insert(tbl).second) {
+      std::string s;
+      for (uint32_t j = 0; j < count; ++j)
+        s += fmt::format(" <{}> {:08X} {:08X} | {:08X} {:08X} {:08X} {:08X}", j, Load32(base, entries + 32 * j),
+                         Load32(base, entries + 32 * j + 4), rect[4 * j], rect[4 * j + 1], rect[4 * j + 2], rect[4 * j + 3]);
+      for (uint32_t j = 0; j < count; ++j) {
+        const uint32_t hp = Load32(base, entries + 32 * j);
+        const uint32_t k = j < tm_entry_size(tm) ? tm->entry[j] & 0x7FFFFFFF : 0xFFFFFFFF;
+        const uint32_t ph = k < fm4_pack_headers.size() ? fm4_pack_headers[k] : hp;
+        if (!ph) continue;
+        std::string w;
+        for (uint32_t o = 0; o < 52; o += 4) w += fmt::format(" {:08X}", Load32(base, ph + o));
+        REXLOG_INFO("FM4FILLDIAG   slot {} header {:08X}:{}", j, ph, w);
+      }
+      REXLOG_INFO("FM4FILLDIAG table {:08X} head {:08X} {:08X} {:08X} matched {} count {}:{}", tbl, Load32(base, tbl),
+                  Load32(base, tbl + 4), Load32(base, tbl + 8), tm ? 1 : 0, count, s);
+    }
+  }
+  if (tm && diag) {
+    static std::mutex mm;
+    static std::set<uint32_t> told;
+    std::lock_guard<std::mutex> lock(mm);
+    if (told.size() < 60 && told.insert(tbl).second)
+      REXLOG_INFO("FM4MATCH table {:08X} +8 {} row {} count {}", tbl, Load32(base, tbl + 8),
+                  uint32_t(tm - c.tile_models.data()), count);
+  }
+  if (!tm) return;
+  static std::atomic<uint32_t> filled{0};
+  for (uint32_t j = 0; j < tm->entry.size() && j < count; ++j) {
+    if (tm->entry[j] == 0xFFFFFFFF) continue;
+    const uint32_t k = tm->entry[j] & 0x7FFFFFFF;
+    if (k >= fm4_pack_headers.size() || !fm4_pack_headers[k]) continue;
+    const uint32_t h = fm4_pack_headers[k], now = Load32(base, entries + 32 * j);
+    if (now == h) continue;  // a tile slot may hold a stand-in, not 0
+    if ((tm->entry[j] & 0x80000000) && now) continue;  // a streamed tile's own texture
+    uint8_t* p = forza::GuestPtr(base, entries + 32 * j);
+    p[0] = uint8_t(h >> 24); p[1] = uint8_t(h >> 16); p[2] = uint8_t(h >> 8); p[3] = uint8_t(h);
+    const uint32_t n = filled.fetch_add(1) + 1;
+    if ((n & (n - 1)) == 0)
+      REXLOG_INFO("FM4TRACK: {} atlas tile slots given their atlas's texture (slot {} of {}, pack entry {}, header {:08X})",
+                  n, j, count, k, h);
+  }
+}
+
+// FORZA_FM4_FILLDIAG: the binder's slot 1 (sub_82EAF1B0: r4 the model texture table, r5/r7 the
+// material, r9 the 800-byte block) for tables holding a road-sized atlas tile: the material's
+// sampler map (texture table slot per sampler) and the block's textures and flags.
+extern "C" REX_FUNC(__imp__sub_82EAF1B0);
+extern "C" REX_FUNC(sub_82EAF1B0) {
+  const uint32_t tbl = ctx.r4.u32, r5 = ctx.r5.u32, r7 = ctx.r7.u32, blk = ctx.r9.u32;
+  // The streaming bind loop (sub_82E2B8F8, through sub_82E18E78) rewrites the table's textures
+  // every frame, a tile slot back to null, so tiles get their atlas just before the copy here.
+  static const bool fill = [] {
+    const char* v = std::getenv("FORZA_FM4_ATLAS_FILL");
+    return !v || std::string_view(v) != "0";
+  }();
+  if (fill) FillAtlasTiles(base, tbl);
+  __imp__sub_82EAF1B0(ctx, base);
+  static const bool diag = std::getenv("FORZA_FM4_FILLDIAG") != nullptr;
+  if (!diag || !tbl || !blk) return;
+  const uint32_t entries = Load32(base, tbl + 32), count = Load32(base, tbl + 36);
+  if (!entries || !count || count > 32) return;
+  {
+    // Null textures a sampler still maps to after the fill: which, and their rectangles.
+    static std::mutex nm;
+    static std::set<uint64_t> seen;
+    const uint32_t mat0 = Load32(base, Load32(base, r5 + 4)) + 56 * Load32(base, r7 + 40);
+    const uint32_t a0 = Load32(base, mat0 + 40), a1 = Load32(base, mat0 + 44);
+    for (uint32_t a = a0, i = 0; a < a1 && i < 20; a += 4, ++i) {
+      const int32_t m = int32_t(Load32(base, a));
+      if (m < 0 || uint32_t(m) >= count || Load32(base, entries + 32 * m)) continue;
+      std::lock_guard<std::mutex> lock(nm);
+      if (seen.size() < 40 && seen.insert((uint64_t(tbl) << 8) | uint32_t(m)).second) {
+        std::string r;
+        for (uint32_t j = 0; j < count; ++j)
+          r += fmt::format(" <{}>{:08X} {:08X},{:08X},{:08X},{:08X}", j, Load32(base, entries + 32 * j),
+                           Load32(base, entries + 32 * j + 16), Load32(base, entries + 32 * j + 20),
+                           Load32(base, entries + 32 * j + 24), Load32(base, entries + 32 * j + 28));
+        REXLOG_INFO("FM4NULL table {:08X} sampler {} slot {} of {}:{}", tbl, i, m, count, r);
+      }
+    }
+  }
+  bool road = false;
+  for (uint32_t j = 0; j < count; ++j)
+    if (Load32(base, entries + 32 * j + 16) == 0x3C000000 && Load32(base, entries + 32 * j + 20) == 0x3B800000) road = true;
+  if (!road) return;
+  static std::atomic<int> n{0};
+  if (n.fetch_add(1) >= 8) return;
+  const uint32_t mat = Load32(base, Load32(base, r5 + 4)) + 56 * Load32(base, r7 + 40);
+  const uint32_t m0 = Load32(base, mat + 40), m1 = Load32(base, mat + 44);
+  std::string s = fmt::format("FM4BIND table {:08X} count {} mat {:08X} map", tbl, count, mat);
+  for (uint32_t a = m0; a < m1 && a < m0 + 80; a += 4) s += fmt::format(" {}", int32_t(Load32(base, a)));
+  const uint32_t nb = Load32(base, blk + 28);
+  s += fmt::format(" | block n {}:", nb);
+  for (uint32_t i = 0; i < nb + 2 && i < 20; ++i)
+    s += fmt::format(" {:08X}/{}{}", Load32(base, blk + 32 + 4 * i), int(base_byte(base, blk + 752 + i)), int(base_byte(base, blk + 772 + i)));
+  REXLOG_INFO("{}", s);
+}
+
 // FORZA_FM4_TEXDUMP: the track model draw setup (sub_82D1B080) fills an 800-byte binding
 // block through a virtual call on the object at +1188 (vtable slot 1), then applies it as
 // command-buffer fixups (sub_8248C200: 9, 10; sub_8248B2D8: 3 textures, 8 UV offsets;
@@ -708,6 +899,50 @@ extern "C" REX_FUNC(sub_82D1B080) {
     REXLOG_INFO("FM4TEX draw setup {:08X}: binder {:08X} vtable {:08X} slot1 {:08X} +1192 {:08X} r4 {:08X} r5 {:08X} r6 {:08X} r7 {:08X}",
                 self, binder, vt, vt ? Load32(base, vt + 4) : 0,
                 Load32(base, self + 1192), ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32);
+  }
+  if (std::getenv("FORZA_FM4_TEXWATCH")) {
+    // A write watch: entries of model texture tables whose texture (+0) is still null; a host
+    // thread polls them and logs every guest thread's call chain when one gets a texture.
+    static std::mutex wm;
+    static std::vector<uint32_t> watch;
+    static std::set<uint32_t> tables;
+    static bool started = false;
+    const uint32_t tbl = Load32(base, ctx.r3.u32 + 1192);
+    static std::atomic<int> seen{0};
+    const int seen_n = seen.fetch_add(1);
+    if (seen_n == 0) REXLOG_INFO("FM4TEX watch on: first table {:08X}", tbl);
+    if (seen_n % 200 == 199) {
+      std::lock_guard<std::mutex> lock(wm);
+      REXLOG_INFO("FM4TEX watch: {} calls, {} tables, {} empty entries", seen_n + 1, tables.size(), watch.size());
+    }
+    if (tbl) {
+      std::lock_guard<std::mutex> lock(wm);
+      tables.insert(tbl);
+      const uint32_t entries = Load32(base, tbl + 32), count = Load32(base, tbl + 36);
+      static std::set<uint32_t> have;
+      for (uint32_t j = 0; j < count && j < 20 && watch.size() < 400; ++j)
+        if (entries && !Load32(base, entries + 32 * j) && have.insert(entries + 32 * j).second)
+          watch.push_back(entries + 32 * j);
+      if (!started && watch.size() >= 40) {
+        started = true;
+        std::vector<uint32_t> w = watch;
+        REXLOG_INFO("FM4TEX watching {} empty texture entries", w.size());
+        std::thread([w, base] {
+          for (int i = 0; i < 30000000; ++i) {
+            for (uint32_t a : w) {
+              const uint32_t v = Load32(base, a);
+              if (v) {
+                REXLOG_INFO("FM4TEX watch: entry {:08X} got texture {:08X} (rect {:08X} {:08X} {:08X} {:08X})", a, v,
+                            Load32(base, a + 16), Load32(base, a + 20), Load32(base, a + 24), Load32(base, a + 28));
+                forza::LogGuestThreads("at the texture entry write");
+                return;
+              }
+            }
+            std::this_thread::sleep_for(std::chrono::microseconds(5));
+          }
+        }).detach();
+      }
+    }
   }
   if (std::getenv("FORZA_FM4_TEXDUMP")) {
     static std::atomic<int> tl{0};
