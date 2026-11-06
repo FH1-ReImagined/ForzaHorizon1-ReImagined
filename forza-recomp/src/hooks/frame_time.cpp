@@ -301,6 +301,23 @@ bool OwnCarPosition(uint8_t* base, float& x, float& z) {
   return false;
 }
 
+// At the console rate (30 fps) the game keeps its own frame time and FrameTime() does not run:
+// the CSV then gets a row per guest swap (a frame the render thread handed to the GPU, as the
+// benchmark counts them), dt between swaps, game_ms 0 and no position (#640: the launcher's preset
+// for integrated GPUs is 30 fps). The main loop can run ahead of the swaps there, so its frames
+// would hide a render thread that stopped.
+void RecordConsoleSwap() {
+  std::FILE* csv = FrameCsv();
+  if (!csv) return;
+  static uint64_t first = 0, prev = 0;
+  const uint64_t now = rex::chrono::Clock::QueryGuestTickCount();
+  const double freq = double(rex::chrono::Clock::guest_tick_frequency());
+  if (!first) first = prev = now;
+  std::fprintf(csv, "%.3f,%.4f,0,0,0.000,0.000\n", double(now - first) * 1000.0 / freq,
+               double(now - prev) * 1000.0 / freq);
+  prev = now;
+}
+
 // Returns false to leave the game's frame time.
 bool FrameTime(uint8_t* base, uint32_t game_ms, double& dt_out) {
   static uint64_t prev = 0, seen_count = 0;
@@ -388,7 +405,10 @@ int64_t PresentDelayNs() {
 }
 
 void OnGuestSwap() {
-  if (ConsoleRate()) return;
+  if (ConsoleRate()) {
+    RecordConsoleSwap();
+    return;
+  }
   guest_swaps.fetch_add(1, std::memory_order_release);
   const uint64_t now = rex::chrono::Clock::QueryGuestTickCount();
   {
