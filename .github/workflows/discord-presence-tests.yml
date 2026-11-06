@@ -22,7 +22,7 @@ jobs:
             exe: out/discord/forza
           - os: windows-2022
             exe: out/discord/Release/forza.exe
-          - os: macos-14
+          - os: macos-15
             exe: out/discord/forza
     runs-on: ${{ matrix.os }}
     steps:
