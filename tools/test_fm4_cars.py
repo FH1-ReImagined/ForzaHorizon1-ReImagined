@@ -367,5 +367,77 @@ class LogoTests(unittest.TestCase):
         self.assertFalse(os.path.exists(got.replace("Renault", "Acura")))
 
 
+ET = (b'<Engine>\r\n  <VolumeAdjustments EngineVolume="0.800000" TransmissionVolume="0.600000"/>\r\n'
+      b'  <GlobalCarVolume>\r\n    <PhysicsCoeff RPM="0.600000" Throttle="0.500000"/>\r\n'
+      b'    <ThreePointCurve x0="0.000000" y0="0.390000" x1="0.500000" y1="0.430000" x2="1.000000" y2="0.700000"/>\r\n'
+      b'  </GlobalCarVolume>\r\n  <HarmonicTunings><EmissionGroup0><Volume><Gain>\r\n'
+      b'    <ThreePointCurve x0="0.000000" y0="0.320000" x1="0.500000" y1="0.460000" x2="1.000000" y2="0.700000"/>\r\n'
+      b'  </Gain></Volume></EmissionGroup0></HarmonicTunings>\r\n'
+      b'  <Exhaust><Upgrade L0="12N2_LP640_Exh_HT.xml"/></Exhaust>\r\n</Engine>\r\n')
+
+
+class EngineLevelTests(unittest.TestCase):
+    """#712: an imported car keeps FM4's engine tuning, which FH1 never brought to its own cars'
+    level; its GlobalCarVolume is raised, an FH1 car's tuning is left alone."""
+
+    def test_only_the_global_volume_curve_is_raised(self):
+        out = fm4_cars.louder_engine(ET)
+        gcv = out[out.index(b"<GlobalCarVolume>"):out.index(b"</GlobalCarVolume>")]
+        g = fm4_cars.ENGINE_GAIN
+        self.assertIn(b'y0="%.6f"' % (0.39 * g), gcv)
+        self.assertIn(b'y1="%.6f"' % (0.43 * g), gcv)
+        self.assertIn(b'y2="1.000000"', gcv)  # 0.7 x gain, at most FH1's highest value
+        self.assertIn(b'x2="1.000000"', gcv)
+        self.assertIn(b'PhysicsCoeff RPM="0.600000" Throttle="0.500000"', gcv)
+        self.assertEqual(out.replace(gcv, b""), ET.replace(ET[ET.index(b"<GlobalCarVolume>"):
+                                                              ET.index(b"</GlobalCarVolume>")], b""))
+        self.assertEqual(fm4_cars.louder_engine(ET, 1.0), ET)
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(lambda: fm4_cars.ZIPS.close(self.tmp))
+
+    def game(self, name, ets):
+        media = os.path.join(self.tmp, name, "media")
+        os.makedirs(os.path.join(media, "audio", "cars", "Engines"))
+        for zname, members in (("CarModelTuning.zip", {}), ("Engines/EngineTuning.zip", ets),
+                               ("Engines/HarmonicTuning.zip", {})):
+            with zipfile.ZipFile(os.path.join(media, "audio", "cars", *zname.split("/")), "w") as z:
+                for m, data in members.items():
+                    z.writestr(m, data)
+        return mock.Mock(media=media, update=None)
+
+    def converter(self, fh1_ets, fm4_ets):
+        conv = fm4_cars.Converter.__new__(fm4_cars.Converter)
+        conv.out, conv.pack = os.path.join(self.tmp, "out"), None
+        conv.fh1, conv.fm4 = self.game("fh1", fh1_ets), self.game("fm4", fm4_ets)
+        conv.fh1db = sqlite3.connect(":memory:")
+        conv.fh1db.execute("create table Data_Engine (EngineID INT, MediaName TEXT)")
+        conv.fh1db.execute("create table List_UpgradeEngine (Ordinal INT, EngineID INT)")
+        conv.fh1db.execute("insert into Data_Engine values (5, 'HON_NSXRGT_05')")
+        conv.fh1db.execute("insert into List_UpgradeEngine values (569, 5)")
+        return conv
+
+    def et_out(self, conv, name):
+        path = os.path.join(conv.out, "media", "audio", "cars", "engines", "enginetuning", name + "_ET.xml")
+        if not os.path.exists(path):
+            return None
+        with open(path, "rb") as f:
+            return f.read()
+
+    def test_imported_engines_get_fh1s_level_fh1_engines_do_not(self):
+        conv = self.converter({"LAM_MurcielagoLP640_07_ET.xml": ET, "HON_NSXRGT_05_ET.xml": ET},
+                              {"CHE_CamaroSS_10_ET.xml": ET})
+        report = {}
+        conv.audio("LAM_MurcielagoLP640_07", ["LAM_MurcielagoLP640_07", "HON_NSXRGT_05"], report)
+        conv.audio("CHE_CamaroSS_10", ["CHE_CamaroSS_10"], report)
+        conv.audio("LAM_MurcielagoLP640_07", ["LAM_MurcielagoLP640_07"], report)  # done once
+        self.assertEqual(self.et_out(conv, "LAM_MurcielagoLP640_07"), fm4_cars.louder_engine(ET))
+        self.assertEqual(self.et_out(conv, "CHE_CamaroSS_10"), fm4_cars.louder_engine(ET))  # FM4's copy
+        self.assertIsNone(self.et_out(conv, "HON_NSXRGT_05"))  # an FH1 car's engine (a swap)
+        self.assertEqual(report["louder"], 2)
+        self.assertEqual(report["audio"], [("CHE_CamaroSS_10", ["CHE_CamaroSS_10_ET.xml"])])
+
+
 if __name__ == "__main__":
     unittest.main()

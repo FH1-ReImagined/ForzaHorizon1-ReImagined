@@ -558,6 +558,25 @@ STRING_TABLES = {
 AUDIO_ZIPS = {"cmt": "audio/cars/CarModelTuning.zip", "et": "audio/cars/Engines/EngineTuning.zip",
               "ht": "audio/cars/Engines/HarmonicTuning.zip"}
 
+# FH1 retuned the engine sound of the cars it sells (their EngineTuning, CarModelTuning and
+# harmonic tuning files); the FM4 cars it does not sell kept FM4's tuning, and in the game they
+# are about 2 LU quieter than FH1's cars (#712, docs/modding/fm4-cars.md). An imported car's
+# GlobalCarVolume curve (the engine's level over rpm and throttle) is raised by this factor, at
+# most to 1.0, the highest value FH1's own tuning uses.
+ENGINE_GAIN = 1.6
+ENGINE_VOLUME_MAX = 1.0
+_GCV = re.compile(rb"(<GlobalCarVolume\b.*?</GlobalCarVolume>)", re.S)
+_CURVE_Y = re.compile(rb'(\by[0-9]+=")([0-9.eE+-]+)(")')
+
+
+def louder_engine(data, gain=ENGINE_GAIN):
+    """An EngineTuning file (bytes) with its GlobalCarVolume curve's y values times gain (at
+    most ENGINE_VOLUME_MAX); everything else is left as it is."""
+    def curve(m):
+        return _CURVE_Y.sub(lambda y: y.group(1) + b"%.6f" % min(ENGINE_VOLUME_MAX, float(y.group(2)) * gain)
+                            + y.group(3), m.group(1))
+    return _GCV.sub(curve, data, count=1)
+
 # Tables keyed by the car's id, and the column holding it.
 CAR_TABLES = [
     ("Data_Car", "Id"), ("CameraOverrides", "CarId"), ("CarExceptions", "CarID"),
@@ -1161,7 +1180,8 @@ class Converter:
     def audio(self, car_name, engine_names, report):
         """The car's engine sound set-up. FH1 has every FM4 sound bank and harmonic tuning
         file, and the car and engine tuning (CarModelTuning, EngineTuning) of most FM4 cars;
-        what it lacks is taken from FM4's copy (its audio/cars archives)."""
+        what it lacks is taken from FM4's copy (its audio/cars archives). The EngineTuning of
+        an engine no FH1 car uses goes into the mod at FH1's level (louder_engine, #712)."""
         if not hasattr(self, "_fh_audio"):
             self._fh_audio = {k: self._audio_zip_names(self.fh1.media, v) for k, v in AUDIO_ZIPS.items()}
             self._fm_audio = {k: self._audio_zip_names(self.fm4.media, v) for k, v in AUDIO_ZIPS.items()}
@@ -1171,16 +1191,40 @@ class Converter:
                         pre = v[:-4].lower() + "/"
                         if i.filename.lower().startswith(pre):
                             self._fh_audio[k][i.filename.lower()[len(pre):]] = (self.fh1.update, i)
+        if not hasattr(self, "_fh1_engines"):
+            # Engines an FH1 car uses (its own, or one it can swap to): their tuning is FH1's
+            # and stays as it is; so do those of FH1's DLC cars, which may not be in this database.
+            self._fh1_engines = {str(r[0]).lower() for r in self.fh1db.execute(
+                "select distinct e.MediaName from List_UpgradeEngine u join Data_Engine e "
+                "on e.EngineID=u.EngineID")} | {n.lower() for n in FH1_DLC_CARS}
+            self._louder_done = set()
         wanted = [("cmt", car_name + "_CMT.xml")] + [("et", e + "_ET.xml") for e in engine_names]
         added = []
         for kind, fname in wanted:
-            if fname.lower() in self._fh_audio[kind]:
+            rel = "media/%s/%s" % (AUDIO_ZIPS[kind][:-4].lower(), fname)
+            engine = fname[:-len("_ET.xml")].lower() if kind == "et" else None
+            if kind == "et" and engine not in self._fh1_engines:
+                # An engine only FM4's cars have: its tuning (FH1's copy, else FM4's) with
+                # FH1's level (ENGINE_GAIN), in the mod, which outranks every archive.
+                if engine in self._louder_done:
+                    continue
+                src = self._fh_audio[kind].get(fname.lower()) or self._fm_audio[kind].get(fname.lower())
+                if not src:
+                    continue
+                data = Member(ZIPS.get(src[0]), src[0], src[1]).read()
+                self.write(rel, louder_engine(data))
+                self._louder_done.add(engine)
+                report["louder"] = report.get("louder", 0) + 1
+                if fname.lower() in self._fh_audio[kind]:
+                    continue
+            elif fname.lower() in self._fh_audio[kind]:
                 continue
-            src = self._fm_audio[kind].get(fname.lower())
-            if not src:
-                continue
-            data = Member(ZIPS.get(src[0]), src[0], src[1]).read()
-            self.put("media/%s/%s" % (AUDIO_ZIPS[kind][:-4].lower(), fname), data)
+            else:
+                src = self._fm_audio[kind].get(fname.lower())
+                if not src:
+                    continue
+                data = Member(ZIPS.get(src[0]), src[0], src[1]).read()
+                self.put(rel, data)
             added.append(fname)
             if kind == "et":
                 for ht in sorted(set(re.findall(r'"([^"]+_HT\.xml)"', data.decode("latin-1")))):
@@ -1407,6 +1451,8 @@ def main(argv=None):
             print("added %5d %-28s class %d PI %d" % (cid, name, cls, pi))
         for cid, why in rep["skipped"]:
             print("skipped %5d %s" % (cid, why))
+        if rep.get("louder"):
+            print("engine tunings at FH1's level: %d" % rep["louder"])
         for car, files in rep.get("audio", []):
             print("sound set-up from FM4 for %s: %s" % (car, ", ".join(files)))
         if rep.get("conflicts"):

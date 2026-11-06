@@ -121,7 +121,7 @@ from unpacked files; 5.6 GB of package, 10 MB of mod).
 | `Thumbnail_<id>.xds` | FM4 | none (the same 884,788-byte format); the game draws a new one after a paint job |
 | database rows | FM4 | [below](#the-database) |
 | names (`data_car.str`, `list_carmake.str`) | FM4 | added to FH1's tables ([strings](#strings)) |
-| engine sound | FH1 | FH1 has the sound banks, harmonic tuning, `CarModelTuning` and `EngineTuning` of all 381 cars ([checked](#checked-in-the-game)); what it lacks would be taken from FM4's archives |
+| engine sound | FH1 | FH1 has the sound banks, harmonic tuning, `CarModelTuning` and `EngineTuning` of all 381 cars ([checked](#checked-in-the-game)); what it lacks would be taken from FM4's archives. The `EngineTuning` of an engine no FH1 car uses goes into the mod with its `GlobalCarVolume` curve times 1.6, at most 1.0 ([level](#engine-level-712)) |
 
 `interior_emissive_LOD0.xds` and `zlights*.xds` are not made: 19 of FH1's own 175 cars have no
 `interior_emissive_LOD0.xds` either, and FM4's cockpit materials do not sample it.
@@ -308,6 +308,32 @@ Lights and engine sound, the Title Update 4 build of this branch, a copied save,
 Every FM4 car the import adds has its `CarModelTuning` and `EngineTuning` in FH1, and every
 sound bank those name is one of FH1's (`NA.fsb`, named for five of the cars, is FH1's own
 placeholder bank of its `NA_*_HT.xml` files).
+
+### Engine level (#712)
+
+FH1 retuned the engine sound of the cars it sells (`EngineTuning`, `CarModelTuning` and harmonic
+tuning per car); the FM4 cars it does not sell kept FM4's tuning, only FH1's new shift boost
+(`ShiftVolumeScalar` 2.5) was set in all of them. The sound banks are the same files in both games
+(351 of the 353 on FM4's disc 1 byte for byte). Measured in the game (a TU4 build of main
+`9c4a2e7`, a copied save, offline, output muted; the mix the game submits dumped inside the
+game and folded to stereo as the runtime folds it; radio off, chase camera, 6 s at the limiter
+with the brakes held, then 5 s at full throttle; EBU R128 loudness):
+
+| | limiter | full throttle |
+|---|---|---|
+| the same FH1 car with FM4's tuning instead of FH1's (S2000, '69 Camaro SS, MP4-12C, 430 Scuderia) | −2.1 LU | −1.1 LU |
+| an imported FM4 car against a similar FH1 car (7 pairs: Murciélago LP640 / Aventador, R33 / R34 GT-R, Focus ST '06 / '12, Camaro SS '10 / ZL1, WRX STI '08 / '11, M5 '09 / '12, RX-7 FC / FD), before | −2.2 LU (−4.5 to −0.3) | −2.0 LU |
+| the same, imported with `GlobalCarVolume` × 1.6 | −0.7 LU (−4.9 to +1.9) | −0.5 LU |
+
+`GlobalCarVolume` is the one per-car engine level the game follows: × 1.5 on the LP640 gave
++1.9 and +2.1 LU at the limiter in two runs (the same car repeats within 0.2 LU), its harmonic
+loop volumes × 1.25 +0.9, the camera's `EmissionGroupVolumes` 0.8 → 1.0 +0.8, while
+`EngineVolume` 0.8 → 1.0 changed nothing. FH1's own curves never pass 1.0, and the Focus ST with
+its curve at 1.38 was not louder than at 1.0, so the import stops at 1.0: the Focus ST and the
+RX-7 FC, whose curves reach 1.0 first (0.86 and 0.72 before), stay 4.9 and 0.1 LU under their
+FH1 pair. Peaks stayed at 0.30 of full scale or less; FH1's own cars are not changed (the
+Aventador with the import loaded: −21.2 LU, −21.8 to −22.1 without). The engines an FH1 car
+uses, also as a swap, keep FH1's tuning.
 
 Then all 381 cars (`--all`, the cars' files in the package): the Autoshow's makes include the
 ones FH1 lacked (Acura, listed with its RSX Type-S, TSX and Integra from the Disc 2 car packs);
