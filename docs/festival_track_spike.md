@@ -590,6 +590,31 @@ Same steps as before (`fm4_track_mod.py`, spots from FM4's AI line, `reconvert_t
 - Sheets (trk-spike shots/): silverstone-spots.png, motegi-spots.png, tsukuba-spots.png,
   hockenheim-spots.png; shots/spots-sebL1/2.png (Sebring spot 2, lightmaps read as 1).
 
+## More circuits, batch 3b: Mugello, Amalfi, Nürburgring GP, Top Gear
+
+| Circuit | Ribbon 0 | Zones | Tiles | Blocks asked | 9-spot pass |
+| --- | --- | --- | --- | --- | --- |
+| Mugello | 2157 instances, 1921 models | 208 | 376 | 70275 | 9/9 drawn, 0 crashes |
+| Amalfi (AmalfiGP, ribbon 01 as 00) | 1934 instances, 782 models | 4312 | 375 | 33301 | 9/9 drawn, 0 crashes |
+| Nürburgring GP (NurburgringF1, ribbon 05 as 00) | 3495 instances, 1852 models | 361 | 1169 | 62229 | 9/9 drawn, 0 crashes |
+| Top Gear | 1491 instances, 1054 models | 242 | 430 | 36101 | 9/9 drawn, 0 crashes |
+
+- Mugello asks for 70275 blocks, past the 65536 cap (its largest need 56220): no run ran out.
+- Amalfi and the Nürburgring GP have no ribbon 0: the moved ribbon loads (fm4_track_mod.py).
+- Left: the Nürburgring GP's road black at spots 2 and 4 to 8 (the lightmap, as above);
+  Top Gear's ground in flat colours (blue at spot 6, orange at 3, black at 9) and its runway
+  flat grey at 3 to 5 and 7, as Hockenheim's red at 7 and 8: a second kind of wrong surface
+  beside the black lightmaps; Amalfi's road dark at spot 6. Mugello clean.
+- Sheets (trk-spike shots/): mugello-spots.png, amalfigp-spots.png, nurburgringf1-spots.png,
+  topgear-spots.png.
+
+All 27 circuits on FM4's disc 1 but the HomeSpace sets now convert and draw at every test
+spot without a crash. What stops them looking right, in order of how many circuits it hits:
+the black lightmaps on roads (Sebring, Catalunya, Indianapolis, Crown Jewel, Silverstone,
+Nürburgring GP, some of Le Mans, Laguna, Maple Valley, Infineon, Road America, Amalfi), the
+flat-coloured grounds (Top Gear, Hockenheim), flat grey roads (Infineon 5-6, Crown Jewel 4,
+Top Gear's runway).
+
 ## Towards players: a plan
 
 What a player would need, beyond the spike (none of this is built yet):
