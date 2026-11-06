@@ -642,6 +642,13 @@ Top Gear's runway).
   - Left: Indianapolis 8 (part black) and 7 (pale); Top Gear 3 (orange ground); Hockenheim's
     flat red ground at 7 and 8 (unchanged: another cause).
   - Suzuka the same as before (0.03% to 2.4% of pixels differ).
+- A second round, the circuits with smaller dark patches (81 runs, 0 crashes): fixed Laguna
+  Seca 7 and 8, Maple Valley 2 and 3, Le Mans 2 and 5, Infineon 3 and 8, Road America 2 and
+  6, Amalfi 6 and 7, Alps 6 and 8, Tsukuba 2 and 6, Motegi 1, 7 and 9: the dark ground
+  beside roads was the same cut-short pack textures.
+- Left after both rounds (another cause each, not looked into yet): Hockenheim's flat red
+  ground (7, 8), Top Gear's orange ground (3), Infineon's flat grey road (5, 6), Indianapolis
+  8 (part black) and 7 (pale), Tsukuba's white haze at 9.
 
 ## Towards players: a plan
 
