@@ -407,9 +407,20 @@ What a player would need, beyond the spike (none of this is built yet):
     the ground draws only with a model that also has its own, normal placement in that zone
     (900 at spots 1 and 9). A second, unscaled placement of the ground's model in every zone
     (tried, removed) did not make the copy draw, and turned the road at spot 9 flat grey.
-    Next: the draw itself, with the PS trace (TERR_BLND draws with the ground's world matrix,
-    scale 15, at spot 1 for 900 and for 866): whether FH1 submits the draw at all, then its
-    per-zone model batches. `FM4_PVS_GROUND_LAYER` stays, off. Sheets (trk-spike, not in the repo):
+    The draw trace (the PS trace on TERR_BLND draws, a world matrix with 15 x 15 scale, at
+    spot 1; `find_scaled.py` in trk-spike) corrected that: with 866 the ground is drawn (3
+    draws, 1400 indices), at exactly the placement the converter writes (c140-c142 = the
+    instance's), but its stretched geometry lands away from the circuit: the placement
+    (`ground_instance`) assumes a piece's vertices sit round its model matrix's translation, as
+    900's do and 866's evidently do not (its centre would need the vertex bounds, not read
+    yet). With 900 (the default) the ground is drawn (6 draws) and fills the holes. A copy of
+    900's model (any new model number: the one-layer copy, `FM4_PVS_GROUND_LAYER=A|B`, or a
+    plain copy, `=copy`) is not drawn at all (0 draws), shader renamed or not: a model past
+    FM4's own count is skipped somewhere FH1 sets up a track's models (the zone data lists it
+    as any other). So the ground keeps model 900 and its pale, patchy blend; a green ground
+    needs either that model limit found (then the one-layer copy), or the piece's own shader
+    patched for every use of it (it is also the grid's terrain). `FM4_PVS_GROUND_LAYER` stays,
+    off. Sheets (trk-spike, not in the repo):
     shots/suzuka-ground-mask.png, suzuka-spots-25m-mask-off-on.png,
     suzuka-ground-layer-unculled.png.
 - The visible set's 25 m default (`FM4_PVS_VISIBLE_SIZE`, 120 before): two autopilot runs from

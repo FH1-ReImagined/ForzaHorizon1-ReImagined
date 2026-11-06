@@ -460,7 +460,7 @@ def convert(F, files):
     if GROUND:
         g = ground_instance(F, used)
         if g is not None:
-            if GROUND_LAYER in ("A", "B"):
+            if GROUND_LAYER in ("A", "B", "copy"):
                 g["model"] = ground_model_copy(F, P, files, g["model"], g["reach"])
             insts = insts + [g]
             P["instances"].append(fh1_instance_of(g))
@@ -569,7 +569,7 @@ def ground_model_copy(F, P, files, model, reach):
     if src not in files or GROUND_COPIES.get(dst, (src,))[0] != src:
         return model
     shaders, renames = list(M["shaders"]), []
-    for k, si in enumerate(shaders):
+    for k, si in enumerate(shaders if GROUND_LAYER != "copy" else []):
         name = F["shaders"][si]
         base = name.split("\\")[-1]
         if "terr_blnd" not in base.lower() or base[-1].lower() == "g":
@@ -587,7 +587,7 @@ def ground_model_copy(F, P, files, model, reach):
         GROUND_COPIES[fx_dst] = (fx_src, [])
         if fx_dst not in files:
             files.append(fx_dst)
-    if not renames:
+    if not renames and GROUND_LAYER != "copy":
         return model
     F["models"].append(dict(M, shaders=shaders))
     # FH1 culls an instance by a sphere of its model's extent round its origin, and the
