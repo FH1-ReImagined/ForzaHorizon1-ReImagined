@@ -518,6 +518,21 @@ GROUND_COPIES = {}  # new file in the track's bin folder: (the file it is a copy
 # blocks in use measured on a lap (24454 for 24037 at the 120 m visible set, 34225 for 34518
 # at 25 m).
 STREAM_MARGIN = float(os.environ.get("FM4_PVS_STREAM_MARGIN", "1.25"))
+# A test (FM4_PVS_ZONE_TEXTURES=1): a zone's file list holds its textures' own files too, as
+# Colorado's do (a streamed record's object holds the archive index of its _0x<id>.bix as its
+# resource id). It changed nothing at Sunset Infield (FH1 requests a streamed texture itself):
+# the textures left on the pack's resident mips were short of memory instead
+# (hooks/fm4_track.cpp, sub_825CB038). Listing them also needs about three times the pool.
+ZONE_TEXTURES = os.environ.get("FM4_PVS_ZONE_TEXTURES", "0") == "1"
+# Which of a texture's files: "mips" its _0x<id>.bix alone (mip 1 down), "all" with its
+# _0x<id>_B.bix (the base level) too.
+ZONE_TEXTURE_FILES = os.environ.get("FM4_PVS_ZONE_TEXTURE_FILES", "mips")
+
+
+def texture_files(own):
+    """A streamed texture's own files a zone lists (ZONE_TEXTURE_FILES)."""
+    return ((f"_0x{own:08X}.bix", f"_0x{own:08X}_B.bix") if ZONE_TEXTURE_FILES == "all"
+            else (f"_0x{own:08X}.bix",))
 
 
 def atlas_mask_shaders(F):
@@ -543,19 +558,26 @@ def stream_blocks(F, cells, grid, bin_dir):
     size = {}
     def file_size(m):
         if m not in size:
-            p = os.path.join(bin_dir, f"{F['prefix']}.{m:05d}.rmb.bin")
+            p = os.path.join(bin_dir, m if isinstance(m, str) else f"{F['prefix']}.{m:05d}.rmb.bin")
             size[m] = os.path.getsize(p) if os.path.exists(p) else 0
         return size[m]
+
+    def zone_files(cell):  # the models' files and, with ZONE_TEXTURES, the textures' own files
+        out = set(cell["models"])
+        for t in (cell["textures"] if ZONE_TEXTURES else ()):
+            own = F["textures"][t][0]
+            out.update(texture_files(own))
+        return out
     index = {c: k for k, c in enumerate(grid.cells)}
     best = 0
     for (col, row), k in index.items():
         # Odd columns sit half a hex lower (HexGrid): their side neighbours are rows row, row+1.
         side = (0, 1) if col % 2 else (-1, 0)
         near = [(col, row - 1), (col, row + 1)] + [(col + dc, row + dr) for dc in (-1, 1) for dr in side]
-        models = set(cells[k]["models"])
+        models = zone_files(cells[k])
         for c in near:
             if c in index:
-                models.update(cells[index[c]]["models"])
+                models.update(zone_files(cells[index[c]]))
         best = max(best, sum(file_size(m) for m in models))
     return (best + 1023) // 1024
 
@@ -1052,6 +1074,14 @@ def convert_mod(mod, fh1_disc, loose):
                 f = f"{P['prefix']}.{m:05d}.rmb.bin"
                 if f in index:
                     cell["files"].append((index[f], index[f], 9, index[f]))
+            # And its textures' own files (see ZONE_TEXTURES): _0x<id>.bix and _0x<id>_B.bix.
+            listed = set()
+            for t in (cell["textures"] if ZONE_TEXTURES else ()):
+                own = F["textures"][t][0]
+                for f in texture_files(own):
+                    if f in index and f not in listed:
+                        listed.add(f)
+                        cell["files"].append((index[f], index[f], 9, index[f]))
             w = Writer()
             write_cell(w, cell, P["g2"])
             zones[zn] = bytes(w.b)

@@ -123,6 +123,7 @@ void OnTeleport(PPCContext& ctx, uint8_t* base) {
 #include <cctype>
 #include <cstring>
 #include <chrono>
+#include <map>
 #include <mutex>
 #include <unordered_map>
 #include <set>
@@ -851,9 +852,120 @@ static void FillAtlasTiles(uint8_t* base, uint32_t tbl) {
     }
   }
   if (diag && models && rec >= models && (rec - models) % 84 == 0) {
-    // Slots whose texture is 32 x 32 or smaller (the pack's resident mips): model, slot, size.
+    // The tables seen; 30 s after the first, a host thread looks at every streamed record's
+    // slot: applied (the slot points into its texture object) or stuck, with samples.
+    static std::mutex tm_mu;
+    static std::vector<std::pair<uint32_t, uint32_t>> seen_tables;
+    static std::set<uint32_t> seen_set;
+    static bool started = false;
+    {
+      std::lock_guard<std::mutex> lock(tm_mu);
+      if (seen_set.insert(tbl).second) seen_tables.emplace_back(tbl, (rec - models) / 84);
+      if (!started) {
+        started = true;
+        std::thread([base, pres, models] {
+          for (int pass = 0; pass < 3; ++pass) {
+          std::this_thread::sleep_for(std::chrono::seconds(30));
+          std::vector<std::pair<uint32_t, uint32_t>> tabs;
+          { std::lock_guard<std::mutex> lock(tm_mu); tabs = seen_tables; }
+          const uint32_t texs = Load32(base, pres + 2812), nt = Load32(base, pres + 2816);
+          uint32_t applied = 0, stuck = 0, other = 0;
+          uint64_t texels = 0, bytes = 0;
+          std::set<uint32_t> applied_set, stuck_set;
+          std::set<uint32_t> applied_models, stuck_models, applied_rids, stuck_rids, other_rids;
+          int shown_a = 0, shown_s = 0;
+          for (auto [tb, m] : tabs) {
+            const uint32_t entries = Load32(base, tb + 32), count = Load32(base, tb + 36);
+            const uint32_t mr = models + 84 * m, list = Load32(base, mr + 60), nl = Load32(base, mr + 64);
+            for (uint32_t j = 0; j < count && j < nl && j < 32; ++j) {
+              const uint32_t ri = Load32(base, list + 4 * j) & 0xFFFFFF;
+              const uint32_t obj = ri < nt ? Load32(base, texs + 4 * ri) : 0;
+              if (!obj || (Load32(base, obj + 0xC) & 0x4) == 0) continue;
+              const uint32_t hp = Load32(base, entries + 32 * j);
+              const bool ok = hp >= obj && hp < obj + 0x80;
+              const uint32_t d2 = hp ? Load32(base, hp + 0x24) : 0;
+              const bool small = hp && (d2 & 0x1FFF) + 1 <= 32 && ((d2 >> 13) & 0x1FFF) + 1 <= 32;
+              if (ok) ++applied; else if (small) ++stuck; else ++other;
+              if (ok) applied_models.insert(m); else if (small) { stuck_models.insert(m); stuck_set.insert(obj); }
+              (ok ? applied_rids : small ? stuck_rids : other_rids).insert(Load32(base, obj + 0x1C));
+              {
+                // Resource state of the record's own file, by class; applied texels.
+                const uint32_t rid = Load32(base, obj + 0x1C);
+                const uint32_t mgr = fm4_resource_manager.load(), rt = mgr ? Load32(base, mgr + 16) : 0;
+                const uint32_t r0 = rt && rid < 0x100000 ? Load32(base, rt + 12 * rid) : 0;
+                const uint32_t r2 = rt && rid < 0x100000 ? Load32(base, rt + 12 * rid + 8) : 0;
+                static thread_local std::map<std::string, uint32_t>* states = nullptr;
+                if (!states || (j == 0 && tb == tabs.front().first)) { delete states; states = new std::map<std::string, uint32_t>; }
+                const char* cls = ok ? "applied" : small ? "stuck" : "other";
+                const char* st = !r0 ? "empty" : r2 == 0x105FFFFF ? "loaded" : (r0 >> 24) >= 0x2E ? "header" : "pending";
+                (*states)[std::string(cls) + "/" + st]++;
+                if (ok && applied_set.insert(obj).second) {
+                  const uint64_t n = uint64_t((d2 & 0x1FFF) + 1) * (((d2 >> 13) & 0x1FFF) + 1);
+                  texels += n;
+                  const uint32_t fmt = Load32(base, hp + 0x20) & 0x3F;  // DXT1 (0x12) half a byte a texel
+                  bytes += fmt == 0x12 ? n / 2 : fmt == 0x13 || fmt == 0x14 ? n : n * 4;
+                }
+                if (tb == tabs.back().first && j + 1 == std::min<uint32_t>(std::min(count, nl), 32)) {
+                  std::string s;
+                  for (auto& [k, v] : *states) s += fmt::format(" {}={}", k, v);
+                  REXLOG_INFO("FM4OBJ states:{} applied texels {}", s, texels);
+                }
+              }
+              if ((ok && shown_a < 4) || (!ok && small && shown_s < 6)) {
+                (ok ? shown_a : shown_s)++;
+                std::string w;
+                for (uint32_t o = 0; o < 0x60; o += 4) w += fmt::format(" {:08X}", Load32(base, obj + o));
+                REXLOG_INFO("FM4OBJ {} model {} slot {} record {} header {:08X} {}x{} object {:08X}:{}", ok ? "applied" : "stuck",
+                            m, j, ri, hp, (d2 & 0x1FFF) + 1, ((d2 >> 13) & 0x1FFF) + 1, obj, w);
+              }
+            }
+          }
+          REXLOG_INFO("FM4OBJ after {} s: {} tables, streamed slots applied {} ({} textures, {} texels, {} KB), stuck small {} ({} textures), other {}", 30 * (pass + 1), tabs.size(),
+                      applied, applied_set.size(), texels, bytes / 1024, stuck, stuck_set.size(), other);
+          for (int k = 0; k < 2; ++k) {
+            std::string s;
+            for (uint32_t m : (k ? stuck_models : applied_models)) s += fmt::format(" {}", m);
+            REXLOG_INFO("FM4OBJ {} models:{}", k ? "stuck" : "applied", s);
+          }
+          if (pass == 0) {
+            const uint32_t mgr = fm4_resource_manager.load();
+            std::string s;
+            for (uint32_t o = 0; o < 64 && mgr; o += 4) s += fmt::format(" {:08X}", Load32(base, mgr + o));
+            REXLOG_INFO("FM4RES manager {:08X}:{}", mgr, s);
+            const uint32_t rt = mgr ? Load32(base, mgr + 16) : 0;
+            for (uint32_t id : {100u, 1000u, 2000u, 3000u, 3150u, 3158u, 3159u, 3160u, 3161u, 3162u, 3165u, 3200u, 4000u, 5000u, 5229u, 5300u, 7000u, 7109u}) {
+              REXLOG_INFO("FM4RES entry {}: {:08X} {:08X} {:08X}", id, Load32(base, rt + 12 * id), Load32(base, rt + 12 * id + 4),
+                          Load32(base, rt + 12 * id + 8));
+            }
+          }
+          for (int k = 0; k < 3; ++k) {
+            std::string s;
+            for (uint32_t r : (k == 0 ? applied_rids : k == 1 ? stuck_rids : other_rids)) s += fmt::format(" {}", int32_t(r));
+            REXLOG_INFO("FM4OBJ {} resource ids:{}", k == 0 ? "applied" : k == 1 ? "stuck" : "other", s);
+          }
+          }
+        }).detach();
+      }
+    }
+    // Slots whose texture is 32 x 32 or smaller (the pack's resident mips): model, slot, size;
+    // from 25 s after the first draw (once streaming has had its time).
     static std::mutex sm;
     static std::set<uint64_t> told;
+    static const auto t0 = std::chrono::steady_clock::now();
+    {
+      // Calls and small slots per 5 s window.
+      static std::atomic<uint32_t> calls{0}, smalls{0}, window{0};
+      const uint32_t w = uint32_t(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - t0).count() / 5);
+      uint32_t s = 0;
+      for (uint32_t j = 0; j < count; ++j) {
+        const uint32_t hp = Load32(base, entries + 32 * j);
+        if (hp && ((Load32(base, hp + 0x24) & 0x1FFF) + 1) <= 32) ++s;
+      }
+      if (window.exchange(w) != w)
+        REXLOG_INFO("FM4BINDS window {}: {} binder calls, {} small slots", w, calls.exchange(0), smalls.exchange(0));
+      calls.fetch_add(1); smalls.fetch_add(s);
+    }
+    if (std::chrono::steady_clock::now() - t0 < std::chrono::seconds(25)) goto small_done;
     for (uint32_t j = 0; j < count; ++j) {
       const uint32_t hp = Load32(base, entries + 32 * j);
       if (!hp) continue;
@@ -878,6 +990,7 @@ static void FillAtlasTiles(uint8_t* base, uint32_t tbl) {
                     ok ? Load32(base, rt + 12 * rid + 8) : 0);
       }
     }
+  small_done:;
   }
   if (!tm) return;
   static std::atomic<uint32_t> filled{0};
@@ -1439,3 +1552,117 @@ extern "C" REX_FUNC(sub_82CEDEE0) {
   __imp__sub_82CEDEE0(ctx, base);
 }
 #endif
+
+// Streamed track models on a converted FM4 track. Their vertex and index buffers come from one
+// of the game's own fixed-size heaps (sub_825CB038, the game's XMemAlloc, called from the
+// buffer helpers at 82AA5030, vertex data, and 82AA50FC, index data; attributes B2800000).
+// FH1 sizes that heap for Colorado: FM4's zones ask for more (Sunset Infield's spot 2: 35 MB
+// of vertex data, then every further request failed, 140000 failed calls a minute, retried for
+// ever), and a model that never gets its buffers never binds its textures either: they stay on
+// the static pack's resident mips (32 x 32: flat grey roads, dark verges). On a converted track
+// (fm4_stream_blocks.txt found) a failed allocation from those two callers is taken from the
+// guest's 4 KB-page physical heap instead, and the game's free and size calls for it
+// (sub_825CB040, sub_825CB048) go there too. FORZA_FM4_TEX_FALLBACK=0 turns it off;
+// FORZA_FM4_ALLOCDIAG=1 logs failures and totals per caller.
+namespace {
+std::mutex tex_fallback_mu;
+std::unordered_map<uint32_t, uint32_t> tex_fallback;  // guest address -> size
+uint64_t tex_fallback_bytes = 0;
+bool TexFallbackOn() {
+  static const bool on = [] {
+    const char* v = std::getenv("FORZA_FM4_TEX_FALLBACK");
+    return !v || std::string_view(v) != "0";
+  }();
+  return on && converted_track;
+}
+}  // namespace
+
+extern "C" REX_FUNC(__imp__sub_825CB038);
+extern "C" REX_FUNC(sub_825CB038) {
+  static const bool diag = std::getenv("FORZA_FM4_ALLOCDIAG") != nullptr;
+  const uint32_t size = ctx.r3.u32, flags = ctx.r4.u32, lr = uint32_t(ctx.lr);
+  __imp__sub_825CB038(ctx, base);
+  if (!ctx.r3.u32 && (lr == 0x82AA5034 || lr == 0x82AA5100) && size && TexFallbackOn()) {
+    auto* heap = REX_KERNEL_MEMORY()->LookupHeapByType(true, 4096);
+    uint32_t addr = 0;
+    const uint32_t rounded = (size + 4095) & ~4095u;
+    if (heap && heap->Alloc(rounded, 4096, rex::memory::kMemoryAllocationReserve | rex::memory::kMemoryAllocationCommit,
+                            rex::memory::kMemoryProtectRead | rex::memory::kMemoryProtectWrite, true, &addr) && addr) {
+      std::memset(forza::GuestPtr(base, addr), 0, rounded);
+      std::lock_guard<std::mutex> lock(tex_fallback_mu);
+      tex_fallback[addr] = size;
+      tex_fallback_bytes += rounded;
+      const size_t n = tex_fallback.size();
+      if ((n & (n - 1)) == 0)
+        REXLOG_INFO("FM4TRACK: {} streamed track textures' memory from the physical heap ({} KB in use)", n,
+                    tex_fallback_bytes / 1024);
+      ctx.r3.u64 = addr;
+    }
+  }
+  if (!diag) return;
+  static std::mutex mu;
+  static std::map<uint32_t, std::pair<uint64_t, uint32_t>> by_caller;  // bytes, failures
+  static uint32_t calls = 0, fails = 0;
+  std::lock_guard<std::mutex> lock(mu);
+  auto& e = by_caller[lr];
+  if (ctx.r3.u32) e.first += size; else { ++e.second; ++fails; }
+  if (!ctx.r3.u32 && fails <= 20)
+    REXLOG_INFO("FM4ALLOC failed: {} bytes flags {:08X} from {:08X}", size, flags, lr);
+  if (++calls % 20000 == 0) {
+    std::string s;
+    for (auto& [c, v] : by_caller) s += fmt::format(" {:08X}:{}KB/{}f", c, v.first / 1024, v.second);
+    REXLOG_INFO("FM4ALLOC {} calls, {} failed:{}", calls, fails, s);
+  }
+}
+
+// The game's free (r3 address, r4 attributes) and size for those addresses.
+extern "C" REX_FUNC(__imp__sub_825CB040);
+extern "C" REX_FUNC(sub_825CB040) {
+  {
+    std::lock_guard<std::mutex> lock(tex_fallback_mu);
+    auto it = tex_fallback.find(ctx.r3.u32);
+    if (it != tex_fallback.end()) {
+      const uint32_t addr = it->first, rounded = (it->second + 4095) & ~4095u;
+      tex_fallback.erase(it);
+      tex_fallback_bytes -= rounded;
+      if (auto* heap = REX_KERNEL_MEMORY()->LookupHeap(addr)) heap->Release(addr);
+      return;
+    }
+  }
+  __imp__sub_825CB040(ctx, base);
+}
+extern "C" REX_FUNC(__imp__sub_825CB048);
+extern "C" REX_FUNC(sub_825CB048) {
+  {
+    std::lock_guard<std::mutex> lock(tex_fallback_mu);
+    auto it = tex_fallback.find(ctx.r3.u32);
+    if (it != tex_fallback.end()) {
+      ctx.r3.u64 = it->second;
+      return;
+    }
+  }
+  __imp__sub_825CB048(ctx, base);
+}
+
+// FORZA_FM4_ALLOCDIAG: the game's other allocator (sub_82D81300: r3 size, r4 alignment; the
+// track's pack loop and texture objects call it): failures with size and caller.
+extern "C" REX_FUNC(__imp__sub_82D81300);
+extern "C" REX_FUNC(sub_82D81300) {
+  static const bool diag = std::getenv("FORZA_FM4_ALLOCDIAG") != nullptr;
+  const uint32_t size = ctx.r3.u32, align = ctx.r4.u32, lr = uint32_t(ctx.lr);
+  __imp__sub_82D81300(ctx, base);
+  if (!diag) return;
+  static std::mutex mu;
+  static std::map<uint32_t, std::pair<uint64_t, uint32_t>> by_caller;
+  static uint32_t calls = 0, fails = 0;
+  std::lock_guard<std::mutex> lock(mu);
+  auto& e = by_caller[lr];
+  if (ctx.r3.u32) e.first += size; else { ++e.second; ++fails; }
+  if (!ctx.r3.u32 && fails <= 20)
+    REXLOG_INFO("FM4ALLOC2 failed: {} bytes align {} from {:08X}", size, align, lr);
+  if (++calls % 20000 == 0) {
+    std::string s;
+    for (auto& [c, v] : by_caller) s += fmt::format(" {:08X}:{}KB/{}f", c, v.first / 1024, v.second);
+    REXLOG_INFO("FM4ALLOC2 {} calls, {} failed:{}", calls, fails, s);
+  }
+}

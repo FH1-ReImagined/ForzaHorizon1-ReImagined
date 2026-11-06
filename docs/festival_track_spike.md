@@ -433,16 +433,51 @@ Fujimi Kaido's other ribbons are left alone, as before).
   | Laguna Seca | 4.23 km | 33.34 / 33.77 | 2.39 / 3.63 | 1473 / 1799 | 27171 / 33446 |
   | Fujimi Kaido | 4.15 km | 33.34 / 33.78 | 2.15 / 3.27 | 1354 / 2034 | 16285 / 29439 |
   | Sunset Infield | 4.79 km | 33.34 / 33.76 | 2.65 / 4.18 | 1558 / 2187 | 50377 / 62411 |
-- The flat grey road and red-green grass at Sunset Infield's spot 2 (and Laguna's spot 2 road)
-  are not the tiles: they stay the same with the model-number match and with a 75 s wait. The
-  trace has the near road's diffuse at 32 x 32 and its detail at 32 x 16 where the same
-  1024 x 512 texture draws full size on another piece: streamed records (flag 0x4, a .bix and
-  a _B.bix of their own) left on the pack's resident mips. In the texture objects of those
-  slots the resource id is set but its resource entry is empty (0, 0, 0: never loaded), the
-  records listed in the spot's zone texture list. Fujimi Kaido has slots in the same state
-  (290 of 400 logged) and looks sharp, so the log alone does not tell a budget from a missing
-  request; next is the code that asks for a zone's textures (`FORZA_FM4_FILLDIAG`'s FM4SMALL
-  lines name model, slot, record and resource state).
+- The flat grey roads and dark verges (Sunset Infield's spot 2, Laguna's spot 2, Autopark,
+  Maple Valley) are streamed textures (flag 0x4, a .bix and a _B.bix of their own) left on the
+  static pack's resident mips (32 x 32), for one cause: the streamed models' vertex and index
+  buffers come from one of the game's own fixed-size heaps (sub_825CB038, its XMemAlloc, from
+  the buffer helpers 82AA4FC8, vertex data, and 82AA5090, index data, attributes B2800000;
+  called with count x stride and count x index size from the model loader at 82E4AD94 and
+  82E4AFF4), sized for Colorado, and a model whose buffers get no memory never finishes
+  loading, nor binds its textures. At Sunset's spot 2 the heap gave 35 MB of vertex and 5 MB
+  of index data, then every further request failed (about 140000 failed calls a minute,
+  retried for ever); Fujimi
+  Kaido's spot 1 needed less and got everything (`FORZA_FM4_ALLOCDIAG=1` logs it).
+  Found by a host thread that, 30 s in, checks every streamed slot of the tables seen:
+  applied (the table points into the texture object's own header, +44) or not
+  (`FORZA_FM4_FILLDIAG`'s FM4OBJ lines); the binder runs only when a zone goes live, so the
+  slot changes later without it.
+- The fix (fm4_track.cpp, on unless `FORZA_FM4_TEX_FALLBACK=0`): on a converted track a
+  failed allocation from those two callers comes from the guest's 4 KB-page physical heap,
+  and the game's free and size calls for it (sub_825CB040, sub_825CB048) go there too. Sunset
+  spot 2: 405 textures applied instead of 278 (a few hundred allocations, 9 MB, from the
+  fallback), no failures left; the road has its asphalt, skid marks and kerbs.
+- Left: 112 streamed textures at Sunset's spot 2 still never load (the same ones every run,
+  with no allocation failing): their objects get a pending bit (+8 | 0x20) and stay. All but 7
+  have their own file at archive index 3161 or more (of 5230), the applied ones below; not a
+  file offset (139 MB). Not found yet what holds them.
+- With the fallback, 9-spot passes against the passes before (trk-spike shots/
+  sunsetinfield-fallback.png, laguna-fallback.png, autopark-fallback.png,
+  maplevalley-fallback.png, fujimikaido-fallback.png, suzuka-fallback.png), 0 crashes in all:
+  - Sunset Infield: the roads have their asphalt at most spots (spot 2's grass still flat).
+  - Laguna Seca: spot 2's road too (spot 7's dark patch stays).
+  - Autopark: the stands and roads textured, the black patches gone (spot 8's car landed
+    upside down against a post: the spawn, not the drawing).
+  - Maple Valley: spot 2's dark patch gone, spot 3's smaller (64 allocations from the
+    fallback).
+  - Fujimi Kaido: the same as before (0.04% to 2.6% of pixels differ); the fallback is never
+    used there.
+  - Suzuka: the same, with more detail at spots 1 and 4 (trees, stands; 64 allocations).
+- Next: why the last streamed textures never load. The allocations no longer fail; the stuck
+  ones are a fixed set by resource id (own .bix at archive index 3161 or more at Sunset). The
+  buffer helpers are at 82AA4FC8 / 82AA5090, the game's allocator at 82D83590 (heap from a
+  thread-local allocator id, table at 0x835950CC, 8 bytes each); a second allocator,
+  sub_82D81300, is logged by `FORZA_FM4_ALLOCDIAG` too. Then the TrackSettings
+  ResourcePriority test again (it was masked by the full heap).
+- Tried and left off: listing each zone's textures' files in its file list as Colorado does
+  (`FM4_PVS_ZONE_TEXTURES=1`): no change (FH1 asks for a streamed texture itself), and about
+  three times the streaming pool.
 - Suzuka re-checked with the tile fill on and the mask patch off (spots-suzX1 against
   spots-suzR): the same at all 9 spots, 0.05% to 3.7% of pixels differ by more than 24 levels
   (clouds, the far trackside), 0 crashes.
