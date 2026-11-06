@@ -36,6 +36,18 @@ C++ headers, and the launcher says so (#135). The Flatpak brings its own compile
 The launcher updates itself (**About**, **Launcher updates**). Its data lives in
 `~/.var/app/io.github.dyotson.ForzaHorizon1ReImagined/`.
 
+**The game on the SD card.** The game files and the build need about 15 GB of free space. To keep them on the
+SD card, choose **Setup > Game and save folder > Change folder** and pick a folder on the card (under
+`/run/media`). The Flatpak may write there. Launchers up to 0.2.8 could only read the card. If the launcher
+says the Flatpak may only read a folder, allow it with the command it shows, for example:
+
+```sh
+flatpak override --user --filesystem=/run/media io.github.dyotson.ForzaHorizon1ReImagined
+```
+
+Or use Flatseal: choose **Forza Horizon 1: ReImagined** and add the folder under **Filesystem >
+Other files**. Then close and reopen the launcher (#717).
+
 ## Add to Steam
 
 The native Linux packaged launcher offers **About > Add to Steam** (#508). It adds one shortcut

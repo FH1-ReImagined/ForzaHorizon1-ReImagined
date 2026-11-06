@@ -132,6 +132,7 @@ class ErrorMessages(unittest.TestCase):
         result = mock.Mock()
         task.done.connect(result)
         with mock.patch("forza_launcher.ui.workers.installer.extract_game", side_effect=installer.InstallError("bad archive")), \
+                mock.patch("forza_launcher.ui.workers.datafolder.probe_writable", return_value=None), \
                 mock.patch("forza_launcher.ui.workers.paths.log_error", return_value="launcher.log"):
             task.run()
         self.assertIn("Step: Extracting the game files", result.call_args.args[1])

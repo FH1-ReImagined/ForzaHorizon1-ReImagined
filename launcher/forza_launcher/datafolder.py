@@ -2,9 +2,11 @@
 used (writable, free space, not synced by OneDrive), what "access denied" means and how the
 player's saves are carried to another folder. Issues #38 and Discussion #31."""
 import ctypes
+import errno
 import ntpath
 import os
 import re
+import shlex
 import shutil
 import sys
 from pathlib import Path
@@ -21,6 +23,11 @@ MARKERS = ("game", "runtime", "build", "sdk", "toolchain", "downloads", "xwin")
 
 ACCESS_DENIED_RE = re.compile(r"GetLastError\(\) = 5\b|Access is denied|Permission denied|WinError 5\b|"
                               r"PermissionError|EACCES", re.I)
+# A write refused because the folder is on a read-only mount (Linux EROFS; in the Flatpak, a folder
+# the sandbox shares read-only, #717).
+READ_ONLY_RE = re.compile(r"Read-only file system|\[Errno 30\]|\bEROFS\b")
+# Where the player changes the folder (Setup page, its "Game and save folder" card).
+CHANGE_FOLDER_UI = 'Setup > "Game and save folder" > Change folder'
 
 # Windows file attributes of cloud-synced files and folders (OneDrive and other sync clients).
 ATTR_OFFLINE = 0x1000
@@ -201,17 +208,122 @@ def _other_than(path) -> str:
     return str(s) if _norm(s) != _norm(path) else (r"C:\ForzaReImagined" if IS_WINDOWS else str(Path.home() / "forza-data"))
 
 
-def blocked_message(path, detail: str = "") -> str:
+def system() -> str:
+    """Whose help a folder the launcher cannot write gets: 'windows', 'flatpak' (the Linux launcher
+    in its Flatpak sandbox, which may only read most of the host's folders) or 'linux'."""
+    return "windows" if IS_WINDOWS else "flatpak" if paths.IN_FLATPAK else "linux"
+
+
+def _existing(path) -> Path:
+    """`path`, or its nearest parent folder that exists."""
+    p = Path(path)
+    while not p.exists() and p != p.parent:
+        p = p.parent
+    return p
+
+
+def read_only_mount(path) -> bool:
+    """The mount that holds `path` (or its nearest existing parent) is read-only. Inside the Flatpak
+    that is a folder the sandbox shares read-only (finish-args ...:ro), whatever the drive allows."""
+    try:
+        return bool(os.statvfs(_existing(path)).f_flag & os.ST_RDONLY)
+    except (OSError, AttributeError):   # no statvfs on Windows
+        return False
+
+
+def flatpak_app_id() -> str:
+    return paths.FLATPAK_ID or paths.FLATPAK_APP_ID
+
+
+def flatpak_private(path) -> bool:
+    """`path` is inside the Flatpak's own folder (~/.var/app/<id>), which its sandbox can always write:
+    a failure there is not about the Flatpak's permissions."""
+    own = Path.home() / ".var" / "app" / flatpak_app_id()
+    try:
+        return Path(os.path.abspath(path)).is_relative_to(Path(os.path.abspath(own)))
+    except (OSError, ValueError):
+        return False
+
+
+def flatpak_grant_path(path) -> Path:
+    """The folder to give the Flatpak write access to so that `path` can be used: `path`, or while it
+    does not exist yet, the folder it will be made in (Flatpak only shares folders that exist). Never
+    the whole file system."""
+    p = _existing(path)
+    return Path(path) if p == p.parent else p
+
+
+def flatpak_override_command(folder) -> str:
+    """The one command that lets the launcher's Flatpak write to `folder` (next start of the launcher)."""
+    return f"flatpak override --user {shlex.quote(f'--filesystem={folder}')} {flatpak_app_id()}"
+
+
+def _windows_blocked(path) -> str:
     why = in_onedrive(path)
-    msg = (f"Windows would not let the launcher use the folder {path}. It is blocked by something on this "
-           "computer: OneDrive (it syncs Documents, Desktop and Pictures), antivirus software, or Windows "
-           "Controlled folder access (Windows Security > Virus & threat protection > Ransomware protection). "
-           + (f"This folder looks synced because {why}. " if why else "")
-           + f"Choose another folder in Setup (\"Where the game is built\"), for example {_other_than(path)}, "
-           "then press Build again.")
+    return (f"Windows would not let the launcher use the folder {path}. It is blocked by something on this "
+            "computer: OneDrive (it syncs Documents, Desktop and Pictures), antivirus software, or Windows "
+            "Controlled folder access (Windows Security > Virus & threat protection > Ransomware protection). "
+            + (f"This folder looks synced because {why}. " if why else "")
+            + f"Choose another folder in {CHANGE_FOLDER_UI}, for example {_other_than(path)}, "
+            "then press Build again.")
+
+
+def _flatpak_blocked(path, read_only: bool) -> str:
+    grant = flatpak_grant_path(path)
+    return ((f"The launcher runs as a Flatpak, which may only read the folder {path}, not write to it. "
+             if read_only else
+             f"The launcher runs as a Flatpak and could not write to the folder {path}; the Flatpak may not "
+             "be allowed to write there. ")
+            + "To allow it, either:\n"
+            f"- in Flatseal, choose Forza Horizon 1: ReImagined and add {grant} under Filesystem > Other files, "
+            "or\n"
+            f"- run this in a terminal: {flatpak_override_command(grant)}\n"
+            "Then close and reopen the launcher and try again. "
+            + ("" if read_only else "If that is not enough, check that your user may write to the folder "
+                                    "(its owner and permissions). ")
+            + f"Or choose another folder in {CHANGE_FOLDER_UI}, for example {_other_than(path)}.")
+
+
+def _linux_blocked(path, read_only: bool) -> str:
+    return (f"The launcher cannot write to the folder {path}"
+            + (" because its drive is mounted read-only. " if read_only else
+               ". Check that its drive is mounted with write access and that your user may write to the "
+               "folder (its owner and permissions). ")
+            + f"Or choose another folder in {CHANGE_FOLDER_UI}, for example {_other_than(path)}.")
+
+
+def blocked_message(path, detail: str = "", system_name: str | None = None, read_only: bool | None = None) -> str:
+    """What to tell the player about a folder the launcher could not write (`detail`: what the system
+    said). Windows: OneDrive, antivirus, Controlled folder access (#38). The Flatpak: its permission
+    to write there, with the Flatseal and the flatpak override fixes (#717). Other Linux: the mount and
+    the folder's permissions. `read_only` (None: found from `detail` and the folder's mount) is a
+    read-only mount."""
+    system_name = system_name or system()
+    if system_name == "windows":
+        msg = _windows_blocked(path)
+    else:
+        if read_only is None:
+            read_only = bool(READ_ONLY_RE.search(detail or "")) or read_only_mount(path)
+        msg = (_flatpak_blocked(path, read_only) if system_name == "flatpak" and not flatpak_private(path)
+               else _linux_blocked(path, read_only))
     if detail:
-        msg += f"\n(Windows said: {detail.strip()[:300]})"
+        msg += f"\n({'Windows' if system_name == 'windows' else 'The system'} said: {detail.strip()[:300]})"
     return msg
+
+
+def cannot_write_message(path, err: str) -> str:
+    """probe_writable's error `err` for `path`, and what to do about it."""
+    return (f"Cannot write to {path}: {err}. "
+            + blocked_message(path, read_only=True if READ_ONLY_RE.search(err) else None))
+
+
+def is_read_only_error(e: BaseException) -> bool:
+    return isinstance(e, OSError) and e.errno == errno.EROFS
+
+
+def is_write_blocked_error(e: BaseException) -> bool:
+    """Access denied, or a read-only mount (in the Flatpak: a folder it may only read)."""
+    return is_access_denied_error(e) or is_read_only_error(e)
 
 
 def is_access_denied_error(e: BaseException) -> bool:
@@ -234,7 +346,7 @@ def check_folder(path, game_files_ready=False, extra_gb=0.0, need_toolchain=True
     if writable:
         err = probe_writable(path)
         if err:
-            out.append(("error", f"Cannot write to {path}: {err}. {blocked_message(path)}"))
+            out.append(("error", cannot_write_message(path, err)))
             return out
     why = in_onedrive(path)
     if why:

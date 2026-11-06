@@ -462,8 +462,9 @@ Installation behavior:
   command to install it for the current user: `flatpak install --user <bundle>`. Close the
   launcher, run that command in a host terminal, then reopen the launcher. **Open download
   folder** opens the folder through the desktop portal; the command remains visible if that
-  fails. The manifest grants `xdg-download` write access for these bundles, while home and
-  game media remain read-only. It grants no host-command permission, and the launcher never
+  fails. The manifest grants `xdg-download` write access for these bundles, while home
+  remains read-only (removable drives under `/run/media` and `/media` are writable for a game
+  and save folder there, #717). It grants no host-command permission, and the launcher never
   starts the Flatpak installer or restarts the sandbox itself. System installations can be
   managed manually through the host's software tools or terminal.
 
@@ -1206,7 +1207,7 @@ server, the CI-built SDK overlay, licenses; no game code, data or generated code
 `flatpak/stage/` (git-ignored). `paths.IN_FLATPAK` (FLATPAK_ID) adds the extension's `bin` to PATH and
 switches Qt to its own file dialogs (the portal would hand out the one picked file, losing a Games on
 Demand package's `<name>.data`). Permissions: wayland, fallback-x11, pulseaudio, network, `--device=all`,
-read-only `home`, `/media`, `/run/media`, `/mnt`, plus writable `xdg-download` for verified launcher bundles (other disks: `flatpak override --user --filesystem=PATH:ro`).
+read-only `home` and `/mnt`, writable `/run/media` and `/media` (removable drives such as an SD card, for the game and save folder, #717), plus writable `xdg-download` for verified launcher bundles (other disks: `flatpak override --user --filesystem=PATH:ro`, or without `:ro` for a game and save folder there; the launcher names that command when it cannot write a folder).
 Saves, config, extracted game and build live in `~/.var/app/<id>/`. New CLI: `forza-launcher --extract PACKAGE`.
 
 Tested (this host, Fedora Atomic, user installation): the app builds and installs; `--extract` of the

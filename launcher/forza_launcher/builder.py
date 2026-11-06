@@ -38,8 +38,9 @@ class BuildError(Exception):
 
 
 class FolderBlocked(BuildError):
-    """Windows denied access to the data folder (OneDrive, antivirus, Controlled folder access): the
-    player should choose another folder. Issue #38."""
+    """The data folder cannot be written: Windows denied access (OneDrive, antivirus, Controlled folder
+    access, #38), or on Linux it is read-only (in the Flatpak: a folder the sandbox may only read,
+    #717). The player should allow the access or choose another folder."""
 
 
 class Reporter:
@@ -173,7 +174,7 @@ def build_root(root: Path, rep: Reporter) -> Path:
         raise BuildError(
             f"The path of the folder the game is built in, {root}, has {' '.join(bad)} in it, which CMake "
             f"cannot build under, and the launcher could not make a link to it without them ({e}). Choose "
-            "a folder without these characters in Setup (\"Where the game is built\"), then press Build "
+            f"a folder without these characters in {datafolder.CHANGE_FOLDER_UI}, then press Build "
             "again.") from e
     rep.log(f"The folder {root} has {' '.join(bad)} in its path, which CMake cannot build under: "
             f"building through {link}, a link to it.")
@@ -1131,16 +1132,16 @@ def regpu_only_failure(failed) -> bool:
 
 def run_build(opts: Options, rep: Reporter, game_files: Path) -> Path:
     """The whole pipeline; returns the runtime directory. Safe to cancel and run again.
-    On Windows a folder that cannot be written (OneDrive, antivirus, Controlled folder access) ends in
-    FolderBlocked with a message that says so, before or during the build."""
+    A folder that cannot be written (Windows: OneDrive, antivirus, Controlled folder access; Linux: a
+    read-only mount, in the Flatpak a folder it may only read, #717) ends in FolderBlocked with a
+    message that says so, before the build starts (a file is written there first) or during it."""
     global CURRENT_ROOT
     CURRENT_ROOT = opts.root
-    if IS_WIN:
-        for lvl, text in datafolder.check_folder(opts.root, need_toolchain=False):
-            if lvl == "error" and text.startswith("Cannot write"):
-                raise FolderBlocked(text)
-            if lvl == "warn":
-                rep.log("Warning: " + text)
+    for lvl, text in datafolder.check_folder(opts.root, need_toolchain=False):
+        if lvl == "error" and text.startswith("Cannot write"):
+            raise FolderBlocked(text)
+        if lvl == "warn":
+            rep.log("Warning: " + text)
     try:
         # A folder CMake cannot build under (#691) is built through a link to it; messages that name
         # the folder (CURRENT_ROOT) keep its own path.
@@ -1149,10 +1150,22 @@ def run_build(opts: Options, rep: Reporter, game_files: Path) -> Path:
             return _run_build(opts, rep, game_files)
         return opts.root / _run_build(dataclasses.replace(opts, root=root), rep, game_files).relative_to(root)
     except OSError as e:
-        if IS_WIN and datafolder.is_access_denied_error(e):
+        if IS_WIN and datafolder.is_access_denied_error(e) or \
+                not IS_WIN and datafolder.is_read_only_error(e) and _inside(e.filename, opts.root):
             paths.log_error("build: access denied", e)
             raise FolderBlocked(datafolder.blocked_message(opts.root, str(e))) from e
         raise
+
+
+def _inside(name, root) -> bool:
+    """The file an OSError names is in the data folder, also through build_root's link (or there is no
+    name to tell)."""
+    if not name:
+        return True
+    try:
+        return Path(os.path.realpath(name)).is_relative_to(Path(os.path.realpath(root)))
+    except (TypeError, ValueError):
+        return False
 
 
 def _run_build(opts: Options, rep: Reporter, game_files: Path) -> Path:
