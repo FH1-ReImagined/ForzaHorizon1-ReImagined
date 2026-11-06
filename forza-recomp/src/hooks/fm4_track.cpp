@@ -1111,6 +1111,26 @@ extern "C" REX_FUNC(sub_82EAF1B0) {
   }();
   if (fill) FillAtlasTiles(base, tbl);
   __imp__sub_82EAF1B0(ctx, base);
+  if (std::getenv("FORZA_FM4_BINDDIAG") && blk) {
+    // Per sampler: map value (-1, -2, slot) and the flags at +752 / +772, counted.
+    static std::mutex mu;
+    static std::map<std::string, uint32_t> hist;
+    static uint32_t calls = 0;
+    const uint32_t mat = Load32(base, Load32(base, r5 + 4)) + 56 * Load32(base, r7 + 40);
+    const uint32_t m0 = Load32(base, mat + 40), m1 = Load32(base, mat + 44);
+    const uint32_t n = std::min<uint32_t>(Load32(base, blk + 28), 20);
+    std::lock_guard<std::mutex> lock(mu);
+    for (uint32_t i = 0; i < n && m0 + 4 * i < m1; ++i) {
+      const int32_t m = int32_t(Load32(base, m0 + 4 * i));
+      hist[fmt::format("s{}:{}:{}{}", i, m < 0 ? m : 9, int(*forza::GuestPtr(base, blk + 752 + i)),
+                       int(*forza::GuestPtr(base, blk + 772 + i)))]++;
+    }
+    if (++calls % 5000 == 0) {
+      std::string s;
+      for (auto& [k, v] : hist) s += fmt::format(" {}={}", k, v);
+      REXLOG_INFO("FM4BINDDIAG {} calls:{}", calls, s);
+    }
+  }
   static const bool diag = std::getenv("FORZA_FM4_FILLDIAG") != nullptr;
   if (!diag || !tbl || !blk) return;
   const uint32_t entries = Load32(base, tbl + 32), count = Load32(base, tbl + 36);

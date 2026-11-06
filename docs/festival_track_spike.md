@@ -650,6 +650,33 @@ Top Gear's runway).
   ground (7, 8), Top Gear's orange ground (3), Infineon's flat grey road (5, 6), Indianapolis
   8 (part black) and 7 (pale), Tsukuba's white haze at 9.
 
+## The five leftovers: one cause, the instance lightmap's uvOS (not fixed)
+
+Infineon's flat grey road (5, 6), Indianapolis 8 (part black) and 7, Tsukuba's white haze
+(9), Top Gear's orange ground (3) and Hockenheim's red ground (7, 8), traced at Infineon 5,
+Indianapolis 8, Tsukuba 9, Top Gear 3 and Hockenheim 7 (PS trace, trk-spike runs/*P*.pstrace):
+each wrong surface is a draw whose Light_Map_uvOS (PS c116) does not come from its own
+command buffer. The draws that look right have their c116 written there (fixup type 8, at
++0x180 or +0x540: e.g. (0.2031, 0.6719, 0.0625, 0.0625), that is offset u, v then scale
+u, v). The wrong ones take it from FH1's buffer (depth 2):
+- as a rectangle with the u scale 0: (0.3906, 0.0156, 0, 0.0625) at Top Gear, (0.2031,
+  0.1094, 0, 0.0625) at Hockenheim, for instances whose lightmap record is (0.0625, 0.0625,
+  0.3906, 0.0156): the offsets and v scale right, u scale zero, the lightmap read along one
+  column (flat colour); with 1/128 tiles (record 0.0078, 0.0078, 0.9648, 0.0273) the same
+  write comes out right, (0.9648, 0.0273, 0.0078, 0.0078);
+- or as whatever the last draw left: (-5.07, -168.8, 0, -175.5) at Infineon, (18.3, -87, 0,
+  -174) at Tsukuba, (1, 2.4e-8, 0, -1e-5) at Hockenheim.
+The models' own type-8 fixups (word 0: (X << 16) | (slot << 4) | 8; X 0x78 or 0x74) hold no
+entry for that sampler (DIFF_CLR_SPEC_OPAC_REFL_4's models: 0x780008, 0x780018 or 0x780408
+only), so the lightmap's uvOS is set outside the pass group: in FM4 at run time from the
+instance's lightmap record; in FH1 by its own instance-lightmap code, which writes c116 in a
+layout FM4's shaders do not read the same way. The binder (sub_82EAF1B0) maps sampler 7 to a
+valid slot with "write uvOS" set for every draw at Infineon (`FORZA_FM4_BINDDIAG=1` counts
+the map values and flags), so it is not the binder's -1/-2 cases.
+Next: find FH1's per-instance writer of PS c116 (the instance lightmap path, depth 2) and
+give it the record's u scale (or write c116 = the record's (ou, ov, su, sv) for FM4's
+instances there).
+
 ## Towards players: a plan
 
 What a player would need, beyond the spike (none of this is built yet):
