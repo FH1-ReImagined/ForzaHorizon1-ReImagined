@@ -863,6 +863,51 @@ static void FillAtlasTiles(uint8_t* base, uint32_t tbl) {
       if (seen_set.insert(tbl).second) seen_tables.emplace_back(tbl, (rec - models) / 84);
       if (!started) {
         started = true;
+        if (const char* w = std::getenv("FORZA_FM4_OBJWATCH")) {
+          // Records to watch (comma list): their texture objects' +8 state word and +0x2C..+0x30,
+          // every change with a timestamp; guest call chains at the first change of each.
+          std::vector<uint32_t> recs;
+          for (const char* p = w; *p;) { recs.push_back(uint32_t(std::strtoul(p, const_cast<char**>(&p), 10))); if (*p == ',') ++p; else break; }
+          std::thread([base, pres, recs] {
+            const auto t0 = std::chrono::steady_clock::now();
+            const uint32_t texs = Load32(base, pres + 2812);
+            std::vector<uint32_t> objs, last(recs.size(), 0xDEADBEEF), last2(recs.size(), 0xDEADBEEF);
+            std::vector<bool> chained(recs.size(), false);
+            for (uint32_t r : recs) objs.push_back(Load32(base, texs + 4 * r));
+            for (size_t k = 0; k < objs.size(); ++k) {
+              // The users list: +0x10 high half the count, +0x14 the list (6 bytes each?).
+              const uint32_t o = objs[k], n = Load32(base, o + 0x10) >> 16, lst = Load32(base, o + 0x14);
+              std::string s;
+              for (uint32_t i = 0; i < n && i < 24; ++i) {
+                s += fmt::format(" [{:04X} {:08X}]", uint32_t(*forza::GuestPtr(base, lst + 6 * i)) << 8 | *forza::GuestPtr(base, lst + 6 * i + 1),
+                                 Load32(base, lst + 6 * i + 2));
+              }
+              std::string raw;
+              for (uint32_t i = 0; i < 48; i += 4) raw += fmt::format(" {:08X}", Load32(base, lst + i));
+              REXLOG_INFO("FM4WATCH record {} users {} at {:08X}:{} | raw{}", recs[k], n, lst, s, raw);
+              if (k == 0) {
+                const uint32_t vt = Load32(base, o);
+                std::string v;
+                for (uint32_t i = 0; i < 12; ++i) v += fmt::format(" {:08X}", Load32(base, vt + 4 * i));
+                REXLOG_INFO("FM4WATCH texture object vtable {:08X}:{}", vt, v);
+              }
+            }
+            for (int i = 0; i < 2000000; ++i) {
+              for (size_t k = 0; k < objs.size(); ++k) {
+                const uint32_t v = Load32(base, objs[k] + 8), v2 = Load32(base, objs[k] + 0x2C);
+                if (v != last[k] || v2 != last2[k]) {
+                  const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+                  REXLOG_INFO("FM4WATCH {} ms record {} object {:08X}: +8 {:08X} -> {:08X}, +2C {:08X} -> {:08X}, +10 {:08X} +1C {:08X}",
+                              ms, recs[k], objs[k], last[k], v, last2[k], v2, Load32(base, objs[k] + 0x10), Load32(base, objs[k] + 0x1C));
+                  static int snaps = 0;
+                  if (k == 0 && last[k] != 0xDEADBEEF && snaps < 20) { ++snaps; forza::LogGuestThreads("at the watched object's change"); }
+                  last[k] = v; last2[k] = v2;
+                }
+              }
+              std::this_thread::sleep_for(std::chrono::microseconds(50));
+            }
+          }).detach();
+        }
         std::thread([base, pres, models] {
           for (int pass = 0; pass < 3; ++pass) {
           std::this_thread::sleep_for(std::chrono::seconds(30));

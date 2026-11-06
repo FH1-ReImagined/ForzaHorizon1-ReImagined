@@ -474,7 +474,7 @@ def convert(F, files):
                      ({insts[i]["idx"] & 0xFFFFFF for i in zi if insts[i]["u12"] != 0xFFFFFFFF}
                       if LIGHTMAPS else set()))
         zones.append({"instances": [0x80000000 | i for i in zi], "models": models,
-                      "textures": tex, "texture_flags": [0] * len(tex), "files": [],
+                      "textures": tex, "texture_flags": [ZONE_TEXTURE_FLAG] * len(tex), "files": [],
                       "drawn": [1] * len(zi), "placements": [placement_of(insts[i]) for i in zi]})
     P["zones"] = [(len(z["instances"]), 0, len(z["models"])) for z in zones]
     # FH1 sizes its pools of live instance objects and placements from the largest zone in
@@ -524,6 +524,12 @@ STREAM_MARGIN = float(os.environ.get("FM4_PVS_STREAM_MARGIN", "1.25"))
 # the textures left on the pack's resident mips were short of memory instead
 # (hooks/fm4_track.cpp, sub_825CB038). Listing them also needs about three times the pool.
 ZONE_TEXTURES = os.environ.get("FM4_PVS_ZONE_TEXTURES", "0") == "1"
+# The flag byte each zone gives its textures (Colorado's zones hold 0 for 88% of them, 1 for
+# the rest). With 0 FH1 streamed only part of a zone's textures in: at Sunset Infield's spot 2,
+# 112 of them were asked for every frame and never loaded (flat grass, black billboards, the
+# road on the pack's resident mips); with 1 every one loads (699 textures, 1 left). 1 for all:
+# FM4's zones hold what is seen from them. FM4_PVS_ZONE_TEXTURE_FLAG=0 as before.
+ZONE_TEXTURE_FLAG = int(os.environ.get("FM4_PVS_ZONE_TEXTURE_FLAG", "1"))
 # Which of a texture's files: "mips" its _0x<id>.bix alone (mip 1 down), "all" with its
 # _0x<id>_B.bix (the base level) too.
 ZONE_TEXTURE_FILES = os.environ.get("FM4_PVS_ZONE_TEXTURE_FILES", "mips")
