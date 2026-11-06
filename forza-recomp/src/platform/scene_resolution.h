@@ -116,4 +116,25 @@ inline bool ScaleQuadRect(Rect& r, uint32_t tex_width, uint32_t tex_height, Size
   return true;
 }
 
+// The sun's shadow mask (src/hooks/scene_resolution.cpp, #682) is drawn over the scene's depth
+// with a viewport and texel offsets for a 1280x720 screen written in the game's code. While
+// the scene is smaller, a 1280x720 viewport at 0,0 is the scene's; anything else is left alone.
+struct Viewport {
+  uint32_t x, y, width, height;
+};
+inline bool ScaleMaskViewport(Viewport& v, Size scene) {
+  if (v.x != 0 || v.y != 0 || v.width != kNativeWidth || v.height != kNativeHeight ||
+      !Scaled(scene.height)) {
+    return false;
+  }
+  v.width = scene.width;
+  v.height = scene.height;
+  return true;
+}
+inline bool ScaleMaskScreenSize(Size& s, Size scene) {
+  if (s.width != kNativeWidth || s.height != kNativeHeight || !Scaled(scene.height)) return false;
+  s = scene;
+  return true;
+}
+
 }  // namespace forza::scene_resolution

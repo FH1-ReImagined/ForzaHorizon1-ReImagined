@@ -8,6 +8,13 @@ and apply from the next start (the game reads them when it loads the track):
 | Shadow detail | `world_shadow_detail` | small objects cast shadows up to 60 m x their size factor | 3x as far (180) | 10x (600) |
 | Distant texture detail | `world_texture_detail` | the track's texture LOD bias, 0 | -0.5 | -1 |
 
+**Car detail** (`world_car_detail`) keeps other cars' detailed models farther away and on more
+cars (High 2x, Ultra 4x the game's distances and counts); it applies live and is also in the
+in-game Graphics screen, see [Car detail](#car-detail-361).
+
+**Paint job detail** (`livery_bake_scale`) draws each car's vinyls and decals for driving at 2x
+the game's 1024x1024 (photos keep the game's size for their final textures); see [Paint job detail](#paint-job-detail-659).
+
 A third option, **Shadow softness** (`world_shadow_filter`, #380), changes how the shadows
 are filtered rather than which objects cast them; it applies live and is also in the in-game
 Graphics screen. See [Shadow softness](#shadow-softness-380) below. A fourth,
@@ -51,19 +58,37 @@ Looked at and **not** made options:
   3,000 changed neither the culled count nor the draws. No visible gain.
 - **Shadow map size**: the shadow cascades are EDRAM render targets (1040x2528 and 520x1264
   per frame), so the render scale (Display > Picture) already sharpens them with the rest of
-  the frame. `ShadowEnds` (`InGameShadowEnd` 202, `TrackSegCamShadowEnd` 200) are not read
+  the frame. A separate, higher resolution for the shadow maps alone would be a per-render-target
+  scale in the GPU emulation (an SDK change to the EDRAM and resolve paths), not a game
+  setting. `ShadowEnds` (`InGameShadowEnd` 202, `TrackSegCamShadowEnd` 200) are not read
   in free roam (no access in a minute of driving, camera changes, pause and map); 15 changed
   nothing on screen. The command-line option `UseSmallShadowMap` only switches a
   512 to a 256-wide viewport of a smaller shadow pass.
+- **Shadow distance**: already long. The shadow renderer (TU4 `sub_824829D8`) fits nine
+  light-space boxes a frame (their corners from TU4 `sub_8241C100`, logged at the free roam
+  spawn): the three sun cascades of the mask are about 10, 36 and 92 m across, and the six
+  more of the outer passes 50, 68, 100, 255, 400 and about 1,300 m, the last reaching beyond
+  a kilometre. What ends a distant object's shadow is the caster cull above (Shadow detail),
+  not the cascades' reach; stretching the cascades would spread the same texels wider, so
+  blurrier shadows near the car.
+- **Track far distance**: the command-line option `trackfardistance` (TU4 `sub_82563570`
+  stores it at +4192 of the options object, 55 with `perfmode`): no load of that field was
+  found in Title Update 4's code.
 - **Grass**: `GrassFade*`, `GrassLOD*` and `GrassMin/MaxNumShells` are read every frame but
   Colorado's grass is meshes (`GrassMaxNumShells` 0); a 1-2 m fade or 0 and 8 shells changed
   nothing.
 - **Cube map (car reflections)** `<Cubemap MeshLimit FarDistance VisibilityThreshold>`,
   `screenAreaDistances cubeMap`: the reflections of the world in the cars. Cars already look
   right; left for later. `<CollidableDropDistance>` (300): no visible change at 5 m.
-- **Car and crowd LOD** (`media/renderscenarios.zip`: `CarLODTransDist`,
-  `CarLODTransDistTraffic`, `CrowdLODCountScales`; `TrackSettings <Crowds lod0-3>`): known
-  and cheap to raise, but lowest priority (#361).
+- **Crowd LOD** (`CrowdLODCountScales` and `CrowdSpriteDistScale` in the render settings,
+  `TrackSettings <Crowds lod0-3 SpriteDistance>`): only the festival sites have crowds; not
+  changed. The cars' LOD is an option, [Car detail](#car-detail-361) below.
+- **Density**: the game has no foliage or detail density setting (the grass above is meshes,
+  placed per zone like the trees). The density values it has are gameplay: traffic and festival
+  cars (`AI/Traffic/Density/*`, `AI/Spawning/Density/*` in `gametunablesettings/GlobalRegistry.xml`),
+  the festival crowd's size (`<Performance CrowdSize="1024">`), and the particles' rate
+  (`ParticleRateScale`, a render setting at 1). More traffic changes the game, and the
+  multiplayer sessions sync it; left alone.
 
 ## Cost
 
@@ -100,6 +125,247 @@ and return.
 
 These knobs could also sit in the in-game Graphics screen (#116): both values are read
 every frame, so a live change only needs the settings struct the hook already sees.
+
+## Car detail (#361)
+
+**Settings > Display > World detail > Car detail** and the in-game **Graphics** screen (Title
+Update 4) offer Console (default), High and Ultra (`world_car_detail`). It applies live (Save in
+the Graphics screen).
+
+### How the game picks a car's model
+
+Each car has up to five models, LOD0 (the full one) to LOD4. The game's render settings
+(`DynamicRenderSettings`: the defaults in the executable, scenario files in
+`media/renderscenarios.zip` on top, none of which set these) give two sets of distances and a
+count, each read through its own getter (TU4 addresses; disc in `src/hooks/car_detail.cpp`):
+
+- `CarLODTransDist` (getter `sub_8248CBD0`): `LODdist_Near` 15, `LODdist_Far` 25,
+  `LODdist_VeryFar` 50. The selection (`sub_824351D8`, per car each frame) takes the car's
+  distance to the camera, less its size, over the camera's zoom: LOD0 within 15 m, LOD1 to
+  25 m, LOD2 to 50 m, LOD3 beyond.
+- `CarLODTransDistTraffic` (`sub_82E99A08`), for traffic: `LODdist_T_LOD2`-`T_LOD5` 15, 25, 50,
+  100 (LOD4 beyond 100 m), `T_LOD4_Closest` 20, `T_LOD5_Closest` 80.
+- `CarLODThresholds` (`sub_8247C5C8`): 2, 4, 6. Before the selection, the cars are ranked by
+  distance (`sub_82477368`): only the two nearest cars other than the player's may use LOD0,
+  up to the fourth LOD1, the rest LOD2 at best; from six cars on, both counts drop by one.
+  The selection then clamps to that minimum and to the LODs the car has loaded.
+
+In free roam that leaves almost every other car on a simplified model: at the spawn and on the
+first two minutes of County Route 203, 92% of the picks were LOD3 or LOD4 (table below).
+
+### What the levels do
+
+| Level | Distances | Cars allowed LOD0, LOD1; one fewer each from |
+| --- | --- | --- |
+| Console | 15 / 25 / 50 m, traffic 15 / 25 / 50 / 100 m | 2, 4, 6 cars |
+| High | x2: 30 / 50 / 100 m, traffic up to 200 m | 4, 8, 12 |
+| Ultra | x4: 60 / 100 / 200 m, traffic up to 400 m | 8, 16, 24 |
+
+`src/hooks/car_detail.cpp` scales what the three getters return; the stored settings stay the
+game's, so Console calls them unchanged and a change applies at the next frame. The selection
+still clamps to the models the car has (its LOD count); no streaming stalls, missing models or
+extra hitches showed in the runs below.
+`tests/car_detail_test.cpp` checks the levels.
+
+### Pop-in
+
+`FORZA_CAR_LOD_STATS=1` logs, every 5 s, how many LOD picks the selection made, how many
+changed a car's LOD from its last pick (a model switch: the pop-in) and at what distance from
+the camera (to the car's centre, the selection's own measure before it takes the car's size
+off), and the share of each LOD. Title Update 4, a career save, chase camera, 1280x720, one run
+per level: two minutes of free roam from the spawn with `tools/autodrive.py` on a
+`tools/nav_route.py` loop (County Route 203 to Route 28, the same road each run; the traffic
+differs run to run; about 24 cars picked a frame, most of them traffic out of sight or far away):
+
+| Level | Model switches | within 25 m | 25-50 m | 50-100 m | 100-200 m | beyond 200 m | Picks at LOD0-2 | LOD3 | LOD4 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Console | 111 | 28 | 31 | 50 | 2 | 0 | 7.5% | 30.2% | 62.4% |
+| High | 120 | 0 | 33 | 34 | 53 | 0 | 13.1% | 30.2% | 56.7% |
+| Ultra | 140 | 0 | 0 | 36 | 32 | 72 | 26.2% | 37.2% | 36.6% |
+
+A car still goes through its models as it comes closer, so the count of switches stays about the
+same (it grows a little: the farther bands hold more cars); what changes is where they happen.
+On Console half of them are within 50 m, a quarter within 25 m of the camera; High has none
+within 25 m, Ultra none within 50 m. An earlier run of the same drive per level (without the
+distances) gave 93, 132 and 160 switches and the same shift of the picks.
+
+The race grid (GoPro Millennia Masters, the seven CPU cars standing 5 to about 60 m ahead during
+the countdown, 10 s): LOD0 in 36% of the picks on Console (the player's car and two more), 62%
+on High and 90% on Ultra; LOD3 15%, 0.2% and 0%.
+
+Frame times over the drives (60 fps cap): no level adds hitches (frames over 25 ms, two runs a
+level: Console 41 (a cold shader cache) and 13, High 13 and 25, Ultra 12 and 8; none over 50 ms).
+
+### Cost
+
+Under a 60 fps cap nothing measurable on an RX 9060 XT: the drives above hold 60 fps on every
+level (mean frame 16.67-16.68 ms, p99 18.8-20.1 ms). Uncapped:
+
+Free roam spawn, the car standing, traffic passing; TU4, RX 9060 XT (RADV), uncapped (`--frame_rate=240 --vsync=false`), 1280x720 window; the levels switched live with `FORZA_CAR_DETAIL_FILE` in one session per render scale (Console, High, Ultra, Ultra, High, Console, Console, High, Ultra; 15 s each, the first 3 s skipped), BENCH lock held. GPU = the process's DRM engine time, CPU = the whole process's CPU time, per frame; the mean of the three phases of a level, the range of fps in brackets.
+
+| Render scale | Level | fps | GPU ms | GPU busy | CPU ms |
+| --- | --- | --- | --- | --- | --- |
+| 1 | Console | 196.2 (182.1-207.5) | 4.29 | 84% | 17.51 |
+| 1 | High | 188.2 (168.4-199.7) | 4.47 | 84% | 18.14 |
+| 1 | Ultra | 203.4 (193.6-216.2) | 4.13 | 84% | 16.58 |
+| 2 | Console | 79.8 (79.5-80.0) | 12.78 | 102% | 28.95 |
+| 2 | High | 79.2 (79.1-79.3) | 12.82 | 101% | 29.36 |
+| 2 | Ultra | 79.1 (78.9-79.2) | 12.85 | 102% | 29.37 |
+
+Within the noise: at render scale 1 the phases spread by 20-40 fps with the traffic passing
+(the ranges of all three levels overlap, and Ultra came out fastest); at render scale 2, where
+the GPU is the limit, High and Ultra cost about 0.05 ms of GPU time a frame (under 1% fps). The
+spawn has few cars near enough for the levels to change their models; a busier scene (the race
+grid, traffic jams) costs more triangles, but the cars are a small part of a frame.
+
+### Screenshots
+
+Kept out of Git. At fixed points of the drive above (15, 30, 45, 60, 90 and 120 s from the
+spawn, 1280x720) the three levels give the same road with different traffic, so they compare the
+world, not the cars: no other change. On the race grid during the countdown, switched live
+(`FORZA_CAR_DETAIL_FILE`, the frames a second apart), the seven CPU cars 5 to 60 m ahead look
+the same on all three levels at 1280x720: those LODs differ in what a car of that size on screen
+does not show (the switch is a visible pop only when it happens near the camera, which is what
+the levels move away). The differences between the frames are the camera settling and the crowd.
+Photo mode cannot show it: the selection does not run while the world is paused there (no picks
+are logged), so the cars keep the models they had when it opened.
+
+## Paint job detail (#659)
+
+**Settings > Display > World detail > Paint job detail** (`livery_bake_scale`): Console (1,
+default) or 2x. Vinyls and decals look sharp in the Paint Shop and soft when driving and in
+photos; 2x draws the paint job for driving at twice the game's resolution (photo mode's own
+copy stays at the game's size, below). It applies from the next start.
+
+### How the game draws a paint job
+
+The Paint Shop draws the side being edited into a 2048x2048 layout every frame. For driving and
+photos the game draws the whole design once, when the car loads, through a chain of render
+textures (TU4 addresses; disc ones in `src/hooks/livery_bake.cpp`), all made with
+`sub_82CF9058`:
+
+| Texture | Size (Aventador) | Made by | What it holds |
+| --- | --- | --- | --- |
+| `LivInt-<n>-0` to `-4` | 640x150 to 1882x724 | `sub_82D4DBC8` | each side's layers |
+| `LivRenderTexture` | 1024x1024 (Paint Shop 2048), 8:8:8:8 | `sub_82D4BD60` | the sides put together in the car's texture layout (`sub_82D511B8`, at rectangles given in pixels of the 1024x1024 layout) |
+| `LivRenderPristineN`, `LivRenderDamageN` | 1024x1024, 6 levels, 8:8:8:8 | `sub_82D53420` | the layout without and with damage, and its mips (`sub_82D54030`, `sub_82D50040`: drawn in strips that fit the 10 MB of EDRAM) |
+| `LivPristineN`, `LivDamageN` | 1024x1024, 6 levels, DXT5 | `sub_82D5B3D0` | the same compressed on the CPU (`sub_825AC118`, `sub_82CFAB18`, through two 1024x1024 scratch textures from `sub_8259A318`): the textures the car is drawn with |
+
+(`LivRenderPristine0`/`Damage0` and `LivPristine0`/`Damage0`, 2048x2048, are made only when a
+setup's flags ask for them; no car seen here did.) The whole car (sides, roof, bumpers) shares
+the 1024x1024, so a decal gets about half the texels it has in the Paint Shop. Render scale does
+not help: the CPU compresses the guest's 1024x1024 copy, so the car is drawn with a 1024x1024
+DXT5 texture at every render scale.
+
+### What 2x does
+
+`src/hooks/livery_bake.cpp` makes every 1024x1024 texture of the chain 2048x2048 (with one more
+mip level where it has mips, so the smallest stays 32x32), the layout size the draws read (+60
+of the setup), the sides' rectangles for the blit into the layout, and the compression's
+scratch textures with them. The draws, EDRAM strips, mips and the compression follow the sizes.
+The Paint Shop's own 2048x2048 layout and the sides (`LivInt`, already up to 1882 wide) stay as
+they are. `tests/livery_bake_test.cpp` checks the sizes.
+
+Each step matters: with only the render textures scaled, the CPU compression read them as
+1024x1024 (the car showed a magnified corner of the layout); with the compressed textures too
+but not the scratch ones, the car got DXT5 garbage; with the layout too but not the sides'
+rectangles, the sides landed in a quarter of the layout and the car showed no decals. Only a driving
+car's paint job is scaled (mode 6 or 8 at +232 of the setup, whose final textures are the DXT5
+pair). The Paint Shop's editor (+236 -1) has its own 2048x2048 layout with its sides placed in
+it; scaled too, the editor's car was black and torn. Photo mode draws the car's paint job again
+for the photo (mode 7), into two uncompressed 8:8:8:8 1024x1024 final textures instead of the
+DXT5 pair; at 2048x2048 those did not fit next to the car's own textures (the texture was not
+made and Take Photo crashed), so photos keep the game's 1024x1024, without DXT5 compression.
+
+Photo mode's copy of the paint job (+236 is 2; a car's own is 1) draws no sides. Once a car's
+paint job is drawn, the game saves its layout, compressed, as the layout's size squared x 4
+bytes (`sub_82D4E7D0`, queued by the setup's steps in `sub_82D5C5F8`), and the copy loads that
+save into its own layout (`sub_82D4E9F0`), as many bytes as its own layout holds. At 2x the save
+is 2048x2048 (16 MB raw) and a 1024x1024 copy read its first 4 MB: a quarter of the design, cut
+into bands and moved, so in photo mode decals were gone or in the wrong place and vinyls had
+other diagonals and hard cuts (#680). The hook keeps each save's size with its address. The copy
+keeps the game's 1024x1024 layout; when its save was 2048x2048, the hook reads the whole save in
+four 4 MB parts (`sub_82D3E878`, through the layout's own memory) and halves it into the layout,
+each texel the average of 2x2 through the Xenos tiling. The photo's final textures are
+1024x1024 either way. A first version made the copy's layout 2048x2048 instead: photo mode's
+heap has no room for that, and from the heap of the render copies it was not made once a
+damaged car's copies were there (the game stopped entering photo mode, 1 in 6 on Windows and on
+the first entry after a crash into a wall here).
+
+The CPU compresses the render copies (`LivRenderPristineN`/`DamageN`) from guest memory, which
+the GPU's resolves write. With `readback_resolve = some` (the default) a resolve is copied back
+only when its key is new; at 2x the damage copy's was not, so `LivDamageN` came out the same as
+`LivPristineN` (one texture, one fingerprint in a texture dump) and the car showed no scratches
+when driving (#680), while photo mode, which draws its own uncompressed damage copy, had them.
+With `readback_resolve = full` the 2048x2048 `LivDamageN` has the scratches. While a paint job is
+drawn at 2x, from its first render copy until 2 s after its last compression, the hook puts all
+of physical memory in `readback_resolve_wait_range` (`src/platform/readback_wait.h`, owner
+`kLiveryBake`), the way the online photo does at its shutter: those resolves wait for the GPU
+and are copied back. That is a car loading with a paint job at 2x, about a second; Console
+never asks for it.
+
+### Memory
+
+| Texture (per car with a paint job) | Console | 2x |
+| --- | --- | --- |
+| `LivRenderPristineN` + `DamageN` (8:8:8:8, mips) | 2 x 5.3 MB | 2 x 21.3 MB |
+| `LivPristineN` + `DamageN` (DXT5, mips) | 2 x 1.3 MB | 2 x 5.3 MB |
+| `LivRenderTexture` | 4 MB | 16 MB |
+| scratch textures (during the compression only) | 5 MB | 20 MB |
+| Total kept | about 17 MB | about 69 MB |
+
+The game makes these from memory it reserves at start for render textures: the guest's
+physical memory in use was the same at Console and 2x (357 MB in free roam). The graphics card
+holds a copy of each (the render ones at the render scale squared) and the EDRAM strips while
+the paint job is drawn. Only cars with a paint job pay: in single player that is the player's
+car (the 7 CPU cars of the GoPro Millennia Masters race and the traffic have none); online,
+each player's car with one. 4096x4096 (4x) does not fit: the first such texture was not made
+and the game stopped on the missing livery, so the option stops at 2x.
+
+### Checked
+
+Title Update 4, Linux/RADV, the Aventador with an Amsoil decal on the rear bumper and on the
+right side (placed in the Paint Shop on a copy of the test save), free roam at the festival,
+chase camera at the spawn, the same frame at both levels. At 1280x720, render scale 1, the
+decal's outlines are slightly crisper at 2x; at render scale 2 (2560x1440) the difference is
+clear: at Console the letters' edges show DXT5 blocks and texel steps, at 2x they are smooth
+and the black outlines thin and even. At 2x the Paint Shop's menus and decal editor show the
+car and its design as at Console, and the car after leaving it carries the design. Take Photo
+works at 2x in free roam and after the Paint Shop, and a race (GoPro Millennia Masters, 7 CPU cars, test save) ran 35 s with no paint job made. No
+errors in the logs. Not checked: online
+lobbies with many paint jobs, Windows, the frame time while a car loads, and the disc build
+(its functions come from `tools/tu_address_map.py`, it compiles, it was not run).
+
+Photo mode's copy (#680), same save: the layout the car saved and the one photo mode loaded,
+dumped from guest memory and untiled. At Console both are the same 4 MB, byte for byte. At 2x
+before the fix the save was 16 MB and the copy's layout a cut-up quarter of it (the rear decal
+in four bands at the bottom of the layout, the side decal missing); a 2048x2048 copy loaded all
+16 MB, byte for byte the save; the save halved as the hook does it differs from the Console layout
+by 0.013 on average per byte (0 to 255), so the design is where the Console one has it.
+
+Scratches (#680), same save, a texture dump of free roam: at Console `LivPristineN` and
+`LivDamageN` are two 1024x1024 DXT5 textures, the damage one with scratches over the body. At 2x
+before the fix the dump held a single 2048x2048 DXT5, the pristine one (the damage texture had
+the same picture); with `readback_resolve = full`, and after the fix with the default `some`, it
+holds both, the damage one with the same scratches as at Console (the same fingerprint in both
+runs).
+
+### The decals themselves
+
+Vinyl shapes (`media/Livery.zip`, `vinyls/*.carbin`, 880 files) are meshes and stay sharp at
+any size. Decals (`decals/*.carbin`, 490 files, 478 different pictures) are bitmaps: 256x256 (7
+of them 256x128) 8:8:8:8 with 9 mip levels, one per file. A decal stretched over most of a side
+(about 900 pixels of the 2048x2048 layout for the Amsoil one above) has a quarter of the layout's
+texels at 2x, so it is the next limit. They load as ordinary textures, so the launcher's **Make
+decal pack** (Texture packs page, [texture packs](texture_packs.md#make-decal-pack)) upscales them
+2x or 4x from the game files into a texture pack.
+
+Checked (same save, Title Update 4, render scale 2, Paint job detail 2x, the car's side at the
+festival spawn): with the decal pack the Amsoil decal's letters and outlines are crisp and the
+registered mark readable, where the game's decal shows soft, stepped edges; 4x is a little
+crisper than 2x there. On the rear bumper, where the decal is small, the pack changes little. The pack must be in memory when the car loads (the paint job is drawn once
+then), which is why the decal pack asks to be read at start (its `pack.toml`, SDK patch 0436).
+Without that the car showed the game's decal.
 
 ## Shadow softness (#380)
 

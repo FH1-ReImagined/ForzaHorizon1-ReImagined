@@ -1,5 +1,5 @@
 // forza - a car's picture, its livery and photo mode are rendered with real pipelines (#74, #77,
-// #167, docs/rendering.md).
+// #167, #632, docs/rendering.md).
 //
 // The game renders a car's picture once (the purchase, Car Select, the garage), reads the
 // resolve back on the CPU and saves it in the profile (ForzaProfile/Thumbnails). With
@@ -13,7 +13,14 @@
 // sync_pipeline_creation (patch 0051) makes the command processor create or wait for the
 // real pipeline of each draw, for kWindow. Other draws in that time wait for their pipeline
 // too, as with async_shader_compilation=false; with a warm cache nothing waits.
-// FORZA_THUMB_SYNC=0 switches the hook off.
+//
+// sub_824DDCE8 requests a car thumbnail from the thumbnail manager (CCarThumbnail, the
+// 288x160 or larger picture rendered into a 1280x720 target and read back). Besides the
+// purchase's sub_82546460, the livery save popup calls it (CPopupLoadSaveLivery,
+// sub_826D6A38) for the paint job's preview (thumb.xdc of the design, the 288x160 picture
+// the storefront shows): with an empty cache that preview was black, the car's draws
+// skipped (#632). The request holds the same window. FORZA_THUMB_SYNC=0 switches both
+// hooks off.
 //
 // The livery (paint, vinyls and decals) is drawn once into the car's 1024x1024 textures when
 // the car is loaded, and the same skipped draws left those textures without some of their
@@ -113,6 +120,13 @@ extern "C" REX_FUNC(sub_82546460) {
   static const bool on = EnvOn("FORZA_THUMB_SYNC");
   if (on) HoldSync();
   __imp__sub_82546460(ctx, base);
+}
+
+extern "C" REX_FUNC(__imp__sub_824DDCE8);
+extern "C" REX_FUNC(sub_824DDCE8) {
+  static const bool on = EnvOn("FORZA_THUMB_SYNC");
+  if (on) HoldSync();
+  __imp__sub_824DDCE8(ctx, base);
 }
 
 extern "C" REX_FUNC(__imp__sub_82C8FE60);

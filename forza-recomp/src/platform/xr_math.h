@@ -305,6 +305,17 @@ inline Pose EyePose(const Pose& view, int eye, float ipd) {
   return {view.q, {view.p.x + d.x, view.p.y + d.y, view.p.z + d.z}};
 }
 
+// Which of the runtime's two stereo views (xrLocateViews in the VIEW space, x right) is the left
+// eye: the one further left (#705). OpenXR makes view 0 the left eye of
+// XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, but the eye each view's picture is drawn for is
+// taken from where the runtime puts it, so a runtime that numbered them the other way round still
+// gets each eye its own picture. `previous` is kept while the positions say nothing (not valid, or
+// less than a millimetre apart across).
+inline int LeftView(float view0_x, float view1_x, bool positions_valid, int previous) {
+  if (!positions_valid || !(std::fabs(view0_x - view1_x) >= 0.001f)) return previous;
+  return view0_x < view1_x ? 0 : 1;
+}
+
 // A panel `distance` metres from the recentred eyes in the direction `pitch` radians up (negative:
 // down), facing them: its pose relative to the recentre origin (OpenXR quads face +z).
 inline Pose PanelPose(float distance, float pitch) {

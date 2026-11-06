@@ -325,8 +325,10 @@ def import_design(catalog, item_path, target, executable, cancelled=lambda: Fals
             raise ugc.CatalogError('Unsupported destination career save.')
         used = struct.unpack_from('>I', career, 4)[0]
         valid = False
-        for address in (0x8200D634, 0x82013A04):
-            off = address-xex.load_address+32
+        # the HMAC key of a TU4 profile follows the table's first half; a base-game profile's
+        # is the 32 bytes before the table (save_editor._keys)
+        for off in (address-xex.load_address+delta for address in (0x8200D634, 0x82013A04)
+                    for delta in (32, -32)):
             if 0 <= off <= len(image)-32:
                 key = bytes(((image[off+i]^target.identity[(i-4)%8])+2*i)%256 for i in range(32))
                 valid |= 68 <= used <= len(career)-8 and hmac.compare_digest(hmac.digest(key, career[40:8+used], 'sha256'), career[8:40])

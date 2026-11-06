@@ -43,6 +43,7 @@ Usage:
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 import hashlib
 import os
+import re
 import struct
 import sys
 
@@ -137,9 +138,12 @@ class Svod(Xdvdfs):
     def __init__(self, path, hdr):
         self.hdr = hdr
         data_dir = path + ".data"
-        names = sorted(os.listdir(data_dir))
+        # only the DataNNNN fragments: a copy can bring a Thumbs.db, .DS_Store or desktop.ini along
+        names = sorted(n for n in os.listdir(data_dir) if re.fullmatch(r"(?i)data[0-9a-f]{4}", n))
         if len(names) != hdr.data_file_count:
-            raise SystemExit(f"expected {hdr.data_file_count} data fragments, found {len(names)}")
+            raise SystemExit(f"its {os.path.basename(data_dir)} folder should hold {hdr.data_file_count} "
+                             f"data parts (Data0000 to Data{max(hdr.data_file_count - 1, 0):04d}) but "
+                             f"holds {len(names)}: copy the whole folder again")
         self.files = [open(os.path.join(data_dir, n), "rb") for n in names]
         d = hdr.descriptor
         self.enhanced_gdf = bool(d[0x18] & 0x40)

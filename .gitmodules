@@ -2,3 +2,7 @@
 	path = server
 	url = https://github.com/FH1-ReImagined/forza-live
 	branch = main
+[submodule "forza-recomp/thirdparty/ReGPU"]
+	path = forza-recomp/thirdparty/ReGPU
+	url = https://github.com/FH1-ReImagined/ReGPU
+	branch = fh1

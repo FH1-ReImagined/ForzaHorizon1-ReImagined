@@ -14,6 +14,8 @@ import json
 import os
 import re
 import subprocess
+import sys
+import tempfile
 from dataclasses import dataclass, field
 
 from . import cleanenv
@@ -243,6 +245,106 @@ def detect() -> Detected:
         return Detected()
 
 
+# --- the Vulkan driver (#672) ----------------------------------------------------------------------
+# Intel integrated graphics on a Vulkan 1.2 driver can't run the game's Vulkan renderer: an HD 520 on
+# Vulkan 1.2.203 lost the device before the title screen (#669), a UHD on 1.2.131 ran at about 1 fps
+# (#640). Only Intel iGPUs: an AMD driver's Vulkan version says nothing about its age (Vega iGPUs
+# report 1.3.2xx on current drivers, #268).
+VK_INTEGRATED, VK_DISCRETE = 1, 2
+PCI_INTEL = 0x8086
+INTEL_VULKAN_MIN = (1, 3)
+_vk_devices = []
+
+
+def vulkan_probe_command(out_file) -> list:
+    from . import paths
+    if paths.FROZEN:
+        return [sys.executable, "--vulkan-devices", str(out_file)]
+    return [sys.executable, "-I", os.path.join(os.path.dirname(os.path.abspath(__file__)), "vulkan_probe.py"),
+            str(out_file)]
+
+
+def parse_vulkan_devices(text: str):
+    """[{name, vendor_id, device_id, type, api, driver}] from vulkan_probe's JSON; None when it found nothing."""
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return None
+    devices = data.get("devices") if isinstance(data, dict) else None
+    if not isinstance(devices, list):
+        return None
+    out = []
+    for d in devices:
+        if not isinstance(d, dict) or not isinstance(d.get("vendor_id"), int) or not isinstance(d.get("type"), int):
+            continue
+        out.append({"name": str(d.get("name") or ""), "vendor_id": d["vendor_id"],
+                    "device_id": d.get("device_id") if isinstance(d.get("device_id"), int) else 0,
+                    "type": d["type"], "api": str(d.get("api") or ""),
+                    "driver": d.get("driver") if isinstance(d.get("driver"), int) else 0})
+    return out or None
+
+
+def vulkan_devices(timeout=15):
+    """This PC's Vulkan devices (parse_vulkan_devices), or None when unknown. Asked once per launcher
+    session, in a process of its own. FORZA_VULKAN_DEVICES='{"devices": [...]}' overrides (testing)."""
+    forced = os.environ.get("FORZA_VULKAN_DEVICES", "").strip()
+    if forced:
+        return parse_vulkan_devices(forced)
+    if not _vk_devices:
+        found = None
+        try:
+            with tempfile.TemporaryDirectory(prefix="forza-vk-") as tmp:
+                out = os.path.join(tmp, "devices.json")
+                _run(vulkan_probe_command(out), timeout=timeout)
+                found = parse_vulkan_devices(_read(out))
+        except Exception:  # detection must never stop the launcher
+            found = None
+        _vk_devices.append(found)
+    return _vk_devices[0]
+
+
+def api_tuple(text):
+    """(1, 2, 203) from '1.2.203'; None when it is not a version."""
+    m = re.fullmatch(r"\s*(\d+)\.(\d+)(?:\.(\d+))?\s*", str(text or ""))
+    return tuple(int(x or 0) for x in m.groups()) if m else None
+
+
+def game_vulkan_device(devices, vendor: str, index: int = -1):
+    """The device the game's Vulkan renderer takes: the one at vulkan_device when set, else the chosen
+    vendor's (--gpu_vendor), discrete before integrated; without a vendor, any discrete one first."""
+    devices = [d for d in devices or [] if isinstance(d, dict)]
+    if 0 <= index < len(devices):
+        return devices[index]
+    if vendor in SDK_VENDORS:
+        devices = [d for d in devices if vendor_from_pci_id(d.get("vendor_id", 0)) == vendor]
+    rank = {VK_DISCRETE: 0, VK_INTEGRATED: 1}
+    return min(devices, key=lambda d: rank.get(d.get("type"), 2), default=None)
+
+
+def old_intel_vulkan(devices, vendor: str, index: int = -1):
+    """The game's Vulkan device when it is an Intel integrated GPU whose driver reports a Vulkan API below
+    1.3, else None (also when the version is not known)."""
+    d = game_vulkan_device(devices, vendor, index)
+    if d is None or d.get("vendor_id") != PCI_INTEL or d.get("type") != VK_INTEGRATED:
+        return None
+    api = api_tuple(d.get("api"))
+    return d if api is not None and api[:2] < INTEL_VULKAN_MIN else None
+
+
+def old_intel_vulkan_text(device, windows=None) -> str:
+    """What the player reads on Setup, Play and next to Graphics API."""
+    windows = IS_WINDOWS if windows is None else windows
+    name = device.get("name") or "Your Intel graphics"
+    api = ".".join(str(x) for x in (api_tuple(device.get("api")) or ())) or device.get("api", "")
+    text = (f"The Intel graphics driver is too old for the game's Vulkan renderer: {name} reports Vulkan {api}, "
+            "and the game needs 1.3 (on 1.2 it closes before the title screen or runs at about 1 fps). ")
+    if windows:
+        return text + ("Update the Intel graphics driver from intel.com, or use Direct3D 12 "
+                       "(Settings > Display > Graphics API).")
+    return text + ("Update Mesa: install your distribution's updates (with the Flatpak launcher, run "
+                   "flatpak update).")
+
+
 # --- what is known per vendor ----------------------------------------------------------------
 @dataclass
 class Known:
@@ -268,18 +370,21 @@ _FSR = {"present_effect": "fsr", "resolution_scale": 1, "async_shader_compilatio
         "store_shaders": True}
 # The Steam Deck's settings (#140, docs/steam_deck.md), also what specs.py offers on one. The command
 # processor of the GPU emulation sets its frame rate (docs/perf.md): the one-pass scene takes about a fifth
-# of its work away, and 540p saves only GPU time. Shadow and texture detail stay the game's own (their cost
-# is within the noise on a fast PC, docs/graphics-detail.md; not measured on a Deck). Its 16:10 screen shows
+# of its work away, and 540p saves only GPU time. Shadow, texture and car detail stay the game's own (their cost
+# is within the noise on a fast PC, docs/graphics-detail.md; not measured on a Deck), and so does paint job
+# detail (its cost is memory per car, which the Deck's shared 16 GB has least of). Its 16:10 screen shows
 # the 16:9 picture pixel for pixel between two bars.
 DECK_SETTINGS = {"frame_rate": 30, "resolution_scale": 1, "present_effect": "fsr", "scene_msaa": "off",
-                 "world_shadow_detail": "console", "world_texture_detail": "console", "scene_resolution": "720",
+                 "world_shadow_detail": "console", "world_texture_detail": "console", "world_car_detail": "console",
+                 "livery_bake_scale": 1, "scene_resolution": "720",
                  "present_letterbox": True}
 
 PRESETS = {
     NVIDIA: Preset(
         "NVIDIA",
-        {**_FSR, "frame_rate": 60, "gpu_backend": "vulkan"},
-        "Vulkan, render scale 1 to 2 with AMD FSR 1, 60 fps, background shader compilation on.",
+        {**_FSR, "frame_rate": 60, "gpu_backend": "vulkan", "vulkan_store_pipeline_cache": False},
+        "Vulkan, render scale 1 to 2 with AMD FSR 1, 60 fps, background shader compilation on; the driver "
+        "keeps compiled pipelines in its own cache.",
         [Known("gpu_backend", lambda v: v == "d3d12",
                "Direct3D 12 flickers on NVIDIA and turns reflections on glass and paint green.", 46,
                "flickers on NVIDIA, #46", "d3d12"),
@@ -289,7 +394,10 @@ PRESETS = {
          Known("async_shader_compilation", lambda v: not v,
                "Vulkan stutters on NVIDIA while shaders compile; keep background compilation on.", 49),
          Known("store_shaders", lambda v: not v,
-               "Without the shader cache every start stutters again (worse on NVIDIA, Vulkan).", 49)],
+               "Without the shader cache every start stutters again (worse on NVIDIA, Vulkan).", 49),
+         Known("vulkan_store_pipeline_cache", lambda v: bool(v),
+               "NVIDIA's driver never reuses the pipelines kept here (it has its own cache): the file grows to "
+               "512 MB, takes that much RAM while playing and slows every start.", 640)],
         [("Vulkan can still stutter with a warm shader cache; play a session so the cache fills.", 49)]),
     AMD: Preset(
         "AMD",
@@ -304,7 +412,10 @@ PRESETS = {
                "Integrated Intel graphics are slow at render scale 2 and above (not measured).", 0),
          Known("gpu_backend", lambda v: v == "d3d12",
                "Direct3D 12 takes a different render target path on Intel and was never tested.", 0,
-               "untested on Intel", "d3d12")],
+               "untested on Intel", "d3d12"),
+         Known("gpu_backend", lambda v: v == "regpu",
+               "ReGPU (experimental) was never tested on Intel graphics; with an old Intel driver Direct3D 12 "
+               "is the advice.", 0, "untested on Intel", "regpu")],
         [("Nobody has reported a run on Intel graphics yet; please say how it goes (GitHub issues).", 0)]),
     DECK: Preset(
         "Steam Deck",

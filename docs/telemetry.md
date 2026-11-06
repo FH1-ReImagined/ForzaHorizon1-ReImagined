@@ -63,8 +63,37 @@ diagram selector changes the reference only. Zero resistance disables that
 trigger; overall intensity scales both. Xbox and DualShock 4 have no adaptive
 triggers. Body rumble, lightbar and player LEDs are not claimed by this writer.
 
-Effects default off. Background workers handle HID and UDP I/O. Effects switch on above a raw trigger value of 12 and off below 4, and follow the
-trigger in steps of 8, so a trigger held half way does not flicker. Effects release
+Effects default off. Background workers handle HID and UDP I/O. The effects follow the
+car's telemetry, never the trigger's position (`haptics/feel.py`, #692): an effect set from
+where the trigger is pushes the trigger and moves the next effect, which bounced a half-held
+trigger (#224), and #696's single fixed profile stopped that and every reaction to driving.
+Each trigger gets an effect picked from the FH1T v2 physics and the controller runs it by
+itself, resistance as a ten-zone profile (mode 0x21), pulses and buzz as its vibration mode
+(0x26, the frequency in parameter 8); the first tenth of travel stays free, so nothing is felt
+until the trigger is pressed.
+
+| Situation | Brake L2 | Throttle R2 |
+| --- | --- | --- |
+| ABS working (moving) | pulses at 14 Hz, 80% of the strength | - |
+| A wheel locked, no ABS | judder at 24 Hz, 50-100% | - |
+| Braking (the car slows by over 2 m/s²) | resistance 30-100%, growing to 10 m/s² | - |
+| Wheelspin (slip beyond peak grip) | - | buzz 30-80 Hz, 40-100% with the spin |
+| Rough ground (vertical shaking) | buzz at 45 Hz, 25-50% | the same |
+| Impact (over 30 m/s² and 4 m/s lost) | jolt at 35 Hz for 250 ms, 100% | the same |
+| Near the rev limiter (93% of redline) | - | light wall in the last zones, 60% |
+| Otherwise | light pedal weight, 30% | free |
+| Menus, pause, no telemetry, a pressed trigger the car ignores | off | off |
+
+The percentages are of the trigger's strength (0-8) times the overall intensity. Rough ground
+is the RMS of the car's high-passed vertical acceleration from its height on the game's clock,
+skipping samples that repeat a position or come off the usual gap (the packet's derived
+acceleration spikes to 40 m/s² on a hitch); it starts at 3 + 0.06 x speed m/s². A pressed
+trigger (raw over 64) while the game's processed brake and throttle both stay at zero for three
+frames is a menu over a running world (the online pause menu), and releases both triggers at
+once. A new effect is sent only when its target moves past a threshold (another effect, 0.75
+zone of force, one step of amplitude or 5 Hz) and at most every 50 ms; an unchanged request is
+never written again (#696). Without the physics fields (a v1 game) the brake keeps only the
+light pedal weight. Effects release
 after 350 ms without valid active telemetry, when disabled, on game stop/exit
 and before launcher shutdown. Each game process gets a fresh nonce, so old
 packets cannot reactivate effects. USB/Bluetooth coexistence with SDL, Steam
@@ -119,7 +148,11 @@ Validity bits: position/forward 1, fresh raw input 2, derived velocity 4,
 derived acceleration 8. Active requires a local car, a physics substep and
 player-one input read within 250 ms, and a non-zero rumble
 request from the game within 3 s: the car stays in the vehicle list in menus, but the
-game only rumbles while it runs (#224). Sequence comparison accepts u32 wrap and
+game only rumbles while it runs (#224). With the physics bridge (v2) the game's own
+simulation state decides as well (`driving_gate.h` `TriggerGate`): no pause, rewind, replay
+or menu. An online world does not pause, so the rumble check stays: a game that has rumbled
+must have rumbled within 3 s (#692). Each change is logged as `Telemetry: trigger effects
+on/off (reason)`. Sequence comparison accepts u32 wrap and
 rejects duplicates/reordered packets. The receiver checks length, version,
 token, fields and finite floats. Its watchdog uses receive time, without
 comparing clock epochs across processes. This is local IPC, not an authenticated
@@ -218,3 +251,31 @@ vibration gating and the 150 ms expiry. It passed locally on Windows. Native
 modified game sources also compile for both base and TU4; the TU4 host and the
 modified runtime link. Physical trigger feel, transport compatibility and Linux
 remain to be tested.
+
+## Measuring the trigger effects
+
+`tools/virtual_dualsense.py` makes a virtual DualSense over `/dev/uhid` (no hardware): a
+`/dev/hidrawN` with a DualSense's reports, which records and decodes every output report
+written to it (valid flags, motors, each trigger's mode, zones, force or amplitude and
+frequency) and sends input reports with any L2/R2 position. Its default test identity
+(pid.codes 1209:0001, vendor usage page) makes no joystick, so Steam Input, remappers and
+desktop games never see it; `--identity sony` gives it Sony's VID/PID and real descriptor for
+machines without those (hid-playstation then binds it as a pad).
+
+`tools/trigger_harness.py` runs the launcher's own `HapticsService` and HID writer, from any
+launcher folder, in its own process, with the writer pointed at one virtual pad's node only:
+
+    tools/trigger_harness.py live --launcher main=OLD/launcher --launcher new=launcher \
+        --bus bt --log run.jsonl --env-file tele.env   # then start the game with tele.env
+    tools/trigger_harness.py replay run.jsonl --launcher new=launcher --log replay.jsonl
+    tools/trigger_harness.py replay run.jsonl --pedal-scale .5 ...   # half the trigger travel
+    tools/trigger_harness.py compare replay.jsonl replay-half.jsonl
+    tools/trigger_harness.py report replay.jsonl --markers markers.txt --svg timeline.svg \
+        --svg-force force.svg
+
+`live` records the game's packets and forwards each to every service, so several launcher
+versions see the same drive; `replay` sends a recording again at its pace; `synthetic` writes a
+scripted drive. `report` gives the writes and changes a second, the effect in each situation,
+force against brake input with and without ABS, and the time from a `pause` marker (START
+pressed) to both triggers off. `tools/test_trigger_harness.py` checks the decoder and, where
+`/dev/uhid` is writable, a replay through the real service at full and half trigger travel.

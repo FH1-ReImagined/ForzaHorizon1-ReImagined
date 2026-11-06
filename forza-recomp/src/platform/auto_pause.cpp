@@ -62,6 +62,7 @@ struct WindowObserver::Impl final : rex::ui::WindowListener {
 };
 WindowObserver::WindowObserver(rex::ui::Window* window) : impl_(std::make_unique<Impl>(window)) {}
 WindowObserver::~WindowObserver() = default;
+void WindowObserver::Detach() { impl_->Detach(); }
 void World(uint32_t address) { world.store(address, std::memory_order_release); }
 bool Poll(uint8_t* base, uint16_t buttons, uint32_t user_mask) {
   using Sequence = uint32_t (*)(uint32_t);

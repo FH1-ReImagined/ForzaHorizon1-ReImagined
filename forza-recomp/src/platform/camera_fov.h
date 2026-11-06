@@ -29,6 +29,14 @@ inline bool LiveCameraWorld(const uint8_t* world) {
   const float scale = ReadFloat(world + 0x28);
   return std::isfinite(scale) && scale > 0.0f;
 }
+// The base FOV holds in any loaded world, also paused (the pause menu shows the frozen camera)
+// and rewinding (time scale below zero): those are still the player's driving cameras, and the
+// stock FOV there made every pause and rewind jump to the default view (#646). Cameras other
+// than the five driving ones (photo mode, menus) get no offset from AdjustedFov anyway.
+inline bool LoadedCameraWorld(const uint8_t* world) {
+  if (!world || !world[0x0D]) return false;
+  return std::isfinite(ReadFloat(world + 0x28));
+}
 
 enum class Kind { kOther, kChaseNear, kChaseFar, kCockpit, kHood, kBumper, kBlend };
 struct Settings {

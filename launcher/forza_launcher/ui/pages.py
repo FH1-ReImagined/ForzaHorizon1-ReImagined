@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QTimer, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QPixmap
-from PySide6.QtWidgets import (QCheckBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+from PySide6.QtWidgets import (QCheckBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
                                QPlainTextEdit, QProgressBar, QPushButton, QScrollArea,
                                QTabBar, QStackedWidget, QVBoxLayout, QWidget)
 
@@ -14,6 +14,7 @@ from .. import (GITHUB_URL, PRIVACY_URL, PUBLIC_SERVER, __version__, build_env, 
                installer, paths, pins, shader_prebuild, vr)
 from ..config import Config
 from . import theme, workers
+from .challenges_card import ChallengesCard
 from .widgets import Disclosure, Hero, SpinBox, StatusRow, card, label
 
 
@@ -46,6 +47,51 @@ def human_time(seconds):
     return f"{m // 60} h {m % 60} min" if m >= 60 else f"{m} min"
 
 
+class IntelDriverNotice(QFrame):
+    """Setup and Play: the Intel iGPU's Vulkan driver is below 1.3 (#672). On Windows "Use Direct3D 12"
+    switches the Graphics API, as the Settings banner's "Use recommended" does; nothing changes by itself."""
+
+    def __init__(self, cfg: Config, window):
+        super().__init__()
+        self.cfg, self.window = cfg, window
+        self.setObjectName("intelDriverNotice")
+        self.setStyleSheet(f"#intelDriverNotice {{ border: 1px solid {theme.ORANGE}; border-radius: 8px; }}")
+        row = QHBoxLayout(self)
+        row.setContentsMargins(16, 10, 16, 10)
+        row.setSpacing(12)
+        self.text = label("", "")
+        self.text.setTextFormat(Qt.PlainText)
+        row.addWidget(self.text, 1)
+        self.use_d3d12 = QPushButton("Use Direct3D 12")
+        self.use_d3d12.clicked.connect(self.apply)
+        row.addWidget(self.use_d3d12, 0, Qt.AlignVCenter)
+        self.hide()
+
+    def refresh(self):
+        text = self.cfg.intel_vulkan_warning()
+        self.text.setText(text)
+        self.use_d3d12.setVisible(bool(self.cfg.intel_vulkan_fix()))
+        self.setVisible(bool(text))
+
+    def apply(self):
+        fix = self.cfg.intel_vulkan_fix()
+        if not fix:
+            return self.refresh()
+        from .. import schema
+        self.cfg.settings.update(fix)
+        settings = getattr(self.window, "settings", None)
+        if settings is not None:
+            settings.apply_external({k: v for k, v in fix.items() if k in schema.BY_KEY})   # shows it there
+            settings.flush()
+        else:
+            try:
+                self.cfg.save()
+            except OSError as e:
+                self.window.status(f"Could not save launcher settings: {e}", True)
+        self.window.refresh_intel_driver_notices()
+        self.window.status("Graphics API: Direct3D 12 (Settings > Display)", False)
+
+
 # ================================================================== Play ==================
 
 class PlayPage(QWidget):
@@ -59,10 +105,18 @@ class PlayPage(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         sc, lay = scroll_page("Play", "")
+        # The banner's height follows the page's width (Hero.heightForWidth). With the page's
+        # content close to the window's height, a scroll bar that comes and goes changes that
+        # width, so the height, so whether the bar is needed: Qt's scroll area then recursed until
+        # the stack ran out (a crash on Windows with the Challenges card's height). A bar that is
+        # always there keeps the width the same.
+        sc.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
         outer.addWidget(sc)
         # the title is part of the banner; hide the text title on this page
         lay.itemAt(0).widget().hide()
         lay.addWidget(Hero())
+        self.intel_driver = IntelDriverNotice(cfg, window)
+        lay.addWidget(self.intel_driver)
         self.warn = label("", "warn")
         self.warn.hide()
         lay.addWidget(self.warn)
@@ -146,6 +200,8 @@ class PlayPage(QWidget):
         self.shader_progress.hide()
         lay.addWidget(self.shader_progress)
         lay.addWidget(c)
+        self.challenges = ChallengesCard(cfg)   # daily and weekly challenges (forza-live #1)
+        lay.addWidget(self.challenges)
         self.install_details = Disclosure("Installation details")
         self.install_paths = label("", "help")
         self.install_paths.setTextFormat(Qt.PlainText)
@@ -177,6 +233,7 @@ class PlayPage(QWidget):
             self._clock_probe.result.connect(self._clock_result)
             self._clock_probe.start()
         cfg = self.cfg
+        self.intel_driver.refresh()
         root = cfg.game_files()
         if (root / "default.xex").is_file():
             files_ok, files_msg = installer.check_game_folder(root)
@@ -215,6 +272,7 @@ class PlayPage(QWidget):
         if mode == "public":
             details.append(f"Online server: {PUBLIC_SERVER}")
         self.install_paths.setText("\n".join(details))
+        self.challenges.refresh()
         ready = files_ok and install is not None
         save_page = getattr(self.window, 'saves', None)
         if self.window._crash_probe is not None:
@@ -380,6 +438,8 @@ class SetupPage(QWidget):
         outer.addWidget(label("Setup", "pageTitle"))
         outer.addWidget(label("Build the game from your own copy of Forza Horizon. "
                               "No game code or data is included with the launcher.", "pageLead"))
+        self.intel_driver = IntelDriverNotice(cfg, window)
+        outer.addWidget(self.intel_driver)
         self.tabs = QTabBar()
         self.tabs.setExpanding(False)
         self.tabs.setDrawBase(False)
@@ -629,6 +689,7 @@ class SetupPage(QWidget):
 
     def refresh(self):
         cfg = self.cfg
+        self.intel_driver.refresh()
         self.refresh_folder()
         root = cfg.game_files()
         have = (root / "default.xex").is_file()

@@ -101,7 +101,8 @@ Related tables:
   2-byte id. 13 distinct masks occur.
 - Rewards come from `WristbandScoring` (points per wristband level and place: level 0 gives
   100/90/.../30, level 6 gives 250/210/.../70), `EventScoring` (credits per place),
-  `Rewards_EventPrizes` (a car for 17 events), `Rewards_Wristband` and `Rewards_EventUnlock`.
+  `Rewards_EventPrizes` (a car for 17 events, all of them showcases and Nemesis races: see
+  "Prize cars"), `Rewards_Wristband` and `Rewards_EventUnlock`.
 - Wristband levels are thresholds on career XP (`CareerWristbandLevels`: 0, 220, 750, 1450,
   2500, 4100, 6400).
 
@@ -211,10 +212,9 @@ So the first scope is the 70 festival races.
 - **The pick.** The host has to choose the event. A WORLD chat command (`forza_live/social/chat.py`
   already relays the world channel), such as `/event FR05` or a short list from `/events`,
   is a server-only first version. It sends the existing `WORLD_EVENT` path with
-  `&event=<id>`. The in-world version, a prompt at the event's start marker like the
-  head-to-head challenge's, needs the activities' world positions. The `TriggerZone`s name
-  world objects (`FR05`), so the positions would have to be logged once from the single-player
-  activity manager.
+  `&event=<id>`. The in-world version turned out simpler than a prompt of our own: the
+  game's own event markers can be loaded into the online world, and their map card starts the
+  event (see "Milestone 4: events from the map").
 
 ## How the career records a result
 
@@ -336,8 +336,10 @@ the event as done is the first thing to run (open questions).
   Base and TU4 games are kept apart by the server (`#TU4` room), so a co-op world is always
   one version.
 - **Saves:** the career tables and profile fields are the same. TU4 converts a save one way
-  (`VersionFlags`), so the launcher's grant has to work on both. Its codecs already do: the
-  key tables are read from both executables.
+  (`VersionFlags`), so the launcher's grant has to work on both. The key tables are read from
+  the installed executable, and a base profile is signed with another HMAC key than a TU4 one
+  (the 32 bytes before the table, not its second half): the launcher read only TU4 profiles
+  until the acceptance run of 2026-11-04 found it (see "The two-game acceptance test").
 
 ## Risks
 
@@ -459,12 +461,13 @@ About 8-12 days.
 
 - **M2, guests too:** each launcher applies the result if the event is unlocked in that save.
   Street races if the traffic test passes. The prize car through the Message Center or the
-  launcher (`garage.py` already adds stock cars). Done, except the prize car, and street races
-  stay off: see "Milestone 2".
-- **M3:** the base game (its addresses), then the in-game grant (option B) for instant credit;
-  the prize car (see "What milestone 3 needs").
+  launcher (`garage.py` already adds stock cars). Done, and street races stay off: see
+  "Milestone 2". No festival race has a prize car, so there is none to grant: see "Prize cars".
+- **M3:** the base game, then the in-game grant (option B) for instant credit (see "What
+  milestone 3 needs" and "The base game").
 - **M4:** the event prompt at its world marker instead of the chat command; the named CPU
-  field if `AIFieldId` or a hook makes it possible.
+  field if `AIFieldId` or a hook makes it possible. The start from the map is done (TU4): see
+  "Milestone 4: events from the map".
 
 ## Milestone 1 progress
 
@@ -859,15 +862,15 @@ a campaign round names none. In `launcher/test_coop_grant.py`:
 
 ### What milestone 3 needs
 
-- **The base game:** the client's CPU skill hook at the base addresses (`sub_82568BD8` and the
-  world event op 2 path; the table under "Evidence"). The server and launcher parts serve both
-  builds unchanged.
+- **The base game:** a two-game run. The client's CPU skill hook is already written against the
+  base addresses (`sub_82568BD8` and the world event op 2 path) and mapped to TU4's; the server
+  and launcher parts serve both builds unchanged (see "The base game").
 - **The in-game grant (option B):** instant credit, and for players who start the game outside
   the launcher (their results wait, unapplied, today). It can read the same ledger and keep its
   rules (own results only, the host's write, improvement only, no wristband level).
-- **The prize car** (`Rewards_EventPrizes`, 17 events) and any other multiplayer reward or
-  unlock: left out here because Sean's draft PR #231 changes the multiplayer rewards and
-  unlocks. M3 should build on it once it lands, not beside it.
+- **The prize car** (`Rewards_EventPrizes`, 17 events): none of them is a festival race, so a
+  co-op round never earns one (see "Prize cars"). Other multiplayer rewards and unlocks are
+  Sean's draft PR #231's area.
 - **Results that wait:** an in-game note when a co-op result waits (today only the launcher's
   Play page says so), and a way for a player to drop one.
 - **Before `/event`:** whether every player has a car for the event (FR63 above). Done
@@ -1075,6 +1078,299 @@ A smaller first step would write only the result and the event's unlocks in game
 game's own SQL on the `Profile0_*` tables (the query function `src/hooks/database_query.cpp`
 wraps). XP and credits would stay with the launcher. That needs a ledger flag: otherwise the
 launcher finds the place already stored and pays no XP or credits.
+
+## Milestone 2, continued (2026-11-03): prize cars, the base game, the acceptance test
+
+Done from the code, the game's data and scratch save copies, without running the game. The
+guests' careers (milestone 2 above) are unchanged: their tests pass on main (server 52, launcher
+26 co-op tests), and the acceptance test below runs them again with today's server and launcher.
+
+### Prize cars
+
+**No event a co-op round can run has a prize car, so the grant has none to give.** The game
+has three ways to give a car after a career race, and none of them applies to a festival race:
+
+- **`Rewards_EventPrizes`** (17 rows, the same in the disc's and TU4's `gamedb.slt`): every one
+  is a showcase (style 3: the exhibitions and the races against a plane) or a Nemesis race
+  (style 5: NEM_TEST, NR02-NR06, NEM_FINAL). No festival race (style 1) and no street race
+  (style 2) has one. The payout component's post-race step (TU4 `sub_826C84D8`, base
+  `sub_82620A70`) asks for the event's car (`sub_82535298`, base `sub_824C7270`: `SELECT
+  RewardCarId, RewardCarUpgradeClass FROM Rewards_EventPrizes WHERE EventId=%d`) when the player
+  finished 1st (1st or 2nd for event 101, the first plane race), and keeps it (its `+344` car,
+  `+348` upgrade class) only when the save had no result for the event or a place below that
+  (`sub_82522108`). So a prize car is a first win's. The festival flow then shows it
+  (`ShouldShowRewardCarSequence`, `CIsPendingCarReward`: vtable `0x82092340`, slot 9
+  `sub_829D05C8`, a pending car unless the manager's `+308` is -1). A real career save shows
+  what the game writes: a Gold wristband TU4 career save has ten of the 17 cars (not the others), each a
+  `Career_Garage` row with `Flags` 2, its owner's gamertag as `OriginalOwner` and one owner, and
+  no other car with `Flags` 2, with 65 of its 70 festival events won.
+- **The career car tombola** (`ShouldShowCarTombolaScreen` -> `CIsCareerCarTombolaEvent`: vtable
+  `0x8202D3CC`, slot 9 `sub_8264C338`, base `sub_825C20C8`): only after a street race
+  (`SELECT CareerEventStyle FROM Events WHERE Id=%d` must give 2, `sub_82534CB0`), with a flag of
+  the race settings (`*(0x833CAACC)+969`) set, and only when the event is the last of its hub's
+  list (`sub_8264BB68`: the hub's events ordered by `UnlockPointsReq, CashPrize, TargetClass,
+  Id`). The car is drawn at random (`CCareerEventPrizeCarTombola`).
+  Co-op street races give no career result (traffic, above), and a random draw is not something
+  the launcher could repeat as the game would.
+- **The wristband's reward**: Race Central gives it with the wristband (`CTriggerWristbandUpgrade`),
+  which the grant leaves to the game. (No string of either build names `Rewards_Wristband`.)
+
+The online flow's own car draw (`show_car_tombola`, `Rewards_DriverLevelv3`) is the online
+driver level's, which the online race already runs. So milestone 2's grant stays as it is. A
+result for a showcase or a Nemesis race never reaches a save (`launcher/test_coop_grant.py`
+tests both), and the server's `/event` offers neither. Should a later milestone run them online,
+the grant would add the car as the game does: on a first win (as above), a stock `Career_Garage`
+row with `Flags` 2 upgraded to `RewardCarUpgradeClass`, through `garage.py`'s stock car builder.
+
+### The race completion's unlocks
+
+The grant writes the event's own unlocks and leaves the unlocks by XP to the game (milestone 1).
+Read again for this milestone, with both builds' code:
+
+- **The event's own unlocks** (`Rewards_EventUnlock`, `sub_8253B988`, base `sub_824CD7D0`): the
+  race completion trigger (TU4 `sub_82A35AC8`, base `sub_82989B40`) gives them when the stored
+  place is within the event style's place to pass (`sub_825112D8`, a tunable per style), and for
+  a street race also when the XP reaches its own threshold. Its rows are the Headline race's (it
+  unlocks NEM_FINAL), the rally championships' and one for an event the database doesn't have.
+  **No festival race has one**, so for the events co-op runs today this step writes nothing.
+- **The unlocks by XP** (`sub_82546080`, base `sub_824D7A10`): `SELECT Id, CareerEventStyle, HubId
+  FROM Events WHERE (UnlockPointsReq <= XP AND UnlockPointsReq > 0) AND (CareerEventStyle=5, 2, 6
+  or 1) AND Level <= wristband level`, then per style:
+  - a street race only when its hub is unlocked (`CareerHubUnlocks`) and either the hub is 1 or
+    the world's `eventhub001` activity has its flag set (`sub_82535C68`, in-world state);
+  - a Nemesis race only when the save has no result for it within a place held in memory
+    (`*(0x833CFE24+8)`, a tunable);
+  - the Headline race and the festival races at their XP;
+  - then the hubs by XP (`sub_82542D30`, base `sub_824D4610`).
+  Each unlock also starts a notice (the radio or a phone message) and updates the world's event
+  markers. Two of the conditions are in the running game's memory only, and the save's wristband
+  level, which only Race Central raises, holds back every Nemesis race and festival level. So the
+  launcher can't run this rule exactly; the game runs it after the player's next career race,
+  with its notices. The festival races it unlocks are six of levels 0 and 1 (FR01 and FR05 at 30
+  XP; FR03, FR06, FR08 and FR10 at 430): only a career in its first hour has them still locked.
+
+### The base game
+
+**Nothing in the game or server part of the co-op path is TU4 only.** The base pair of the
+acceptance run (2026-11-04) raced and got its results like the TU4 one; only the launcher had to
+learn the base game's profile key (below).
+
+| Part | Base game |
+| --- | --- |
+| The Co-op Festival in Find Game | listed: both builds send the HELLO features `0x5F` (`src/kernel/net.cpp`), which include the Co-op Festival's `0x08`. Base and TU4 games sign in to different rooms (`#TU4`), so a co-op world is always one build |
+| Friends-only placement, `/event`, the round's XML | server only, the same for both. The round's XML has no TU4-only element (TU4's `MultiStageSeriesOptions` is left out and defaults); the base `GameOptionPresets.xml` has the same `<Overrides>` with `ForceOnlyRentalCars="1"`, which the round replaces with 0, and the base image knows the attribute. The disc's 9 rental cars are the same (TU4 adds 9 more) |
+| CPU drivers and the event's skill | `src/hooks/world_events.cpp` is written against the base build's addresses (the online game `0x83305CC4`, the AI lookup `sub_82568BD8`, the round's hooks) and mapped to TU4's by `src/tu4_addresses.h`; its field offsets have both builds' values (`FORZA_TU4 ? ... : ...`). The Horizon World's CPU drivers were built on the base build first |
+| Places and online winnings | the server reads them from `XSessionWriteStats` and `WriteRaceStatsEx`, the same records in both builds (#12's four-human places were the base game's) |
+| The launcher's grant | the same `Career_*` tables and `Main/*` values, the disc's `gamedb.slt` for both (its 119 events are TU4's), the keys from the installed `default.xex`. A base profile (`VersionFlags` 0) has the same AES key as a TU4 one but its HMAC key comes from the 32 bytes before the key table; the launcher knew only the TU4 key, so every base save failed its integrity check, fixed in `save_editor._keys` |
+
+What a base run had to show, all of it seen in the acceptance run (step 8): the Co-op Festival
+listed, the round's lobby with the event's cars, the log line `WORLD: campaign event ... CPU
+driver(s) at the event's skill`, a loaner where a save has no car that fits, both places in the
+ledger, and the grant decoded from the base saves (after the launcher fix).
+
+**For the in-game grant (option B), the base addresses** (found with `tools/tu_address_map.py`
+and checked by the strings and calls each one makes):
+
+| What | TU4 | Base |
+| --- | --- | --- |
+| Payout component post-race (the prize car, the event-101 rule) | `sub_826C84D8` | `sub_82620A70` |
+| Prize car of an event (`Rewards_EventPrizes`) | `sub_82535298` | `sub_824C7270` |
+| Post-race payout | `sub_826C0C00` | `sub_82619798` |
+| Payout component constructor | `sub_826C67D0` | `sub_8261F0B8` |
+| Career race's component set | `sub_826AC9D0` | `sub_82606AA0` |
+| Online race's component set | `sub_826AF3C0` | `sub_82608B70` |
+| Components by race type | `sub_826B7068` | `sub_82610448` |
+| Race completion unlocks | `sub_82A35AC8` | `sub_82989B40` |
+| The event's own unlocks (`Rewards_EventUnlock`) | `sub_8253B988` | `sub_824CD7D0` |
+| Unlocks by XP | `sub_82546080` | `sub_824D7A10` |
+| XP / wristband tracker setup | `sub_824BEF10` | `sub_8248EFC8` |
+| Career car tombola check (street races) | `sub_8264C338`, `sub_8264BB68` | `sub_825C20C8`, `sub_825C15D8` |
+| An event's `CareerEventStyle` | `sub_82534CB0` | `sub_824C6BD8` |
+| `CIsPendingCarReward` | `sub_829D05C8` | `sub_8291D5F8` |
+| Race settings (event id `+0x388`) | `0x833CAACC` | `0x832DF00C` |
+
+The career writer, the career component's post-race step (`+0x28` in the base game), the
+current event id and the online game object are in the "Evidence" table.
+
+### The two-game acceptance test (run 2026-11-04)
+
+For the guests' careers on today's server and launcher (signed requests #515, relays #516 and
+the servers page came after milestone 2's run), the loaner, and a base pair. Never on a real
+save: copies of a test career save, a TU4 one and a base one.
+
+**Set-up.** Two games as in phase A: DriverA (the host) and DriverB (the guest), each with its own
+data folder, Forza Live identity and copy of the save, friends with each other, against a local
+server from `server/` started with the game's database (`--game-db`). Each game is started from
+the launcher (or its session recorded with `coop_grant.record_session` and the grant run with
+`coop_grant.after_session` once the game is closed, as milestones 1 and 2 did). The
+TU4 test save used so far (a Gold wristband career) has FR69 (level 6, R3), FR63 (S class,
+Audi), FR60, FR68 and FR59 unlocked and not raced.
+Before and after each session, for both saves:
+
+    tools/career_state.py SAVE --game GAME --xuid XUID --event FR69 --event FR63
+
+(SAVE: the `00000001` folder; XUID: the profile's, which the save's keys are bound to.)
+
+**Steps and what to check:**
+
+1. **Both race, each place in the ledger.** A and B pick Co-op Festival (B is placed into A's
+   world), A types `/event FR69` in World chat. Check: the lobby has the event's class and six CPU
+   drivers in R3 cars, both race to the end, the server logs `round ... (FR69) closed with 2
+   result(s)` with both places, and every call is verified (no unverified-call line).
+2. **Each save gets its own result.** Close both games. Each launcher's Play page says "Co-op
+   results: FR69 at place N (was not raced): +X XP, +Y CR ...". `career_state.py` after: FR69 at
+   that player's own place, its race too; `Main/XP` up by the event's points at that place (level
+   6: 80 at 7th, 70 at 8th, as in milestone 2); `Main/Credits` up by the prize
+   less what the race paid online (`Main/OnlineWinnings` before and after, the note names it);
+   `Main/WristbandLevel` unchanged; `CareerEventUnlocks` and `Career_Garage` unchanged by the grant,
+   no new `prize_cars` (the session itself adds a car at each online level-up: the online driver
+   level's reward, `Flags` 264, its owner the gamertag). Each save has one new backup, "Before co-op results". `GET /coop/results` has
+   nothing left for either player.
+3. **A worse place changes nothing.** `/event FR69` again, both finish lower or equal: both
+   grants return "applied 0, unchanged 1" (the Play page shows no co-op note for an unchanged
+   result), the saves' state is the same as after step 2, and no backup is added.
+4. **The loaner.** `/event FR63` (no S-class Audi in the test save): both games lend a car
+   (an Audi R8 GT), both race, both get a result; their garages (`Career_Garage`) are unchanged.
+5. **In the game.** Start each game from its granted save: the credits shown match
+   `career_state.py`, the map's FR69 card shows the points left (250 less the points earned),
+   and a single-player race afterwards runs normally and saves.
+6. **Optional, the locked wait.** On B's copy remove FR59 from `CareerEventUnlocks` before the
+   session (the launcher's codecs: `garage.decode` / `encode`), race `/event FR59`: B's note says
+   it waits, `GET /coop/results` keeps it for B, and it is applied at B's first session after the
+   unlock is put back.
+7. **Optional, no festival prize car.** In single player, win an unraced festival event (FR68):
+   no reward car sequence, and `prize_cars` unchanged.
+8. **The base game.** Steps 1, 2 and 4 with two base builds and base saves. Also check in A's log
+   `WORLD: campaign event 233 (...): 6 CPU driver(s) at the event's skill ...`.
+
+**The run (2026-11-04).** Main at `bf75fbd` (server `74affee`), the TU4 and base builds of that
+commit, a local server with `--game-db`, each game on its own headless gamescope (960x540, 30 fps),
+`tools/autodrive.py` at the wheel. The TU4 pair: two copies of the golden TU4 career save (630,931
+CR, XP 11,230, Gold wristband), B's with FR59 removed from `CareerEventUnlocks`; the base pair: two
+copies of the Xenia career save the golden save was converted from (`VersionFlags` 0, the same
+career). The grants ran as `window.py` runs them at a session's end (`record_session`, then
+`after_session` against the local server with each player's identity). Three TU4 sessions (FR69 and
+FR59; FR69 again; FR63), one base session (FR69 and FR63), then a single-player session on each
+build.
+
+| Step | Result |
+| --- | --- |
+| 1. Both race | Pass. B was placed into A's world (friends); `/event FR69` gave CO-OP FESTIVAL POINT-TO-POINT RACE, Red Rock Descent 6.61 km, DriverA, DriverB and six CPU drivers in R3 cars (Saleen S7, LP700-4, McLaren F1 GT). Both games logged `WORLD: campaign event 233 (round start): 6 CPU driver(s) at the event's skill 48 temperament 6`. Ledger: `round 91e56b8e2bc25e26 (FR69) closed with 2 result(s); DriverA place 8/8; DriverB place 4/8`, the host's write `relative score 4` for B and `0` for A. No unverified call. A's car stuck at a hairpin at 4% (autodrive), so A's 8th is a race not driven to the end: the game reports it "finished 1" when the race timer ends (phase A), and it counts |
+| 2. Each save its own result | Pass. A: "FR69 at place 8 (was not raced): +70 XP, +1,475 CR (the prize less the 625 CR the online race paid)" and "FR59 at place 7: +80 XP, +0 CR (the prize less the 5,000 CR ...)"; XP 11,230 -> 11,380, credits 636,556 -> 638,031, FR69 and race 169 at 8, FR59 at 7. B: "FR69 at place 4: +120 XP, +1,500 CR (the prize less the 9,500 CR ...)"; XP 11,230 -> 11,350, credits 645,431 -> 646,931, FR69 at 4. Both: `WristbandLevel` 6, `CareerEventUnlocks` and `Career_Garage` unchanged by the grant, `prize_cars` the same ten, one backup "Before co-op results"; `GET /coop/results`: nothing for A, B's locked FR59 only |
+| 3. Worse or equal place | Pass. A 8th (not driven) and B 4th again (`round 8ae1d18b7ea17ae1`): both grants "applied 0, unchanged 1", no note, no backup added, `career_state.py` identical before and after the grant |
+| 4. The loaner | Pass. `/event FR63`: "DriverA starts FR63: S class, Audi, 7 CPU drivers, 1 lap, Sunset"; both games and all six CPU drivers in Audi R8 GTs (S 648); A 7th, B 8th; grants +80 XP and +70 XP (+0 CR, the online race paid more than the prize). No R8 GT in either garage afterwards |
+| 5. In the game | Pass. The multiplayer lobby showed 638,031 CR (A) and 646,931 CR (B) after step 2, the `career_state.py` values. A in single player: the map's FR69 card "Advan Asphalt Attack R3 180 PTS" (250 less the 70 earned at 8th); GoPro Millennia Masters raced to the end (8th), and the save after it had `Main/NumRaces` 90 -> 91 and credits 643,031 -> 647,656 |
+| 6. The locked wait | Pass. B's FR59 (8th): "FR59 (8th in DriverA's world) waits: this career has not unlocked FR59 yet ... until 04 Dec 2026", kept by the server through B's second session; after FR59 was put back, B's third grant: "FR59 at place 8 (was not raced): +70 XP, +0 CR (the prize less the 5,000 CR the online race paid)", with the winnings bracket of B's next race (`[9500, 14500]`) |
+| 7. No festival prize car | Not run: the test driver trails the CPU drivers and does not win. `prize_cars` stayed the same ten through every session and grant above |
+| 8. The base game | Pass after a launcher fix. The base pair: Co-op Festival listed, B placed into A's world, FR69 with six CPU drivers in R3 cars and the log line above in A's log, `round e3594d3b2aa8926b (FR69) closed with 2 result(s); DriverA place 7/8; DriverB place 8/8`; FR63 with R8 GT loaners for both (`round 8e582ae1028dfe3c`: A 7th, B 8th). **The grant failed at first:** `career_state.py` and the launcher refused both base saves ("The profile integrity check failed"), and so would the grant, the profile editor and the design import. The garage decoded; the profile did not. A base profile is signed with another HMAC key: the AES key is the TU4 one, the HMAC key comes from the 32 bytes before the key table instead of its second half (found by trying the table's neighbourhood against the base save's MAC; the bytes are the same in the disc and TU4 images). With the fix (`save_editor._keys` offers both pairs, an edit keeps the pair the save decoded with): A "+80 XP ... +0 CR" for each event, XP 11,230 -> 11,390; B +70 each, 11,230 -> 11,370; `VersionFlags` still 0. The base game loaded A's granted save: 648,431 CR and the FR69 card "170 PTS" (250 less 80 at 7th) |
+
+Seen along the way:
+
+- **A race not driven to the end still counts.** A's car never left the first hairpin (4%), and
+  the race timer's end gave it 8th "finished 1", which the ledger, the host's write and the grant
+  all took: +70 XP and the prize less what the race paid. Last place is the least an event gives,
+  so this was left as it is; what a career race gives a player who stops was not measured.
+- **Online level-ups add a car each** (the online driver level's reward, `Rewards_DriverLevelv3`,
+  `Career_Garage` `Flags` 264): six cars in the four co-op sessions. Their rewards land in
+  `Main/OnlineWinnings` too, so a round with a level-up pays a smaller prize (milestone 3).
+
+## Milestone 4: events from the map (2026-11-04)
+
+**The host of a Co-op Festival world starts an event from the map, as a single-player career
+picks one: the event's marker, its card (X DETAILS), then SELECT "START CO-OP EVENT".** It
+sends the server the same as typing `/event <id>` in World chat, so the round is the same:
+the event's class, restrictions, grid and CPU drivers at the event's skill, and the ledger's
+results. `/event` keeps working. Title Update 4 only (the card's hooks are TU4's, like Custom
+Race's); a base game world keeps `/event`.
+
+### How the map starts an event offline, and what an online world had
+
+- **The markers are activities.** Every festival event is an
+  `ActivityCareerEventActivation` of `career_event_activations.xml` (vtable `0x8200C104`, the
+  event id at `+404`). The career creates the activities of the events the save has unlocked
+  (88 in the test save), and each puts a marker on the map and the minimap
+  (`CMapEntityActivity`, vtable `0x82024460`, its activity at `+0x28`). The map shows
+  SET ROUTE (A), DETAILS (X), FAST TRAVEL ANYWHERE (Y, locked in the test save) on a marker.
+- **The card.** DETAILS opens `ForzaUI::CCareerEventDescription`, the same card the event's
+  start shows. On the map it has no career entry (`+376` is 0): its A sets a route, and its
+  footer reads SET ROUTE, BACK, RESTRICTIONS, LEADERBOARD. The event id is the race settings'
+  current event (`*(0x833CAACC)+0x388`), set by the map. **Offline the map never starts an
+  event:** the race starts at its sign-up zone (the `TriggerZone`, radius 25: SIGN ME UP, the
+  same card with its career entry, whose A runs `CLoadIntoCareerRace`).
+- **An online world had no markers.** The free roam loads its activity files by race type
+  (`sub_826A0AC0`, file ids of the resource table at `0x833930C8`). Race type 17, the
+  single-player free roam, loads ids 146-168. Type 18, the online free roam, leaves out 151
+  (paintshop), 156 (race activations), 160 (race encounters), 162 (multiplayer), 164
+  (career event activations), 166 (DLC center) and 168 (street race hubs). A census of the
+  map's markers found 853 records of career event markers in single player and none in a
+  Co-op Festival world.
+
+### What the client does (`forza-recomp/src/hooks/coop_map_event.cpp`)
+
+1. **The markers.** In a Co-op Festival world (Find Game's playlist 20, the round's free
+   roam), the hook on `sub_826A0AC0` also loads file 164 (`sub_8296EDD0(loader, 164)`) after
+   the others. The career creates the same activities as in single player.
+2. **Their info.** A career marker reads its event's entry in the career's event map info: a
+   component (`*(sub_8269B4F8())[*(0x833EDC58)]`) whose map at `+0xC034` is filled by
+   `sub_827445A0`'s SQL, with the markers themselves (96 bytes each from `+16`, their count at
+   `+0xC018`). Nothing fills it online. Without it, two things crashed in the test runs:
+   - the career activity's map filter (`sub_82505098`, vtable slot 25) read a missing
+     entry in the free roam's first seconds;
+   - the map's card under the cursor (`sub_828B6998`) read the marker's own copy (`+0x40`,
+     null) as soon as the cursor reached an event.
+   `sub_825CB940`, which `CTriggerEventUnlocks` runs after a career race, fills the map and
+   copies each marker's entry. The hook runs it before the file is loaded. It runs again once
+   the markers exist (they are made a frame or more later): the hook on `sub_825CB068` (the
+   map's test whether a marker shows) runs it when a career marker has no entry, once per
+   count of markers. With both, the map and the minimap show the events as in single player:
+   the won ones with a trophy, the new ones NEW, with name, class and prize under the cursor.
+3. **The card.** `custom_race.cpp`'s hooks on the card (bind `sub_82733A68`, input
+   `sub_82738948`, destructor `sub_82727530`) ask `coop_map_event.cpp` first. On a map card in
+   a Co-op Festival free roam it adds SELECT "START CO-OP EVENT" to the footer (slot 13, the
+   Custom Race slot; Custom Race is offline only). The map clears the card's footer after the
+   bind to add its own prompts, so the hook on `sub_8289A908` (a footer's clear) puts the
+   prompt back. SELECT sends the World chat command `/event <id>` (`LiveChatCommand`,
+   `live_friends.cpp`: World chat's SAY, not shown in the Chat tab). The server's notices
+   are shown as usual.
+4. **On a guest's console** the card offers the same prompt. The server refuses the command
+   from anyone but the world's host, and the guest gets the notice "Only the world's host
+   (DriverA) can start an event". The guest's map and minimap show its own career's events,
+   since each console loads them from its own save.
+5. **The sign-up zone.** Online the zone at an event's start shows SIGN ME UP too, but its X
+   does nothing there: driven to FR17 "Oakley Heat Wave" and stopped in the zone,
+   X opened no card. So no single-player race can be loaded out of the online world. Should a
+   sign-up card (with its career entry) open in a Co-op Festival free roam anyway, its A starts
+   the co-op event and its X (Rivals, a single-player time trial) does nothing (not seen: no
+   such card opened).
+
+The world's free roam ends into the event's lobby while the host is still on the map's card
+(`world_events.cpp` takes the event from the free roam's update, which runs under the map).
+Cvar `coop_map_events` (on) turns it all off; `FORZA_COOP_MAP_TRACE=1` logs the refreshes and
+every card.
+
+The server needs no change. Its Co-op Festival description in Find Game now names the map:
+"Its host starts festival events for everyone in it: an event's Details on the map, then
+SELECT, or /event FR05 in World chat."
+
+### The two-game check (2026-11-04)
+
+A TU4 build of this branch, the local server from `server/` with `--game-db`, DriverA (host)
+and DriverB (guest) on copies of the golden TU4 save, each on its own headless gamescope,
+`tools/autodrive.py` at the wheel.
+
+| Step | Result |
+| --- | --- |
+| The markers online | Both games logged `COOP MAP: the festival's events are on the map` on entering the world, and the refresh found 393 markers. The map showed the career's events as in single player (a trophy on the won ones, NEW on the new ones); under the cursor: "Chevron Sixties Speedway, A, 15,000 Cr" |
+| The card | X DETAILS opened the festival card (FR50, MUST BE 1960 - 1969, BEST FINISH 1ST) with SELECT START CO-OP EVENT next to SET ROUTE, BACK, RESTRICTIONS, LEADERBOARD; the card's event id read 231 (FR50) |
+| A guest's SELECT | B's card sent `/event 231`; B was told "Only the world's host (DriverA) can start an event" (the HUD notice) and nothing started |
+| The host's SELECT | A's card sent `/event 231`: "DriverA starts FR50: A class, 1960-1969, 7 CPU drivers, 1 lap, Dawn" on both, `next round is campaign event 231 (FR50), 2 human(s), AI Medium (skill 40, temperament 6)`, the free roam ended from under the map's card. Lobby on both: CO-OP FESTIVAL POINT-TO-POINT RACE, Main Stage Run 4.31 km, DriverA and DriverB and six CPU drivers in Ford GT40s (A 582) |
+| Both race | A finished 4th (driven to the end); B's car stuck at 15% and the race timer gave it 8th "finished 1" (as in the acceptance run). The host's write: relative scores 4 (A) and 0 (B). Ledger: `round 0e9171f81203a1c9 (FR50) closed with 2 result(s); DriverB place 8/8; DriverA place 4/8`; `GET /coop/results` offered each player its own result |
+| The grants | Both launcher grants (record_session, then after_session): "applied 0, unchanged 1" (FR50 is won at 1st in the test save), confirmed; the server had nothing left for either |
+| Back in the world | The markers loaded again in the world's next free roam (393), the card offered the start again, and `/event FR17` typed in World chat still started an event |
+
+Not done: the base game (the card's hooks are TU4 only, like Custom Race's; a base world
+keeps `/event`), a prompt at the event's start zone that starts the co-op event (its X does
+nothing online), and a check of the guest's garage against the event before the start.
 
 ## Open questions (measure first)
 

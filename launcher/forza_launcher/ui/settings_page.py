@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFileDialog,
                                QMessageBox, QPushButton, QRadioButton, QScrollArea, QSlider, QStackedWidget,
                                QToolTip, QVBoxLayout, QWidget)
 
-from .. import PUBLIC_SERVER, display, dlss, fsr3, game, gamertag, gpu, power, schema, specs, vr
+from .. import PUBLIC_SERVER, display, dlss, fsr3, game, gamertag, gpu, power, regpu, schema, specs, vr
 from ..config import Config, render_toml, validate_extras
 from . import theme
 from .settings_search import SettingsSearch
@@ -567,6 +567,7 @@ class SettingsPage(QWidget):
             self._vr_status_block(lay)
         if g == "Online":
             self._online_block(lay)
+            self._web_account_block(lay)
         if g == "Profile":
             self._profile_block(lay)
         self._rows(lay, g)
@@ -736,8 +737,15 @@ class SettingsPage(QWidget):
             # The 3x allocation belongs to the native UI; these modes render
             # the scene at 2x, so the ordinary 3x-scene warning does not apply.
             warning_settings["resolution_scale"] = 2
+        # Direct3D 12 is the advice there (#672): its "untested on Intel" note goes; ReGPU's stays.
+        old_intel = (self.cfg.old_intel_vulkan() is not None and
+                     warning_settings.get("gpu_backend", "vulkan") != regpu.CHOICE)
         for key, text, issue in gpu.warnings(vendor, warning_settings):
-            found.setdefault(key, []).append(text + gpu.issue_text(issue))
+            if not (old_intel and key == "gpu_backend"):
+                found.setdefault(key, []).append(text + gpu.issue_text(issue))
+        driver = self.cfg.intel_vulkan_warning()
+        if driver:
+            found.setdefault("gpu_backend", []).append(driver)
         vendor_keys = set(found)    # the vendor's own warning on a setting says it already
         for w in specs.warnings(self.cfg.pc_specs(), warning_settings):
             if w.key and w.key not in vendor_keys:
@@ -856,6 +864,18 @@ class SettingsPage(QWidget):
         self.search.add("Custom server address", "Online", "Server", self.custom,
                         keywords="host port custom_server")
 
+    def _web_account_block(self, lay):
+        """Settings > Online > Website account (ui/web_account.py), for the public server only:
+        the website's accounts check keys the public server knows."""
+        from .web_account import WebAccountCard
+        content = section_card(lay, "Website account")
+        self.web_account_frame = content.parentWidget()
+        self.web_account = WebAccountCard(self.cfg, self)
+        content.addWidget(self.web_account)
+        self._show_web_account(self.cfg.online["mode"])
+        self.search.add("Link to website account", "Online", "Website account", self.web_account.link_button,
+                        keywords="forza.dyotson.dev website account Discord GitHub link unlink sign out")
+
     def sync_server(self):
         """Show the server the Servers page picked (#587)."""
         mode = self.cfg.online["mode"]
@@ -864,10 +884,17 @@ class SettingsPage(QWidget):
         if mode in self.radios and not self.radios[mode].isChecked():
             self.radios[mode].setChecked(True)
         self.custom.setEnabled(mode == "custom")
+        self._show_web_account(mode)
+
+    def _show_web_account(self, mode):
+        frame = getattr(self, "web_account_frame", None)  # built after the server radios
+        if frame is not None:
+            frame.setVisible(mode == "public")
 
     def _set_mode(self, mode):
         self.cfg.online["mode"] = mode
         self.custom.setEnabled(mode == "custom")
+        self._show_web_account(mode)
         self.touched()
 
     def _custom_changed(self):

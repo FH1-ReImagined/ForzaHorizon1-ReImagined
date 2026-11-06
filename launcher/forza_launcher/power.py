@@ -5,7 +5,7 @@ Settings > Display > Frame rate > Battery saver: Off (the default), On, or Auto 
 does not divide, stay) and render scale 1 with AMD FSR 1 and the scene in one pass without MSAA
 (scene_msaa off): AMD FSR 3 becomes FSR 1, SMAA and the temporal anti-aliasing become the game's
 own, and the render thread sleeps while it waits for the GPU (gpu_wait_blocking, already the
-default on Linux). The player's own settings stay in launcher.json and come back at the next start on
+default). The player's own settings stay in launcher.json and come back at the next start on
 mains power. The power source is read once, when the game starts, from
 /sys/class/power_supply; a controller's or a mouse's battery (scope Device) does not count.
 No Qt in here (test_power.py).

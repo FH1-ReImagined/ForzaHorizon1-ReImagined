@@ -291,6 +291,7 @@ class LaunchPlan:
     haptics_settings: dict = field(default_factory=dict)
     save_profile: object = None
     log_before_start: tuple | None = None  # identify a leftover log if this process never writes one
+    roll_before_start: tuple | None = None  # the same for its roll (forza.1.log, session_roll)
 
     def command_line(self) -> str:
         return " ".join(shlex.quote(a) for a in self.argv)
@@ -324,6 +325,7 @@ def content_warnings(cfg: Config, game: GameInstall, home: Path, root: Path, ext
     error, #79), or a known DLC package there that is damaged or incomplete (dlccheck: the Rally pack's
     bad copy crashes Kettle Hills stage 1, #422)."""
     from . import datafolder, dlccheck
+    from .fm4cars import PACKAGE as FM4_CARS  # Import FM4 cars' own package is not DLC (#648)
     out = []
     if cfg["tu_package"].strip() and not extra_update and not (game.dir / "update").is_dir():
         out.append(f"Title Update 4 is chosen in Setup, but this build has none ({game.dir / 'update'} is "
@@ -331,8 +333,8 @@ def content_warnings(cfg: Config, game: GameInstall, home: Path, root: Path, ext
                    "Rebuild.")
     if not check_dlc:
         return out
-    seen = datafolder.dlc_packages(root)
-    installed = datafolder.dlc_packages(home)
+    seen = datafolder.dlc_packages(root) - {FM4_CARS}
+    installed = datafolder.dlc_packages(home) - {FM4_CARS}
     if not seen and (installed or cfg["dlc_dir"].strip()):
         where = f"{root / datafolder.DLC_DIR / '00000002'}"
         out.append(f"No DLC in the game's folder ({where})" +
@@ -529,10 +531,13 @@ def _build_plan(cfg: Config, game: GameInstall, write, refresh_xenia, log, saver
     home = cfg.data_home()
     data = cfg.game_files()
     toml_path = game.dir / "forza.toml"
+    # (cfg.d["settings"] is this start's copy, build_plan: launcher.json keeps the player's choice)
+    from . import regpu
+    regpu_note = regpu.fall_back(cfg.d["settings"], game.dir)
     toml_text = write_toml(cfg, toml_path) if write else render_toml(cfg)
 
     args = [f"--game_data_root={data}"]
-    notes = []
+    notes = [regpu_note] if regpu_note else []
     env, unset = {}, []
     env["FORZA_GRAPHICS_SETTINGS"] = str(home / ingame.FILENAME)
 
@@ -668,6 +673,77 @@ def log_path_of(plan: "LaunchPlan"):
     return None
 
 
+def rolled_log_path(log: Path) -> Path:
+    """Where the game moves its log when it reaches its size limit (the SDK's log_file_max_mb,
+    50 MB): forza.log rolls over to forza.1.log and a new forza.log starts; one roll is kept."""
+    return log.with_name(f"{log.stem}.1{log.suffix}")
+
+
+def previous_log_path(log: Path) -> Path:
+    """The last session's log, kept while the next session writes forza.log (#609)."""
+    return log.with_name(f"{log.stem}.previous{log.suffix}")
+
+
+def rotate_log(log, note=print) -> bool:
+    """Before the game starts: one session per file (#609). forza.log becomes forza.previous.log
+    and its roll forza.1.log forza.previous.1.log, replacing the copies of the session before, so
+    the new session starts an empty forza.log. On Windows a log that an older game still has open
+    cannot be moved: it stays, the new session appends to it as before, and `note` says so.
+    True when there is no old log in the way."""
+    if log is None:
+        return True
+    log = Path(log)
+    previous, roll = previous_log_path(log), rolled_log_path(log)
+    previous_roll = rolled_log_path(previous)
+    if not log.exists():
+        return True
+    try:
+        os.replace(log, previous)
+    except OSError as exc:
+        note(f"Kept {log.name} ({exc.strerror or exc}): another game may still be writing it; "
+             f"this session is added to its end.")
+        return False
+    try:
+        if roll.exists():
+            os.replace(roll, previous_roll)
+        elif previous_roll.exists():
+            previous_roll.unlink()  # from an older session: it does not belong to the new copy
+    except OSError as exc:
+        note(f"Could not move {roll.name} aside: {exc.strerror or exc}")
+    return True
+
+
+def _file_signature(path):
+    try:
+        st = path.stat() if path is not None else None
+        return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns) if st else None
+    except OSError:
+        return None
+
+
+def _roll_signature(plan):
+    log = log_path_of(plan)
+    return _file_signature(rolled_log_path(log)) if log is not None else None
+
+
+def session_roll(plan):
+    """This session's forza.1.log (it reached the size limit) or None: one left by an older session
+    is not this one's."""
+    log = log_path_of(plan)
+    if log is None:
+        return None
+    now = _roll_signature(plan)
+    return rolled_log_path(log) if now is not None and now != getattr(plan, "roll_before_start", None) else None
+
+
+def prepare_log(plan, note=print):
+    """Before a game process starts: move the last session's log aside, then remember what is left
+    (log_is_current, session_roll)."""
+    rotate_log(log_path_of(plan), note)
+    plan.log_before_start = log_signature(plan)
+    plan.roll_before_start = _roll_signature(plan)
+
+
 # Log lines at error level that the game writes in normal play (missing sound banks, audio frames the
 # decoder does not like, XAM/XLIVEBASE calls the runtime has no answer for): never the reason a game
 # stopped, so "Last errors" skips them (#98).
@@ -696,12 +772,7 @@ def _log_tail(plan: "LaunchPlan", lines=200):
 
 
 def log_signature(plan):
-    log = log_path_of(plan)
-    try:
-        st = log.stat() if log is not None else None
-        return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns) if st else None
-    except OSError:
-        return None
+    return _file_signature(log_path_of(plan))
 
 
 def log_is_current(plan):
@@ -953,7 +1024,7 @@ class Session:
     def _start_game(self, extra):
         plan = self.plan
         self._acquire_save_lease()
-        plan.log_before_start = log_signature(plan)
+        prepare_log(plan, lambda text: (self.log(text), paths.log_error(text)))
         from .shader_warmup import Monitor
         self.shader_warmup = Monitor(log_path_of(plan))
         env = cleanenv.clean_environment()

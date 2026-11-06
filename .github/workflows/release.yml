@@ -28,6 +28,16 @@ concurrency:
 permissions:
   contents: read
 
+# Code signing of the Windows launcher, uninstaller and installer through SignPath Foundation (#354; the
+# "Code signing policy" in README.md). Off until the repository variable SIGNPATH_ORGANIZATION_ID is set,
+# with the secret SIGNPATH_API_TOKEN (and SIGNPATH_PROJECT_SLUG if the project is not called
+# ForzaHorizon1-ReImagined there), and never on pull requests: the release is then built unsigned, as before.
+# A tag uses the release-signing policy (a maintainer approves each request in SignPath, while the job waits);
+# a run by hand uses test-signing (SignPath's untrusted test certificate, no approval) to try the pipeline.
+env:
+  SIGN: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' && github.event_name != 'pull_request' }}
+  SIGN_MODE: ${{ github.ref_type == 'tag' && 'release' || 'test' }}
+
 jobs:
   launcher-tests:
     runs-on: ${{ matrix.os }}
@@ -40,7 +50,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: true   # server/: the Forza Live server (FH1-ReImagined/forza-live)
+          submodules: true   # server/: the Forza Live server (FH1-ReImagined/forza-live); forza-recomp/thirdparty/ReGPU (FH1-ReImagined/ReGPU)
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -69,6 +79,10 @@ jobs:
         run: python tools/test_dpi_manifest.py -v
       - name: Livery codec tests
         run: python -m unittest discover -s tools -p 'test_livery_codec.py' -v
+      - name: Trigger effect decoder tests (the virtual DualSense parts skip without /dev/uhid, #692)
+        run: python -m unittest discover -s tools -p 'test_trigger_harness.py' -v
+      - name: FM4 car converter tests (synthetic models, no game files, #648)
+        run: python -m unittest discover -s tools -p 'test_fm4_cars.py' -v
       - name: Resource hook audit tests (synthetic images)
         run: python -m unittest discover -s tools -p 'test_resource_data_hooks.py' -v
       - name: Thumbnail and photo sync renewal contracts (no game)
@@ -132,6 +146,11 @@ jobs:
           g++ -std=c++20 -O2 -pthread -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/driving_gate_test.cpp -o "$RUNNER_TEMP/driving-gate-test"
           "$RUNNER_TEMP/driving-gate-test"
       - if: runner.os == 'Linux'
+        name: Readback wait range owners
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/readback_wait_test.cpp -o "$RUNNER_TEMP/readback-wait-test"
+          "$RUNNER_TEMP/readback-wait-test"
+      - if: runner.os == 'Linux'
         name: The frame after a stopped game
         run: |
           g++ -std=c++20 -O2 -pthread -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/resume_gap_test.cpp -o "$RUNNER_TEMP/resume-gap-test"
@@ -146,6 +165,11 @@ jobs:
         run: |
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/car_view_test.cpp -o "$RUNNER_TEMP/car-view-test"
           "$RUNNER_TEMP/car-view-test"
+      - if: runner.os == 'Linux'
+        name: Club garage cars named from the game's car list
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/club_garage_test.cpp -o "$RUNNER_TEMP/club-garage-test"
+          "$RUNNER_TEMP/club-garage-test"
       - if: runner.os == 'Linux'
         name: Title service request header and its nonblocking stream
         run: |
@@ -176,6 +200,16 @@ jobs:
         run: |
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/world_detail_test.cpp -o "$RUNNER_TEMP/world-detail-test"
           "$RUNNER_TEMP/world-detail-test"
+      - if: runner.os == 'Linux'
+        name: Car detail levels
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/car_detail_test.cpp -o "$RUNNER_TEMP/car-detail-test"
+          "$RUNNER_TEMP/car-detail-test"
+      - if: runner.os == 'Linux'
+        name: Livery bake sizes
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/livery_bake_test.cpp -o "$RUNNER_TEMP/livery-bake-test"
+          "$RUNNER_TEMP/livery-bake-test"
       - if: runner.os == 'Linux'
         name: Shadow softness levels
         run: |
@@ -239,7 +273,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: rexglue-overlay-linux-amd64.tar.gz
-          key: sdk-overlay-linux-${{ hashFiles('tools/tests/auto-pause/**','forza-recomp/tests/auto_pause*','forza-recomp/src/platform/auto_pause*','forza-recomp/src/hooks/telemetry.cpp','forza-recomp/src/platform/camera_fov.h','forza-recomp/src/platform/driving_gate.h','forza-recomp/src/platform/guest_*.h','forza-recomp/src/platform/sdk_import.*','forza-recomp/src/platform/xr.h','forza-recomp/src/tu4_addresses.h','tools/test_presenter_reconnect.cpp', 'tools/build_rexglue_sdk.sh', 'tools/test_readback_history.cpp', 'tools/test_frame_cost.cpp', 'tools/test_world_ao.cpp', 'tools/test_vr_stereo.cpp', 'tools/test_texture_pack_dds.cpp', 'tools/test_shader_load_memo.cpp', 'tools/test_pipeline_lookahead.cpp', 'forza-recomp/tests/wheel_ff_log_test.cpp', 'forza-recomp/tests/wheel_ff_reject_test.cpp', 'forza-recomp/tests/wheel_thrustmaster_test.cpp', 'forza-recomp/tests/wheel_rumble_test.cpp', 'forza-recomp/tests/wheel_rumble_pace_test.cpp', 'forza-recomp/tests/wheel_ff_test.cpp', 'forza-recomp/tests/wheel_devices_test.cpp', 'forza-recomp/tests/wheel_buttons_test.cpp', 'forza-recomp/tests/wheel_shifter_test.cpp', 'forza-recomp/tests/wheel_min_force_test.cpp', 'forza-recomp/tests/wheel_gear_request_test.cpp', 'forza-recomp/tests/wheel_handbrake_test.cpp', 'forza-recomp/tests/wheel_primary_test.cpp', 'tools/test_wait_wakeups.cpp', 'tools/test_driver_pipeline_cache.cpp', 'tools/test_pipeline_store.cpp', 'tools/test_fh1_screen_raster.cpp', 'tools/test_render_target_trim.cpp', 'tools/test_vulkan_memory_placement.cpp', 'tools/test_submission_watch.cpp', 'tools/test_gamepad_remap.cpp', 'tools/test_pipeline_prebuild.cpp', 'tools/test_vfs_host_errors.cpp', 'tools/test_xma_invalid_input.cpp', 'launcher/packaging/ci_linux_sdk_setup.sh', 'launcher/packaging/ci_toolchain_debs.txt', 'launcher/forza_launcher/pins.py') }}
+          key: sdk-overlay-linux-${{ hashFiles('tools/tests/auto-pause/**','forza-recomp/tests/auto_pause*','forza-recomp/src/platform/auto_pause*','forza-recomp/src/hooks/telemetry.cpp','forza-recomp/src/platform/camera_fov.h','forza-recomp/src/platform/driving_gate.h','forza-recomp/src/platform/guest_*.h','forza-recomp/src/platform/sdk_import.*','forza-recomp/src/platform/xr.h','forza-recomp/src/tu4_addresses.h','tools/test_presenter_reconnect.cpp', 'tools/build_rexglue_sdk.sh', 'tools/test_readback_history.cpp', 'tools/test_frame_cost.cpp', 'tools/test_world_ao.cpp', 'tools/test_vr_stereo.cpp', 'tools/test_texture_pack_dds.cpp', 'tools/test_shader_load_memo.cpp', 'tools/test_pipeline_lookahead.cpp', 'forza-recomp/tests/wheel_ff_log_test.cpp', 'forza-recomp/tests/wheel_ff_reject_test.cpp', 'forza-recomp/tests/wheel_thrustmaster_test.cpp', 'forza-recomp/tests/wheel_rumble_test.cpp', 'forza-recomp/tests/wheel_rumble_pace_test.cpp', 'forza-recomp/tests/wheel_ff_test.cpp', 'forza-recomp/tests/wheel_devices_test.cpp', 'forza-recomp/tests/wheel_buttons_test.cpp', 'forza-recomp/tests/wheel_shifter_test.cpp', 'forza-recomp/tests/wheel_min_force_test.cpp', 'forza-recomp/tests/wheel_gear_request_test.cpp', 'forza-recomp/tests/wheel_handbrake_test.cpp', 'forza-recomp/tests/wheel_primary_test.cpp', 'tools/test_wait_wakeups.cpp', 'tools/test_driver_pipeline_cache.cpp', 'tools/test_pipeline_store.cpp', 'tools/test_fh1_screen_raster.cpp', 'tools/test_render_target_trim.cpp', 'tools/test_vulkan_memory_placement.cpp', 'tools/test_submission_watch.cpp', 'tools/test_device_lost_trail.cpp', 'tools/test_gamepad_remap.cpp', 'tools/test_pipeline_prebuild.cpp', 'tools/test_vfs_host_errors.cpp', 'tools/test_xma_invalid_input.cpp', 'launcher/packaging/ci_linux_sdk_setup.sh', 'launcher/packaging/ci_toolchain_debs.txt', 'launcher/forza_launcher/pins.py') }}
       - if: steps.cache.outputs.cache-hit != 'true'
         name: Build dependencies, LLVM, CMake and the pinned SDK nightly
         run: |
@@ -271,6 +305,9 @@ jobs:
           clang++ -std=c++17 -I"$HOME/rexglue-sdk-src-forza/sdk/src/graphics/vulkan" \
             tools/test_submission_watch.cpp -o "$RUNNER_TEMP/submission-watch-test"
           "$RUNNER_TEMP/submission-watch-test"
+          clang++ -std=c++17 -Wall -Wextra -Werror -I"$HOME/rexglue-sdk-src-forza/sdk/src/graphics/vulkan" \
+            tools/test_device_lost_trail.cpp -o "$RUNNER_TEMP/device-lost-trail-test"
+          "$RUNNER_TEMP/device-lost-trail-test"
           clang++ -std=c++17 -Wall -Wextra -Werror -I"$HOME/rexglue-sdk-src-forza/sdk/src/graphics/vulkan" \
             tools/test_shader_load_memo.cpp -o "$RUNNER_TEMP/shader-load-memo-test"
           "$RUNNER_TEMP/shader-load-memo-test"
@@ -508,7 +545,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: true   # server/: the Forza Live server (FH1-ReImagined/forza-live)
+          submodules: true   # server/: the Forza Live server (FH1-ReImagined/forza-live); forza-recomp/thirdparty/ReGPU (FH1-ReImagined/ReGPU)
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -548,10 +585,13 @@ jobs:
   launcher-windows:
     needs: sdk-windows
     runs-on: windows-2022
+    permissions:
+      contents: read
+      actions: read   # the SignPath action reads this run's jobs and downloads the artifacts to sign
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: true   # server/: the Forza Live server (FH1-ReImagined/forza-live)
+          submodules: true   # server/: the Forza Live server (FH1-ReImagined/forza-live); forza-recomp/thirdparty/ReGPU (FH1-ReImagined/ReGPU)
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -601,14 +641,6 @@ jobs:
           if (-not $info.CompanyName -or -not $info.FileDescription -or $info.OriginalFilename -ne 'forza-launcher.exe' -or $info.ProductVersion -ne $env:VERSION -or $info.FileVersion -ne $numeric) {
             throw 'forza-launcher.exe has no (or the wrong) version resource'
           }
-      # TODO(code signing, #482, #354): sign launcher/dist/forza-launcher/forza-launcher.exe here, before the
-      # smoke test and the Package step copy it, so the payload manifest below hashes the signed file. Needs a
-      # code-signing certificate (SignPath Foundation or Certum, still to be chosen) and its secrets, for
-      # example:
-      #   - name: Sign the launcher
-      #     shell: pwsh
-      #     run: <signtool sign /fd SHA256 /tr <timestamp server> /td SHA256 ...> launcher/dist/forza-launcher/forza-launcher.exe
-      # then the signature is verified: (Get-AuthenticodeSignature <file>).Status -eq 'Valid'.
       - name: Smoke test the packaged window
         shell: bash
         run: python launcher/packaging/smoke_gui.py launcher/dist/forza-launcher/forza-launcher.exe
@@ -618,6 +650,62 @@ jobs:
           python launcher/packaging/make_package.py --platform windows \
             --pyinstaller-dist launcher/dist/forza-launcher \
             --overlay overlay/rexglue-overlay-windows-amd64.tar.gz --out out --version "$VERSION"
+      # Code signing, part 1 (#354; off unless SIGN, see env above): the staged forza-launcher.exe and Inno
+      # Setup's uninstaller, in one SignPath request. The uninstaller is also what Setup's temporary self-copies
+      # run, and only Inno Setup can embed its signature: build_installer.ps1 -PrepareUninstaller has it write
+      # the unsigned file and stop. The signed launcher replaces the staged one before the Installer step
+      # writes the payload manifest, so the manifest and the installer hold the signed file.
+      - name: Files to sign (the launcher and the uninstaller)
+        if: env.SIGN == 'true'
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; }
+          New-Item -ItemType Directory -Force -Path to-sign | Out-Null
+          Copy-Item -LiteralPath out/ForzaHorizon1-ReImagined/forza-launcher.exe -Destination to-sign/
+          $uninstaller = launcher/packaging/build_installer.ps1 -PrepareUninstaller -Version $env:VERSION `
+            -Stage out/ForzaHorizon1-ReImagined -Out installer -SignedUninstallerDir signed-uninstaller
+          Copy-Item -LiteralPath $uninstaller -Destination to-sign/
+          Get-ChildItem to-sign | Format-Table Name, Length
+      - name: Upload the launcher and the uninstaller to sign
+        if: env.SIGN == 'true'
+        id: unsigned-binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-windows-binaries   # unsigned-*: never published (the publish job drops them)
+          path: to-sign/
+          if-no-files-found: error
+          retention-days: 1
+      - name: Sign the launcher and the uninstaller (SignPath)
+        if: env.SIGN == 'true'
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'ForzaHorizon1-ReImagined' }}
+          signing-policy-slug: ${{ env.SIGN_MODE }}-signing
+          artifact-configuration-slug: binaries   # launcher/packaging/signpath/binaries.xml
+          github-artifact-id: ${{ steps.unsigned-binaries.outputs.artifact-id }}
+          parameters: |
+            version: "${{ env.VERSION }}"
+          wait-for-completion: true
+          # release-signing waits for a maintainer's approval in SignPath
+          wait-for-completion-timeout-in-seconds: 7200
+          output-artifact-directory: signed-binaries
+      - name: Put the signed launcher and uninstaller in place
+        if: env.SIGN == 'true'
+        shell: pwsh
+        run: |
+          $launcher = 'signed-binaries/forza-launcher.exe'
+          $uninstaller = @(Get-ChildItem signed-binaries -Filter 'uninst-*.e*' -File)
+          if (-not (Test-Path -LiteralPath $launcher) -or $uninstaller.Count -ne 1) { throw 'SignPath did not return forza-launcher.exe and one uninst-*.e32' }
+          launcher/packaging/verify_signature.ps1 -Mode $env:SIGN_MODE $launcher $uninstaller[0].FullName
+          if ($LASTEXITCODE -ne 0) { throw 'The signed launcher or uninstaller failed the signature check' }
+          Copy-Item -LiteralPath $launcher -Destination out/ForzaHorizon1-ReImagined/forza-launcher.exe -Force
+          Copy-Item -LiteralPath $uninstaller[0].FullName -Destination signed-uninstaller/ -Force
+          # The signed launcher still starts: PyInstaller finds its archive behind the signature.
+          $v = (& out/ForzaHorizon1-ReImagined/forza-launcher.exe --version | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $v -ne $env:VERSION) { throw "The signed launcher's --version printed '$v' (exit code $LASTEXITCODE)" }
       - name: Installer (Inno Setup, with the Visual C++ 2015-2022 x64 redistributable)
         shell: pwsh
         run: |
@@ -636,15 +724,45 @@ jobs:
           # outside the installer so a quarantined file can still be identified.
           python launcher/packaging/windows_build_manifest.py out/ForzaHorizon1-ReImagined --version "$env:VERSION" --commit "$env:GITHUB_SHA" --run-url "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
           if ($LASTEXITCODE -ne 0) { throw 'Could not generate the Windows payload manifest' }
-          # The installer's own version resource needs a four-part number (installer.iss: VersionNumeric).
-          $numeric = (python launcher/packaging/windows_version_info.py "$env:VERSION").Trim()
-          if ($LASTEXITCODE -ne 0) { throw 'Could not compute the numeric version' }
-          & $iscc "/DAppVersion=$env:VERSION" "/DVersionNumeric=$numeric" "/DStage=$PWD\out\ForzaHorizon1-ReImagined" "/DRedist=$PWD\vc_redist.x64.exe" "/DOut=$PWD\installer" launcher\packaging\installer.iss
-          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup failed' }
+          # Signed: compile with the signed uninstaller of "Put the signed launcher and uninstaller in place".
+          $signed = @{}
+          if ($env:SIGN -eq 'true') { $signed.SignedUninstallerDir = 'signed-uninstaller' }
+          launcher/packaging/build_installer.ps1 -Version $env:VERSION -Stage out/ForzaHorizon1-ReImagined `
+            -Redist vc_redist.x64.exe -Out installer @signed
           Copy-Item -LiteralPath out/ForzaHorizon1-ReImagined/windows-build-manifest.json -Destination "installer/ForzaHorizon1-ReImagined-windows-files-$env:VERSION.json"
-      # TODO(code signing, #482, #354): sign installer/*.exe here (the Setup program), the same way as the
-      # launcher above, before it is uploaded. Inno Setup can also sign the installer and its uninstaller while
-      # compiling (a SignTool entry in [Setup] plus iscc /S...), which also covers unins000.exe.
+      # Code signing, part 2 (#354): the installer, which now holds the signed launcher and uninstaller.
+      - name: Upload the installer to sign
+        if: env.SIGN == 'true'
+        id: unsigned-installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-windows-installer   # never published (the publish job drops unsigned-*)
+          path: installer/ForzaHorizon1-ReImagined-Setup-${{ env.VERSION }}.exe
+          if-no-files-found: error
+          retention-days: 1
+      - name: Sign the installer (SignPath)
+        if: env.SIGN == 'true'
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'ForzaHorizon1-ReImagined' }}
+          signing-policy-slug: ${{ env.SIGN_MODE }}-signing
+          artifact-configuration-slug: installer   # launcher/packaging/signpath/installer.xml
+          github-artifact-id: ${{ steps.unsigned-installer.outputs.artifact-id }}
+          parameters: |
+            version: "${{ env.VERSION }}"
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 7200
+          output-artifact-directory: signed-installer
+      - name: Put the signed installer in place
+        if: env.SIGN == 'true'
+        shell: pwsh
+        run: |
+          $name = "ForzaHorizon1-ReImagined-Setup-$env:VERSION.exe"
+          launcher/packaging/verify_signature.ps1 -Mode $env:SIGN_MODE "signed-installer/$name"
+          if ($LASTEXITCODE -ne 0) { throw 'The signed installer failed the signature check' }
+          Copy-Item -LiteralPath "signed-installer/$name" -Destination "installer/$name" -Force
       - uses: actions/upload-artifact@v4
         with:
           name: launcher-windows
@@ -666,7 +784,9 @@ jobs:
       - shell: pwsh
         run: |
           $exe = (Get-ChildItem installer\*Setup*.exe | Select-Object -First 1).FullName
-          launcher\packaging\test_installer.ps1 -Setup $exe
+          # Signed builds: the installer, the installed launcher and the uninstaller pass verify_signature.ps1 too.
+          $signature = if ($env:SIGN -eq 'true') { $env:SIGN_MODE } else { 'none' }
+          launcher\packaging\test_installer.ps1 -Setup $exe -Signature $signature
 
   # The Linux Flatpak: the launcher run by the freedesktop SDK 26.08 (which also builds the game on
   # the player's machine, with the SDK's LLVM extension), the project sources and the patched SDK
@@ -680,7 +800,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: true   # server/: the Forza Live server (FH1-ReImagined/forza-live)
+          submodules: true   # server/: the Forza Live server (FH1-ReImagined/forza-live); forza-recomp/thirdparty/ReGPU (FH1-ReImagined/ReGPU)
       - uses: actions/download-artifact@v4
         with:
           name: sdk-overlay-linux
@@ -712,8 +832,17 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          path: assets
-          merge-multiple: true
+          path: artifacts
+      - name: Collect the release files
+        run: |
+          # unsigned-*: the files launcher-windows sent to SignPath; only their signed copies are released.
+          rm -rf artifacts/unsigned-*
+          mkdir assets
+          # One file per name: the flatpak job's own artifact and flatpak-builder's carry the same
+          # bundle, and mv refuses two sources with the same name in one call.
+          find artifacts -type f -print0 | while IFS= read -r -d '' f; do
+            cp -f "$f" "assets/$(basename "$f")"
+          done
       - name: Release
         env:
           GH_TOKEN: ${{ github.token }}

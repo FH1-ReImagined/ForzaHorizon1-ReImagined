@@ -9,6 +9,7 @@ Layout under the data root (default ~/.local/share/forza, %LOCALAPPDATA%\\ForzaR
   build/       the project sources, generated code and the build tree
   runtime/     what Play runs: the program, its libraries, forza.toml
 """
+import dataclasses
 import hashlib
 import json
 import os
@@ -106,7 +107,80 @@ def runtime_dir(root: Path) -> Path:
     return root / "runtime"
 
 
-EXCLUDE_DIRS = {"out", "__pycache__"}
+# CMake cannot build in a folder whose path has one of these (#691). [ and ] (and * and ?, which
+# Windows does not allow) are patterns to file(GLOB), with which CMake finds its own compiler
+# identification files (the downloaded CMake lives in toolchain/) and the SDK's per-configuration
+# target files ("IMPORTED_LOCATION or IMPORTED_IMPLIB not set for imported target rex::runtime");
+# ; separates the items of CMake lists (and of INCLUDE and LIB); and on Windows %NAME% expands in
+# the commands ninja runs through cmd.exe.
+CMAKE_UNSAFE = "[]*?;" + ("%" if IS_WIN else "")
+
+
+def cmake_unsafe_chars(path) -> str:
+    """The characters of `path` CMake cannot build under (CMAKE_UNSAFE), each once."""
+    return "".join(dict.fromkeys(c for c in str(path) if c in CMAKE_UNSAFE))
+
+
+def link_home() -> Path:
+    """Where build_root puts its links: a folder of the launcher's own, outside every data folder."""
+    if IS_WIN:
+        d = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "ForzaReImagined-links"
+    else:
+        d = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "forza-reimagined" / "links"
+    return d if not cmake_unsafe_chars(d) else Path(tempfile.gettempdir()) / "forza-reimagined-links"
+
+
+def _is_link(p: Path) -> bool:
+    isjunction = getattr(os.path, "isjunction", None)   # Python 3.12
+    return os.path.islink(p) or bool(IS_WIN and isjunction and isjunction(p))
+
+
+def _make_link(target: Path, link: Path):
+    if IS_WIN:
+        import _winapi   # a junction: no administrator rights or Developer Mode needed, unlike a symlink
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        os.symlink(target, link, target_is_directory=True)
+
+
+def _remove_link(link: Path):
+    """Removes the link `link`, never what it points to."""
+    if IS_WIN:
+        os.rmdir(link)   # a junction
+    else:
+        os.unlink(link)
+
+
+def build_root(root: Path, rep: Reporter) -> Path:
+    """`root`, or when its path has characters CMake cannot build under (CMAKE_UNSAFE), a link to it
+    whose path has none: the build then runs through the link, on the folder's own files. The link
+    is kept for the next build (CMake's cache names it), and remade when it points elsewhere."""
+    bad = cmake_unsafe_chars(root)
+    if not bad:
+        return root
+    real = os.path.normcase(os.path.realpath(root))
+    home = link_home()
+    link = home / hashlib.sha1(real.encode("utf-8", "surrogateescape")).hexdigest()[:12]
+    try:
+        if not _is_link(link) and os.path.lexists(link):
+            raise OSError(f"{link} is in the way and is not a link")
+        if _is_link(link) and os.path.normcase(os.path.realpath(link)) != real:
+            _remove_link(link)
+        if not _is_link(link):
+            home.mkdir(parents=True, exist_ok=True)
+            _make_link(root, link)
+    except OSError as e:
+        raise BuildError(
+            f"The path of the folder the game is built in, {root}, has {' '.join(bad)} in it, which CMake "
+            f"cannot build under, and the launcher could not make a link to it without them ({e}). Choose "
+            "a folder without these characters in Setup (\"Where the game is built\"), then press Build "
+            "again.") from e
+    rep.log(f"The folder {root} has {' '.join(bad)} in its path, which CMake cannot build under: "
+            f"building through {link}, a link to it.")
+    return link
+
+
+EXCLUDE_DIRS = {"out", "__pycache__", ".git"}
 # Original preparation source only; no generated tuning assets are distributed.
 NATIVE_TUNING_FILES = ("native_tuning_assets.py",)
 
@@ -118,15 +192,33 @@ NATIVE_MENU_FILES = ("native_menu_scene.py", "offline_cars_flow.py", "lzx_delta.
                        ("change_car", "tune_car", "garage", "autoshow", "social_friends", "social_world", "social_game", "social_requests", "social_chat", "social_connection")))
 
 
-def source_files(proj: Path):
+# ReGPU (the thirdparty/ReGPU submodule, FH1-ReImagined/ReGPU) is built only into the Windows GPU plugin
+# (FORZA_REGPU_PLUGIN): other platforms get none of it, and Windows only what its CMakeLists.txt reads
+# (its two EXCLUDE_FROM_ALL check programs' sources included), not its notes or developer tools.
+REGPU_DIR = Path("thirdparty") / "ReGPU"
+REGPU_FILES = ("CMakeLists.txt", "LICENSE", "README.md", "tests/linkcheck.cpp", "tools/embed_hlsl.py",
+               "tools/xenos_dis.cpp")
+REGPU_DIRS = ("include", "src")
+
+
+def _regpu_file(rel: Path) -> bool:
+    inner = rel.relative_to(REGPU_DIR)
+    return inner.as_posix() in REGPU_FILES or inner.parts[0] in REGPU_DIRS
+
+
+def source_files(proj: Path, windows: bool = IS_WIN):
     """The project files the build uses: forza-recomp minus generated code and output."""
     base = proj / "forza-recomp"
     for dirpath, dirs, files in os.walk(base):
         rel = Path(dirpath).relative_to(base)
         dirs[:] = sorted(d for d in dirs if d not in EXCLUDE_DIRS and
-                         not (rel == Path(".") and d.startswith("generated")))
+                         not (rel == Path(".") and d.startswith("generated")) and
+                         not (not windows and rel / d == REGPU_DIR))
+        in_regpu = rel == REGPU_DIR or REGPU_DIR in rel.parents
         for f in sorted(files):
-            if f.endswith((".pyc", ".log")):
+            if f.endswith((".pyc", ".log")) or f == ".git":  # (.git: a submodule's link to its repository)
+                continue
+            if in_regpu and not _regpu_file(rel / f):
                 continue
             yield rel / f
     if (base / "generated" / "rexglue.cmake").is_file():
@@ -524,13 +616,16 @@ def clamp_future_times(roots, now: float | None = None, slack: float = 2.0) -> i
 STAMP_NAME = ".forza-configure-stamp"
 
 
-def configure_stamp(tools, sdk_ident: str, tu: bool) -> str:
+def configure_stamp(tools, sdk_ident: str, tu: bool, root: Path | None = None) -> str:
     """What the CMake build tree was configured with: the launcher version (its project sources,
-    toolchain file and options), the SDK, the compilers and whether a title update is used. A tree
-    configured with anything else is deleted and configured again, not resumed."""
+    toolchain file and options), the SDK, the compilers, whether a title update is used, and the
+    path CMake saw the folder by when that was a link to it (build_root). A tree configured with
+    anything else is deleted and configured again, not resumed."""
     return hashlib.sha1("|".join([__version__, PLAT, pins.SDK_TAG, sdk_ident, str(bool(tu)),
                                   tools.cc, tools.cxx, tools.cmake, tools.ninja,
-                                  json.dumps(tools.source, sort_keys=True)]).encode()).hexdigest()
+                                  json.dumps(tools.source, sort_keys=True)] +
+                                 ([str(root)] if root is not None and root.parent == link_home() else [])
+                                 ).encode()).hexdigest()
 
 
 def reset_stale_build_tree(bdir: Path, stamp: str, rep: Reporter):
@@ -965,7 +1060,8 @@ def msvc_environment(opts: Options, rep: Reporter, tools, lo, hi):
     if env:
         return env
     xdir = opts.root / "xwin"
-    if not (xdir / "crt" / "include").is_dir():
+    # All of it: a splat that failed half way leaves the CRT without the SDK.
+    if not all((xdir / p).is_dir() for p in ("crt/include", "sdk/include/ucrt", "sdk/lib/um/x86_64")):
         if not opts.accept_ms_license:
             raise BuildError("The Microsoft C++ runtime and Windows SDK are needed and are not installed. "
                              "Accept Microsoft's license in the setup page to download them, or install "
@@ -975,8 +1071,11 @@ def msvc_environment(opts: Options, rep: Reporter, tools, lo, hi):
         fetch.unpack("xwin-windows", arc, tooldir, strip=1)
         exe = next(tooldir.rglob("xwin.exe"))
         rep.status("Downloading the Microsoft C++ runtime and Windows SDK")
+        # --disable-symlinks: xwin links the SDK's versioned folders and case aliases, and Windows
+        # lets a normal user make symlinks only with Developer Mode on (os error 1314). Its file
+        # system ignores case, and the paths below need no links.
         run([exe, "--accept-license", "--cache-dir", opts.root / "downloads" / "xwin-cache", "splat",
-             "--output", xdir], opts.root, cleanenv.clean_environment(), rep)
+             "--disable-symlinks", "--output", xdir], opts.root, cleanenv.clean_environment(), rep)
     inc = [xdir / "crt" / "include", xdir / "sdk" / "include" / "ucrt", xdir / "sdk" / "include" / "um",
            xdir / "sdk" / "include" / "shared", xdir / "sdk" / "include" / "winrt"]
     lib = [xdir / "crt" / "lib" / "x86_64", xdir / "sdk" / "lib" / "um" / "x86_64",
@@ -1000,10 +1099,13 @@ def compile_passes(opts: Options, rep: Reporter, tools, src: Path, bdir: Path, e
     for attempt in (1, 2):
         rep.status("Compiling" + (" (second pass)" if attempt == 2 else ": this takes a long time"))
         dirty = {"seen": False}
+        failed = []
 
         def on_line(line):
             if DIRTY_MANIFEST in line:
                 dirty["seen"] = True
+            if line.startswith("FAILED: "):
+                failed.append(line)
             m = NINJA_RE.match(line)
             if m:
                 n, total = int(m.group(1)), int(m.group(2))
@@ -1014,7 +1116,17 @@ def compile_passes(opts: Options, rep: Reporter, tools, src: Path, bdir: Path, e
                 low_priority=opts.low_priority, monitor=monitor)
         except BuildError as e:
             e.dirty_manifest = dirty["seen"]
+            e.failed = list(failed)
             raise
+
+
+def regpu_only_failure(failed) -> bool:
+    """Whether every ninja "FAILED: <output>" line is the ReGPU plugin's (regpu-plugin/, the DLL)."""
+    outputs = []
+    for line in failed:
+        rest = re.sub(r"^FAILED:\s*(?:\[code=\d+\]\s*)?", "", line).strip().replace("\\", "/")
+        outputs.append(rest.split(" ")[0])
+    return bool(outputs) and all(o.startswith("regpu-plugin/") or "rexgpu-regpu" in o for o in outputs)
 
 
 def run_build(opts: Options, rep: Reporter, game_files: Path) -> Path:
@@ -1030,7 +1142,12 @@ def run_build(opts: Options, rep: Reporter, game_files: Path) -> Path:
             if lvl == "warn":
                 rep.log("Warning: " + text)
     try:
-        return _run_build(opts, rep, game_files)
+        # A folder CMake cannot build under (#691) is built through a link to it; messages that name
+        # the folder (CURRENT_ROOT) keep its own path.
+        root = build_root(opts.root, rep)
+        if root == opts.root:
+            return _run_build(opts, rep, game_files)
+        return opts.root / _run_build(dataclasses.replace(opts, root=root), rep, game_files).relative_to(root)
     except OSError as e:
         if IS_WIN and datafolder.is_access_denied_error(e):
             paths.log_error("build: access denied", e)
@@ -1105,11 +1222,17 @@ def _run_build(opts: Options, rep: Reporter, game_files: Path) -> Path:
     overlay = sdk_overlay_archive()
     dev = dev_sdk_overlay()
     sdk_ident = sdk_identity(overlay, dev)
-    stamp = configure_stamp(tools, sdk_ident, tu is not None)
+    stamp = configure_stamp(tools, sdk_ident, tu is not None, root)
 
+    # ReGPU, the experimental Direct3D 12 renderer (Settings > Graphics API, regpu.py), is built with
+    # every Windows build, so choosing it needs no new build. It is optional: when only its plugin
+    # fails to compile, the game is built without it.
+    regpu_plugin = IS_WIN
     # A tree CMake configured for another version of the launcher (a build that stopped, then an
     # update) is deleted, not resumed; so is one ninja cannot get clean (see compile_pass).
-    for attempt in (1, 2):
+    attempt = 0
+    while attempt < 2:
+        attempt += 1
         reset_stale_build_tree(bdir, stamp, rep)
         fixed = clamp_future_times([src, sdk, build_dir(root) / "toolchain", build_env.toolchain_dir(root),
                                     root / "xwin"])
@@ -1121,7 +1244,8 @@ def _run_build(opts: Options, rep: Reporter, game_files: Path) -> Path:
              f"-DCMAKE_PREFIX_PATH={sdk.as_posix()}", f"-Drexglue_DIR={(sdk / 'lib/cmake/rexglue').as_posix()}",
              f"-DFORZA_REXGLUE={rexglue.as_posix()}",
              f"-DCMAKE_MAKE_PROGRAM={Path(tools.ninja).as_posix()}"] +
-            ([f"-DFORZA_XENOS_PLUGIN={(sdk / 'lib/librexgpu-xenos.so').as_posix()}"] if not IS_WIN else []) +
+            ([f"-DFORZA_XENOS_PLUGIN={(sdk / 'lib/librexgpu-xenos.so').as_posix()}"] if not IS_WIN else
+             [f"-DFORZA_REGPU_PLUGIN={'ON' if regpu_plugin else 'OFF'}"]) +
             cmake_extra, src, env, rep, low_priority=opts.low_priority)
         write_configure_stamp(bdir, stamp)
         rep.progress(0.24)
@@ -1129,6 +1253,13 @@ def _run_build(opts: Options, rep: Reporter, game_files: Path) -> Path:
             compile_passes(opts, rep, tools, src, bdir, env, monitor)
             break
         except BuildError as e:
+            if regpu_plugin and regpu_only_failure(getattr(e, "failed", ())):
+                rep.log("Warning: the experimental ReGPU renderer did not compile (the lines above); building "
+                        "the game without it. Settings > Graphics API > ReGPU then plays with Vulkan.")
+                regpu_plugin = False
+                (bdir / "rexgpu-regpu.dll").unlink(missing_ok=True)
+                attempt -= 1
+                continue
             if not getattr(e, "dirty_manifest", False):
                 raise
             if attempt == 2:
@@ -1185,7 +1316,13 @@ def stage_runtime(opts: Options, rep: Reporter, bdir: Path, sdk: Path) -> Path:
         shutil.copy2(tool, tmp)
         os.replace(tmp, rt / tool.name)
     if IS_WIN:
-        for f in [bdir / "forza.exe"] + sorted(bdir.glob("forza_*.dll")):
+        # rexgpu-regpu.dll and its d3dcompiler_47.dll: the optional ReGPU plugin (FORZA_REGPU_PLUGIN);
+        # its licenses come with licenses/ above.
+        # A plugin from an earlier build is removed when this one has none (it would not match forza.exe).
+        plugin = [bdir / n for n in ("rexgpu-regpu.dll", "d3dcompiler_47.dll") if (bdir / n).is_file()]
+        if not (bdir / "rexgpu-regpu.dll").is_file():
+            (rt / "rexgpu-regpu.dll").unlink(missing_ok=True)
+        for f in [bdir / "forza.exe"] + sorted(bdir.glob("forza_*.dll")) + plugin:
             shutil.copy2(f, rt / f.name)
         for dll in sorted((sdk / "bin").glob("*.dll")):
             if not dll.name.endswith(("d.dll", "rd.dll")):

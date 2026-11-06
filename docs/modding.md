@@ -10,6 +10,8 @@ original back.
 - [For modders](#for-modders): make a mod, find a file's path, package it.
 - [Restrictions](#restrictions): what mods can and cannot do.
 - [How it works](#how-it-works) and [why editing media.zip hung the game](#why-editing-mediazip-hung-the-game-117).
+- Forza Motorsport 4's cars from your own FM4 discs: **Import FM4 cars…** on the Mods page
+  ([modding/fm4-cars.md](modding/fm4-cars.md)).
 
 ## For players
 

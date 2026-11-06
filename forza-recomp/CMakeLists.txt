@@ -165,6 +165,8 @@ set(FORZA_SOURCES
     src/hooks/scene_resolution.cpp
     src/hooks/scene_tiling.cpp
     src/hooks/world_detail.cpp
+    src/hooks/car_detail.cpp
+    src/hooks/livery_bake.cpp
     src/hooks/shadow_filter.cpp
     src/hooks/ai_catchup.cpp
     src/hooks/physics_loader_check.cpp
@@ -173,11 +175,13 @@ set(FORZA_SOURCES
     src/hooks/resource_stream_trace.cpp
     src/hooks/bigshot_readback.cpp
     src/hooks/online_photo.cpp
+    src/hooks/photo_focus.cpp
     src/hooks/thumbnail_sync.cpp
     src/hooks/world_challenge.cpp
     src/hooks/ambient_leaderboard.cpp
     src/hooks/teleport_velocity.cpp
     src/hooks/custom_race.cpp
+    src/hooks/coop_map_event.cpp
     src/hooks/smashables_lookup.cpp
     src/hooks/challenge_hud.cpp
     src/hooks/car_placeholder.cpp
@@ -220,6 +224,7 @@ set(FORZA_SOURCES
     src/platform/benchmark_session.cpp
     src/platform/hud_overlay.cpp
     src/platform/motion_blur_fix.cpp
+    src/platform/readback_wait.cpp
     src/platform/world_ao.cpp
     src/platform/native_quit.cpp
     src/platform/resume.cpp
@@ -267,6 +272,17 @@ else()
 endif()
 
 rexglue_setup_target(forza GPU_PLUGINS xenos)
+
+# ReGPU's Direct3D 12 renderer as a GPU plugin beside forza.exe (--gpu_plugin=regpu), Windows only.
+# Off by default here; the launcher's Windows build turns it on (the experimental Graphics API choice
+# "ReGPU", launcher/forza_launcher/regpu.py) and builds without it when only the plugin fails to compile.
+# Its shaders ship pre-built, so it needs no fxc or py (FORZA_REGPU_FSR1_FROM_SOURCE=ON compiles them again).
+if(WIN32)
+    option(FORZA_REGPU_PLUGIN "Build the ReGPU GPU plugin (rexgpu-regpu.dll)" OFF)
+    if(FORZA_REGPU_PLUGIN)
+        add_subdirectory(regpu-plugin)
+    endif()
+endif()
 include(cmake/discord.cmake)
 
 # forza-texcompress: texture packs to BC7/BC1 DDS files, run by the launcher's Make HD pack and

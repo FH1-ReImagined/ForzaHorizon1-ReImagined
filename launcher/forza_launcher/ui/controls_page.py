@@ -226,8 +226,8 @@ class ControlsPage(QWidget):
         content.addWidget(self.haptics_enabled)
         self.haptics_fields = {}
         for key, title, maximum, suffix in [('intensity', 'Overall intensity', 100, '%'),
-                                           ('throttle_strength', 'Throttle resistance · R2', 8, ''),
-                                           ('brake_strength', 'Brake resistance · L2', 8, '')]:
+                                           ('throttle_strength', 'Throttle strength · R2', 8, ''),
+                                           ('brake_strength', 'Brake strength · L2', 8, '')]:
             row = QHBoxLayout()
             row.setSpacing(24)
             row.addWidget(label(title, 'muted'), 1)
@@ -245,9 +245,11 @@ class ControlsPage(QWidget):
         self.haptics_status = label('', 'help')
         content.addWidget(self.haptics_status)
         content.addWidget(label('Uses the default driving layout: LT brakes and RT accelerates. '
-                                'Set resistance to Off if you use a different trigger assignment. '
-                                'Triggers release when telemetry stops. RPM, tire slip, ABS and road effects '
-                                'are not available in this first FH1 bridge.', 'help'))
+                                'Set a strength to Off if you use a different trigger assignment. '
+                                'The triggers follow the car: the brake stiffens as the car slows and '
+                                'pulses with ABS, the throttle buzzes on wheelspin, and both shake on rough '
+                                'ground and in a crash. They release in menus and when telemetry stops.',
+                                'help'))
         credit = QLabel(f'Trigger transport: <a style="color:{theme.ORANGE}" '
                         'href="https://github.com/haritha99ch/HorizonHaptics">HorizonHaptics</a> · MIT license')
         credit.setObjectName('help')

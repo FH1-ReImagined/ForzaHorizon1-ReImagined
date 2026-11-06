@@ -12,6 +12,12 @@ tools/play.sh --base          # the base game instead of Title Update 4
 tools/run_forza.sh 120        # a two-minute test run; logs in ${XDG_RUNTIME_DIR:-/tmp}/forza_run
 ```
 
+- **The log:** `forza.log` in the data folder (launcher: Play > **Open log folder**; with
+  `tools/play.sh`, `~/.local/share/forza`) holds the current session only. Each start moves the
+  last one's to `forza.previous.log`, replacing the older copy (#609). A session that passes
+  50 MB rolls over to `forza.1.log` and starts a new `forza.log`, so one session's log stays under
+  100 MB (`log_file_max_mb`, 0 = no limit). For a report, attach `forza.log`, and
+  `forza.previous.log` if the problem happened in the session before.
 - **Profile and controllers:** the game runs signed in to one local profile on player 1,
   and every connected controller drives player 1, so START on any pad gets you past the
   title screen (with Steam Input or Sunshine virtual pads around, your pad is often not
@@ -261,6 +267,9 @@ tools/run_forza.sh 120        # a two-minute test run; logs in ${XDG_RUNTIME_DIR
   720p, the HUD and menus stay sharp at 720p. It only saves GPU time; a PC limited by its CPU gains
   nothing. Not with FSR 3, DLSS, SMAA or ultrawide. Measurements in
   [perf.md](perf.md#scene-resolution-below-720p-scene_resolution-347-2026-10-24).
+- **Motion blur** (`motion_blur = false` in `forza.toml` or Display > Picture, or the in-game
+  Graphics screen): turns off high-speed blur while leaving tone mapping, bloom and vignette
+  untouched (#588). Useful for high refresh rates or players sensitive to motion blur.
 
 ## Steam Deck
 

@@ -37,6 +37,8 @@
 #define __imp__sub_824B87A8 __imp__sub_82525C98
 #define sub_824C3C98 sub_82531BE0
 #define __imp__sub_824C3C98 __imp__sub_82531BE0
+#define sub_824DDCE8 sub_8254C450
+#define __imp__sub_824DDCE8 __imp__sub_8254C450
 #define sub_824F1A80 sub_8255D7E8
 #define __imp__sub_824F1A80 __imp__sub_8255D7E8
 #define sub_82502DD8 sub_8256D008

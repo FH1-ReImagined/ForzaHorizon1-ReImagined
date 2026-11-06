@@ -8,7 +8,8 @@ from dataclasses import replace
 
 from .settings import normalize
 from .telemetry import Decoder
-from .vendor.dualsense.triggers import feedback, off
+from .feel import Feel
+from .vendor.dualsense.triggers import off
 from .xbox import XboxOutput
 
 STALE_SECONDS = .35
@@ -28,49 +29,6 @@ def supports_xbox(directory):
         return supported(directory) and metadata.get('xbox_trigger_rumble') == 1
     except (OSError, ValueError, AttributeError):
         return False
-
-
-PRESS_ON, PRESS_OFF, PRESS_BAND = 12, 4, 8  # raw 0-255: engage above ON, release below OFF
-
-
-class Pedal:
-    """Hysteresis for one trigger (#224). The raw value jitters by a few counts, so a trigger held
-    half way crossed the rounding step of the force again and again and the effect flickered. The
-    effect engages above PRESS_ON, releases only below PRESS_OFF, and while engaged follows the
-    trigger only after it moved PRESS_BAND from where the current force was set."""
-    def __init__(self):
-        self.held = None
-
-    def update(self, value):
-        if self.held is None:
-            if value >= PRESS_ON:
-                self.held = value
-        elif value < PRESS_OFF:
-            self.held = None
-        elif abs(value-self.held) >= PRESS_BAND:
-            self.held = value
-        return self.held or 0
-
-    def reset(self):
-        self.held = None
-
-
-def effects(frame, settings, pedals=None):
-    """Basic resistance from raw LT/RT, valid for the default driving layout.
-
-    Deliberately does not infer ABS, traction, gears or RPM from missing signals. `pedals` is the
-    (brake, throttle) Pedal pair that keeps the effect steady across frames. Without a frame or
-    outside driving (`frame.active` is false in menus) both triggers are released.
-    """
-    pedals = pedals or (Pedal(), Pedal())
-    if frame is None or not frame.active or not settings['enabled']:
-        for pedal in pedals:
-            pedal.reset()
-        return off(), off()
-    def pedal(state, value, strength):
-        force = round(strength * settings['intensity']/100 * state.update(value)/255)
-        return feedback([0] + [force]*9) if force else off()
-    return pedal(pedals[0], frame.brake, settings['brake_strength']), pedal(pedals[1], frame.throttle, settings['throttle_strength'])
 
 
 class HapticsService:
@@ -135,7 +93,7 @@ class HapticsService:
     def _run(self):
         device = None
         failed = False
-        pedals = (Pedal(), Pedal())
+        feel = Feel()  # the effects follow the car, never the trigger (feel.py, #692)
         try:
             while not self._stop.is_set():
                 data = None
@@ -172,7 +130,7 @@ class HapticsService:
                             device.close()
                         device, failed = None, True
                 if device:
-                    device.set(*effects(frame, settings, pedals))
+                    device.set(*feel.update(frame, settings, time.monotonic()))
                     if not settings['enabled']:
                         device.close()
                         device = None

@@ -102,7 +102,15 @@ def store_key(plan) -> dict:
 
 
 def uses_vulkan(plan) -> bool:
-    return (_arg(plan.argv, "--gpu_backend") or "vulkan") == "vulkan"
+    """The Direct3D 12 backends (and ReGPU) are chosen in forza.toml, the command line can override it."""
+    backend = _arg(plan.argv, "--gpu_backend")
+    if backend is None:
+        from .config import parse_toml
+        try:
+            backend = parse_toml(getattr(plan, "toml_text", "") or "").get("gpu_backend")
+        except ValueError:
+            backend = None
+    return (backend or "vulkan") == "vulkan"
 
 
 def _file_id(path: Path) -> str:
@@ -244,10 +252,10 @@ def prebuild_command(plan) -> list:
 def run_game(plan, progress=None, cancelled=None, log=print, poll=0.25) -> dict:
     """Start the game in prebuild-only mode and wait for it. progress(done, total, part) follows the
     SHADER_WARMUP lines; part counts the pipeline caches (two with split scene/HUD rendering)."""
-    from .game import clean_shm, log_is_current, log_path_of, log_signature
+    from .game import clean_shm, log_is_current, log_path_of, prepare_log
     from .shader_warmup import Monitor
     log_file = log_path_of(plan)
-    plan.log_before_start = log_signature(plan)
+    prepare_log(plan, log)
     monitor = Monitor(log_file)
     env = cleanenv.clean_environment()
     for k in plan.unset:

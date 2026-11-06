@@ -111,7 +111,7 @@ The preset (Settings, Display):
 | Render scale | 1 | the game's own 1280x720 |
 | Upscaling filter | AMD FSR 1 | costs nothing on the Deck's screen (1:1, below); sharp when docked |
 | Scene anti-aliasing (MSAA) | Off | the scene in one pass instead of three: about a fifth less CPU work in the GPU emulation, the Deck's limit ([perf.md](perf.md#one-pass-scene-scene_msaa-45-2026-10-23)) |
-| Shadow detail, Distant texture detail | Console | the game's own |
+| Shadow detail, Distant texture detail, Car detail | Console | the game's own |
 | 3D scene resolution | 720p | 540p saves GPU time only, and the Deck is limited by its CPU |
 | Letterbox other aspect ratios | on | see Screen |
 

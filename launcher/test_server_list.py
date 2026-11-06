@@ -175,7 +175,7 @@ class Fetching(Base):
         server = self.fake(document=sign([]))
         self.assertEqual(server_list.fetch_list(server.url, ""), [])
         self.assertEqual(server.requests, [])
-        self.assertEqual(server_list.LIST_KEY, "")  # until the public server has its list key
+        self.assertEqual(len(bytes.fromhex(server_list.LIST_KEY)), 32)  # the public server's
 
     def test_what_is_refused(self):
         bad = self.fake(document=sign([], seed=bytes(32)))

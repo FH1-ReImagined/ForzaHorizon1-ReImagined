@@ -24,7 +24,8 @@
 // the frame statistics (RECOMP_PERF, src/debug/frame_stats.cpp); "PROF:START" and
 // "PROF:STOP" run the CPU sampler (src/debug/cpu_profile.cpp); "SAY:<text>" says <text> in
 // World chat and "SAYC:<text>" in Club chat (live_friends.cpp; the Co-op Festival's /event and
-// the /club commands in scripted tests).
+// the /club commands in scripted tests); "CVAR:<name>=<value>" sets a setting at once (a test
+// switching readback_resolve_wait_range in one session, #665).
 
 #include "input_caps.h"
 #include "live.h"
@@ -40,6 +41,7 @@
 #include "../debug/cpu_profile.h"
 #include "../debug/frame_stats.h"
 
+#include <rex/cvar.h>
 #include <rex/logging.h>
 #include <rex/ppc/context.h>
 #include <rex/ppc/func.h>
@@ -186,6 +188,13 @@ void ReadFifo(std::string path, std::vector<Press>* schedule,
       line.clear();
       continue;
     }
+    if (line.rfind("CVAR:", 0) == 0 && line.find('=') != std::string::npos) {  // a setting, now
+      const size_t eq = line.find('=');
+      const bool ok = rex::cvar::SetFlagByName(line.substr(5, eq - 5), line.substr(eq + 1));
+      REXLOG_INFO("FORZA_AUTOPRESS_FIFO: t={:.2f}s {} ({})", now, line, ok ? "set" : "unknown");
+      line.clear();
+      continue;
+    }
     if (line.rfind("SCENE:", 0) == 0) {  // frame statistics label (debug/frame_stats.cpp)
       forza::perf::SetScene(line.substr(6));
       line.clear();
@@ -240,6 +249,39 @@ std::vector<Press> schedule;
 std::chrono::steady_clock::time_point start;
 bool scripted = false;
 
+// FORZA_INPUT_RECORD=<file> logs player 1's pad on every change ("t buttons lt rt lx ly rx ry");
+// FORZA_INPUT_REPLAY=<file> plays such a log back on slot 0 in place of the hardware.
+struct Sample {
+  double t;
+  uint16_t buttons;
+  uint8_t triggers[2];
+  int16_t sticks[4];
+};
+FILE* record_file = nullptr;
+std::vector<Sample> replay;
+
+double Now() { return std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count(); }
+
+void LoadReplay(const char* path) {
+  FILE* f = std::fopen(path, "r");
+  if (!f) {
+    REXLOG_WARN("FORZA_INPUT_REPLAY: cannot open {}", path);
+    return;
+  }
+  Sample s{};
+  unsigned b, lt, rt;
+  int lx, ly, rx, ry;
+  while (std::fscanf(f, "%lf %x %u %u %d %d %d %d", &s.t, &b, &lt, &rt, &lx, &ly, &rx, &ry) == 8) {
+    s.buttons = uint16_t(b);
+    s.triggers[0] = uint8_t(lt);
+    s.triggers[1] = uint8_t(rt);
+    s.sticks[0] = int16_t(lx), s.sticks[1] = int16_t(ly), s.sticks[2] = int16_t(rx), s.sticks[3] = int16_t(ry);
+    replay.push_back(s);
+  }
+  std::fclose(f);
+  REXLOG_INFO("FORZA_INPUT_REPLAY: {} samples from {}", replay.size(), path);
+}
+
 void InitScripting() {
   static std::once_flag once;
   std::call_once(once, [] {
@@ -252,6 +294,14 @@ void InitScripting() {
     if (const char* fifo = std::getenv("FORZA_AUTOPRESS_FIFO"); fifo && *fifo) {
       scripted = true;
       std::thread(ReadFifo, std::string(fifo), &schedule, start).detach();
+    }
+    if (const char* path = std::getenv("FORZA_INPUT_REPLAY"); path && *path) {
+      LoadReplay(path);
+      scripted |= !replay.empty();
+    }
+    if (const char* path = std::getenv("FORZA_INPUT_RECORD"); path && *path) {
+      record_file = std::fopen(path, "w");
+      REXLOG_INFO("FORZA_INPUT_RECORD: {} {}", path, record_file ? "open" : "cannot open");
     }
     if (!PadPerUser()) REXLOG_INFO("Input: every pad drives user 0 (FORZA_PAD_PER_USER=1 to split)");
   });
@@ -325,6 +375,19 @@ bool ReadSlot(GuestFunc sdk, PPCContext& ctx, uint8_t* base, uint32_t slot, uint
   ctx.r4.u64 = r4;
   ctx.r5.u64 = r5;
   out = connected && buffer ? Decode(GuestPtr(base, buffer)) : PadState{};
+  // (Once the recording has ended the pad, and the debug server's presses, take over again.)
+  if (slot == 0 && !replay.empty() && Now() <= replay.back().t + 0.5) {
+    const double now = Now();
+    auto it = std::upper_bound(replay.begin(), replay.end(), now,
+                               [](double t, const Sample& s) { return t < s.t; });
+    out = PadState{};
+    if (it != replay.begin()) {
+      const Sample& s = *(it - 1);
+      out.buttons = s.buttons;
+      std::memcpy(out.triggers, s.triggers, 2);
+      std::memcpy(out.sticks, s.sticks, sizeof(out.sticks));
+    }
+  }
   const bool pressed = Scripted(slot, out);
   return connected || pressed || (scripted && slot == 0);
 }
@@ -376,6 +439,18 @@ extern "C" REX_FUNC(__imp__XamInputGetState) {
         connected = true;
         Merge(state, pad);
       }
+    }
+  }
+  if (user == 0 && record_file && connected) {
+    static PadState last;
+    static bool any = false;
+    if (!any || std::memcmp(&last, &state, sizeof(state)) != 0) {
+      any = true;
+      last = state;
+      std::fprintf(record_file, "%.4f %04x %u %u %d %d %d %d\n", Now(), state.buttons,
+                   state.triggers[0], state.triggers[1], state.sticks[0], state.sticks[1],
+                   state.sticks[2], state.sticks[3]);
+      std::fflush(record_file);
     }
   }
   if (user == 0 && forza::benchmark::WantsPad()) connected = true;

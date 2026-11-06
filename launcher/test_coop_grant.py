@@ -194,8 +194,11 @@ class GrantTests(unittest.TestCase):
             {'id': 'a', 'event': 8, 'place': 1, 'places': 2},     # a showcase
             {'id': 'b', 'event': 999, 'place': 1, 'places': 8, 'winnings': PAID0},   # not in the database
             {'id': 'c', 'event': 4, 'place': 9, 'places': 8, 'winnings': PAID0},     # off the grid
-            {'id': 'd', 'event': '4', 'place': 1, 'places': 8, 'winnings': PAID0}])  # not a number
-        self.assertEqual((result.applied, result.unchanged), ((), ('a', 'b', 'c', 'd')))
+            {'id': 'd', 'event': '4', 'place': 1, 'places': 8, 'winnings': PAID0},   # not a number
+            {'id': 'e', 'event': 31, 'place': 1, 'places': 2, 'winnings': PAID0}])   # a Nemesis race
+        # Showcases and Nemesis races are the only events with a prize car (Rewards_EventPrizes,
+        # docs/coop_campaign.md "Prize cars"): a result for one never reaches the save.
+        self.assertEqual((result.applied, result.unchanged), ((), ('a', 'b', 'c', 'd', 'e')))
 
     def test_a_save_that_changes_during_the_backup_is_not_replaced(self):
         create = saves._create

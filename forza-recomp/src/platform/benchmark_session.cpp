@@ -105,7 +105,7 @@ bool GraphicsFlag(const std::string &key) {
          key == "forza_chase_far_fov" || key == "forza_hood_fov" ||
          key == "forza_bumper_fov" ||
          key == "world_shadow_filter" || key == "world_ambient_occlusion" ||
-         key == "frame_rate" || key == "video_mode_refresh_rate" ||
+         key == "world_car_detail" || key == "frame_rate" || key == "video_mode_refresh_rate" ||
          key == "resolution" || key == "resolution_scale" || key == "vsync" ||
          key == "anisotropic_override" || key == "swap_post_effect";
 }

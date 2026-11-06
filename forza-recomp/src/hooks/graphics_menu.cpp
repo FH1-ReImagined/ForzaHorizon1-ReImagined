@@ -255,6 +255,7 @@ bool IsLive(const Setting &setting) {
   return setting.key == "vsync" || setting.key == "anisotropic_override" ||
          setting.key == "forza_hud_edges" || setting.key == "forza_performance_overlay" ||
          setting.key == "world_shadow_filter" || setting.key == "world_ambient_occlusion" ||
+         setting.key == "world_car_detail" || setting.key == "motion_blur" ||
          setting.key == "forza_cockpit_fov" || setting.key == "forza_chase_near_fov" ||
          setting.key == "forza_chase_far_fov" || setting.key == "forza_hood_fov" ||
          setting.key == "forza_bumper_fov" || setting.key == "forza_minimap_camera";
@@ -299,8 +300,10 @@ constexpr size_t kChaseNearFov = 13, kChaseFarFov = 14, kHoodFov = 15, kBumperFo
 constexpr std::array<size_t, 5> kCameraFovs{kChaseNearFov, kChaseFarFov, kCockpitFov, kHoodFov, kBumperFov};
 // Preset first, then image quality, frame pacing, cameras, HUD and monitoring.
 constexpr size_t kMinimapOrientation = 17;
-constexpr std::array<size_t, 18> kDisplayOrder{8, 0, 1, kAntiAliasing, 2, 5,
-    kShadowSoftness, kAmbientOcclusion, 3, 4,
+constexpr size_t kMotionBlur = 18;
+constexpr size_t kCarDetail = 19;
+constexpr std::array<size_t, 20> kDisplayOrder{8, 0, 1, kAntiAliasing, 2, 5,
+    kShadowSoftness, kAmbientOcclusion, kCarDetail, kMotionBlur, 3, 4,
     kChaseNearFov, kChaseFarFov, kCockpitFov, kHoodFov, kBumperFov, 6, kMinimapOrientation, 7};
 void AntiAliasingChoices() {
   auto &aa = settings[kAntiAliasing];
@@ -394,6 +397,10 @@ void Snapshot() {
       {"forza_bumper_fov", "forza_bumper_fov", "Bumper base FOV", "", {{"0", "Stock (53 degrees)"}}},
       {"forza_minimap_camera", "forza_minimap_camera", "Minimap orientation", "",
        {{"false", "Vehicle (stock)"}, {"true", "Camera"}}},
+      {"motion_blur", "motion_blur", "Motion blur", "",
+       {{"true", "On"}, {"false", "Off"}}},
+      {"world_car_detail", "world_car_detail", "Car detail", "",
+       {{"console", "Console"}, {"high", "High"}, {"ultra", "Ultra"}}},
   };
   for (const auto index : kCameraFovs)
     for (int degrees = 40; degrees <= 90; ++degrees)
@@ -417,6 +424,11 @@ void Snapshot() {
                                {"fsr3_balanced", "FSR 3 Balanced"},
                                {"fsr3_performance", "FSR 3 Performance"}});
   }
+  // The ReGPU plugin's own upscaler (Glue2GPU).
+  if (rex::cvar::GetFlagByName("gpu_plugin") == "regpu")
+    modes.insert(modes.end(), {{"fsr1_quality", "FSR 1 Quality"},
+                               {"fsr1_balanced", "FSR 1 Balanced"},
+                               {"fsr1_performance", "FSR 1 Performance"}});
   for (auto &setting : settings) {
     if (setting.key == "preset" || setting.key == "anti_aliasing") continue;
     setting.value = rex::cvar::GetFlagByName(setting.cvar);
@@ -438,7 +450,7 @@ void Snapshot() {
   }
   // A value the screen does not offer would be saved back as it is; show and keep the
   // game's look (Console, Off).
-  for (const size_t world : {kShadowSoftness, kAmbientOcclusion}) {
+  for (const size_t world : {kShadowSoftness, kAmbientOcclusion, kCarDetail}) {
     auto &setting = settings[world];
     if (std::none_of(setting.choices.begin(), setting.choices.end(),
                      [&](const Choice &choice) { return choice.value == setting.value; }))
@@ -531,14 +543,14 @@ bool SaveNativeConfig() {
       "draw_resolution_scale_x", "draw_resolution_scale_y", "fh1_scene_720p_native_hud",
       "fh1_native_scene_scale", "swap_post_effect", "anisotropic_override", "vsync",
       "forza_hud_edges", "forza_performance_overlay", "world_shadow_filter", "world_ambient_occlusion",
-      "forza_cockpit_fov", "forza_chase_near_fov", "forza_chase_far_fov", "forza_hood_fov", "forza_bumper_fov",
-      "forza_minimap_camera"}) {
+      "world_car_detail", "forza_cockpit_fov", "forza_chase_near_fov", "forza_chase_far_fov", "forza_hood_fov", "forza_bumper_fov",
+      "forza_minimap_camera", "motion_blur"}) {
     auto value = rex::cvar::GetFlagByName(name);
     if (value.empty()) continue;
     const std::string key(name);
     if (key == "resolution" || key == "fh1_upscaler" || key == "swap_post_effect" ||
         key == "forza_performance_overlay" || key == "world_shadow_filter" ||
-        key == "world_ambient_occlusion")
+        key == "world_ambient_occlusion" || key == "world_car_detail")
       value = "\"" + value + "\"";
     updates.emplace_back(key, value);
   }
@@ -676,6 +688,10 @@ void PauseRows(Native &ui, uint8_t *base, bool show) {
   }
 }
 std::string Help(size_t i) {
+  if (i == kCarDetail)
+    return "How far other cars keep their detailed models: High twice the game's distance and twice as many detailed cars, Ultra four times. Console is the game's. Save applies this change.";
+  if (i == kMotionBlur)
+    return "Blur moving scenery and wheels while driving fast. Off eliminates speed blur trails while keeping tone mapping, bloom and vignette untouched. Save applies this change.";
   if (i == kMinimapOrientation)
     return "Vehicle keeps the stock minimap. Camera rotates it with where you look. TU4 desktop gameplay only; the full map stays unchanged. Save keeps the choice; Back discards.";
   if (std::find(kCameraFovs.begin(), kCameraFovs.end(), i) != kCameraFovs.end())
@@ -743,8 +759,9 @@ bool Relevant(size_t i) {
 #endif
   if (i == 2) return BackendMode() == "off";
   if (i == kAntiAliasing) return settings[1].value == "off";
-  // The occlusion is a pass of the Vulkan renderer (SDK patch 0350).
-  if (i == kAmbientOcclusion) return rex::cvar::GetFlagByName("gpu_backend") != "d3d12";
+  // The occlusion is a pass of the Vulkan renderer (SDK patch 0350) and of the ReGPU plugin.
+  if (i == kAmbientOcclusion) return rex::cvar::GetFlagByName("gpu_backend") != "d3d12" ||
+                                     rex::cvar::GetFlagByName("gpu_plugin") == "regpu";
   if (i == 6) return rex::cvar::GetFlagByName("forza_ultrawide") == "true" ||
                      rex::cvar::GetFlagByName("forza_hud_layout") == "true";
   return true;
@@ -1213,8 +1230,11 @@ void Tick(PPCContext& ctx, uint8_t* base) {
       success = CommitSettings();
       completed = true;
       message = success ? "Settings saved." : "Applied, but could not save settings.";
-    } else if (rex::cvar::GetFlagByName("gpu_backend") != "vulkan" ||
+    } else if ((rex::cvar::GetFlagByName("gpu_backend") != "vulkan" &&
+                rex::cvar::GetFlagByName("gpu_plugin") != "regpu") ||
                !rex::cvar::GetFlagInfo("fh1_graphics_request")) {
+      // Only Vulkan and the ReGPU plugin answer it: rexgpu-xenos.dll registers the flag on
+      // Direct3D 12 too, where nothing would answer.
       completed = true;
       message = "Live graphics requires the updated Vulkan renderer.";
     } else {

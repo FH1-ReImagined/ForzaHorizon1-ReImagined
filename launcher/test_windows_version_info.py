@@ -139,10 +139,13 @@ class Workflow(unittest.TestCase):
     def test_windows_job_builds_the_bootloader_and_checks_it_before_building_the_launcher(self):
         job = self.job("launcher-windows", "installer-test")
         for needle in ('PYINSTALLER_COMPILE_BOOTLOADER: "1"', "pip install --no-binary pyinstaller -r launcher/requirements-build.txt",
-                       "launcher/packaging/check_bootloader.py", "windows_version_info.py", "/DVersionNumeric=$numeric"):
+                       "launcher/packaging/check_bootloader.py", "windows_version_info.py", "launcher/packaging/build_installer.ps1"):
             self.assertIn(needle, job)
         self.assertLess(job.index("check_bootloader.py"), job.index("pyinstaller --noconfirm forza-launcher.spec"))
-        self.assertIn("TODO(code signing", job)
+        # build_installer.ps1 passes installer.iss its four-part version
+        build = (PACKAGING / "build_installer.ps1").read_text(encoding="utf-8")
+        self.assertIn("windows_version_info.py", build)
+        self.assertIn('"/DVersionNumeric=$numeric"', build)
 
     def test_linux_job_is_unchanged_by_it(self):
         job = self.job("launcher-linux", "launcher-windows")

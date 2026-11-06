@@ -14,6 +14,7 @@
 #include "guest_addr.h"
 #include "guest_memory.h"
 #include "car_physics.h"
+#include <rex/logging.h>
 #include <rex/memory/utils.h>
 #include <array>
 #include <algorithm>
@@ -50,6 +51,7 @@ struct Bridge {
   std::array<Sent, 4> sent{};
   bool xbox_seen = false;
   uint32_t xbox_sequence = 0;
+  int logged_active = -1;  // the last logged trigger state (#692): -1 none yet
   uint32_t user_mask = 15;
   std::mutex mutex;
   Bridge() {
@@ -259,9 +261,23 @@ void Physics(uint8_t* base) {
   if (physics.valid) flags |= 16;
   Put(packet, offset, s.token); Put(packet, offset, sequence); Put(packet, offset, flags);
   Put(packet, offset, now); Put(packet, offset, car);
-  // Driving: a local car, fresh input and the game's rumble running; not in menus.
-  const bool driving = valid && (flags & 2) &&
-      (s.physics ? Player().State() == Drive::kDriving : Gate().Driving(now));
+  // Driving: a local car, fresh input, the game's simulation running and its rumble too; not in
+  // menus, also not in the online pause menu, where the world keeps running (#692).
+  const Drive drive = Player().State();
+  const Triggers gate = s.physics ? TriggerGate(drive, Gate(), now)
+                                  : (Gate().Driving(now) ? Triggers::kOn : Triggers::kNoRumble);
+  const bool driving = valid && (flags & 2) && gate == Triggers::kOn;
+  if (int(driving) != s.logged_active) {
+    s.logged_active = int(driving);
+    if (driving)
+      REXLOG_INFO("Telemetry: trigger effects on (driving)");
+    else if (!valid || !(flags & 2))
+      REXLOG_INFO("Telemetry: trigger effects off (no local car or no fresh pad input)");
+    else if (gate == Triggers::kNoRumble)
+      REXLOG_INFO("Telemetry: trigger effects off (the game's rumble stopped: a menu)");
+    else
+      REXLOG_INFO("Telemetry: trigger effects off ({})", DriveName(drive));
+  }
   Put(packet, offset, uint32_t(driving));
   for (auto v : {position, velocity, acceleration, forward}) for (float f : v) Put(packet, offset, f);
   Put(packet, offset, s.left); Put(packet, offset, s.right);
