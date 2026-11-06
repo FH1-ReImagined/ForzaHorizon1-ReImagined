@@ -42,15 +42,24 @@ def _sdk_lib_dirs():
     return []
 
 
+SET_IN_ADVANCED = "set in Advanced settings"
+CHECKOUT_BUILD = "the build in this checkout"
+
+
+def checkout_build_name() -> str:
+    """The checkout's build folder under forza-recomp/out/build: FORZA_BUILD, as in play.sh; set
+    but empty counts as unset (it named out/build itself)."""
+    return os.environ.get("FORZA_BUILD", "").strip() or "linux"
+
+
 def candidate_dirs(cfg: Config):
     override = cfg.advanced.get("game_dir", "").strip() or os.environ.get("FORZA_GAME_DIR", "")
     if override:
-        yield Path(override), "set in Advanced settings", False
+        yield Path(override), SET_IN_ADVANCED, False
     from . import builder
     yield builder.runtime_dir(cfg.data_home()), "built by the launcher", False
     if paths.in_checkout() and not paths.IS_WINDOWS:  # development: this checkout's own build
-        build = os.environ.get("FORZA_BUILD", "linux")
-        yield paths.REPO_ROOT / "forza-recomp/out/build" / build, "the build in this checkout", True
+        yield paths.REPO_ROOT / "forza-recomp/out/build" / checkout_build_name(), CHECKOUT_BUILD, True
 
 
 def find_game(cfg: Config):
@@ -62,6 +71,25 @@ def find_game(cfg: Config):
         if exe.is_file():
             return GameInstall(d, exe, _sdk_lib_dirs() if needs_sdk else [], why), looked
     return None, looked
+
+
+def outside_build(cfg: Config) -> GameInstall | None:
+    """The game Play starts when it is not the launcher's own build: the Advanced game_dir (or
+    FORZA_GAME_DIR) override, or this source checkout's build (never seen by a frozen or installed
+    launcher). The launcher's build state (builder.build_status) does not describe it."""
+    install, _looked = find_game(cfg)
+    if install is not None and getattr(install, "source", "") in (SET_IN_ADVANCED, CHECKOUT_BUILD):
+        return install
+    return None
+
+
+def outside_build_text(install: GameInstall) -> str:
+    """The Setup page's Build step for outside_build()."""
+    if install.source == CHECKOUT_BUILD:
+        return (f"Using the build in this checkout ({install.dir}). Build makes the launcher's own build "
+                "in the data folder, which Play uses instead from then on.")
+    return (f"Using the game set in Advanced settings ({install.dir}). Play starts it, not the "
+            "launcher's own build, while that is set.")
 
 
 def missing_message(looked):

@@ -747,11 +747,15 @@ class SetupPage(QWidget):
         state, detail = builder.build_status(cfg.data_home(), cfg["tu_package"])
         label_for = {"built": ("Built", True), "stale": ("Rebuild needed", None), "partial": ("Unfinished", None),
                      "none": ("Not built", None), "nosource": ("Missing sources", False)}[state]
+        outside = game.outside_build(cfg)
+        if outside is not None:  # Play starts this checkout's build or the Advanced game_dir, not ours
+            label_for = ("In use", True)
+            detail = game.outside_build_text(outside) + (f" {detail}" if state == "partial" else "")
         self.c3.set_badge(*label_for)
         self.go3.setText({"stale": "Rebuild", "partial": "Resume build", "built": "Rebuild"}.get(state, "Build"))
         self.status3.setText(self.fail.get("status3") or detail)
         st = builder.read_state(cfg.data_home())
-        if state == "built" and st.get("seconds") and not self.fail.get("status3"):
+        if state == "built" and outside is None and st.get("seconds") and not self.fail.get("status3"):
             self.status3.setText(f"{detail} (took {human_time(st['seconds'])}, up to {st.get('peak_rss_gb', '?')} GB of memory)")
         self.clean.setVisible(state == "built" and (builder.build_dir(cfg.data_home()) / "forza-recomp" / "out").exists())
         self._refresh_checks()

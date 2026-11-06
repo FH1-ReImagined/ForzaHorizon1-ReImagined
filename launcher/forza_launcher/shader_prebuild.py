@@ -45,8 +45,16 @@ UNKNOWN_FLAG = ("The game does not know the prebuild option: it was built by an 
 
 def build_problem(cfg) -> str:
     """Why the game cannot be prebuilt yet ('' when its build is current). Same test as the Setup page's
-    Build step: the build is complete and made from the project of this launcher (builder.build_status)."""
-    from . import builder
+    Build step: the build is complete and made from the project of this launcher (builder.build_status).
+    A build Play starts that is not the launcher's (this checkout's, or the Advanced game_dir) is not
+    the launcher's to judge: it is prebuilt as it is (an older one says it lacks the option, UNKNOWN_FLAG)."""
+    from . import builder, game
+    try:
+        outside = game.outside_build(cfg) is not None
+    except Exception:
+        outside = False
+    if outside:
+        return ""
     try:
         state, _detail = builder.build_status(cfg.data_home(), cfg["tu_package"])
     except Exception:
