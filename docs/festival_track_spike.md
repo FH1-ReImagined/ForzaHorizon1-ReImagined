@@ -673,9 +673,20 @@ instance's lightmap record; in FH1 by its own instance-lightmap code, which writ
 layout FM4's shaders do not read the same way. The binder (sub_82EAF1B0) maps sampler 7 to a
 valid slot with "write uvOS" set for every draw at Infineon (`FORZA_FM4_BINDDIAG=1` counts
 the map values and flags), so it is not the binder's -1/-2 cases.
-Next: find FH1's per-instance writer of PS c116 (the instance lightmap path, depth 2) and
-give it the record's u scale (or write c116 = the record's (ou, ov, su, sv) for FM4's
-instances there).
+Followed further:
+- FH1's depth-2 c116 is a global: 82E4D308 writes PS c116..c119 once from a block at
+  0x835A0E10 (sub_82465E28(dev, 116, block, 4)); a draw that does not write its own c116
+  takes that, or what an earlier draw left. The (offset, 0, scale) values above are such
+  leftovers from other FM4 draws, not a per-instance write.
+- The healthy road models' colour passes write the uvOS block c116..c127 (a type-0 write of
+  12 registers, patched by their type-8 fixups, X = 0x74 for c116 and 0x78 for c120). The
+  broken materials (DIFF_CLR_SPEC_OPAC_REFL_4 at Tsukuba, Hockenheim; the models drawn with
+  stale c116 at Infineon, Indianapolis) have type-8 fixups for c120 only (X = 0x78, slots 0,
+  1 or 0x40) and no write of c116, while their pixel shader reads Light_Map_uvOS at c116 (and
+  Diffuse_Texture_uvOS at c122). So FM4 itself must supply their lightmap uvOS another way:
+  constant relocation of the shader's registers to the material's block, or a per-instance
+  write in its renderer. Not found; tracing FM4's renderer for these materials is the next
+  step (more than the hour this box allowed per item).
 
 ## Towards players: a plan
 
