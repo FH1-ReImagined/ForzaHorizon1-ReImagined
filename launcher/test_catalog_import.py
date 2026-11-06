@@ -77,7 +77,7 @@ class ImportTests(unittest.TestCase):
         return ci.import_design(self.catalog,self.item.path,self.target,self.executable,**kwargs)
 
     def files(self):
-        return ci._tree(self.folder/'LivCatalog',lambda:False)
+        return ci._tree(self.folder/'LivCatalog',lambda:False,self.target.root)
 
     def existing(self):
         db=self.database();self.insert(db,self.row(4,'Existing',999))
@@ -164,6 +164,61 @@ class ImportTests(unittest.TestCase):
         except OSError:self.skipTest('symlinks unavailable')
         with self.assertRaisesRegex(ValueError,'Linked'): self.run_import()
         self.assertEqual(list(outside.iterdir()),[])
+
+    def link(self,path,to):
+        try:path.symlink_to(to,target_is_directory=to.is_dir())
+        except OSError:self.skipTest('symlinks unavailable')
+
+    def test_data_folder_reached_through_a_linked_parent_imports(self):
+        # A Steam Deck SD card (/run/media/<card> is a link), /home on Fedora Atomic, ~/Games
+        # linked to another drive: links above the data folder are the player's layout (#719).
+        card=self.root/'card';self.link(card,self.root)
+        before=self.existing()
+        target=ci.Target(card,card/'profile',self.target.identity)
+        self.assertEqual((target.home,target.root),(self.root,self.target.root))
+        backup=ci.import_design(self.catalog,self.item.path,target,card/'default.xex')
+        self.assertTrue(backup.is_relative_to(self.root/'save-backups/catalog-imports'))
+        self.assertEqual(self.files()['existing.liv'],before['existing.liv'])
+        self.assertIn(self.item.path,self.files())
+        self.assertIn('Latest verified catalog backup',ci.recovery_warning(target,'test.'))
+        # Play recovers the catalog through the same linked path without a warning.
+        plan=game.LaunchPlan(game=None,cwd=card,argv=['forza',f'--user_data_root={card/"profile"}'],
+            env={'FORZA_XUID':target.identity.hex()},unset=[],toml_path=card/'forza.toml',
+            toml_text='',log_dir=card)
+        self.assertEqual(ci.target_for_plan(plan),target)
+        session=game.Session(plan,log=lambda _:None)
+        try:
+            with patch('subprocess.Popen') as spawn,patch.object(ci,'recover',wraps=ci.recover) as recover:
+                session.start();spawn.assert_called_once();recover.assert_called_once()
+            self.assertEqual(plan.notes,[])
+        finally:session.cleanup()
+
+    def test_links_inside_the_data_folders_are_refused_wherever_they_point(self):
+        before=self.existing()
+        outside=Path(self.temp.name+'-outside');outside.mkdir();self.addCleanup(outside.rmdir)
+        inside=self.folder/'Elsewhere';inside.mkdir()
+        cases=[(self.folder/'LivCatalog',outside),          # out of the data folder
+               (self.folder/'LivCatalog',inside),           # inside it: refused like the save manager
+               (self.folder/'.catalog-import.json',outside), # a journal written through a link
+               (self.root/'save-backups',outside)]          # backups and the lock under the home
+        for link,to in cases:
+            with self.subTest(link=link.name,to=to.name):
+                hold=link.with_name(link.name+'.real')
+                if link.exists():link.rename(hold)
+                self.link(link,to)
+                try:
+                    with self.assertRaisesRegex(ValueError,'Linked'):self.run_import()
+                finally:
+                    link.unlink()
+                    if hold.exists():hold.rename(link)
+                self.assertEqual(list(outside.iterdir()),[]);self.assertEqual(list(inside.iterdir()),[])
+                self.assertEqual(self.files(),before)
+        # A folder between the data folder and the save is inside it too.
+        profile=self.target.root/game.LOCAL_PROFILE;moved=self.root/'moved'
+        profile.rename(moved);self.link(profile,moved)
+        with self.assertRaisesRegex(ValueError,'Linked'):self.run_import()
+        with self.assertRaisesRegex(ValueError,'Linked'):ci.recover(self.target)
+        with self.assertRaisesRegex(ValueError,'outside'):ci._direct(self.root/'x',self.target.root)
 
     def test_source_and_destination_index_round_trip_and_size_bounds(self):
         db,_=ci._database(self.catalog.index,self.index_keys);db.close()
