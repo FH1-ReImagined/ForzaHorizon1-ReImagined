@@ -543,6 +543,27 @@ Same steps as before (`fm4_track_mod.py`, spots from FM4's AI line, `reconvert_t
 - Sheets (trk-spike shots/): infin-spots.png, lemans-spots.png, roadatlanta-spots.png,
   roadamerica-spots.png.
 
+## More circuits, batch 2: Indianapolis, Crown Jewel, Sebring, Catalunya
+
+| Circuit | Ribbon 0 | Zones | Tiles | Blocks asked | 9-spot pass |
+| --- | --- | --- | --- | --- | --- |
+| Indianapolis (Indi) | 3948 instances, 1541 models | 153 | 1487 | 57265 | 9/9 drawn, 0 crashes |
+| Crown Jewel | 1510 instances, 3255 models | 378 | 501 | 73419 | 9/9 drawn, 0 crashes |
+| Sebring | 7731 instances, 2118 models | 315 | 3212 | 35228 | 9/9 drawn, 0 crashes |
+| Catalunya | 4330 instances, 1831 models | 120 | 2155 | 42348 | 9/9 drawn, 0 crashes |
+
+- Crown Jewel asks for 73419 streaming blocks, past the hook's 65536 cap; its largest need
+  without the margin is 58735 and no run ran out (no "ran out" warning in 9 runs).
+- The dark surfaces got worse: the road itself black at Sebring (all spots but 3),
+  Catalunya (2 to 6), Indianapolis (5, 6, 8) and Crown Jewel (1 to 3; 4 flat grey). Not the
+  shader alone (ROAD_BLND_2 draws at Suzuka, black at Sebring and Catalunya) nor the tile
+  fill (the same few slots left alone as at Road Atlanta, which draws). Next: a trace of a
+  black road draw.
+- Sebring's spot 6 lost its run to run.sh's guard: an old game.pid's number taken by another
+  process. The guard now only counts a forza started on trk-spike's game folder.
+- Sheets (trk-spike shots/): indi-spots.png, crownjewel-spots.png, sebring-spots.png,
+  catalunya-spots.png.
+
 ## Towards players: a plan
 
 What a player would need, beyond the spike (none of this is built yet):
