@@ -751,7 +751,49 @@ extern "C" REX_FUNC(sub_82E2EAD8) {
   if (!table) return;
   const uint32_t header = Load32(base, table + 12 * id);
   for (uint32_t k = 0; k < c.ids.size(); ++k)
-    if (c.ids[k] == id) { fm4_pack_headers[k] = header; break; }
+    if (c.ids[k] == id) {
+      fm4_pack_headers[k] = header;
+      // FORZA_FM4_DUMPPACK=DIR:k,k...: a pack entry's 52-byte header and its base level's
+      // bytes as the GPU holds them (tiled, big-endian words) to DIR/pack_<k>.bin.
+      static const char* dump = std::getenv("FORZA_FM4_DUMPPACK");
+      if (dump && header) {
+        const std::string spec(dump);
+        const size_t colon = spec.find(':');
+        const std::string dir = spec.substr(0, colon);
+        bool want = false;
+        for (size_t p = colon + 1; p < spec.size();) {
+          const size_t q = spec.find(',', p);
+          if (std::strtoul(spec.substr(p, q - p).c_str(), nullptr, 10) == k) want = true;
+          if (q == std::string::npos) break;
+          p = q + 1;
+        }
+        if (want) {
+          const uint32_t d1 = Load32(base, header + 0x20), d2 = Load32(base, header + 0x24);
+          const uint32_t w = (d2 & 0x1FFF) + 1, hh = ((d2 >> 13) & 0x1FFF) + 1, fmt = d1 & 0x3F;
+          const uint32_t bpb = (fmt == 0x12 || fmt == 0x3B) ? 8 : 16;  // bytes per 4x4 block
+          const uint32_t aw = (w + 127) & ~127u, ah = (hh + 127) & ~127u;  // tiled: 32x32 blocks
+          const uint32_t bytes = (aw / 4) * (ah / 4) * bpb;
+          const uint32_t addr = d1 & ~0xFFFu;
+          if (std::FILE* f = std::fopen((dir + "/pack_" + std::to_string(k) + ".bin").c_str(), "wb")) {
+            std::fwrite(forza::GuestPtr(base, header), 1, 52, f);
+            std::fwrite(forza::GuestPtr(base, addr), 1, bytes, f);
+            std::fclose(f);
+            REXLOG_INFO("FM4TRACK: pack entry {} dumped: {}x{} format {:02X} at {:08X}, {} bytes", k, w, hh, fmt, addr, bytes);
+          }
+          // Again 30 s later (the data may arrive after the registration): pack_<k>_late.bin.
+          std::thread([base, header, addr, bytes, dir, k] {
+            std::this_thread::sleep_for(std::chrono::seconds(30));
+            if (std::FILE* f = std::fopen((dir + "/pack_" + std::to_string(k) + "_late.bin").c_str(), "wb")) {
+              std::fwrite(forza::GuestPtr(base, header), 1, 52, f);
+              std::fwrite(forza::GuestPtr(base, addr), 1, bytes, f);
+              std::fclose(f);
+              REXLOG_INFO("FM4TRACK: pack entry {} dumped again 30 s later", k);
+            }
+          }).detach();
+        }
+      }
+      break;
+    }
 }
 
 static inline uint8_t base_byte(uint8_t* base, uint32_t a) { return *forza::GuestPtr(base, a); }
@@ -1730,4 +1772,39 @@ extern "C" REX_FUNC(sub_82EADA68) {
     return;
   }
   __imp__sub_82EADA68(ctx, base);
+}
+
+// FM4's static pack holds whole textures (base level, then mips); FH1's holds only the mips
+// (its base levels stream from .bix files). The pack's registration (sub_82E2EAD8) asks the
+// texture layout (sub_82AFFA70: r5 &base size, r10 &mip size) and allocates and copies only
+// mip size + 4 KB, while the header points the base level at the start and the mips past
+// it: a 512 x 512 atlas got its first 0xF000 bytes, the bottom half of its base level was the
+// next texture's memory (black road lightmaps at Sebring, Catalunya, Indianapolis...).
+// While FM4's pack is read, the mip size given back from that call has the base size added,
+// so the whole texture is allocated and copied. FORZA_FM4_STX_WHOLE=0 turns it off.
+extern "C" REX_FUNC(__imp__sub_82AFFA70);
+extern "C" REX_FUNC(sub_82AFFA70) {
+  static const bool whole = [] {
+    const char* v = std::getenv("FORZA_FM4_STX_WHOLE");
+    return !v || std::string_view(v) != "0";
+  }();
+  const bool ours = whole && fm4_stx_active && uint32_t(ctx.lr) == 0x82E2EB34;
+  const uint32_t p_base = ctx.r5.u32, p_mip = ctx.r10.u32, p_mipaddr = ctx.r9.u32;
+  __imp__sub_82AFFA70(ctx, base);
+  if (!ours || !p_base || !p_mip || !p_mipaddr) return;
+  const uint32_t bsize = Load32(base, p_base), msize = Load32(base, p_mip);
+  const uint32_t sum = bsize + msize;
+  auto put = [&](uint32_t a, uint32_t v) {
+    uint8_t* p = forza::GuestPtr(base, a);
+    p[0] = uint8_t(v >> 24); p[1] = uint8_t(v >> 16); p[2] = uint8_t(v >> 8); p[3] = uint8_t(v);
+  };
+  // No mips: the wrapper copies 4 KB only; a non-zero mip address makes it take the size.
+  if (!Load32(base, p_mipaddr)) {
+    if (bsize <= 4096) return;
+    put(p_mipaddr, 1);
+  }
+  put(p_mip, sum);
+  static std::atomic<int> told{0};
+  if (told.fetch_add(1) < 3)
+    REXLOG_INFO("FM4TRACK: static pack texture copied whole: base {} + mips {} bytes", bsize, msize);
 }
