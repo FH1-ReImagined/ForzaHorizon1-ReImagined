@@ -1090,3 +1090,48 @@ vsync, the 540p scene since #640, fullscreen; each run a fresh start of the gold
   so nothing was drawn at 2048.
 - **ReGPU at the 720p scene:** benchmark 31.9 fps (one run), so the 540p scene helps it too. With the
   plugin's old defaults (vsync off, the game's filtering) one benchmark gave 39.8 fps.
+
+## Device lost: which draw the GPU was on (#551)
+
+When the driver resets the GPU ("device lost", Windows' TDR or a GPU fault), the game cannot go
+on. The log used to name only the submission the GPU never finished. Since ReIGlue 0438 it
+names the draw (cvar `gpu_device_lost_breadcrumbs`, on by default; `false` in Advanced >
+Other settings turns it off):
+
+- **Vulkan**: every guest draw and resolve gets a number, kept with its submission, frame and
+  shaders for the last 16384. After each, the GPU writes the number once it has finished it
+  (`VK_AMD_buffer_marker`: AMD's Windows drivers, RADV, and NVIDIA's driver too) or, where
+  that is missing, passes a checkpoint holding it (`VK_NV_device_diagnostic_checkpoints`). On a
+  loss, before the game stops:
+
+  ```
+  GPU breadcrumbs (VK_AMD_buffer_marker): last finished #6125407 (draw 1 of 669 in submission
+  13681, frame 2999, VS D974E56F5F5EE662, PS E550CDDE3EED31DA, 3 vertices); unfinished: #6125408
+  (draw 2 of 669 in submission 13681, frame 2999, VS 12BA4E86B158D049, PS CAE25D74AD7B16CB, 9300
+  vertices); submission 13681 holds #6125407-#6126075; 6126075 recorded in all
+  ```
+
+  The unfinished draw is the oldest the GPU still had: the one it hung on, or one stuck behind
+  it. Its VS/PS are the hashes the `Creating graphics pipeline state with VS ..., PS ...` lines
+  use.
+- **Direct3D 12**: DRED (auto-breadcrumbs, page faults) is on without the debug layer. The log
+  names the operation each unfinished command list was on (`DrawIndexedInstanced (draw 412 of
+  the list's 980)`), the four before it, and the allocations at a page fault's address.
+
+Cost (RX 9060 XT, RADV, `tools/perf_scenario.sh race` at up to 240 fps, 2026-11-05): the frame
+rate did not change (CPU-bound, 133.9 fps with the breadcrumbs, 132.7 without, two runs each);
+the GPU was busy 2% longer (770 against 754 ms a second). A second marker per draw, when the
+draw was issued, cost 5%, so there is none. DRED's cost was not measured here (Windows only).
+
+Test hooks: `FORZA_TEST_GPU_LOSS_AT_FRAME=<n>` reports a loss at frame n without one (Vulkan:
+the fence check; Direct3D 12: `ID3D12Device5::RemoveDevice`), `FORZA_TEST_GPU_HANG_AT_FRAME=<n>`
+makes the GPU wait for an event that is never set (Vulkan, from the 50th draw of a submission:
+a real reset, on test machines only; with another game on the same GPU, Windows may run that one
+instead and never reset), `FORZA_TEST_GPU_BREADCRUMBS=nv` takes NVIDIA's checkpoints where
+AMD's markers exist too.
+
+Checked 2026-11-05: on a GTX 1650 Ti (Windows) the hang hook made Windows reset the GPU about 6 s
+later, and both `VK_AMD_buffer_marker` and the checkpoints named the resolve right before the
+hang point as the last finished and the draw after it as unfinished; on Direct3D 12 the removal
+hook showed DRED on without the debug layer (no command list in flight, no page fault). RADV was
+checked with the simulated loss only: a real reset there would reset the desktop's GPU too.

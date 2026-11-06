@@ -59,11 +59,12 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # translations' SPIR-V freed once their shader module exists (#640), and 0435: no locked
 # instruction on every draw for the outdated-texture flag, no division per packet (#607), and
 # 0436: a texture pack's pack.toml can ask for its files to be read at start (the decal pack, #659),
-# and 0437: texture pack replacements freed with their textures, within a graphics memory limit (#677).
+# and 0437: texture pack replacements freed with their textures, within a graphics memory limit (#677),
+# and 0438: a lost device names the draw the GPU was on (Vulkan breadcrumbs, D3D12 DRED, #551).
 # A reviewed full commit can be pinned before a maintainer publishes a tag.
 # When a tag is supplied, its target must still match this immutable commit.
 REIGLUE_TAG=
-REIGLUE_COMMIT=031077babfb78daa4cc3544788b8bc09ca3edf08  # 0437 (#677), on top of ReIGlue main (0427-0436)
+REIGLUE_COMMIT=271809b33e7bf3d7c5a6b3b65f042774544f7a10  # 0438 (#551), on top of ReIGlue main (0427-0437)
 REIGLUE_URL="${REIGLUE_URL:-https://github.com/FH1-ReImagined/ReIGlue}"
 NIGHTLY="${REXSDK_NIGHTLY:-$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64}"
 SRC="${REXSDK_SRC:-$HOME/rexglue-sdk-src-forza/sdk}"
