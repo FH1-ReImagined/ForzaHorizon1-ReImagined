@@ -2,18 +2,9 @@
 # Artifacts contain diagnostics only; local game apps are never packaged here.
 name: macOS
 
+# Manual only for now: the Mac port isn't being worked on, so it no longer runs on every
+# push and pull request (run it from the Actions tab when needed).
 on:
-  pull_request:
-    paths:
-      - .github/workflows/macos.yml
-      - forza-recomp/**
-      - tools/**
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/macos.yml
-      - forza-recomp/**
-      - tools/**
   workflow_dispatch:
 
 permissions:
