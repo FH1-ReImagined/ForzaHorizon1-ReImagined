@@ -5,6 +5,7 @@ import shutil
 import struct
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -683,6 +684,159 @@ class Fm4FormTests(unittest.TestCase):
         for media in (0x26FF1101, 0x12345678):
             write_tree(self.t / f"m{media:X}", {**DISC1, "default.xex": xex(fm4cars.FM4_TITLE, media)})
             self.disc1(self.t / f"m{media:X}")
+
+
+def in_use(path):
+    """The error Windows gives for a file another program holds (WinError 32)."""
+    e = PermissionError(13, "The process cannot access the file because it is being used by another "
+                            "process", str(path))
+    e.winerror = 32
+    return e
+
+
+def open_files_under(folder):
+    """Files under folder this process holds open (Linux; Windows refuses the delete itself)."""
+    fds = Path("/proc/self/fd")
+    out = []
+    if fds.is_dir():
+        for fd in fds.iterdir():
+            try:
+                t = os.readlink(fd)
+            except OSError:
+                continue
+            if t.startswith(str(folder) + os.sep):
+                out.append(t)
+    return out
+
+
+class Fm4WindowsFileTests(_Setup, unittest.TestCase):
+    """#551: on Windows the import added the cars, then failed deleting its temporary folder, as
+    FM4's car pack zips (unpacked from Disc 2 into it) were still open. Deleting or renaming a
+    folder with a file open in it fails here the way Windows does."""
+
+    def setUp(self):
+        super().setUp()
+        self.tools = fm4_cars = fm4cars._tools()
+        self.addCleanup(fm4_cars.ZIPS.close)
+        self.real_rmtree, self.real_rename = shutil.rmtree, os.rename
+
+        def rmtree(path, *a, **kw):
+            held = open_files_under(Path(path).resolve())
+            if held:
+                raise in_use(held[0])
+            return self.real_rmtree(path, *a, **kw)
+
+        def rename(src, dst, *a, **kw):
+            held = open_files_under(Path(src).resolve())
+            if held:
+                raise in_use(held[0])
+            return self.real_rename(src, dst, *a, **kw)
+        for p in (patch.object(shutil, "rmtree", rmtree), patch.object(os, "rename", rename),
+                  patch.object(fm4cars, "prepare", self.unpacked), patch.object(time, "sleep")):
+            p.start()
+            self.addCleanup(p.stop)
+        self.temp = None
+
+    def unpacked(self, disc1, disc2, work, progress, cancelled):
+        """What prepare() leaves for an image of each disc: both unpacked into the import's
+        temporary folder, the car packs' zips at the place the player's log names."""
+        self.temp = work.parent
+        d1 = work / "disc1"
+        shutil.copytree(disc1, d1)
+        import zipfile
+        (d1 / "Media/cars").mkdir(parents=True)
+        with zipfile.ZipFile(d1 / "Media/cars/ABC_Car_11.zip", "w") as z:
+            z.writestr("carattribs.xml", "<CarAttributes/>")
+        packs = work / "content/4d53091000000001/Media/DLCZips"
+        packs.mkdir(parents=True)
+        with zipfile.ZipFile(packs / "0001_pri_65.zip", "w") as z:
+            z.writestr("media/cars/BUG_Veyron_09/carattribs.xml", "<CarAttributes/>")
+        return d1, work / "content"
+
+    def converter(self, opens=True):
+        tools = self.tools
+
+        class Reading(FakeConverter):
+            """Reads FM4's files the way the converter does: zips through the tool's cache, the
+            databases with sqlite, the pack it writes; closes them with the converter's close."""
+
+            def __init__(self, fm4, fh1, out, package=None):
+                super().__init__(fm4, fh1, out, package)
+                import sqlite3
+                self.fm4db, self.fh1db, self.pack = fm4.db(), sqlite3.connect(":memory:"), None
+                if opens:
+                    assert "bug_veyron_09" in fm4.car_files() and "abc_car_11" in fm4.car_files()
+            close = tools.Converter.close
+        return Reading
+
+    def test_fm4s_files_are_closed_before_the_temporary_folder_goes(self):
+        msg = fm4cars.build(self.cfg, self.disc1, "disc2.iso", converter=self.converter())
+        self.assertIn("Added 1", msg)
+        self.assertNotIn("temporary folder", msg)
+        self.assertFalse(self.temp.exists())
+        self.assertEqual([p.name for p in mods.mods_dir(self.cfg).iterdir()], [fm4cars.MOD])
+        self.assertFalse([p for p in self.tools.ZIPS.open if str(self.temp) in p])
+
+    def test_a_file_held_for_a_moment_is_waited_for(self):
+        calls = []
+        real = shutil.rmtree
+
+        def scanned(path, *a, **kw):  # an antivirus reading the new files, twice
+            if Path(path).name.startswith(".fm4-import-") and len(calls) < 2:
+                calls.append(path)
+                raise in_use(Path(path) / "package/x.zip")
+            return real(path, *a, **kw)
+        with patch.object(shutil, "rmtree", scanned):
+            msg = fm4cars.build(self.cfg, self.disc1, "disc2.iso", converter=self.converter())
+        self.assertEqual(len(calls), 2)
+        self.assertNotIn("temporary folder", msg)
+        self.assertFalse(self.temp.exists())
+
+    def test_a_folder_that_stays_held_does_not_undo_the_import(self):
+        real = shutil.rmtree
+
+        def held(path, *a, **kw):
+            if Path(path).name.startswith(".fm4-import-"):
+                raise in_use(Path(path) / "src/content/x.zip")
+            return real(path, *a, **kw)
+        with patch.object(shutil, "rmtree", held):
+            msg = fm4cars.build(self.cfg, self.disc1, "disc2.iso", converter=self.converter())
+        self.assertIn("Added 1", msg)
+        self.assertIn(f"temporary folder {self.temp} could not be deleted yet", msg)
+        self.assertEqual(fm4cars.status(self.cfg)["cars"], ["BUG_Veyron_09"])
+        first = self.temp
+        fm4cars.build(self.cfg, self.disc1, "disc2.iso", converter=self.converter())  # sweeps it
+        self.assertFalse(first.exists())
+        self.assertEqual([p.name for p in mods.mods_dir(self.cfg).iterdir()], [fm4cars.MOD])
+
+    def test_a_publish_step_that_stays_held_keeps_the_previous_import_and_says_why(self):
+        fm4cars.build(self.cfg, self.disc1, "disc2.iso", converter=self.converter())
+        real = os.rename
+
+        def held(src, dst, *a, **kw):
+            if Path(src).name == fm4cars.MOD and ".fm4-import-" in str(src):
+                raise in_use(Path(src) / "media/db/gamedb.slt")
+            return real(src, dst, *a, **kw)
+        with patch.object(os, "rename", held), self.assertRaises(fm4cars.Fm4Error) as caught:
+            fm4cars.build(self.cfg, self.disc1, "disc2.iso", converter=self.converter())
+        self.assertIn("in use by another program", str(caught.exception))
+        self.assertIn("the cars imported before are kept", str(caught.exception))
+        self.assertEqual(fm4cars.status(self.cfg)["cars"], ["BUG_Veyron_09"])
+        package, _ = fm4cars._package(self.cfg)
+        self.assertTrue((package / "Media/DLCZips/fm4cars1_pri_60.zip").is_file())
+        self.assertFalse(self.temp.exists())
+        self.assertEqual([p.name for p in mods.mods_dir(self.cfg).iterdir()], [fm4cars.MOD])
+
+    def test_a_failed_conversion_closes_its_files_too(self):
+        tools = self.tools
+
+        class Failing(self.converter()):
+            def run(self, ids, progress=None, cancelled=lambda: False):
+                raise tools.ConvertError("no car converted")
+        with self.assertRaises(fm4cars.Fm4Error):
+            fm4cars.build(self.cfg, self.disc1, "disc2.iso", converter=Failing)
+        self.assertFalse(self.temp.exists())
+        self.assertIsNone(fm4cars.status(self.cfg))
 
 
 try:

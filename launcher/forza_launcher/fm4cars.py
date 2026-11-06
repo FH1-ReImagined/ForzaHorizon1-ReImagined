@@ -10,10 +10,12 @@ Nothing is downloaded and nothing leaves this PC. docs/modding/fm4-cars.md has t
 import copy
 import errno
 import json
+import os
 import re
 import shutil
 import struct
 import tempfile
+import time
 from pathlib import Path
 
 from . import datafolder, mods, paths
@@ -825,6 +827,64 @@ def _update_root(cfg):
     return update if update and (Path(update) / "media.zip").is_file() else None
 
 
+# ---- Moving and deleting on Windows (#551) ------------------------------------------------------
+# Windows refuses to rename or delete a file while a program holds it open, and a folder while it
+# holds a file in it: our own handles (FM4's zips, the databases), which are closed before the
+# publish, but also an antivirus or the search indexer reading the gigabytes just written, for a
+# moment. Such an error is retried for a few seconds before it is named to the player.
+_BUSY = (5, 32, 33)  # access denied (a folder being scanned), sharing violation, lock violation
+_WAITS = (0.1, 0.2, 0.4, 0.8, 1.5, 2.5)
+
+
+def _busy(e):
+    return getattr(e, "winerror", None) in _BUSY
+
+
+def _retry(fn, *args):
+    """fn(*args), retried while Windows says a file is in use."""
+    for wait in _WAITS:
+        try:
+            return fn(*args)
+        except OSError as e:
+            if not _busy(e):
+                raise
+            time.sleep(wait)
+    return fn(*args)
+
+
+def _move(src, dst):
+    """Moves a folder of ours: a rename, retried while a file of it is in use (shutil.move would
+    copy the gigabytes instead, then fail to delete the source); a copy only to another drive."""
+    try:
+        _retry(os.rename, src, dst)
+    except OSError as e:
+        if _busy(e):
+            raise
+        shutil.move(src, dst)
+
+
+def _remove(path):
+    """Deletes a folder of ours, retried while a file of it is in use. False when it stays."""
+    try:
+        _retry(shutil.rmtree, path)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return False
+    return True
+
+
+def _locked(e):
+    return getattr(e, "winerror", None) in (32, 33)
+
+
+def _in_use(e):
+    return Fm4Error(f"{e.filename or 'A file'} is in use by another program, so the import could not "
+                    "finish; the cars imported before are kept. This is usually an antivirus scan of "
+                    "the new files or a File Explorer window on that folder: wait a minute or close it, "
+                    "then import again.")
+
+
 def build(cfg, disc1, disc2=None, progress=lambda n, total, text: None, cancelled=lambda: False,
           converter=None):
     """Convert every FM4 car FH1 lacks and publish them as the FM4 cars mod. The previous
@@ -836,77 +896,106 @@ def build(cfg, disc1, disc2=None, progress=lambda n, total, text: None, cancelle
         raise Fm4Error(f"{target} already exists and was not made by Import FM4 cars. Move it first.")
     backup = target.with_name("." + MOD + ".previous")
     if backup.exists():
-        shutil.rmtree(backup, ignore_errors=True)
+        _remove(backup)
+    for old in target.parent.glob(".fm4-import-*"):  # an earlier import's, its cleanup refused
+        if old.is_dir() and not old.is_symlink():
+            _remove(old)
+    work = Path(tempfile.mkdtemp(prefix=".fm4-import-", dir=target.parent))
+    try:
+        message = _build(cfg, tools, target, backup, work, disc1, disc2, progress, cancelled, converter)
+    except BaseException:
+        _remove(work)
+        raise
+    if not _remove(work):
+        # the cars are in: a folder Windows won't let go of yet is no reason to say it failed
+        message += (f" Its temporary folder {work} could not be deleted yet (a program has a file "
+                    "of it open); the next import deletes it, or delete it yourself.")
+    return message
+
+
+def _build(cfg, tools, target, backup, work, disc1, disc2, progress, cancelled, converter):
     dlc_root = Path(cfg.data_home()) / datafolder.DLC_DIR / "00000002"
-    with tempfile.TemporaryDirectory(prefix=".fm4-import-", dir=target.parent) as temp:
-        work = Path(temp)
-        src1, src2 = prepare(disc1, disc2, work / "src", progress, cancelled)
-        staged = work / MOD
-        staged_pack = work / "package" / tools.PACK_NAME
+    src1, src2 = prepare(disc1, disc2, work / "src", progress, cancelled)
+    staged = work / MOD
+    staged_pack = work / "package" / tools.PACK_NAME
+    fm4 = fh1 = conv = None
+    try:
         fm4 = tools.FM4(str(src1), str(src2) if src2 else None)
         update = _update_root(cfg)
         fh1 = tools.FH1(str(cfg.game_files()), str(update) if update else None, str(dlc_root))
-        try:
-            conv = (converter or tools.Converter)(fm4, fh1, str(staged), str(staged_pack))
-            ids = [cid for cid, _, reason in conv.candidates() if not reason]
-            if not ids:
-                raise Fm4Error("Your FM4 files have no car that FH1 lacks.")
-            try:
-                report = conv.run(ids, progress, cancelled)
-            except tools.Cancelled:
-                raise Cancelled() from None
-            except tools.ConvertError as e:
-                raise Fm4Error(str(e)) from None
-        finally:
+        conv = (converter or tools.Converter)(fm4, fh1, str(staged), str(staged_pack))
+        ids = [cid for cid, _, reason in conv.candidates() if not reason]
+        if not ids:
+            raise Fm4Error("Your FM4 files have no car that FH1 lacks.")
+        report = conv.run(ids, progress, cancelled)
+    except tools.Cancelled:
+        raise Cancelled() from None
+    except tools.ConvertError as e:
+        raise Fm4Error(str(e)) from None
+    finally:
+        # every handle on the unpacked discs and the new pack closed before they move or are
+        # deleted: Windows refuses both while a file is open (#551)
+        if conv is not None and hasattr(conv, "close"):
+            conv.close()
+        if fh1 is not None:
             fh1.close()
-        info = {"format": 1, "cars": [c[1] for c in report["cars"]],
-                "skipped": [s[1] for s in report["skipped"]],
-                "dlc": _dlc(cfg)}
-        (staged / MARKER).write_text(json.dumps(info, ensure_ascii=False, indent=1), encoding="utf-8")
-        if cancelled():
-            raise Cancelled()
-        old_state = copy.deepcopy(cfg.d.get("mods"))
-        package, header = _package(cfg)
-        new_header = work / "Headers" / "00000002" / header.name  # where the converter puts it
-        existed = target.exists()
-        if existed:
-            target.rename(backup)
-        old_package = package.with_name(package.name + ".previous")
-        had_package = package.exists()
-        moved = False
+        if fm4 is not None:
+            fm4.close()
+    info = {"format": 1, "cars": [c[1] for c in report["cars"]],
+            "skipped": [s[1] for s in report["skipped"]],
+            "dlc": _dlc(cfg)}
+    (staged / MARKER).write_text(json.dumps(info, ensure_ascii=False, indent=1), encoding="utf-8")
+    if cancelled():
+        raise Cancelled()
+    old_state = copy.deepcopy(cfg.d.get("mods"))
+    package, header = _package(cfg)
+    new_header = work / "Headers" / "00000002" / header.name  # where the converter puts it
+    existed = target.exists()
+    if existed:
         try:
-            if had_package:
-                if old_package.exists():
-                    shutil.rmtree(old_package)
-                package.rename(old_package)
-            if staged_pack.exists():
-                package.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(staged_pack), str(package))
-                moved = True
-                header.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(new_header, header)
-            staged.rename(target)
-            state = mods.state(cfg)
-            cfg.d["mods"] = {"order": [f for f in state["order"] if f != MOD] + [MOD],
-                             "disabled": [f for f in state["disabled"] if f != MOD]}
-            cfg.save()
-        except BaseException:
-            if target.exists():
-                shutil.rmtree(target)
-            if existed:
-                backup.rename(target)
-            if moved and package.exists():
-                shutil.rmtree(package)
-            if old_package.exists():
-                old_package.rename(package)
-            if old_state is None:
-                cfg.d.pop("mods", None)
-            else:
-                cfg.d["mods"] = old_state
+            _retry(target.rename, backup)
+        except OSError as e:
+            if _locked(e):
+                raise _in_use(e) from e
             raise
+    old_package = package.with_name(package.name + ".previous")
+    had_package = package.exists()
+    moved = False
+    try:
+        if had_package:
+            if old_package.exists():
+                _retry(shutil.rmtree, old_package)
+            _retry(package.rename, old_package)
+        if staged_pack.exists():
+            package.parent.mkdir(parents=True, exist_ok=True)
+            moved = True
+            _move(str(staged_pack), str(package))
+            header.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(new_header, header)
+        _retry(staged.rename, target)
+        state = mods.state(cfg)
+        cfg.d["mods"] = {"order": [f for f in state["order"] if f != MOD] + [MOD],
+                         "disabled": [f for f in state["disabled"] if f != MOD]}
+        cfg.save()
+    except BaseException as e:
+        if target.exists():
+            _retry(shutil.rmtree, target)
         if existed:
-            shutil.rmtree(backup, ignore_errors=True)
-        shutil.rmtree(old_package, ignore_errors=True)
+            _retry(backup.rename, target)
+        if moved and package.exists():
+            _retry(shutil.rmtree, package)
+        if old_package.exists():
+            _retry(old_package.rename, package)
+        if old_state is None:
+            cfg.d.pop("mods", None)
+        else:
+            cfg.d["mods"] = old_state
+        if isinstance(e, OSError) and _locked(e):
+            raise _in_use(e) from e
+        raise
+    if existed:
+        _remove(backup)
+    _remove(old_package)
     n, skipped = len(info["cars"]), len(info["skipped"])
     more = f" {skipped} could not be converted (see the mod's {MARKER})." if skipped else ""
     return f"Added {n} Forza Motorsport 4 car(s). They are in the Autoshow the next time the game starts.{more}"

@@ -201,6 +201,9 @@ class PackWriter:
 
 
 class _Zips:
+    """The zips read so far, kept open. close() lets them go: Windows can delete or move neither
+    a file nor its folder while a handle to it is open (#551)."""
+
     def __init__(self):
         self.open = {}
 
@@ -209,6 +212,14 @@ class _Zips:
         if z is None:
             z = self.open[path] = zipfile.ZipFile(path)
         return z
+
+    def close(self, *roots):
+        """Close the zips under any of the folders roots (all of them when none is given)."""
+        roots = [os.path.normcase(os.path.abspath(r)) for r in roots if r]
+        for path in list(self.open):
+            p = os.path.normcase(os.path.abspath(path))
+            if not roots or any(p == r or p.startswith(r.rstrip(os.sep) + os.sep) for r in roots):
+                self.open.pop(path).close()
 
 
 ZIPS = _Zips()
@@ -245,9 +256,15 @@ class FM4:
                         self.packs.append((os.path.join(root, f), st[0] if st else None))
         self.packs.sort()
         self._cars = None
+        self._roots = (disc1, content)
 
     def db(self):
         return sqlite3.connect("file:%s?mode=ro" % self.db_path, uri=True)
+
+    def close(self):
+        """Close FM4's zips: the launcher deletes the unpacked discs next (#551)."""
+        self._cars = None
+        ZIPS.close(*self._roots)
 
     def car_files(self):
         """MediaName (lower) -> (display MediaName, [(relative name, Member)])."""
@@ -329,8 +346,10 @@ class FH1:
                         self.dlc_zips.append((int(m.group(1)), os.path.join(root, f)))
         self.dlc_zips.sort()
         self._tmp = []
+        self._roots = (game, update, dlc)
 
     def close(self):
+        ZIPS.close(*self._roots)
         for p in self._tmp:
             try:
                 os.unlink(p)
@@ -976,6 +995,15 @@ class Converter:
         self.package = package
         self.pack = PackWriter(os.path.join(package, "Media", "DLCZips"), PACK_STEM, PACK_PRIORITY) if package else None
 
+    def close(self):
+        """Close the databases and a pack zip a failed run left open (#551): on Windows an open
+        file can't be deleted, nor the folder holding it."""
+        for db in (self.fm4db, self.fh1db):
+            db.close()
+        if self.pack and self.pack.f is not None:
+            self.pack.f.close()
+            self.pack.f = None
+
     def write(self, rel, data):
         path = os.path.join(self.out, *rel.split("/"))
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -1300,7 +1328,9 @@ def main(argv=None):
             print("sound set-up from FM4 for %s: %s" % (car, ", ".join(files)))
         if rep.get("conflicts"):
             print("rows whose key FH1 uses differently (left out):", rep["conflicts"][:20])
+        c.close()
         fh1.close()
+        fm4.close()
         return 0
     except ConvertError as e:
         print("error:", e, file=sys.stderr)
