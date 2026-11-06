@@ -615,6 +615,34 @@ Nürburgring GP, some of Le Mans, Laguna, Maple Valley, Infineon, Road America, 
 flat-coloured grounds (Top Gear, Hockenheim), flat grey roads (Infineon 5-6, Crown Jewel 4,
 Top Gear's runway).
 
+## The black roads: static pack textures cut short
+
+- Cause: FH1's static texture pack holds only each texture's mips (base levels stream from
+  .bix files), and its registration (sub_82E2EAD8) asks the texture layout (sub_82AFFA70)
+  then allocates and copies mip size + 4 KB (4 KB alone with no mips), while the header keeps
+  the base level at the start and the mips after it. FM4's pack holds whole textures. A
+  512 x 512 DXT1 atlas (Sebring's 697: base 128 KB, mips 56 KB) got its first 0xF000 bytes;
+  the rest of its base level was the next texture's memory (the next pack entry sat 0xF000
+  further on, the same at Laguna Seca). The road lightmap tiles in an atlas's lower half
+  (Sebring record 3131 at v 0.84) read black, so the roads did.
+- How it was found: a pack entry's header and base level dumped from the running game
+  (`FORZA_FM4_DUMPPACK=DIR:k,k...`) and decoded (Xenos tiling, 8in16, DXT1; the decoder checked
+  on a streamed .bix: tree bark); the dump matched the pack file for 0xF000 bytes only, the
+  file holding 0x2D000 for the entry. Ruled out first: the UV rectangle (the shader reads
+  Light_Map_uvOS as uv * zw + xy, as the binder gives it), the tile fill, the blend mask.
+- Fix (fm4_track.cpp, on unless `FORZA_FM4_STX_WHOLE=0`): while FM4's pack is read, the mip
+  size from that layout call gets the base size added (a texture with no mips larger than
+  4 KB gets a mip address too), so the whole texture is allocated and copied: the dump then
+  matches the file for the whole base level, and Sebring's spot 2 road has its asphalt.
+- 9-spot passes with the fix against the passes before, 81 runs, 0 crashes (trk-spike shots/
+  <track>-whole.png):
+  - Fixed: Sebring (all 8 black spots), Silverstone (3, 4, 7, 8), Catalunya (2 to 6),
+    Crown Jewel (1 to 3 black, 4 flat grey, 8 dark), Nürburgring GP (2, 4 to 8), Indianapolis
+    5 and 6, Top Gear's blue (6) and black (9) ground and its flat grey runway (4, 5, 7).
+  - Left: Indianapolis 8 (part black) and 7 (pale); Top Gear 3 (orange ground); Hockenheim's
+    flat red ground at 7 and 8 (unchanged: another cause).
+  - Suzuka the same as before (0.03% to 2.4% of pixels differ).
+
 ## Towards players: a plan
 
 What a player would need, beyond the spike (none of this is built yet):
