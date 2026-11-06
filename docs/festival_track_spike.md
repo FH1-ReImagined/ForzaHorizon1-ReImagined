@@ -365,6 +365,22 @@ What a player would need, beyond the spike (none of this is built yet):
     with serialisation, which needs instructions inserted (control flow rewritten). Not done.
     FM4's own shadow colour is TrackSettings ShadowColor (0.389, 0.460, 0.565); with the
     shadow term at 1 it changes no pixel, so shad_color stays 1 until there is a shadow source.
+  - Tried (a test, off): FH1's mask at the pixel instead of the rewrite. The converter points
+    each s_grayscaleShadowMap fetch at fetch constant 13 and marks it (texel offsets x -16 and
+    y 15, raw), keeping its result 1 and making shad_color 0 (`FM4_SHADERS_FH1_SHADOWS=1`);
+    a local ReIGlue branch (fh1-648-fm4-shadow-main, not pushed) has the Vulkan translator
+    sample that texture at gl_FragCoord over its size for a marked fetch (component 0: 1 lit,
+    0 shadow; 2 and 3 read 0 everywhere, 1 none). FH1's own free roam draws the same with it
+    (two runs each, 0.69% of pixels differ, against 0.37% between two runs of the shared SDK:
+    the traffic car; trk-spike shots/colorado-before-after.png). On Suzuka the car's shadow
+    appears, but wrong: a black silhouette in front of the car at 6 of 9 spots and at sunset,
+    part of the road white at one spot (shots/suzuka-spots-shadows-off-on.png,
+    suzuka-evening-mask-shadows.png). FH1 fills the mask in a collector pass over its own track
+    meshes (the variants with CSMShadowMapLevel0Samp and CamPosWorld); FM4's models have no such
+    pass, so the mask has no right shadow where FM4's surfaces are. Real shadows on FM4's
+    surfaces need either that collector pass for FM4's models (FH1-format pass groups with
+    FH1's collector shader) or the cascades read in FM4's pixel shaders (a world position per
+    pixel and the CSM matrices, which FH1 sets for its collector draws only).
 - Ground: a pass with `FM4_PVS_GROUND=0` showed where the ground is seen: the holes past the
   circuit's edge, as at the grid's left verge and behind the fence at spot 9; the pale areas
   at spots 4, 6 and 7 are FM4's own horizon landscape and run-off, the same with the ground

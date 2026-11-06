@@ -34,6 +34,18 @@ SHADOW_SAMPLERS = ("s_grayscaleShadowMap", "projTrackLightmap")
 if __import__("os").environ.get("FM4_SHADERS_LIGHTMAP") == "one":
     SHADOW_SAMPLERS += ("Light_MapSampler",)
 MUL, MAX = 1, 3
+# FH1's shadows on FM4's surfaces: each s_grayscaleShadowMap fetch is pointed at fetch constant
+# 13, where FH1 binds its screen-space shadow mask for track draws, and marked (texel offsets x
+# -16 and y 15, raw; no real shader uses them). The SDK's Vulkan shader translator (ReIGlue,
+# SpirvShaderTranslator::Fh1Fm4ShadowFetch) samples the mask at the pixel's position for a
+# marked fetch; elsewhere (D3D12, or an SDK without it) the fetch still reads 1, no shadows.
+# shad_color is then 0: the shadow takes the sun's light away, not the lightmap's.
+# A test, off by default (FM4_SHADERS_FH1_SHADOWS=1): FH1 fills its mask in a collector pass
+# over its own track meshes, which FM4's models do not have, so the mask holds no right shadow
+# for FM4's surfaces: the car's shadow drew as a black silhouette in front of the car and part
+# of the road white (Suzuka, 9 spots, midday and evening).
+FH1_SHADOWS = __import__("os").environ.get("FM4_SHADERS_FH1_SHADOWS", "0") == "1"
+FH1_SHADOW_MASK = 13
 
 
 def blobs(data, kind=PS_MAGIC):
@@ -209,7 +221,9 @@ def shadow_colour(data, start, alus, floats, literals):
     unit = one_and_zero(literals)
     if reg is None or unit is None:
         return []
-    lit, one, _ = unit
+    lit, one, zero = unit
+    if FH1_SHADOWS:
+        return constant_reads(data, start, alus, {reg[0]}, lit, zero, "shad_color", 0)
     return constant_reads(data, start, alus, {reg[0]}, lit, one, "shad_color", 1)
 
 
@@ -323,6 +337,7 @@ def patch_fxobj(name, data):
         done.append("atlas blend mask -> 1")
     for start, size, samplers, floats, literals in blobs(bytes(data)):
         shadow = {r for n, r in samplers.items() if n in SHADOW_SAMPLERS}
+        fm4_shadow = samplers.get("s_grayscaleShadowMap")
         ins = instructions(bytes(data), start, size)
         for s, kind, w in ins:
             if kind == "fetch" and (w[0] & 0x1F) == 1 and ((w[0] >> 20) & 0x1F) in shadow:
@@ -331,9 +346,14 @@ def patch_fxobj(name, data):
                 for c in range(4):
                     sel = (swz >> (3 * c)) & 7
                     one |= (7 if sel == 7 else 5) << (3 * c)
-                w = [w[0], (w[1] & ~0xFFF) | one, w[2]]
+                w0, w2 = w[0], w[2]
+                marked = FH1_SHADOWS and ((w[0] >> 20) & 0x1F) == fm4_shadow
+                if marked:
+                    w0 = (w0 & ~(0x1F << 20)) | (FH1_SHADOW_MASK << 20)
+                    w2 = (w2 & ~(0x3FF << 16)) | (0x10 << 16) | (0x0F << 21)
+                w = [w0, (w[1] & ~0xFFF) | one, w2]
                 struct.pack_into(">3I", data, start + 12 * s, *w)
-                done.append(f"slot {s}: shadow map fetch -> 1")
+                done.append(f"slot {s}: shadow map fetch -> 1" + (", FH1's mask (marked)" if marked else ""))
         alus = [(s, alu_fields(w), w) for s, kind, w in ins if kind == "alu"]
         if LIGHTMAP_COLOURS:
             done += lightmap_colours(data, start, alus, literals)
