@@ -100,10 +100,14 @@ Which cars: every `Data_Car` row of FM4's database whose id and `MediaName` FH1'
 the installed DLC's patches) does not have, that has a model in the given files, and that is not
 one of FH1's DLC cars (`FH1_DLC_CARS`: a DLC installed later must not meet a second copy). The
 two games share one car id registry: no id means two different cars. FM4 Disc 1 and the three
-Disc 2 car packs give 381 such cars (61 of them of the 30 makes FH1 lacks, such as Acura, Saab
-and Vauxhall: their `List_CarMake` row and names come along; FH1 already has every FM4 make's
-logo). Two cars have no model in those files and are left out. The Autovista pack (Disc 2,
-package 4) has only showroom models and is not used. All 381 convert (15 minutes on this PC
+Disc 2 car packs give 381 such cars (60 of them of the 25 makes FH1 lacks, such as Acura, Saab
+and Vauxhall: their `List_CarMake` row and names come along). FH1 has the logos of all of them
+but Renault's, which come from FM4's `UI/Textures.zip` (`UI4/Logos/<size>/L_MAN_Renault_Logo.xds`,
+the same format; without them its Autoshow tile was black, #710). An FM4 make FH1 has under
+another id, by its English name, is FH1's: FM4's Eagle (87, the Talon) joins FH1's Eagle (102,
+the Speedster) instead of a second Eagle in the Autoshow (#710); Eagle is the only one.
+Two cars have no model in those files and are left out. The Autovista pack (Disc 2, package 4)
+has only showroom models and is not used. All 381 convert (15 minutes on this PC
 from unpacked files; 5.6 GB of package, 10 MB of mod).
 
 | Part | From | Change |
