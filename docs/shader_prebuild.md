@@ -351,9 +351,9 @@ Store fixes (#167, #247), as of PR #253:
 
 ### The shipped list
 
-`launcher/forza_launcher/data/pipelines-4D5309C9.json`: 1566 pipelines and 1096 shader
-recipes, storage version `fbo:20260228/20261018`. 540 KB of text, one pipeline or shader
-per line (51 KB gzip): small enough for git, and a new capture changes only the lines of
+`launcher/forza_launcher/data/pipelines-4D5309C9.json`: 2831 pipelines and 1102 shader
+recipes, storage version `fbo:20260228/20261018`. 865 KB of text, one pipeline or shader
+per line (60 KB gzip): small enough for git, and a new capture changes only the lines of
 new pipelines. `check` passes: hashes, decoded render state, vertex layout and export
 fields, and image offsets.
 
@@ -374,15 +374,16 @@ route on Windows with NVIDIA ([below](#windows-nvidia-276)):
 | #276, one cache root over four sessions (below): 27 places in every region but the two held out, by day (12:00) and night (23:00); photo mode; an outpost's Change Car, Paint Shop (paint, a vinyl group, decals) and Garage upgrades; the Autoshow (the first cars of its first manufacturers, Abarth to Aston Martin, from two views, and a purchase); 12 festival races and two Showcases with the first eligible car (D to S: MINI, Nissan, Mitsubishi, Lotus, Toyota, Plymouth, Ferrari, Ford and others); the main menu's Benchmark; 325 pipelines not listed before | main | 1208 |
 | #276, a Horizon World on a local server: two games, a co-op challenge, both cars driving together | main | 513 |
 | #276, Windows, GTX 1650 Ti, the launcher's settings for that PC: the map tour (24 places, day and night), 12 festival races and a Showcase, two Autoshow purchases, photo mode with every effect slider and a photo; 44 pipelines not listed before | main | 1046 |
+| #276, the same laptop at five render settings players use ([below](#render-settings-276)): 540p scene, 720p without scene MSAA, 720p with 2x MSAA, the lowest settings, FSR 3 at render scale 2; 1265 pipelines not listed before | main, ui, scene | 939, 950, 944, 946, 463 + 687 |
 
-Partitions in the merged list: 469 pipelines in all three, 255 main and scene, 530 main
-only, 288 ui only (most of them the fractional raster variant), 23 main and ui, 1 scene and
-ui. A pipeline seen only without split rendering is also imported by both
+Partitions in the merged list: 482 pipelines in all three, 331 main and scene, 1482 main
+only, 504 ui only (most of them the fractional raster variant), 24 main and ui, 6 scene only,
+2 scene and ui. A pipeline seen only without split rendering is also imported by both
 split caches (`split_partitions`): which of the two would draw it is unknown. With SMAA at 1440p
 the HUD cache imports 634 pipelines and the scene cache 850 (the 269 fractional variants
 are dropped there, the raster is not scaled).
 
-Shaders: 605 `file`, 487 `bound`, 2 `image`, 2 `missing`; 1563 of the 1566 pipelines (99.8%)
+Shaders: 610 `file`, 488 `bound`, 2 `image`, 2 `missing`; 2824 of the 2831 pipelines (99.8%)
 can be rebuilt from the player's files. The rest compile in play, as before. Before #614 the two
 `image` shaders were `missing` (1148 of 1190): a vertex shader of 96 bytes and a pixel shader of
 36 that the D3D library keeps in the executable without a blob header (Title Update 4 image
@@ -514,6 +515,71 @@ pipelines from `--fh1_frame_cost_csv`.
   on 6 threads), against about 500 on the RX 9060 XT, so the prebuild takes 35 s, almost all of
   it the driver. The bigger list costs nothing measurable. The first start after it takes
   1.1-1.2 s: the driver's cache (45 MB for the list) answers for every pipeline.
+
+### Render settings (#276)
+
+The #640 runs showed that render settings, not the vendor, add the most pipelines: the scene's
+MSAA sample count is part of every scene pipeline, and the pixel shaders' modification bits for
+centroid interpolation follow it. The captures above were all made with the game's 4x MSAA scene
+(or split rendering), while 0.2.7 gives entry cards the 540p scene by default.
+
+Same laptop and setup as [Windows, NVIDIA](#windows-nvidia-276), main of 2026-11-05 (09a1d6a),
+one cache root per setting, the scripted route of that capture (the same road nodes): the map
+tour by day and at 23:00, 8 festival races with the first eligible car (GoPro Millennia Masters,
+Ferrari Campione, BBS Japanese Trailblazers, ADIDAS Lakeside Landslide, Rockstar Dirt Raid, Brembo
+Midnight Blast, Oakley British Elite, Old Spice Mega Muscle) and the Bi-Plane Beatdown Showcase,
+photo mode with every effect slider and a photo, and the Autoshow's Horizon Recommends for the
+Lotus Championship (no purchase). Lotus Championship, MINI Mayhem and Audi Elite need a car the
+save doesn't have and were left out. The settings are the launcher's (`game.build_plan` with the
+setting changed):
+
+| Setting | Pipelines stored | New against the list | New against the list and the settings above |
+| --- | --- | --- | --- |
+| The launcher's plan for this PC: 540p scene, game MSAA (one pass with 2x MSAA), FSR 1 | 939 | 504 | 504 |
+| 720p scene, Scene anti-aliasing Off | 950 | 512 | 511 |
+| 720p scene, Scene anti-aliasing 2x (native 2x MSAA) | 944 | 507 | 22 |
+| The lowest settings (540p, Scene anti-aliasing Off, anisotropic filtering and motion blur off) | 946 | 516 | 5 |
+| AMD FSR 3 Quality at 1080p (render scale 2, split rendering) | 463 ui + 687 scene | 223 | 223 |
+
+Why they are new:
+- 540p and 720p with 2x: 397 and 408 are listed pipelines drawn with 2 samples instead of 4, the
+  rest of the state the same; 92-93 more differ in the render target's view format only. The two
+  settings draw the same 2x scene, so the second adds only 22.
+- Scene anti-aliasing Off and the lowest settings: about 500 drawn with 1 sample instead of 4,
+  436 of them also with other pixel shader modification bits (the interpolation that follows the
+  sample count). The lowest settings add 5 to Off.
+- FSR 3: 206 differ only in modification bit 63 (the HUD's fractional raster, as with SMAA at
+  1080p), 216 of the 223 in the HUD store.
+- In every setting fewer than 10 were a shader no list had or other render state (blend, depth,
+  stencil, culling).
+
+Merged with `pipeline_list.py merge` (the two `image` recipes kept as shipped, with the disc
+executable's offsets): 1566 to 2831 pipelines, 1096 to 1102 shaders, 540 to 865 KB (51 to 60 KB
+gzip).
+
+The measurement: the held-out route of [Wider coverage](#wider-coverage-276) as in
+[Windows, NVIDIA](#windows-nvidia-276) (each run from an empty cache root and driver cache, the
+launcher's prebuild, then the game from the boot), now with the launcher's plan for this PC, the
+540p scene. Two runs per list, alternating.
+
+| | List before (2 runs) | This list (2 runs) |
+| --- | --- | --- |
+| Pipelines built in play, whole session | 275 / 283 | **9 / 6** |
+| Pipelines created in the four scenes (on the command processor / in the background) | 21 / 43, 20 / 49 | **0 / 1, 1 / 2** |
+| Frames over 50 ms in the four scenes (3 min 40 s) | 2 / 2, worst 59 ms | 2 / 2, worst 55 ms |
+| Longest command processor frame | 143 / 157 ms | 65 / 67 ms |
+| Prebuild: shaders from the game files, then the game | 3.2 s + 27.5-27.9 s, 1261 pipelines in a 24.1-24.6 s warm-up | 3.4 s + 39.6-40.0 s, 2298 pipelines in a 36.3-36.6 s warm-up |
+| Warm-up at the first start after the prebuild | 1080 / 1087 ms | 1569 / 1488 ms |
+
+- At 540p the list before missed most of the route: 275-283 pipelines were built in play, 14 on
+  the command processor and 31-36 in the background in the first scene alone (Red Rock
+  Heights), and the command processor held frames for up to 143-157 ms. With this list the
+  session builds 6-9, the scenes 0-1 on the command processor, and the longest frame is 65-67 ms.
+- The 2 frames over 50 ms per run are in Rockstar Cliff Run with both lists, the pipeline of
+  #670 that no list has (its pixel shader has no recipe) compiling in the background.
+- The prebuild takes 12 s longer (52-63 pipelines a second from an empty driver cache) and the
+  first start after it 0.4-0.5 s longer: 2298 of the 2831 are imported by the main store, the
+  rest are the split-rendering HUD and scene variants.
 
 ### Launcher: Prebuild shaders
 
