@@ -687,6 +687,13 @@ Followed further:
   constant relocation of the shader's registers to the material's block, or a per-instance
   write in its renderer. Not found; tracing FM4's renderer for these materials is the next
   step (more than the hour this box allowed per item).
+- The run-time trace agrees: a broken DIFF_CLR_SPEC_OPAC_REFL_4 draw at Tsukuba writes PS c0,
+  c1, c2 from its own buffer and reads c116 (and c148) from FH1's.
+- A possible fix: FH1 binds each instance's lightmap texture (the 256 x 128 file at s7 in
+  Infineon's broken draw) without a uvOS, its shaders needing none. A hook on that binding
+  could call FH1's pixel-constant setter (sub_82465E28(device, 116, data, count), as 82E4D374
+  does) with the instance lightmap record's (ou, ov, su, sv). Needs the binding code, the
+  device and the instance's record found first.
 
 ## Towards players: a plan
 
