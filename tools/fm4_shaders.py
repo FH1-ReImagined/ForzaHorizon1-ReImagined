@@ -596,3 +596,19 @@ def lightmap_uv_register(data, reg):
             struct.pack_into(">3I", data, start + 12 * s, w[0], w[1], w2)
             done.append(s)
     return bytes(data), done, left
+
+
+def lightmap_fetch_constant(data, fc):
+    """The shader file with every pixel shader's Light_MapSampler fetch reading fetch constant fc
+    (tools/fm4_pvs.py, LMUV_BIND); the number of fetches changed."""
+    data = bytearray(data)
+    n = 0
+    for start, size, samplers, _, _ in blobs(bytes(data)):
+        reg = samplers.get("Light_MapSampler")
+        if reg is None:
+            continue
+        for s, kind, w in instructions(bytes(data), start, size):
+            if kind == "fetch" and (w[0] & 0x1F) == 1 and ((w[0] >> 20) & 0x1F) == reg:
+                struct.pack_into(">I", data, start + 12 * s, (w[0] & ~(0x1F << 20)) | (fc << 20))
+                n += 1
+    return bytes(data), n

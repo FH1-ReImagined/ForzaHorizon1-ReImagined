@@ -834,6 +834,33 @@ maps the mask's 0 to 0.45 (`FH1_FM4_SHADOW_FLOOR`), close to FM4's TrackSettings
   FM4's road under it never shows. Next: what A4A965 is (its draws' objects), and why FM4's
   road at spots 5 and 6 is hidden behind it (depth, pass or culling).
 
+### The five leftovers: the lightmap bound through a spare fetch constant (3-hour box)
+
+- Converter only, `FM4_PVS_LMUV_BIND` (on by default; `=0` leaves them): a listed model's material
+  map sends sampler 7 to no slot and its command buffers write no fetch constant 7. Each such
+  model's map now sends a fetch constant its command buffers do write (a type-3 fixup
+  `(fc << 16) | 3`) but none of its shaders samples to the slot holding its instance's
+  lightmap record; its shader copies fetch the lightmap from that fetch constant
+  (`fm4_shaders.lightmap_fetch_constant`) and read its rectangle from a spare register of
+  the c120 block (the rectangle copies above). Each lightmap record gets its own copy of the
+  model with that record in the slot, each instance its record's copy.
+- Fixed: Hockenheim 7 (the flat red run-off is asphalt with its kerbs), Hockenheim 8, Tsukuba 9
+  (the white haze is the grass and gravel); Mugello 1's pink barrier and a dark strip at
+  Hockenheim 1 too.
+- Copies are streamed as files of their own: with every listed model bound, Laguna Seca and
+  Catalunya asked for 107000 and 104000 streaming blocks (the game's cap is 65536) and
+  Catalunya's pool ran dry at spot 5 (a crash in sub_82E3CAE8's caller). A model with more than
+  `FM4_PVS_LMUV_BIND_MAX` (4) lightmap records is left: Catalunya then asks for 43083, Laguna
+  33695, Hockenheim 50141, and the fixes above hold.
+- Left: models whose command buffers write only fetch constants their shaders sample (the road
+  shaders with a normal map, `ROAD_BLND_REFL_NORM_NOCUBE_4` and others): Infineon 5-6,
+  Indianapolis 7-8 and Top Gear 3 stay as they were. A fix needs a fetch constant packet and a
+  type-3 fixup added to their command buffers, or the normal map given up. Infineon's grey is
+  also behind FH1's own full-screen passes (pixel shader A4A965, a rect-list clear/copy shader).
+- Sweep: all 24 converted circuits (Suzuka with them), spots 1 and 5, against each one's latest
+  pass: no crash but Catalunya 5 before the cap above; mean differences 1.3-7.7 except where a
+  fix shows (Hockenheim 1 10.6, Mugello 1 10.6, Autopark 1 11.2: the barrier's lightmap) and
+  Alps 1 (37: the car settled elsewhere).
 ### Car shadows made shippable (3-hour box, stopped for the night): state
 
 - Root cause of the black fallback: the SDK's Vulkan translator stores nothing for a texture
