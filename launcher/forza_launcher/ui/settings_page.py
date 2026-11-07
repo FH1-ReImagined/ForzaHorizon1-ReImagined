@@ -6,7 +6,7 @@ from PySide6.QtGui import QDesktopServices, QIntValidator, QRegularExpressionVal
 from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFileDialog,
                                QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QLineEdit, QTabBar, QPlainTextEdit,
                                QMessageBox, QPushButton, QRadioButton, QScrollArea, QSlider, QStackedWidget,
-                               QToolTip, QVBoxLayout, QWidget)
+                               QToolButton, QToolTip, QVBoxLayout, QWidget)
 
 from .. import PUBLIC_SERVER, display, dlss, fsr3, game, gamertag, gpu, power, regpu, schema, specs, vr
 from ..config import Config, render_toml, validate_extras
@@ -40,6 +40,82 @@ class Spin(_Wheelless, SpinBox):
 
 class DSpin(_Wheelless, DoubleSpinBox):
     pass
+
+
+# The categories of the Settings page, in order, and the schema sections each shows (schema.py keeps
+# every key's group and section; only where it shows changed). Display's picture, upscaling,
+# world detail, HDR and texture sections are the Graphics category; the native pause menu (an
+# Advanced key) shows under Gameplay. A section no category names stays in its group's category.
+TABS = ["Graphics", "Display", "Controls", "Gameplay", "Audio", "VR", "Online", "Profile", "Advanced"]
+TAB_SECTIONS = {
+    "Graphics": [("Display", "Picture"), ("Display", "AMD FSR 3"), ("Display", "World detail"),
+                 ("Display", "HDR"), ("Display", "Texture packs")],
+    "Display": [("Display", "Frame rate"), ("Display", "Window"), ("Display", "Camera"),
+                ("Display", "Ultrawide and HUD")],
+    "Controls": [("Controls", "Controller"), ("Controls", "Auto-pause"), ("Controls", "Keyboard"),
+                 ("Controls", "Keyboard bindings (used when keyboard and mouse is on)"),
+                 ("Controls", "Racing wheel"), ("Controls", "Shifter and clutch")],
+    "Gameplay": [("Gameplay", "CPU drivers"), ("Gameplay", "Car tuning"), ("Gameplay", "Custom Race"),
+                 ("Advanced", "Menu"), ("Gameplay", "Startup")],
+    "Advanced": [("Advanced", "GPU"), ("Advanced", "Log"), ("Advanced", "Discord setup")],
+}
+TAB_LEADS = {
+    "Graphics": "Your graphics card, picture quality, upscaling, world detail and HDR.",
+    "Display": "Frame rate, window, camera field of view and the HUD.",
+    "VR": "Experimental: playable, but expect rough edges. Play with a VR headset: "
+          "press Play in VR on the Play page.",
+    "Controls": "Controller, keyboard and racing wheel options. The button layout, bindings and "
+                "trigger effects are on the Controls page.",
+    "Gameplay": "How the game plays in single player. Online games always play as shipped.",
+    "Audio": "Sound output and the in-game radio. Your own stations are made in Mods > Radio.",
+    "Online": "Xbox LIVE is gone, so the game signs in to a Forza Live server instead. "
+              "Browse community servers in Servers.",
+    "Profile": "Your saves live in the game's data folder. You can also continue a Xenia Canary save.",
+    "Advanced": "For testing and troubleshooting. Everything here is also a forza.toml key or a command-line flag.",
+}
+# Sections shown folded (title and a button) unless their setting is in use: long lists most
+# players never need.
+FOLDED = {
+    "Keyboard bindings (used when keyboard and mouse is on)": lambda cfg: bool(cfg.settings.get("mnk_mode")),
+    "Racing wheel": lambda cfg: cfg.settings.get("wheel_mode") == "on",
+    "Shifter and clutch": lambda cfg: cfg.settings.get("wheel_shifter", "off") != "off",
+}
+# Settings most players never change: in their section, under "More options". Search finds them
+# and opens it.
+MORE_OPTIONS = {
+    "video_mode_refresh_rate", "video_driver",
+    "swap_post_effect", "present_cas_additional_sharpness", "present_dither", "native_2x_msaa",
+    "present_hdr_gamma", "present_hdr_compare",
+    "input_backend", "hid_mappings_file", "controller_remap", "guide_button", "mnk_passthrough",
+    "wheel_device", "wheel_axes", "wheel_buttons", "wheel_pedal_device", "wheel_pedal_axes",
+    "wheel_handbrake_device", "wheel_handbrake_axis", "wheel_vibration_rate",
+    "wheel_shifter_buttons", "wheel_shifter_device", "wheel_shifter_device_buttons",
+    "audio_maxqframes",
+    "world_event_wait_seconds", "world_event_cpu_with_peers", "world_event_cpu_ready", "world_event_ai_grid",
+    "user_language", "user_country", "license_mask",
+}
+
+
+def tab_of(setting):
+    """The Settings category a schema setting shows in."""
+    for tab, sections in TAB_SECTIONS.items():
+        if (setting.group, setting.section) in sections:
+            return tab
+    return setting.group if setting.group in TABS else "Advanced"
+
+
+def tab_settings(tab):
+    """The settings of a category, section by section: [(section, [Setting])]."""
+    ordered = list(TAB_SECTIONS.get(tab, []))
+    for s in schema.S:
+        if s.applies() and tab_of(s) == tab and (s.group, s.section) not in ordered:
+            ordered.append((s.group, s.section))
+    out = []
+    for group, section in ordered:
+        rows = [s for s in schema.for_group(group) if s.section == section]
+        if rows:
+            out.append((section, rows))
+    return out
 
 
 DEPENDS = {  # key -> the bool setting that must be on for it to matter
@@ -205,7 +281,7 @@ class SettingRow(QWidget):
         col.setSpacing(8)
         title = QLabel(s.label)
         title.setWordWrap(True)
-        title.setStyleSheet("font-weight: 600;")
+        title.setObjectName("settingLabel")
         col.addWidget(title)
         if s.help:
             help_text = label(s.help, "help")
@@ -248,14 +324,54 @@ def hline():
     return f
 
 
-def section_card(lay, title, index=None):
+def section_card(lay, title, index=None, folded=None):
+    """A card with a title. folded=True/False: the title gets a Show/Hide button and the content
+    starts hidden (True) or shown (False); the card's .set_expanded() changes it."""
     frame, content = card(margins=(24, 20, 24, 20), spacing=16)
-    content.addWidget(label(title, "cardTitle"))
+    if folded is None:
+        content.addWidget(label(title, "cardTitle"))
+    else:
+        head = QHBoxLayout()
+        head.setSpacing(12)
+        head.addWidget(label(title, "cardTitle"), 1)
+        toggle = QToolButton()
+        toggle.setObjectName("disclosure")
+        toggle.setCheckable(True)
+        toggle.setFocusPolicy(Qt.StrongFocus)
+        toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        toggle.setAccessibleName(title)
+        head.addWidget(toggle, 0, Qt.AlignVCenter)
+        content.addLayout(head)
+        body = QWidget()
+        inner = QVBoxLayout(body)
+        inner.setContentsMargins(0, 0, 0, 0)
+
+        def expanded(on, toggle=toggle, body=body):
+            toggle.setText("Hide" if on else "Show")
+            toggle.setArrowType(Qt.DownArrow if on else Qt.RightArrow)
+            body.setVisible(on)
+        toggle.toggled.connect(expanded)
+        expanded(False)
+        toggle.setChecked(not folded)
+        content.addWidget(body)
+        frame.set_expanded = toggle.setChecked
+        frame.toggle = toggle
+        content = inner
     if index is None:
         lay.addWidget(frame)
     else:
         lay.insertWidget(index, frame)
     return content
+
+
+def reveal(widget):
+    """Open every folded card and "More options" around a widget (a search result)."""
+    parent = widget.parentWidget()
+    while parent is not None:
+        expand = getattr(parent, "set_expanded", None)
+        if callable(expand):
+            expand(True)
+        parent = parent.parentWidget()
 
 
 class SettingsPage(QWidget):
@@ -287,7 +403,7 @@ class SettingsPage(QWidget):
         self.stack = QStackedWidget()
         root.addWidget(self.tabs)
         root.addWidget(self.stack, 1)
-        for g in schema.GROUPS:
+        for g in TABS:
             self.tabs.addTab(g)
             self.stack.addWidget(self._build_group(g))
         self.tabs.currentChanged.connect(self.stack.setCurrentIndex)
@@ -296,8 +412,17 @@ class SettingsPage(QWidget):
         self._apply_dependencies()
 
     # --- plumbing -------------------------------------------------------------------
+    @staticmethod
+    def tab_index(name):
+        """The index of a category (Graphics, Display, Controls, ...) in the tabs and the stack."""
+        return TABS.index(name)
+
+    def show_tab(self, name):
+        self.tabs.setCurrentIndex(self.tab_index(name))
+
     def _show_search_result(self, target):
-        index = schema.GROUPS.index(target.group)
+        reveal(target.widget)
+        index = self.tab_index(target.group)
         self.tabs.setCurrentIndex(index)
         # Let the newly shown category finish its wrapped-text layout before scrolling.
         QTimer.singleShot(0, self, lambda: self._focus_search_target(target))
@@ -513,32 +638,45 @@ class SettingsPage(QWidget):
                     widget.update()
         self._refresh_gpu_warnings()
 
-    def _rows(self, lay, group, skip=()):
-        section = None
-        for s in schema.for_group(group):
-            if s.key in skip:
+    def _rows(self, lay, tab, skip=()):
+        for section, settings in tab_settings(tab):
+            settings = [s for s in settings if s.key not in skip]
+            if not settings:
                 continue
-            if s.section != section:
-                section = s.section
-                content = section_card(lay, section)
-                content.setSpacing(0)
-                self.section_contents[section] = content
-            else:
-                content.addWidget(hline())
-            row = SettingRow(s, self.cfg, self.set_value)
-            self.rows[s.key] = row
-            content.addWidget(row)
-            self.search.add_setting(s, row)
+            fold = FOLDED.get(section)
+            content = section_card(lay, section, folded=None if fold is None else not fold(self.cfg))
+            content.setSpacing(0)
+            self.section_contents[section] = content
+            main = [s for s in settings if s.key not in MORE_OPTIONS]
+            more = [s for s in settings if s.key in MORE_OPTIONS]
+            for i, s in enumerate(main):
+                if i:
+                    content.addWidget(hline())
+                self._row(s, content, tab)
+            if more:
+                if main:
+                    content.addWidget(hline())
+                extra = Disclosure(f"More options ({len(more)})")
+                extra.content.setSpacing(0)
+                extra.setContentsMargins(0, 10, 0, 0)
+                for i, s in enumerate(more):
+                    if i:
+                        extra.content.addWidget(hline())
+                    self._row(s, extra.content, tab)
+                content.addWidget(extra)
+
+    def _row(self, s, content, tab):
+        row = SettingRow(s, self.cfg, self.set_value)
+        self.rows[s.key] = row
+        content.addWidget(row)
+        self.search.add_setting(s, row, tab)
 
     def _page(self, title, lead):
+        # The category's name is its tab: the page starts with its lead.
         w = QWidget()
         lay = QVBoxLayout(w)
-        lay.setContentsMargins(0, 0, 14, 20)
+        lay.setContentsMargins(0, 4, 14, 20)
         lay.setSpacing(20)
-        t = QLabel(title)
-        t.setObjectName("pageTitle")
-        t.setStyleSheet("font-size: 22px;")
-        lay.addWidget(t)
         if lead:
             lay.addWidget(label(lead, "pageLead"))
         scroll = QScrollArea()
@@ -549,19 +687,8 @@ class SettingsPage(QWidget):
 
     # --- groups ---------------------------------------------------------------------
     def _build_group(self, g):
-        leads = {
-            "Display": "Window, frame rate and picture.",
-            "VR": "Experimental: playable, but expect rough edges. Play with a VR headset: "
-                  "press Play in VR on the Play page.",
-            "Controls": "Use a controller, or enable keyboard and mouse and customize your bindings below.",
-            "Gameplay": "How the game plays in single player. Online games always play as shipped.",
-            "Audio": "",
-            "Online": "Xbox LIVE is gone, so the game signs in to a Forza Live server instead.",
-            "Profile": "Your saves live in the game's data folder. You can also continue a Xenia Canary save.",
-            "Advanced": "For testing and troubleshooting. Everything here is also a forza.toml key or a command-line flag.",
-        }
-        scroll, lay = self._page(g, leads[g])
-        if g == "Display":
+        scroll, lay = self._page(g, TAB_LEADS.get(g, ""))
+        if g == "Graphics":
             self._gpu_block(lay)
         if g == "VR":
             self._vr_status_block(lay)
@@ -573,13 +700,17 @@ class SettingsPage(QWidget):
         self._rows(lay, g)
         if g == "VR":
             self._vr_extras_block(lay)
-        if g == "Display":
+        if g == "Graphics":
             self._texture_pack_block()
-        if g == "Controls":
-            lay.addWidget(label("Everything on this page is a forza.toml key; the keyboard bindings "
-                                "use the SDK's key names.", "help"))
+        if g == "Audio" and "Radio" in self.section_contents:
+            from .window import RADIO_PAGE_ID
+            self.radio_page_button = self._page_link(
+                self.section_contents["Radio"], "Custom radio stations (Mods > Radio)", RADIO_PAGE_ID,
+                "Give the three stations your own names, logos and songs.")
         if g == "Controls":
             self._pad_block(lay)
+            lay.addWidget(label("Everything on this page is a forza.toml key; the keyboard bindings "
+                                "use the SDK's key names.", "help"))
         if g == "Advanced":
             self._advanced_block(lay)
         lay.addStretch(1)
@@ -640,10 +771,27 @@ class SettingsPage(QWidget):
 
     def _show_texture_packs(self):
         from .window import TEXTURE_PACKS_PAGE_ID
+        self._open_page(TEXTURE_PACKS_PAGE_ID)
+
+    def _open_page(self, page_id):
         show = getattr(self.window, "show_page", None)
         if show is not None:
             self.flush()
-            show(TEXTURE_PACKS_PAGE_ID)
+            show(page_id)
+
+    def _page_link(self, content, text, page_id, tip):
+        """A link under a card to the page that holds the rest of it (Servers, Saves, Radio)."""
+        content.addWidget(hline())
+        button = QPushButton(text)
+        button.setObjectName("link")
+        button.setToolTip(tip)
+        button.clicked.connect(lambda _=False: self._open_page(page_id))
+        box = QHBoxLayout()
+        box.setContentsMargins(0, 12, 0, 0)
+        box.addWidget(button)
+        box.addStretch(1)
+        content.addLayout(box)
+        return button
 
     def _open_texture_folder(self):
         folder = game.texture_pack_folder(self.cfg)
@@ -669,7 +817,7 @@ class SettingsPage(QWidget):
         col = QVBoxLayout()
         col.setSpacing(8)
         t = QLabel("Your graphics card")
-        t.setStyleSheet("font-weight: 600;")
+        t.setObjectName("settingLabel")
         col.addWidget(t)
         self.gpu_summary = label("", "help")
         col.addWidget(self.gpu_summary)
@@ -691,7 +839,7 @@ class SettingsPage(QWidget):
         recheck.clicked.connect(self._recheck_specs)
         lay.addWidget(recheck, 0, Qt.AlignLeft)
         self._gpu_texts()
-        self.search.add("Your graphics card", "Display", "Graphics card", w, self.gpu_combo,
+        self.search.add("Your graphics card", "Graphics", "Graphics card", w, self.gpu_combo,
                         "GPU vendor NVIDIA AMD Intel recommended settings")
 
     def _gpu_texts(self):
@@ -803,7 +951,7 @@ class SettingsPage(QWidget):
         self.window.status("Checked this PC again", False)
 
     def _pad_block(self, lay):
-        lay = section_card(lay, "Players", 2)
+        lay = section_card(lay, "Players", 1)
         row = QHBoxLayout()
         row.setSpacing(32)
         sw = Switch()
@@ -812,7 +960,7 @@ class SettingsPage(QWidget):
         col = QVBoxLayout()
         col.setSpacing(8)
         t = QLabel("Each controller is its own player")
-        t.setStyleSheet("font-weight: 600;")
+        t.setObjectName("settingLabel")
         col.addWidget(t)
         col.addWidget(label("Off (recommended): every controller drives player 1, so START on any pad "
                             "gets past the title screen. Sets FORZA_PAD_PER_USER=1 when on.", "help"))
@@ -820,6 +968,7 @@ class SettingsPage(QWidget):
         row.addWidget(sw)
         w = QWidget()
         w.setLayout(row)
+        row.setContentsMargins(0, 6, 0, 6)
         lay.addWidget(w)
 
         self.search.add("Each controller is its own player", "Controls", "Players", w, sw,
@@ -859,6 +1008,9 @@ class SettingsPage(QWidget):
         lay.addWidget(self.custom)
         self.radios[self.cfg.online["mode"]].setChecked(True)
         self.custom.setEnabled(self.cfg.online["mode"] == "custom")
+        from .window import SERVERS_PAGE_ID
+        self.servers_page_button = self._page_link(lay, "Community servers, their players and ping (Servers)",
+                                                   SERVERS_PAGE_ID, "The server list: pick one, or add one by address.")
         self.search.add("Online server", "Online", "Server", self.radios["public"],
                         keywords="public local offline Xbox LIVE Forza Live")
         self.search.add("Custom server address", "Online", "Server", self.custom,
@@ -963,6 +1115,9 @@ class SettingsPage(QWidget):
                         keywords="Xenia account")
         self.search.add("Copy the save again on the next start", "Profile", "Save", self.recopy,
                         keywords="Xenia recopy import")
+        from .window import SAVES_PAGE_ID
+        self.saves_page_button = self._page_link(lay, "Backups and the profile editor (Library > Saves)",
+                                                 SAVES_PAGE_ID, "Back up, restore and edit your save.")
 
     def _profile_mode(self, on):
         self.cfg.profile["mode"] = "xenia" if on else "own"
@@ -1114,7 +1269,7 @@ class SettingsPage(QWidget):
             w = self.stack.widget(0)
             self.stack.removeWidget(w)
             w.deleteLater()
-        for g in schema.GROUPS:
+        for g in TABS:
             self.stack.addWidget(self._build_group(g))
         self.stack.setCurrentIndex(cur)
         self._apply_dependencies()

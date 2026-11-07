@@ -72,7 +72,6 @@ class ControlsTests(unittest.TestCase):
     def test_control_settings_link_opens_the_existing_controls_category(self):
         from forza_launcher.config import Config
         from forza_launcher.ui.window import MainWindow
-        from forza_launcher import schema
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             cfg = Config(root / 'launcher.json')
@@ -89,7 +88,7 @@ class ControlsTests(unittest.TestCase):
                                   if b.text() == 'Control settings')
                     button.click()
                     self.assertIs(window.stack.currentWidget(), window.settings)
-                    self.assertEqual(window.settings.tabs.currentIndex(), schema.GROUPS.index('Controls'))
+                    self.assertEqual(window.settings.tabs.currentIndex(), window.settings.tab_index('Controls'))
                     for old_id, page in ((0, window.play), (1, window.setup), (3, window.about), (4, window.gallery)):
                         self.assertIs(window.stack.widget(old_id), page)
                 finally:

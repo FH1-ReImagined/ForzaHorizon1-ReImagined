@@ -91,7 +91,12 @@ class SaveUITests(unittest.TestCase):
         self.assertEqual(len(set(indexes)), len(pages))
         with patch.object(self.win.gallery, 'refresh') as gallery, patch.object(self.win.saves, 'refresh') as saved:
             for page, index in zip(pages, indexes):
-                self.win.navs.button(index).click()
+                if not self.win.nav_button(index).isChecked():   # Library holds Photos and Saves: its tabs
+                    self.win.nav_button(index).click()
+                tabs = self.win.subnav
+                for i in range(tabs.count()):
+                    if tabs.tabData(i) == index:
+                        tabs.setCurrentIndex(i)
                 self.assertIs(self.win.stack.currentWidget(), page)
             gallery.assert_called_once_with()
             saved.assert_called_once_with()

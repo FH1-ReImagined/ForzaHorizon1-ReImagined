@@ -301,14 +301,13 @@ class LauncherUITests(unittest.TestCase):
             self.assertEqual(page.rows[key].dependency.text(), "")
 
     def test_settings_tabs_preserve_values_and_selected_page_after_rebuild(self):
-        from forza_launcher import schema
         page = self.window.settings
         page.set_value("vsync", False)
-        for i in range(len(schema.GROUPS)):
+        for i in range(page.tabs.count()):
             page.tabs.setCurrentIndex(i)
             self.assertEqual(page.stack.currentIndex(), i)
         page.rebuild()
-        self.assertEqual(page.stack.currentIndex(), len(schema.GROUPS) - 1)
+        self.assertEqual(page.stack.currentIndex(), page.tabs.count() - 1)
         page.tabs.setCurrentIndex(0)
         self.assertFalse(page.rows["vsync"].control.isChecked())
 

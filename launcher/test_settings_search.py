@@ -56,7 +56,6 @@ class SettingsSearchTests(unittest.TestCase):
                 for i in range(self.search.results.count())]
 
     def test_key_search_jumps_across_categories_without_changing_settings(self):
-        from forza_launcher import schema
         from forza_launcher.ui import theme
         self.page.setStyleSheet(theme.QSS)
         self.page.resize(680, 720)
@@ -66,7 +65,7 @@ class SettingsSearchTests(unittest.TestCase):
         self.assertIs(target.widget, row)
         self.assertFalse(row.control.isEnabled())
         QTest.keyClick(self.search.edit, Qt.Key_Return)
-        self.assertEqual(self.page.tabs.currentIndex(), schema.GROUPS.index("Controls"))
+        self.assertEqual(self.page.tabs.currentIndex(), self.page.tab_index("Controls"))
         self.assertTrue(self.search.results.isHidden())
         self.app.processEvents()
         scroll = self.page.stack.currentWidget()
@@ -136,13 +135,12 @@ class SettingsSearchTests(unittest.TestCase):
         self.assertEqual(self.search.results.count(), 0)
 
     def test_deep_result_scrolls_into_view_after_category_layout(self):
-        from forza_launcher import schema
         self.query("extra_env")
         target = self.search.results.item(0).data(Qt.UserRole)
         QTest.keyClick(self.search.edit, Qt.Key_Return)
         self.app.processEvents()
         self.app.processEvents()
-        scroll = self.page.stack.widget(schema.GROUPS.index("Advanced"))
+        scroll = self.page.stack.widget(self.page.tab_index("Advanced"))
         top = target.widget.mapTo(scroll.viewport(), target.widget.rect().topLeft())
         self.assertGreaterEqual(top.y(), 0)
         self.assertLess(top.y(), scroll.viewport().height() - target.widget.height())

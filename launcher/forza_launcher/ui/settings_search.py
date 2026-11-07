@@ -67,9 +67,10 @@ class SettingsSearch(QWidget):
             focus.setAccessibleName(label)
         self.targets.append(SearchTarget(label, group, section, widget, focus, keywords))
 
-    def add_setting(self, setting, row):
+    def add_setting(self, setting, row, group=None):
+        """group: the Settings category the row shows in (default: the setting's schema group)."""
         choices = " ".join(str(value) + " " + str(label) for value, label in setting.choices)
-        self.add(setting.label, setting.group, setting.section, row, row.control,
+        self.add(setting.label, group or setting.group, setting.section, row, row.control,
                  " ".join((setting.key, setting.help, choices)))
 
     def clear_targets(self):

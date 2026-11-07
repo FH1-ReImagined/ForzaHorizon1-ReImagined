@@ -136,8 +136,18 @@ class ControlsPage(QWidget):
         self.cfg, self.window = cfg, window
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        scroll, layout = scroll_page('Controls', 'Choose your controller to translate the game’s Xbox button prompts.')
+        scroll, layout = scroll_page('Controls', '')
         outer.addWidget(scroll)
+        # The lead and Control settings share the first row (index 1: the controller status card
+        # of ui/gamepad.py goes in at index 2, under them).
+        top = QHBoxLayout()
+        top.setSpacing(16)
+        top.addWidget(label('Choose your controller to translate the game’s Xbox button prompts.', 'pageLead'), 1)
+        settings = QPushButton('Control settings')
+        settings.setToolTip('Settings > Controls: controller, keyboard and mouse, racing wheel and player options.')
+        settings.clicked.connect(self.settings_requested)
+        top.addWidget(settings, 0, Qt.AlignVCenter)
+        layout.addLayout(top)
         frame, content = card(margins=(24, 20, 24, 20), spacing=14)
         header = QHBoxLayout()
         header.addWidget(label('Controller layout', 'cardTitle'), 1)
@@ -173,9 +183,6 @@ class ControlsPage(QWidget):
         layout.addWidget(self.all_controls)
         layout.addWidget(label('Default driving layout. Actions can change with the layout and transmission chosen in the game. '
                                'Selecting a controller here changes this guide; the game still shows Xbox prompts.', 'help'))
-        settings = QPushButton('Control settings')
-        settings.clicked.connect(self.settings_requested)
-        layout.addWidget(settings, 0, Qt.AlignLeft)
         self._local_settings = schema.defaults()
         frame, content = card(margins=(24, 20, 24, 20), spacing=12)
         self.bindings = BindingsEditor(self.current_settings, self.apply_settings)
