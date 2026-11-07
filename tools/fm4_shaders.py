@@ -264,6 +264,16 @@ def constant_reads(data, start, alus, regs, lit, comp, what, value):
     return done
 
 
+# The sun term's gain in the shadowed shaders (road, shoulders, barriers: the ones with
+# s_grayscaleShadowMap): they multiply the sun's light by TimeGain.w, and FH1's c249 there is
+# (the hour, 0, 0, 8). With the shadow term stored (ReIGlue's fix for constant-only fetch
+# results; D3D12 and ReGPU always), the sunlit road drew nearly white at Suzuka's spots 8 and 9
+# (mean difference 48 against today at 9; 20 with this). Made 1. Under the release SDK's Vulkan
+# translator the sun term there is 0 anyway, so nothing changes there.
+# FM4_SHADERS_TIME_GAIN=0 leaves it.
+TIME_GAIN = __import__("os").environ.get("FM4_SHADERS_TIME_GAIN", "1") == "1"
+
+
 def shadow_colour(data, start, alus, floats, literals):
     reg = floats.get("shad_color")
     unit = one_and_zero(literals)
@@ -440,6 +450,11 @@ def patch_fxobj(name, data):
             done += lightmap_colours(data, start, alus, literals)
         if SHADOW_COLOUR:
             done += shadow_colour(data, start, alus, floats, literals)
+        if TIME_GAIN and fm4_shadow is not None and "TimeGain" in floats:
+            unit = one_and_zero(literals)
+            if unit:
+                done += constant_reads(data, start, alus, {floats["TimeGain"][0]}, unit[0],
+                                       unit[1], "TimeGain", 1)
         for spec in filter(None, os.environ.get("FM4_SHADERS_CONST_TEST", "").split(",")):
             # a test: "NAME=0" or "NAME=1" makes that float constant's reads the literal 0 or 1
             name, value = spec.split("=")
