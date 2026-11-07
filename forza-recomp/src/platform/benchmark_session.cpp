@@ -1,6 +1,7 @@
 #include "benchmark.h"
 #include "benchmark_label.h"
 #include "benchmark_profile.h"
+#include "benchmark_start.h"
 #include "guest_memory.h"
 #include <atomic>
 #include <chrono>
@@ -373,12 +374,11 @@ void FlowTick(PPCContext &ctx, uint8_t *base) {
   }
   if (!automatic.load() || screen.load() == Screen::results)
     return;
-  if (Clock::now() - started > std::chrono::minutes(4) && !event_started) {
-    Fail("event_load_timeout");
-    return;
-  }
-  if (Clock::now() - started > std::chrono::minutes(5)) {
-    Fail("benchmark_start_timeout");
+  // The race has to start while the game keeps drawing (src/platform/benchmark_start.h, #725).
+  if (const char *reason = StartTimeout(
+          std::chrono::duration<double>(Clock::now() - started).count(), SecondsSinceSwap(),
+          event_started)) {
+    Fail(reason);
     return;
   }
 #if defined(FORZA_TITLE_UPDATE) && FORZA_TITLE_UPDATE == 4
