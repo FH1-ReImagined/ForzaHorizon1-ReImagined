@@ -3431,26 +3431,57 @@ seconds after free roam has loaded):
   waited, after its command list, for the event at render object +0x1A10 (sub_826164D0, when +0x1A19 is set; not
   the ring).
 
-**Who sets +0x1A10.** The FFCB worker (guest thread F8001204, from 824A2118, called from 82B3A4FC), once it has
-recorded the frame's slots. The render thread's waits pair with the worker's signals only while the two stay
+**Who sets +0x1A10.** The FFCB worker (guest thread F8001204, from 824A2118, called from 82B3A4FC), once per main
+frame, after it has recorded that frame's slots; the render pass waits for it every frame (from 82616B9C and
+82616C28, through sub_82419270). The render thread's waits pair with the worker's signals only while the two stay
 within a frame or two of each other. During a hold of seconds the main loop does not wait for the render thread
 (it free-runs some 1,300 frames in a 10 s hold), the worker records and signals for every one of them, and when the
 render thread comes back its consume index and the worker's produce index no longer point at the same frames: it
 either applies a slot the worker is rewriting (the null read) or waits on an event whose signal was spent on an
 earlier frame (no frame).
 
-**The fix** (`src/hooks/frame_time.cpp`): the main loop (sub_8247C168) waits while the render thread has been
-inside one render pass (sub_8259F3E8) for more than 250 ms, until the pass ends, for at most 10 s. The worker then
-cannot run more than a frame or two past the render thread, so it stays within the ring. A pass of normal length
-never triggers it; `FORZA_MAIN_WAITS_RENDER=0` turns it off. Linux, the knob above, the benchmark at 30 fps:
+**The fix** (`src/hooks/frame_time.cpp`, `src/hooks/ffcb_wake.cpp`): the main loop (sub_8247C168) waits while the
+render thread has been working inside one render pass (sub_8259F3E8) for more than 1 s, until the pass ends, for at
+most 10 s. The render thread's waits for the HUD worker (the slot wait and the +0x1A10 waits) do not count: the
+worker is paced by the main loop, so the main loop must not wait for a pass that is waiting for it. A pass of
+normal length never triggers it; `FORZA_MAIN_WAITS_RENDER=0` turns it off, `FORZA_MAIN_WAITS_RENDER_MS` (testing)
+sets the limit. Linux, the knob above, the benchmark at 30 fps:
 
 | Build | Wake on | Wake off |
 | --- | --- | --- |
 | Before (8b83c6c) | 2 of 2 crashed (null read) | no frame (`benchmark_stalled`) |
 | Fix, `FORZA_MAIN_WAITS_RENDER=0` | crashed (null read) | no frame (`benchmark_stalled`) |
-| Fix | 3 of 3 complete, 30.0 fps, 1% low 28.4-28.7 | 3 of 3 complete, 30.0 fps, 1% low 28.7-28.8 |
+| First fix (250 ms, worker waits counted) | 3 of 3 complete, 1% low 28.4-28.7 | 3 of 3 complete, 1% low 28.7-28.8 |
+| Fix, 250 ms | 3 of 3 complete, 1% low 23.7-28.1 | 3 of 3 complete, 1% low 26.2-27.8 |
+| Fix, 500 ms | 1 of 1 complete, 1% low 28.1 | 1 of 1 complete, 1% low 26.9 |
+| Fix, 1 s (the default) | 2 of 2 complete, 1% low 28.0-28.3 | 1 of 1 complete, 1% low 27.7 |
 
-With the fix the main loop logged 4 waits per run (5.7, 7.7, 9.7 and 9.7 s, the knob's holds less the time to
-reach the main loop's next frame). Without the knob: the benchmark 2 of 2 complete (30.0 fps, 1% low 28.5 and
-27.8), 3 minutes of free roam 2 of 2 without a crash (30.0 fps, 1% low 25.9 and 25.8), and the main loop waited 0 times in all of them. Still to measure: the Intel UHD's cold first
-race on the Windows laptop (frames of 7-12 s for real), and #582 on WARP.
+All at 30.0 fps (the lower lows with another game on the PC), the main loop waiting 4 times per run. Holds of
+1-4 s instead (13 in one benchmark, `12:1500,16:2500,20:4000,...`) do not crash without the fix either: 2 of 2
+complete (and 2 of 2 with it at 1 s). Without the knob: the benchmark 5 of 5 complete (30.0 fps, 1% low 26.9-28.5),
+3 minutes of free roam 3 of 3 without a crash (30.0 fps, 1% low 25.7-25.9), and the main loop waited 0 times.
+
+**WARP** (`--gpu_backend=d3d12 --d3d12_adapter=-2`, the GTX 1650 Ti laptop's i5-10300H; #582's renderer): the game
+reaches free roam and runs 7 minutes there without a crash in every arm (12 runs). Its frames take 100-500 ms, so a
+low limit or counting the worker waits costs it:
+
+| Build | Free roam fps | Frames over 1 s |
+| --- | --- | --- |
+| No wait (`FORZA_MAIN_WAITS_RENDER=0`) | 7.4, 7.4 | 0, 0 |
+| First fix (250 ms, worker waits counted) | 4.8, 4.8 | 597 in 20 min, 241 in 7 min |
+| 250 ms | 6.2, 6.1 | 115, 113 |
+| 500 ms | 6.2, 6.5 | 39, 45 |
+| 1 s (the default) | 6.8, 7.0 | 12, 11 |
+
+At 1 s WARP still loses 0.4-0.6 fps: some of its passes still take over 1 s once the main loop waits, which a run
+without the wait does not show (its longest frame: 504 ms). Which other wait of the pass depends on the main loop is
+not known yet.
+
+**The Intel UHD with cold driver caches** (D3DSCache, NVIDIA's and Intel's caches moved aside for each run; the
+benchmark from a fresh game cache, 540p, 30 fps, the first fix): on Direct3D 12 the first minute has frames of 7-12 s,
+the main loop waited there 10-13 times, then the game presents a steady 10 fps for the remaining 29 minutes and the
+event (FR02, requested about 3 minutes in) never starts: `benchmark_start_timeout`, 2 of 2 with the fix and 2 of 2
+with `FORZA_MAIN_WAITS_RENDER=0`; no crash, no device lost. That stall is not the ring: after the first minute no
+pass is held and nothing spins (the busiest guest thread, F80012FC, at 15% of a core); it stays open in #725. On
+Vulkan its old driver (1.2.131) shows no frame at all, 4 of 4 in both arms (#672). The GeForce, warm caches, the
+benchmark with the fix: 52.7 and 54.8 fps (52.8-56.0 before), the main loop waiting 0 times.
