@@ -23,7 +23,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/releases/latest"><img alt="Download the launcher" src="https://img.shields.io/badge/Download-the%20launcher-ff5470?style=for-the-badge"></a>
+  <a href="https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/releases/latest"><img alt="Download the launcher" src="https://img.shields.io/badge/Download-the%20launcher-e8964f?style=for-the-badge"></a>
 </p>
 
 <p align="center">
