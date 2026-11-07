@@ -338,14 +338,18 @@ class Interface(ServiceTest):
                 page = SettingsPage(cfg, window)
                 page.show()
                 self.app.processEvents()
-                page.tabs.setCurrentIndex([page.tabs.tabText(i) for i in range(page.tabs.count())].index("Online"))
+                online = page.online_page   # Online > Online in the window
+                online.show()
                 self.app.processEvents()
-                self.assertTrue(page.web_account_frame.isVisibleTo(page))
+                self.assertTrue(page.web_account_frame.isVisibleTo(online))
                 asked.assert_not_called()  # never linked: nothing is sent
-                page.radios["offline"].setChecked(True)
-                self.assertFalse(page.web_account_frame.isVisibleTo(page))
-                page.radios["public"].setChecked(True)
-                self.assertTrue(page.web_account_frame.isVisibleTo(page))
+                cfg.online["mode"] = "offline"   # as Servers' Offline row does
+                page.sync_server()
+                self.assertFalse(page.web_account_frame.isVisibleTo(online))
+                cfg.online["mode"] = "public"
+                page.sync_server()
+                self.assertTrue(page.web_account_frame.isVisibleTo(online))
+                online.hide()
                 page._save_timer.stop()
                 page.deleteLater()
             # after a link, opening the card asks once

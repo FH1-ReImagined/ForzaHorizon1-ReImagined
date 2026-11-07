@@ -98,7 +98,12 @@ class SettingsSearchTests(unittest.TestCase):
 
     def test_launcher_fields_are_searchable_without_indexing_private_values(self):
         self.cfg.online["custom_server"] = "private-host.example"
-        self.assertIs(self.query("custom_server")[0].focus, self.page.custom)
+        from PySide6.QtWidgets import QLineEdit, QTableWidget, QWidget
+        servers = QWidget()   # the window's Servers page: its address field and its list
+        servers.table, servers.address = QTableWidget(servers), QLineEdit(servers)
+        self.page.attach_servers(servers)
+        self.assertIs(self.query("custom_server")[0].focus, servers.address)
+        self.assertEqual(self.query("custom_server")[0].group, "Servers")
         self.assertIs(self.query("Xenia content folder")[0].focus, self.page.xcontent)
         self.assertIs(self.query("extra_env")[0].focus, self.page.envs)
         self.assertTrue(self.query("controller routing"))

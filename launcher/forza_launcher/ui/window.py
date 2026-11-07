@@ -1,4 +1,4 @@
-"""The main window: a sidebar of sections (Play, Library, Mods, Servers, Controls, Settings, Setup, About),
+"""The main window: a sidebar of sections (Play, Library, Mods, Online, Controls, Settings, Setup, About),
 each section's title and page tabs, and starting the game."""
 import sys
 import threading
@@ -30,6 +30,7 @@ TEXTURE_PACKS_PAGE_ID = 9
 RADIO_PAGE_ID = 10
 SERVERS_PAGE_ID = 11
 SAVES_PAGE_ID = 6
+ONLINE_PAGE_ID = 12   # Online > Online: the Online settings (built by the Settings page)
 SIDEBAR_WIDTH = 224
 
 # The sidebar: (section, [(tab title, page id)], in the footer). A section of several pages shows
@@ -38,7 +39,7 @@ SECTIONS = [
     ("Play", [("Play", 0)], False),
     ("Library", [("Photos", 4), ("Designs && vinyls", CATALOG_PAGE_ID), ("Saves", SAVES_PAGE_ID)], False),
     ("Mods", [("Mods", MODS_PAGE_ID), ("Texture packs", TEXTURE_PACKS_PAGE_ID), ("Radio", RADIO_PAGE_ID)], False),
-    ("Servers", [("Servers", SERVERS_PAGE_ID)], False),
+    ("Online", [("Online", ONLINE_PAGE_ID), ("Servers", SERVERS_PAGE_ID)], False),
     ("Controls", [("Controls", 5)], False),
     ("Settings", [("Settings", 2)], False),
     ("Setup", [("Setup", 1)], False),
@@ -169,6 +170,8 @@ class MainWindow(QMainWindow):
         self.radio = RadioPage(cfg, self)
         self.servers = ServersPage(cfg, self)
         self.servers.changed.connect(self._server_chosen)
+        self.settings.attach_servers(self.servers)
+        self.online = self.settings.online_page
         self._close_after_radio = False
         self.radio.idle.connect(lambda: QTimer.singleShot(0, self.close) if self._close_after_radio else None)
         self.navs = QButtonGroup(self)
@@ -176,7 +179,7 @@ class MainWindow(QMainWindow):
                        4: self.gallery, 5: self.controls, 6: self.saves,
                        CATALOG_PAGE_ID: self.catalogs, MODS_PAGE_ID: self.mods,
                        TEXTURE_PACKS_PAGE_ID: self.texture_packs, RADIO_PAGE_ID: self.radio,
-                       SERVERS_PAGE_ID: self.servers}
+                       SERVERS_PAGE_ID: self.servers, ONLINE_PAGE_ID: self.online}
         # In id order, so a page's stack index is its id.
         for page in self._pages.values():
             self.stack.addWidget(page)
@@ -402,12 +405,14 @@ class MainWindow(QMainWindow):
             self.radio.refresh()
         elif self._pages[i] is self.servers:
             self.servers.refresh()
+        elif self._pages[i] is self.online:
+            self.settings.sync_server()
         if self._pages[i] is not self.servers:
             self.servers.leave()
         self.status("")
 
     def _server_chosen(self):
-        """The Servers page changed the server Play uses (or its list): Settings > Online shows it,
+        """The Servers page changed the server Play uses (or its list): Online > Online shows it,
         and launcher.json and forza.toml are saved now."""
         self.settings.sync_server()
         self.settings.flush()

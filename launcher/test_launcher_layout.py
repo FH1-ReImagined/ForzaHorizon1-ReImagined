@@ -145,6 +145,8 @@ class LayoutTests(unittest.TestCase):
         self.assertEqual(sorted(ids), sorted(self.win._pages))
         self.assertEqual(len(self.win.navs.buttons()), len(SECTIONS))
         self.assertLessEqual(len([s for s in SECTIONS if not s[2]]), 7)
+        self.assertEqual([s[0] for s in SECTIONS],
+                         ["Play", "Library", "Mods", "Online", "Controls", "Settings", "Setup", "About"])
 
     def test_every_page_shows_its_section_title_button_and_tab(self):
         from forza_launcher.ui.window import SECTIONS
@@ -193,9 +195,10 @@ class LayoutTests(unittest.TestCase):
                 self.assertTrue(title.isHidden(), title.text())
 
     def test_every_setting_has_a_row_a_category_and_a_search_result(self):
-        from forza_launcher.ui.settings_page import TABS, tab_of
+        from forza_launcher.ui.settings_page import HOSTED, TABS, tab_of
         page = self.win.settings
         self.assertEqual([page.tabs.tabText(i) for i in range(page.tabs.count())], TABS)
+        self.assertNotIn("Online", TABS)
         found = {t.widget: t for t in page.search.targets}
         for s in schema.S:
             if not s.applies():
@@ -203,13 +206,60 @@ class LayoutTests(unittest.TestCase):
             with self.subTest(key=s.key):
                 self.assertIn(s.key, page.rows)
                 row = page.rows[s.key]
-                self.assertIn(tab_of(s), TABS)
-                scroll = page.stack.widget(page.tab_index(tab_of(s)))
-                self.assertTrue(scroll.widget().isAncestorOf(row))
+                self.assertIn(tab_of(s), TABS + HOSTED)
+                self.assertTrue(page.category_scroll(tab_of(s)).widget().isAncestorOf(row))
                 self.assertEqual(found[row].group, tab_of(s))
+
+    def test_online_settings_are_the_online_sections_first_tab(self):
+        from forza_launcher.ui.window import ONLINE_PAGE_ID, SERVERS_PAGE_ID
+        page = self.win.settings
+        self.assertEqual(self.win.stack.indexOf(self.win.online), ONLINE_PAGE_ID)
+        self.assertEqual(self.win.stack.indexOf(self.win.servers), SERVERS_PAGE_ID)
+        for key in ("live_signin", "world_drop_in", "discord_presence", "challenges", "coop_results"):
+            self.assertEqual(schema.BY_KEY[key].group, "Online")   # the keys' group stays
+            self.assertTrue(self.win.online.isAncestorOf(page.rows[key]))
+        self.win.show_page(ONLINE_PAGE_ID)
+        self.assertEqual(self.win.section_title.text(), "Online")
+        self.assertEqual([self.win.subnav.tabText(i) for i in range(self.win.subnav.count())], ["Online", "Servers"])
+        self.assertTrue(page.rows["live_signin"].isVisible())
+        # Search on the Settings page opens Online > Online, and Servers for its own fields.
+        self.win.show_page(2)
+        target = next(t for t in page.search.targets if t.widget is page.rows["discord_presence"])
+        self.assertEqual(target.group, "Online")
+        page._show_search_result(target)
+        self.app.processEvents()
+        self.app.processEvents()
+        self.assertIs(self.win.stack.currentWidget(), self.win.online)
+        self.assertTrue(page.rows["discord_presence"].isVisible())
+        address = next(t for t in page.search.targets if t.focus is self.win.servers.address)
+        page._show_search_result(address)
+        self.app.processEvents()
+        self.app.processEvents()
+        self.assertIs(self.win.stack.currentWidget(), self.win.servers)
+        page.rebuild()   # a reset keeps the Online page, its rows and the Servers results
+        self.assertTrue(self.win.online.isAncestorOf(page.rows["live_signin"]))
+        self.assertTrue(any(t.focus is self.win.servers.address for t in page.search.targets))
+
+    def test_offline_is_a_row_of_servers_and_shows_in_online(self):
+        from forza_launcher.ui.servers_page import OFFLINE
+        servers = self.win.servers
+        with patch.object(servers, "check"):
+            self.win.show_page(11)
+        servers._select(OFFLINE)
+        servers.use_selected()
+        self.assertEqual(self.win.cfg.online["mode"], "offline")
+        self.assertEqual(self.win.settings.server_status.text(), "Play uses: Offline")
+        self.assertFalse(self.win.settings.web_account_frame.isVisibleTo(self.win.online))
+        self.assertIn("(in use)", servers.table.item(len(servers.rows) - 1, 0).text())
+        self.assertFalse(servers.remove_button.isEnabled())
+        servers._select(servers.rows[0].address)
+        servers.use_selected()
+        self.assertEqual(self.win.cfg.online["mode"], "public")
+        self.assertEqual(self.win.settings.server_status.text(), "Play uses: Public server")
 
     def test_display_settings_split_into_graphics_and_display(self):
         from forza_launcher.ui.settings_page import tab_of
+        self.assertEqual(tab_of(schema.BY_KEY["discord_presence"]), "Online")
         for key in ("resolution_scale", "world_shadow_detail", "present_hdr", "texture_replace", "motion_blur"):
             self.assertEqual(tab_of(schema.BY_KEY[key]), "Graphics")
         for key in ("frame_rate", "fullscreen", "forza_cockpit_fov", "forza_ultrawide"):

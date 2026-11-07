@@ -561,8 +561,8 @@ class TexturePacksPage(FolderListPage):
         cl.addWidget(label(
             "Upscales the Paint Shop's 478 decals (the sponsor and brand logos) from your game files, on "
             "this PC, with the same upscaler as Make HD pack: no dump needed. The game's decals are "
-            "256x256, so a big decal on a car looks soft, most of all with Settings > Graphics > World "
-            "detail > Paint job detail at 2x. The result is the pack \"Decal pack (made on this PC)\"; "
+            "256x256, so a big decal on a car looks soft, most of all with "
+            "Settings > Graphics > World detail > Paint job detail at 2x. The result is the pack \"Decal pack (made on this PC)\"; "
             "it also sharpens the Paint Shop's decal pictures.", "muted"))
         row = QHBoxLayout()
         row.setSpacing(12)

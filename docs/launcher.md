@@ -33,7 +33,7 @@ copies, and imports selected FH1 package designs into an existing local profile 
 backing up its catalog. Apply the imported design to a matching car in-game. See
 [UGC preservation](ugc-preservation.md) for the workflow and recovery findings.
 
-**Website account (website #4):** Settings > Online > Website account, shown with the public
+**Website account (website #4):** Online > Online > Website account, shown with the public
 server only, links the game to an optional account on forza.dyotson.dev (Discord, GitHub or an
 emailed code), the second factor the website's player features need. **Link to website account**
 signs `POST https://forza.dyotson.dev/api/game/link/start` with the game's key (`live_auth.py`,
@@ -52,7 +52,7 @@ once a session when the card is shown. The calls are in `web_account.py` (HTTPS 
 `ui/web_account.py`; `test_web_account.py` runs them against a fake service that checks every
 signature. The service is forza-live's `accounts/` (its README has the API and the rules).
 
-Discord status sharing is available under **Settings > Online > Discord** (off by
+Discord status sharing is available under **Online > Online > Discord** (off by
 default). See [Discord Rich Presence](discord.md) for the one-time public application
 ID setup, supported activities, privacy and local IPC tests.
 
@@ -136,9 +136,9 @@ machine from their own copy:
    gone), a launcher, list or GPU plugin update, or a graphics setting that selects other pipeline
    stores (split scene/HUD rendering, output size, render scale, render target path, API). Every later
    start also warms the listed pipelines. The step refuses to start the game while the Build step says "Rebuild needed" or "Not built" (a game built by an older launcher does not know `--shader_prebuild_only`): it shows "Rebuild first" and asks for Setup > Build. Before it builds, the step also fetches the server's list (below) and merges it with the shipped one; offline or on any failure it uses the shipped list alone. [Shader prebuild](shader_prebuild.md).
-   **Share shader list (#276, Settings > Online, on by default):** after a game session the launcher uploads the pipeline descriptions of your own pipeline cache that it has not sent before to the server you play on: shader hashes and render settings, plus how to rebuild each shader from game files (no shader code, no game data, nothing personal). The server publishes entries that at least 3 different players reported. Only the public server and your own server are used, never offline or "This PC"; the upload runs in the background with short timeouts, failures only go to the launcher log, and the launcher keeps a record of what was sent (`shader_share.json` in the data folder). The setting is launcher-only and is not written to `forza.toml`.
+   **Share shader list (#276, Online > Online, on by default):** after a game session the launcher uploads the pipeline descriptions of your own pipeline cache that it has not sent before to the server you play on: shader hashes and render settings, plus how to rebuild each shader from game files (no shader code, no game data, nothing personal). The server publishes entries that at least 3 different players reported. Only the public server and your own server are used, never offline or "This PC"; the upload runs in the background with short timeouts, failures only go to the launcher log, and the launcher keeps a record of what was sent (`shader_share.json` in the data folder). The setting is launcher-only and is not written to `forza.toml`.
    **Co-op campaign results (#309):** after a game session the launcher asks the server you play on (the public one or your own, never offline or "This PC") for your results of the Co-op Festival events you raced, as the world's host or as a guest (a guest's place counts when the host's game saw the same place), and applies each to the save of the session it was earned in (the launcher keeps which save each session used; another save's results wait for that save's next session, and a game started outside the launcher gets none), when that save has the event unlocked and the result beats its place for the event: the event's and race's result, the wristband XP of the improvement, the event's prize at that place less the online winnings that race already paid (you get the larger of the two once; no prize when that amount is not known, for example after races in another save), and the event's own unlock rewards, with a backup ("Before co-op results") and the save editor's checks. The wristband level and the unlocks by XP are left to the game (Race Central and your next race). The Play page lists what was added and each result that waits for an event your career has not unlocked yet (a guest behind the host's wristband): it is added at the first session after you unlock the event. Results it settled are confirmed to the server; results of a game it did not start can never go to a save and are dropped with a note; the others, and failures, wait on the server (30 days, at most 20 a player; results earned as a guest go first, then the oldest) for a later session, and failures only go to the launcher log (`coop_grant.py`, `docs/coop_campaign.md`).
-   **Daily and weekly challenges (forza-live #1, Settings > Online, on by default):** the Play page's Challenges card shows the main Forza Live server's three objectives of the day (00:00 to 00:00 UTC) and three of the week (from Monday 00:00 UTC), the same for every player, with your progress and the time left. The server counts progress from the results your game sends it while you play signed in: races won, on the podium or finished (in a class, or against other players), speed traps and zones at a speed (different ones count), 1000 Club medals and Big Shots (server `forza_live/competition/objectives.py`, `docs/website-data.md` there). The main server may also send a weekly credits gift through the game's Message Center for finished challenges (server `--daily-challenges-gifts`); the card then says how many of the week's challenges you finished toward it, or that this week's gift was sent. A community server may run challenges of its own, but the card shows only the main server's. The card asks `GET /challenges/progress` of the main server, signed like the co-op results, two seconds after it shows, then at most every 5 minutes while the launcher is open, and after each game session; only with Server set to Public server and a Forza Live identity on this PC (the game makes it at its first online start). With "My own server" it says challenges count on the main server only, with "This PC" and "Offline" it is hidden, and with the setting off (the "Online features" choice turns it off) it sends nothing and says how to turn it on (`challenges.py`, `ui/challenges_card.py`).
+   **Daily and weekly challenges (forza-live #1, Online > Online, on by default):** the Play page's Challenges card shows the main Forza Live server's three objectives of the day (00:00 to 00:00 UTC) and three of the week (from Monday 00:00 UTC), the same for every player, with your progress and the time left. The server counts progress from the results your game sends it while you play signed in: races won, on the podium or finished (in a class, or against other players), speed traps and zones at a speed (different ones count), 1000 Club medals and Big Shots (server `forza_live/competition/objectives.py`, `docs/website-data.md` there). The main server may also send a weekly credits gift through the game's Message Center for finished challenges (server `--daily-challenges-gifts`); the card then says how many of the week's challenges you finished toward it, or that this week's gift was sent. A community server may run challenges of its own, but the card shows only the main server's. The card asks `GET /challenges/progress` of the main server, signed like the co-op results, two seconds after it shows, then at most every 5 minutes while the launcher is open, and after each game session; only with Server set to Public server and a Forza Live identity on this PC (the game makes it at its first online start). With "My own server" it says challenges count on the main server only, with "This PC" and "Offline" it is hidden, and with the setting off (the "Online features" choice turns it off) it sends nothing and says how to turn it on (`challenges.py`, `ui/challenges_card.py`).
 5. **Play**, **Settings**, log folders, versions. On Play, **Open log folder** opens the game data folder containing `forza.log` (the current or last session; each start moves the one before to `forza.previous.log`, #609); **Open launcher log folder** opens the separate configuration folder containing `launcher.log` (launcher errors and tracebacks). Start failures also show the full launcher log path.
 
 Data lives in the game's user folder (`~/.local/share/forza`; on Windows `%LOCALAPPDATA%\ForzaReImagined`, or
@@ -151,9 +151,10 @@ The launcher's own config is `~/.config/forza-reimagined/launcher.json`
 
 Use the search field above the Settings categories, or press **Ctrl+F** while in
 Settings. Search matches setting names, help text, option names and configuration
-keys across every category, including the launcher's server, profile and advanced
-options. Select a result or press Enter to open its category and focus the existing
-control; a folded card (Racing wheel, Shifter and clutch, Keyboard bindings) or a card's
+keys across every category, including the launcher's profile and advanced options, the
+Online settings (shown as **Online** in the results; they open Online > Online) and the Servers
+list and address field (they open Online > Servers). Select a result or press Enter to open its
+category and focus the existing control; a folded card (Racing wheel, Shifter and clutch, Keyboard bindings) or a card's
 **More options** that holds the result opens first. Results overlay the tabs without
 shifting the page. Down moves into the results; Escape clears the search, and clicking
 outside dismisses the dropdown.
@@ -247,11 +248,19 @@ them as tabs under its title; the section button returns to the page shown last.
 | **Play** | | The banner, one big **Play** (with **Play in VR** when a VR app is found, and **Stop**), the game's messages, and four status rows: Game files, Game, DLC, Online. **Open log folder**, **Open launcher log folder**, Challenges and **Installation details** follow. |
 | **Library** | Photos, Designs & vinyls, Saves | What the game saved: photo-mode pictures, designs and vinyl groups, save backups and the profile editor. |
 | **Mods** | Mods, Texture packs, Radio | What changes the game's files or adds to them: mods and the FM4 cars, texture packs (HD pack, decal pack, compression), the custom radio stations. |
-| **Servers** | | The server list, the server Play uses, and adding a server by address. |
+| **Online** | Online, Servers | **Online**: the server Play uses (changed in Servers) and every online option: Website account, Forza Live (Sign in to Xbox LIVE, room, invites, friends and chat keys), Horizon World, Shader prebuild, Co-op campaign, Challenges, Discord. **Servers**: the server list with players and ping, This PC, a server added by address, and Offline. |
 | **Controls** | | The controller guide, bindings and calibration, DualSense and Xbox trigger effects. **Control settings** opens Settings > Controls. |
-| **Settings** | Graphics, Display, Controls, Gameplay, Audio, VR, Online, Profile, Advanced | Every forza.toml key and the launcher's own options, with search. |
+| **Settings** | Graphics, Display, Controls, Gameplay, Audio, VR, Profile, Advanced | Every other forza.toml key and the launcher's own options, with search (which finds the Online ones too and opens Online). |
 | **Setup** | Game files, Updates & DLC, Build | Building the game, step by step. |
 | **About** | | The notices, launcher updates, Add to Steam (Linux) and the project links. |
+
+The Online settings were a Settings tab; they are now the first tab of the **Online** section, next
+to Servers. Their keys and schema group ("Online") did not change: the Settings page still builds
+them (`HOSTED` in `ui/settings_page.py`, shown by the window as page 12, `ONLINE_PAGE_ID`), saves
+them and finds them in search, where a result opens Online > Online. The old Server card with four
+radio buttons (Public server, This PC, My own server, Offline) repeated the Servers page: Servers now
+has an **Offline** row as well, and Online > Online shows the server Play uses with a link to
+Servers. Search also finds the Servers list and its address field.
 
 Settings categories, and what moved between them: **Graphics** has the graphics card card,
 Picture (Graphics API, resolution, upscaling, anti-aliasing), NVIDIA DLSS (Windows), AMD FSR 3,
@@ -825,13 +834,14 @@ and keeps `--present_effect=fsr` as the presenter filter and fallback (`fsr3.py`
 when it is on). See [Rendering issues](rendering.md#temporal-upscaling-with-amd-fsr-3-51-2026-10-16).
 Online: public (`forza-reimagined.playit.plus:56677`, written as `live_server` and `FORZA_SERVER`),
 local (the launcher starts the Forza Live server inside its own executable, or reuses one
-on port 21201, like `play.sh`), your own, or offline. The **Servers** page (#587,
+on port 21201, like `play.sh`), your own, or offline. **Online > Servers** (#587,
 `server_list.py`, `ui/servers_page.py`) picks among them: the main server first, then the servers of
 the main server's signed list (`/servers.json`, taken only when the list key the launcher ships
-signed it and it has not expired), This PC, and addresses added by hand. It pings each server's
+signed it and it has not expired), This PC, addresses added by hand, and Offline. It pings each server's
 `/status` (players online, round trip, up or down) in a background thread when the page opens and
 every 30 s while it stays open; a server that does not answer shows as down and stays listed. Using a
-server sets the same Online mode and "My own server" address as Settings > Online. With "Online
+server sets the Online mode (`online.mode`, `online.custom_server` in launcher.json; Offline is mode
+`offline`), and Online > Online shows it in its Server card. With "Online
 features" off, only the page's "Check servers" button checks them. The Xenia save logic is `play.sh --xenia`
 ported (copy once, `--user_data_root/--cache_root/--profile_xuid`, DLC folder shared).
 The DLC is shared into the Xenia copy (`xenia-<XUID>/0000000000000000`) with a link, a junction

@@ -3,7 +3,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QPoint, QRegularExpression, QTimer, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QIntValidator, QRegularExpressionValidator
-from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFileDialog,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog,
                                QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QLineEdit, QTabBar, QPlainTextEdit,
                                QMessageBox, QPushButton, QRadioButton, QScrollArea, QSlider, QStackedWidget,
                                QToolButton, QToolTip, QVBoxLayout, QWidget)
@@ -46,7 +46,10 @@ class DSpin(_Wheelless, DoubleSpinBox):
 # every key's group and section; only where it shows changed). Display's picture, upscaling,
 # world detail, HDR and texture sections are the Graphics category; the native pause menu (an
 # Advanced key) shows under Gameplay. A section no category names stays in its group's category.
-TABS = ["Graphics", "Display", "Controls", "Gameplay", "Audio", "VR", "Online", "Profile", "Advanced"]
+TABS = ["Graphics", "Display", "Controls", "Gameplay", "Audio", "VR", "Profile", "Advanced"]
+# Categories this page builds (rows, search, saving) but the window shows elsewhere: Online is
+# the first tab of the sidebar's Online section, beside Servers.
+HOSTED = ["Online"]
 TAB_SECTIONS = {
     "Graphics": [("Display", "Picture"), ("Display", "NVIDIA DLSS"), ("Display", "AMD FSR 3"),
                  ("Display", "World detail"), ("Display", "HDR"), ("Display", "Texture packs")],
@@ -68,8 +71,8 @@ TAB_LEADS = {
                 "trigger effects are on the Controls page.",
     "Gameplay": "How the game plays in single player. Online games always play as shipped.",
     "Audio": "Sound output and the in-game radio. Your own stations are made in Mods > Radio.",
-    "Online": "Xbox LIVE is gone, so the game signs in to a Forza Live server instead. "
-              "Browse community servers in Servers.",
+    "Online": "Xbox LIVE is gone, so the game signs in to a Forza Live server instead: what it shares "
+              "and does online. Pick the server, or play offline, in Servers.",
     "Profile": "Your saves live in the game's data folder. You can also continue a Xenia Canary save.",
     "Advanced": "For testing and troubleshooting. Everything here is also a forza.toml key or a command-line flag.",
 }
@@ -101,7 +104,7 @@ def tab_of(setting):
     for tab, sections in TAB_SECTIONS.items():
         if (setting.group, setting.section) in sections:
             return tab
-    return setting.group if setting.group in TABS else "Advanced"
+    return setting.group if setting.group in TABS + HOSTED else "Advanced"
 
 
 def tab_settings(tab):
@@ -406,6 +409,12 @@ class SettingsPage(QWidget):
         for g in TABS:
             self.tabs.addTab(g)
             self.stack.addWidget(self._build_group(g))
+        # The Online category (window: Online > Online), rebuilt in place by rebuild().
+        self.online_page = QWidget()
+        self.online_page.setObjectName("onlineSettings")
+        QVBoxLayout(self.online_page).setContentsMargins(0, 0, 0, 0)
+        self._hosted = {}
+        self._build_hosted()
         self.tabs.currentChanged.connect(self.stack.setCurrentIndex)
         self.tabs.currentChanged.connect(self.search.dismiss)
         self.tabs.setCurrentIndex(0)
@@ -420,19 +429,42 @@ class SettingsPage(QWidget):
     def show_tab(self, name):
         self.tabs.setCurrentIndex(self.tab_index(name))
 
+    def _build_hosted(self):
+        layout = self.online_page.layout()
+        for g in HOSTED:
+            old = self._hosted.pop(g, None)
+            if old is not None:
+                layout.removeWidget(old)
+                old.deleteLater()
+            self._hosted[g] = self._build_group(g)
+            layout.addWidget(self._hosted[g])
+
+    def category_scroll(self, name):
+        """The scroll area of a category: a tab of this page, or a hosted one (Online)."""
+        return self._hosted[name] if name in self._hosted else self.stack.widget(self.tab_index(name))
+
+    # Search results the window shows on another page: Online (the hosted category), Servers.
+    ELSEWHERE = {"Online": "ONLINE_PAGE_ID", "Servers": "SERVERS_PAGE_ID"}
+
     def _show_search_result(self, target):
         reveal(target.widget)
-        index = self.tab_index(target.group)
-        self.tabs.setCurrentIndex(index)
+        if target.group in self.ELSEWHERE:
+            from . import window as window_module
+            self._open_page(getattr(window_module, self.ELSEWHERE[target.group]))
+        else:
+            self.tabs.setCurrentIndex(self.tab_index(target.group))
         # Let the newly shown category finish its wrapped-text layout before scrolling.
         QTimer.singleShot(0, self, lambda: self._focus_search_target(target))
 
     def _focus_search_target(self, target):
         if not any(item is target for item in self.search.targets):
             return  # Reset/GPU changes may have rebuilt the controls while queued.
-        scroll = self.stack.currentWidget()
-        if self.tabs.tabText(self.tabs.currentIndex()) != target.group:
+        if target.group == "Servers":
+            target.focus.setFocus(Qt.ShortcutFocusReason)
             return
+        if target.group not in self._hosted and self.tabs.tabText(self.tabs.currentIndex()) != target.group:
+            return
+        scroll = self.category_scroll(target.group)
         scroll.widget().layout().activate()
         if target.focus.isEnabled():
             target.focus.setFocus(Qt.ShortcutFocusReason)
@@ -530,7 +562,7 @@ class SettingsPage(QWidget):
             valid = (17 <= len(identifier) <= 20 and identifier.isascii() and identifier.isdigit()
                      and not identifier.startswith("0") and int(identifier) <= 2 ** 64 - 1)
             discord.warning.setText("Discord sharing needs a valid public Application ID. "
-                                    "Add it under Advanced > Discord setup.")
+                                    "Add it under Settings > Advanced > Discord setup.")
             discord.warning.setVisible(bool(self.cfg.settings.get("discord_presence")) and not valid)
         active = dlss.enabled(self.cfg)
         temporal = fsr3.enabled(self.cfg)
@@ -980,44 +1012,55 @@ class SettingsPage(QWidget):
 
     # Online
     def _online_block(self, lay):
+        """The server Play uses. It is chosen in Servers (the list, This PC, an address, Offline)."""
         lay = section_card(lay, "Server")
-        self.mode_group = QButtonGroup(self)
-        modes = [
-            ("public", f"Public server", f"{PUBLIC_SERVER}: the shared online world, leaderboards and "
-                                          "rivals. You forward no ports."),
-            ("local", "This PC", "Starts a Forza Live server just for this session (127.0.0.1:21200). "
-                                  "Online features work, but only you are in it."),
-            ("custom", "My own server", "A server you or a friend host (forza-live's docs/hosting.md on GitHub). "
-                                      "The Servers page lists community servers and checks which are up."),
-            ("offline", "Offline", "No Xbox LIVE and no server."),
-        ]
-        self.radios = {}
-        for key, title, text in modes:
-            rb = QRadioButton(title)
-            rb.setStyleSheet("font-weight: 600;")
-            self.mode_group.addButton(rb)
-            self.radios[key] = rb
-            lay.addWidget(rb)
-            hint = label(text, "help")
-            hint.setContentsMargins(26, 0, 0, 6)
-            lay.addWidget(hint)
-            rb.toggled.connect(lambda on, k=key: on and self._set_mode(k))
-        self.custom = QLineEdit(self.cfg.online.get("custom_server", ""))
-        self.custom.setPlaceholderText("host[:port], for example example.org:21200")
-        self.custom.editingFinished.connect(self._custom_changed)
-        lay.addWidget(self.custom)
-        self.radios[self.cfg.online["mode"]].setChecked(True)
-        self.custom.setEnabled(self.cfg.online["mode"] == "custom")
+        row = QHBoxLayout()
+        row.setSpacing(12)
+        self.server_status = QLabel("")
+        self.server_status.setObjectName("settingLabel")
+        self.server_status.setWordWrap(True)
+        row.addWidget(self.server_status, 1)
+        lay.addLayout(row)
+        self.server_detail = label("", "help")
+        lay.addWidget(self.server_detail)
         from .window import SERVERS_PAGE_ID
-        self.servers_page_button = self._page_link(lay, "Community servers, their players and ping (Servers)",
-                                                   SERVERS_PAGE_ID, "The server list: pick one, or add one by address.")
-        self.search.add("Online server", "Online", "Server", self.radios["public"],
-                        keywords="public local offline Xbox LIVE Forza Live")
-        self.search.add("Custom server address", "Online", "Server", self.custom,
-                        keywords="host port custom_server")
+        self.servers_page_button = self._page_link(lay, "Choose a server, or play offline (Servers)",
+                                                   SERVERS_PAGE_ID, "The server list: pick one, add one by "
+                                                   "address, This PC or Offline.")
+        self._show_server()
+        self.search.add("Online server", "Online", "Server", self.server_status, self.servers_page_button,
+                        keywords="public local offline This PC Xbox LIVE Forza Live server mode")
+        self._server_targets()
+
+    def attach_servers(self, servers):
+        """The window's Servers page: search finds its server list and its address field."""
+        self._servers = servers
+        self._server_targets()
+
+    def _server_targets(self):
+        servers = getattr(self, "_servers", None)
+        if servers is None or any(t.group == "Servers" for t in self.search.targets):
+            return
+        self.search.add("Servers and Offline", "Servers", "Servers", servers.table,
+                        keywords="server list community public main This PC local offline ping players "
+                                 "Use this server")
+        self.search.add("Add a server by address", "Servers", "Add a server", servers.address,
+                        keywords="host port custom_server my own server community address")
+
+    def _show_server(self):
+        mode = self.cfg.online["mode"]
+        name, detail = {
+            "public": ("Public server", f"{PUBLIC_SERVER}: the shared online world, leaderboards and rivals."),
+            "local": ("This PC", "A Forza Live server just for your session (127.0.0.1:21200): only you are in it."),
+            "custom": ("Your server: " + (self.cfg.online.get("custom_server") or "(no address set)"),
+                       "A server you or a friend host, with its own leaderboards."),
+            "offline": ("Offline", "No Xbox LIVE and no server."),
+        }.get(mode, ("", ""))
+        self.server_status.setText(f"Play uses: {name}")
+        self.server_detail.setText(detail)
 
     def _web_account_block(self, lay):
-        """Settings > Online > Website account (ui/web_account.py), for the public server only:
+        """Online > Online > Website account (ui/web_account.py), for the public server only:
         the website's accounts check keys the public server knows."""
         from .web_account import WebAccountCard
         content = section_card(lay, "Website account")
@@ -1030,28 +1073,14 @@ class SettingsPage(QWidget):
 
     def sync_server(self):
         """Show the server the Servers page picked (#587)."""
-        mode = self.cfg.online["mode"]
-        if self.custom.text().strip() != self.cfg.online.get("custom_server", ""):
-            self.custom.setText(self.cfg.online.get("custom_server", ""))
-        if mode in self.radios and not self.radios[mode].isChecked():
-            self.radios[mode].setChecked(True)
-        self.custom.setEnabled(mode == "custom")
-        self._show_web_account(mode)
+        if hasattr(self, "server_status"):
+            self._show_server()
+        self._show_web_account(self.cfg.online["mode"])
 
     def _show_web_account(self, mode):
-        frame = getattr(self, "web_account_frame", None)  # built after the server radios
+        frame = getattr(self, "web_account_frame", None)  # built after the server card
         if frame is not None:
             frame.setVisible(mode == "public")
-
-    def _set_mode(self, mode):
-        self.cfg.online["mode"] = mode
-        self.custom.setEnabled(mode == "custom")
-        self._show_web_account(mode)
-        self.touched()
-
-    def _custom_changed(self):
-        self.cfg.online["custom_server"] = self.custom.text().strip()
-        self.touched()
 
     # Profile
     def _profile_block(self, lay):
@@ -1271,6 +1300,7 @@ class SettingsPage(QWidget):
             w.deleteLater()
         for g in TABS:
             self.stack.addWidget(self._build_group(g))
+        self._build_hosted()
         self.stack.setCurrentIndex(cur)
         self._apply_dependencies()
         self.search.refresh()

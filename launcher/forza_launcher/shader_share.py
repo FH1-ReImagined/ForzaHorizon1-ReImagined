@@ -11,7 +11,7 @@ Nothing from the game leaves the PC: no shader code, no game files, nothing pers
 carry hashes and render state; the upload is signed with the player's Forza Live XUID and friends
 key, like the friends list, live_auth.py: the key itself is not sent). Only the public server and
 the player's own server are used, never offline or the server on this PC, and only when
-Settings > Online > "Share shader list" is on.
+Online > Online > "Share shader list" is on.
 Everything here has short timeouts, fails silently (the launcher log has it) and runs in a
 background thread: it never holds up Play."""
 import hashlib

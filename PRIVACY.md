@@ -15,7 +15,7 @@ Last updated: 2026-11-04. Every change to this policy is a change to this file, 
   - your activity in the game (with your car, the event and the area of Colorado), shown through the Discord desktop app if it is running.
 - One choice turns all of them off: "Online features" in the Windows installer, or the same question the launcher asks the first time it opens on Linux. You can also turn each one off later in the launcher; see "How to turn each thing off".
 - Separately, on Windows with an NVIDIA graphics card, the first Play downloads NVIDIA's DLSS runtime from GitHub, and actions you start (Build, Make HD pack, Make decal pack) download tools. See "Downloads".
-- Settings > Online > Server > "Offline" stops all contact with game servers.
+- Online > Servers > "Offline" stops all contact with game servers.
 - When you play online, the server receives your gamertag, a random player ID (your XUID) and your IP addresses. Other players see your gamertag and XUID, and the server gives the players in your room your IP addresses so that their games can connect to yours.
 - Traffic to the game server is not encrypted. That includes chat messages. Your keys are not sent: the game and the launcher sign their requests with your signing key, and the server keeps only its public key. The one exception is your friends key from older versions, which the game sends once to the public server to move your account to the signing key.
 - The public server keeps most records with no time limit. Its status page and leaderboards are public.
@@ -30,7 +30,7 @@ Last updated: 2026-11-04. Every change to this policy is a change to this file, 
 - The project maintainer also runs the server that serves the project website, forza.dyotson.dev, and its website accounts.
 - If you sign in to the website with Discord or GitHub, that service handles the sign-in. If you sign in with an email address, a transactional email service (an email relay) delivers the sign-in code to you.
 - Microsoft, Discord and Flathub are involved only in the cases described below.
-- If you play on a server that you or a friend host ("My own server"), that server's operator receives what this policy says goes to "the server". This policy does not cover what that operator does with it.
+- If you play on a server that you or a friend host (a community server, or one added by address in Online > Servers), that server's operator receives what this policy says goes to "the server". This policy does not cover what that operator does with it.
 
 Their privacy policies:
 - GitHub: https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement
@@ -61,25 +61,25 @@ it never changes clock settings. Opening the setup guide opens GitHub in your br
 - The request headers carry your XUID and a signature made with your signing key (not the key itself), so that the server counts each player once. The request uses plain HTTP, so it is not encrypted.
 - Where: the server you play on (the public server or your own). Nothing is sent in "Offline" or "This PC" mode.
 - What the server keeps: for each entry, a hashed form of your XUID, with no time limit, and counters per day that are cleared every day. It publishes only entries that several players reported, without player IDs.
-- Turn off: Settings > Online > "Share shader list". "Offline" and "This PC" also stop it.
+- Turn off: Online > Online > "Share shader list". "Offline" and "This PC" also stop it.
 - Setup > "Prebuild shaders" downloads the published list from the same server. That request sends only a version string. "Share shader list" does not stop this download; "Offline" or "This PC" does.
 
 ### Co-op campaign results (on by default when you play online)
 
-- What: after each session on "Public server" or "My own server", the launcher asks the server for your pending co-op campaign results, then confirms the ones it handled. It does this only when you have a save and a Forza Live identity on this PC. These requests carry your XUID and a signature made with your signing key (not the key itself) over plain HTTP. The answer can include the gamertag of the player who hosted the event.
-- Turn off: Settings > Online > "Co-op campaign results". "Offline" and "This PC" also stop it.
+- What: after each session on the main server ("Public server") or another server added in Online > Servers, the launcher asks the server for your pending co-op campaign results, then confirms the ones it handled. It does this only when you have a save and a Forza Live identity on this PC. These requests carry your XUID and a signature made with your signing key (not the key itself) over plain HTTP. The answer can include the gamertag of the player who hosted the event.
+- Turn off: Online > Online > "Co-op campaign results". "Offline" and "This PC" also stop it.
 
 ### Daily and weekly challenges (on by default with "Public server")
 
 - What: the Play page's Challenges card asks the public server for its current daily and weekly challenges and your progress in them (`/challenges/progress`). The request carries your XUID and a signature made with your signing key (not the key itself) over plain HTTP. The answer contains the objectives, your progress and how many players finished each objective; no other player's name or ID.
-- When: a moment after the Play page shows, then at most every 5 minutes while it stays open, and after each game session. Only when Server is "Public server" and this PC has a Forza Live identity. Nothing is asked with "My own server", "This PC" or "Offline".
+- When: a moment after the Play page shows, then at most every 5 minutes while it stays open, and after each game session. Only when the server is the main server ("Public server") and this PC has a Forza Live identity. Nothing is asked with another server, "This PC" or "Offline".
 - The server counts your progress from the results your game already sends it when you play signed in (races, speed traps and zones, 1000 Club medals, Big Shots). Turning the card off stops the launcher asking; it does not change what the game sends.
 - The public server may send a weekly credits gift for finished challenges to your Message Center in the game, like any gift. A community server that runs challenges keeps its own progress; the launcher shows only the public server's.
-- Turn off: Settings > Online > "Daily and weekly challenges". "Online features" off turns it off too.
+- Turn off: Online > Online > "Daily and weekly challenges". "Online features" off turns it off too.
 
 ### Website account link (only when you click Link)
 
-- What: when you click Settings > Online > Website account > "Link to website account", the launcher asks the website's accounts service for a link, opens the website in your browser, then asks every 3 seconds whether a website account claimed it, and confirms the account you approve (or declines it, with "Not me"). "Unlink" and "Sign out everywhere" send one request each. These requests carry your XUID and a signature made with your signing key (not the key itself), over HTTPS. The answers contain the website account's id, its sign-in method and the day it was made, never another player's XUID.
+- What: when you click Online > Online > Website account > "Link to website account", the launcher asks the website's accounts service for a link, opens the website in your browser, then asks every 3 seconds whether a website account claimed it, and confirms the account you approve (or declines it, with "Not me"). "Unlink" and "Sign out everywhere" send one request each. These requests carry your XUID and a signature made with your signing key (not the key itself), over HTTPS. The answers contain the website account's id, its sign-in method and the day it was made, never another player's XUID.
 - When: only when you click one of those buttons. After a link is made, the launcher also asks for the link's state once a session, when the Website account card is shown.
 - Where: forza.dyotson.dev (the project website's accounts service), whichever game server you use.
 - Turn off: don't link. "Unlink" ends the link; after that the launcher sends nothing until you link again.
@@ -120,7 +120,7 @@ Buttons that open web pages (the project on GitHub, this policy, Microsoft's lic
 
 ### Online play (Forza Live)
 
-Settings > Online > Server has four choices. "Public server" is the default. "This PC" runs a server on your own PC that only you use. "My own server" connects to a server that you or a friend host. "Offline" connects to no server.
+Online > Servers picks the server. The main server ("Public server") is the default. "This PC" runs a server on your own PC that only you use. A community server, or one you or a friend host and add by address, is run by its owner. "Offline" connects to no server.
 
 While a server is set, the game sends it the following every few seconds, from the moment the game starts until you quit:
 - your XUID, a random player ID created on your PC the first time you play online;
@@ -136,7 +136,7 @@ While "Sign in to Xbox LIVE" is on (the default), the game also:
 - sends your matchmaking searches and the sessions you host, and Xbox LIVE skill stats around online races;
 - syncs your friends list every 10 seconds, and sends the friend requests, blocks and gamertag searches you make;
 - sends the chat messages you write, the list of sessions you are in, and the content your game has that changes which cars exist: the numbers of the DLC packs installed and the names of the mods you loaded that change cars or the game database (not your other mods). The server compares it with the players in your session and tells you, and them, what you do not share, because a car that one game lacks looks like a plain placeholder in the other. It is kept in memory only, never written to disk, and shared only with the players of your session as that notice, and asks the server every 10 seconds which car club you are in;
-- in Horizon World free roam, sends your car's in-game position, heading and speed four times a second, for head-to-head challenges (Settings > Online > "Head-to-head challenges" turns this off);
+- in Horizon World free roam, sends your car's in-game position, heading and speed four times a second, for head-to-head challenges (Online > Online > "Head-to-head challenges" turns this off);
 - sends an invite only when you send one ("Show game invites" controls whether invites from others are shown to you);
 - uses the server's title services over plain HTTP: sign-in (gamertag and career level), profile progress (XP, credits, race history), race scores and lap times, Rivals ghost replays, photos you upload or share (image, preview, title, description), photo mode Big Shots you upload (a 3840x2160 picture and its file name), paint jobs and vinyl groups you share on the storefront (the design, its preview, title, description and keywords, and the car it is for), car clubs and the cars shared in them, auctions and gifts, and Message Center checks. Each of these requests carries your XUID, a signature made with your signing key (not the key itself) and the version of the game that sends it (for example 0.2.1/tu4).
 
@@ -146,14 +146,14 @@ Turning "Sign in to Xbox LIVE" off stops the list above, but it does not hide yo
 
 Your IP address and other players:
 - The server gives the other players in your room your public IP address and port and your LAN IP address and port, and the game connects to them directly when it can, as the Xbox 360 game did. They can then see your public IP address.
-- This is the same on the public server, which you reach through playit.gg, and on a server you connect to directly ("My own server"). The public server learns your public address from the tunnel. Until late October 2026 it could not, and it gave other players no IP address.
+- This is the same on the public server, which you reach through playit.gg, and on a server you connect to directly (a community server or one added by address). The public server learns your public address from the tunnel. Until late October 2026 it could not, and it gave other players no IP address.
 - When the server does not know your public address (a tunnel that does not report it), it gives other players none, and the traffic between you and them goes through the server.
 
 ### Discord activity (on by default)
 
 - If the Discord desktop app is running, the game tells it what you are doing (for example "Exploring Colorado", "Racing online", or the number of players in an online lobby) and when you started. This goes to the Discord app on your PC over a local connection. Discord then shows it to your Discord contacts, under Discord's own privacy settings and privacy policy. Your gamertag, XUID and IP address are not part of it.
 - It also tells it your current car with its class and PI, the event you are racing in and, in free roam, the area of Colorado you are in (for example "Red Rock"), with the names the game uses. Nothing you type is part of it.
-- Turn off: Settings > Online > "Share activity on Discord". To keep only the activity: Settings > Online > "Share car, event and area".
+- Turn off: Online > Online > "Share activity on Discord". To keep only the activity: Online > Online > "Share car, event and area".
 
 ### What stays on your PC
 
@@ -245,7 +245,7 @@ Neither is used for tracking or shared with anyone.
 
 ### Linking your game
 
-Linking makes your game key the account's second factor: the website's features for players (likes, deleting your own photos and designs, and later uploads) need a linked game. You start a link in the launcher (Settings > Online > Website account), sign in on the website page it opens and click Link there, then confirm the website account's id in the launcher. Both sides have to approve, so nobody can link your game to their account, or their game to yours, without you.
+Linking makes your game key the account's second factor: the website's features for players (likes, deleting your own photos and designs, and later uploads) need a linked game. You start a link in the launcher (Online > Online > Website account), sign in on the website page it opens and click Link there, then confirm the website account's id in the launcher. Both sides have to approve, so nobody can link your game to their account, or their game to yours, without you.
 
 What a link stores:
 - your XUID, the public half of your signing key (never the key itself), your gamertag (shown on your account page), and when the link was made and moved;
@@ -301,19 +301,19 @@ With a linked account you can like community photos and designs on the website (
 ## How to turn each thing off
 
 - Everything in "In short" at once: untick "Online features" in the Windows installer, or answer the launcher's first-run question with it unticked.
-- All contact with game servers: Settings > Online > Server > "Offline". ("This PC" keeps everything on your own PC.)
-- Room list, presence, friends, chat, stats and title services: Settings > Online > "Sign in to Xbox LIVE" off. You stay visible to the server and your room; see "Online play".
-- Position sharing in free roam: Settings > Online > "Head-to-head challenges".
-- Invites from others: Settings > Online > "Show game invites".
-- Shader-list sharing: Settings > Online > "Share shader list".
-- Co-op campaign results: Settings > Online > "Co-op campaign results".
-- The Play page's daily and weekly challenges: Settings > Online > "Daily and weekly challenges".
+- All contact with game servers: Online > Servers > "Offline". ("This PC" keeps everything on your own PC.)
+- Room list, presence, friends, chat, stats and title services: Online > Online > "Sign in to Xbox LIVE" off. You stay visible to the server and your room; see "Online play".
+- Position sharing in free roam: Online > Online > "Head-to-head challenges".
+- Invites from others: Online > Online > "Show game invites".
+- Shader-list sharing: Online > Online > "Share shader list".
+- Co-op campaign results: Online > Online > "Co-op campaign results".
+- The Play page's daily and weekly challenges: Online > Online > "Daily and weekly challenges".
 - Update check: About > "Check for updates when the launcher opens".
-- Discord activity: Settings > Online > "Share activity on Discord". Only the car, event and area in it: Settings > Online > "Share car, event and area".
+- Discord activity: Online > Online > "Share activity on Discord". Only the car, event and area in it: Online > Online > "Share car, event and area".
 - Your computer's login name as gamertag: set Settings > Profile > Gamertag.
 - The DLSS download: Settings > Graphics > "Graphics API" set to Direct3D 12, with "NVIDIA DLSS" and "NVIDIA DLAA" off.
 - Website accounts: don't make one. To end one: "Sign out" or "Sign out everywhere" on the account page, or "Delete my account" there.
-- The website account link: don't link. To end it: "Unlink" in Settings > Online > Website account, or on the account page.
+- The website account link: don't link. To end it: "Unlink" in Online > Online > Website account, or on the account page.
 - Likes: don't like, or take a like back with the same button. Deleting the website account deletes your game's likes.
 - Your community photos and shared designs on the website: delete them on the account page (with an account linked to your game), or remove a design in the game.
 

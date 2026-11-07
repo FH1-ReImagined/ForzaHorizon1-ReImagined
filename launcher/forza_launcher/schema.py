@@ -564,7 +564,7 @@ add("ai_rubber_banding", "Rubber banding", "Gameplay", "choice", "game",
 
 add("forza_car_tuning", "Native car tuning", "Gameplay", "bool", False,
     "Add Car Tuning to the stock pause menu for your owned car in Colorado free roam. "
-    "Requires Settings > Online > Sign in to Xbox LIVE: off, including when playing solo while signed in to Forza Live. "
+    "Requires Online > Online > Sign in to Xbox LIVE: off, including when playing solo while signed in to Forza Live. "
     "Supports named setups "
     "and tune file export/import. Requires FH1 Title Update 4 resources prepared "
     "by the launcher during a build. Applies on the next game launch.", "Car tuning", restart=True)
@@ -572,8 +572,8 @@ add("forza_car_tuning", "Native car tuning", "Gameplay", "bool", False,
 add("custom_race", "Custom Race", "Gameplay", "bool", False,
     "Replay a festival or street race you have already won with your own settings: press "
     "Select on the event's title card to choose the car class, laps (circuits), opponents "
-    "(1-7) and time of day. Rewards are paid as usual. Offline only: requires Settings > "
-    "Online > Sign in to Xbox LIVE: off. Title Update 4 only. Applies on the next game launch.",
+    "(1-7) and time of day. Rewards are paid as usual. Offline only: requires "
+    "Online > Online > Sign in to Xbox LIVE: off. Title Update 4 only. Applies on the next game launch.",
     "Custom Race", restart=True)
 
 add("skip_startup_movies", "Skip startup videos", "Gameplay", "bool", False,

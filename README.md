@@ -100,14 +100,14 @@ The official online services for Forza Horizon closed in 2023. Forza Live, the p
 - **Community photos and designs.** A Big Shot you upload from photo mode is published on the [photo gallery](https://forza.dyotson.dev/gallery.html) with your gamertag. Paint jobs and vinyl groups you share on the storefront can be found, downloaded and rated in the game, and the newest are listed on the [designs page](https://forza.dyotson.dev/designs.html) with their share codes. What is public and for how long: [`PRIVACY.md`](PRIVACY.md).
 - **Your own server.** The same server software, with a [hosting guide](https://github.com/FH1-ReImagined/forza-live/blob/main/docs/hosting.md).
 
-In **Settings > Online**, pick one:
+In **Online > Servers**, pick one:
 
 - **Public server.** Horizon World, leaderboards and rivals. The address filled in is `forza-reimagined.playit.plus:56677`. You forward no ports.
 - **This PC.** A private server for this session.
-- **My own server.** [Hosting guide](https://github.com/FH1-ReImagined/forza-live/blob/main/docs/hosting.md) in [forza-live](https://github.com/FH1-ReImagined/forza-live), the server's repository. Python 3 from the standard library, or Docker.
+- **Your own server**, added by its address. [Hosting guide](https://github.com/FH1-ReImagined/forza-live/blob/main/docs/hosting.md) in [forza-live](https://github.com/FH1-ReImagined/forza-live), the server's repository. Python 3 from the standard library, or Docker.
 - **Offline.** No Xbox LIVE.
 
-Community servers are run by volunteers in other regions, for a lower ping. Pick one on the launcher's **Servers** page, or type its address in **My own server**. Each keeps its own friends list and leaderboards: only the public server's are the official ones on the website.
+Community servers are run by volunteers in other regions, for a lower ping. Pick one in the launcher's **Online > Servers**, or add it by its address there. Each keeps its own friends list and leaderboards: only the public server's are the official ones on the website.
 
 | Region | Address |
 | --- | --- |

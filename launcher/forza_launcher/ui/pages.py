@@ -284,7 +284,7 @@ class PlayPage(QWidget):
             "local": "Local server on this PC (only you)",
             "custom": "Your server: " + (cfg.online.get("custom_server") or "(no address set)"),
             "offline": "Offline",
-        }[mode] + "   (Settings > Online)")
+        }[mode] + "   (Online > Servers)")
         details = [f"Game files: {root}", f"Saves and data: {cfg.data_home()}"]
         if install:
             details.append(f"Game executable: {install.exe}")

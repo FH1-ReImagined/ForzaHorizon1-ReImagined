@@ -252,6 +252,11 @@ class NavigationTests(unittest.TestCase):
         self.assertIsNot(self.app.focusWidget(), self.win.nav_button(4))
         self.press("next")   # Mods, on its first page
         self.assertIs(self.win.stack.currentWidget(), self.win.mods)
+        self.press("next")   # Online: the Online settings, then Servers
+        self.assertIs(self.win.stack.currentWidget(), self.win.online)
+        self.nav.focus(self.win.subnav)
+        self.press("right")
+        self.assertIs(self.win.stack.currentWidget(), self.win.servers)
 
     def test_shoulders_visit_every_page_in_sidebar_order(self):
         # Designs (id 7) and Mods (id 8) included: the stack index of a page is its id.

@@ -1,6 +1,6 @@
 """The Servers page (#587, server_list.py, ui/servers_page.py) against fake Forza Live servers on
 127.0.0.1: the signed list (its signature, expiry and the server's own signing code), status and
-ping, the rows the page shows, picking a server as Settings > Online saves it, and the page's
+ping, the rows the page shows, picking a server saves it as Online > Online shows it, and the page's
 checks off the GUI thread, when it opens and every 30 s while it stays open. No test reaches a real
 server: an address that is not a fake one is never pinged."""
 import json
@@ -311,14 +311,15 @@ class Page(Base):
         self.assertTrue(self.page.busy())
         self.wait()
         rows = self.cells()
-        self.assertEqual([r[0] for r in rows], ["Test main  (in use)", "Community", "Gone", "This PC"])
-        main, community, gone, local = rows
+        self.assertEqual([r[0] for r in rows], ["Test main  (in use)", "Community", "Gone", "This PC", "Offline"])
+        main, community, gone, local, offline = rows
         self.assertEqual(main[2], "4")
         self.assertTrue(main[3].endswith(" ms"))
         self.assertEqual(main[4], "Up")
         self.assertEqual((community[1], community[2], community[4]), ("Europe", "1", "Up"))
         self.assertEqual((gone[1], gone[2], gone[3], gone[4]), ("Asia", "", "", "Down"))
         self.assertEqual(local[4], "Starts with the game")
+        self.assertEqual(offline[4], "No Xbox LIVE, no server")
         self.assertEqual(self.main.requests.count("/servers.json"), 1)
         self.assertNotIn(threading.main_thread(), self.ping_threads)  # off the GUI thread
 
@@ -449,7 +450,7 @@ class Window(Base):
         win = MainWindow(self.cfg)
         self.addCleanup(win.deleteLater)
         self.addCleanup(win.close)
-        self.assertEqual(win.navs.button(SERVERS_PAGE_ID).text(), "Servers")
+        self.assertEqual(win.nav_button(SERVERS_PAGE_ID).text(), "Online")
         win.show_page(SERVERS_PAGE_ID)
         until = time.monotonic() + 8
         while win.servers.checks < 1 and time.monotonic() < until:
@@ -458,8 +459,7 @@ class Window(Base):
         self.assertTrue(win.servers.timer.isActive())
         win.servers._select(community.address)
         win.servers.use_selected()
-        self.assertTrue(win.settings.radios["custom"].isChecked())
-        self.assertEqual(win.settings.custom.text(), community.address)
+        self.assertEqual(win.settings.server_status.text(), "Play uses: Your server: " + community.address)
         saved = json.loads((self.root / "launcher.json").read_text(encoding="utf-8"))
         self.assertEqual((saved["online"]["mode"], saved["online"]["custom_server"]), ("custom", community.address))
         self.assertEqual(self.cfg.server_spec(), community.address)
