@@ -255,6 +255,35 @@ tools/run_forza.sh 120        # a two-minute test run; logs in ${XDG_RUNTIME_DIR
   Builds before SDK patch 0103 stopped there (#244). On Windows, try another default output, or
   untick "Allow applications to take exclusive control" in the device's Properties > Advanced.
 
+## Car sound levels (#730)
+
+Audio > Car sounds > **Engine** (`car_engine_volume`) and **Turbo and supercharger**
+(`car_turbo_volume`), 0 to 200 % in `forza.toml`, 100 by default (the game's mix). The game
+has one level per car sound bus (`media/audio/AudioEngineConfig.xml`: `gamePlayerEngine`
+0.45, `gameOpponentEngine` 0.25, `gameSuperCharger` 0.5, `gameTurbo` 0.3, ...), which the mixer
+snapshots (`AudioMixerSnapshots.xml`: free roam, race, pause, menus) fade. Every car sound
+reads its bus level when it sets the volume of its FMOD events, and the settings scale that
+read (`forza-recomp/src/hooks/car_audio_volume.cpp`):
+
+- Engine: the engine voices of every car (player and opponent levels both).
+- Turbo and supercharger: the turbo spool and whistle, the blow-off valve (`Cars/Turbos`, its
+  Hi and Lo layers) and the supercharger whine (`Cars/SuperChargers`) of every car.
+
+Tyres, wind, transmission, backfires, collisions, the radio and the rest keep the game's
+level, and the mixer's fades work as before (it reads the unscaled levels). Measured in the
+game (TU4, a copied save, free roam, output muted, the mix the game submits dumped inside
+the game and folded to stereo, a stock 2011 WRX STI, one run each, EBU R128 loudness):
+
+| | idle | limiter (brake-stand) | full throttle |
+|---|---|---|---|
+| Engine 0 % against 100 % | −12.3 LU | −15.6 LU | −8.4 LU |
+| Engine 200 % against 100 % | +3.7 LU | +2.4 LU | +3.0 LU |
+
+With the engine at 0 %, the 0.3 s after letting go of the throttle (the blow-off, the rpm
+falling from about 3,500) were 1.7 to 8.9 dB louder at Turbo 200 % than at 100 %. 200 % on
+the engine adds less than 6 dB because the tyres and wind stay in the mix. The settings
+apply when the game starts.
+
 ## Recommended picture settings
 
 - Upscaling filter **AMD FSR 1** (the launcher's first-run default) at render scale 1: a sharp

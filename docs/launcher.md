@@ -791,6 +791,11 @@ generated `forza.toml` and command line). Keys that hold their default are not w
 Display > Picture > **Cockpit gauges always lit** (`cockpit_gauges_lit`, off by default, #183)
 keeps the instrument backlight of your own car on by day too; the headlights and other cars
 stay as the game draws them ([how](rendering.md#cockpit-gauges-lit-by-day-183)).
+Audio > Car sounds > **Engine** and **Turbo and supercharger** (`car_engine_volume`,
+`car_turbo_volume`, 0 to 200 %, 100 by default, #730) scale the game's own level of those
+sound buses for every car: the engine voices, and the turbo spool, blow-off valve and
+supercharger whine. Tyres, wind, transmission and the rest keep the game's mix
+([how](playing.md#car-sound-levels-730)).
 Audio > Radio > **Station changes** (`radio_station_switch`, Game by default, #401): Fast
 uses a 0.15 s repeat guard and 0.25 s station fades; Instant uses a 0.075 s guard and
 0.04 s fades. Both retarget to the newest accepted request and work with stock and custom
