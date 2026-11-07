@@ -3391,3 +3391,15 @@ without running out of memory.
   0x00000004` on the render thread (chain `8249E118 824A1E6C 8247F9E4 82616BFC 8261E1C0`, lr 824469B8, r4 = 0: the
   slot's state applied as null, the signature of #66). Pacing the wakes is therefore not the fix; the defaults stay.
 - On the GeForce the benchmark starts at 30 fps (30.0) and on Direct3D 12 (44.8, 45.0 fps).
+- **The benchmark's start limit (#725).** With an empty Direct3D shader cache of the driver the Intel UHD keeps
+  presenting at about 10 fps after 7-12 s frames of shader compiles, but the event does not load: 11 of 12
+  benchmarks timed out at the old 5 minutes in every #512 arm, and 2 of 2 at the new limit (it now waits while
+  frames come, up to 30 minutes; `benchmark_start.h`). That load stalls outright; with a warm driver cache it does
+  not happen.
+- **Device lost on Direct3D 12 (#725).** Vulkan ends a submission after 1000 draws on integrated GPUs
+  (`vulkan_submission_draw_limit`, #268) so that none runs past Windows' 2 s GPU timeout; the Direct3D 12 path had
+  no such limit. ReIGlue 0441 (its own PR; not yet in the pinned SDK) adds `d3d12_submission_draw_limit` (-1 = 1000 on UMA GPUs).
+  Benchmark race starts on the Intel UHD, warm caches, the SDK DLLs of one toolchain with and without it,
+  alternated: without the limit 1 of 10 lost the device, with it 0 of 10 (4.8-5.1 fps either way). With the earlier
+  runs without it (5 of 36) that is 6 of 46 without and 0 of 10 with: a hint, not proof. On the GeForce (not UMA, so
+  no split) the benchmark gives 55.3 fps on Vulkan and 45.5 on Direct3D 12, as before.
