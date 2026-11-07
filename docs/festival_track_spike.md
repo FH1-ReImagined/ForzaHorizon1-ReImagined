@@ -876,6 +876,23 @@ maps the mask's 0 to 0.45 (`FH1_FM4_SHADOW_FLOOR`), close to FM4's TrackSettings
   frees it (pale lane today, and the fallback with the switch on); decide on the pale lane;
   then the ReIGlue PR text with the scan and the shots.
 
+### Car shadows: the PR build on Suzuka and Colorado (morning)
+
+- ReIGlue PR branch (local fh1-648-fm4-shadows-pr: 0439 the fix, 0440 the mask fetch with the
+  floor) run on Suzuka's 9 spots (bin-pr, overlay-pr), switch off and on, and Colorado.
+- The pale road was the sun term times FH1's TimeGain.w (c249 = (the hour, 0, 0, 8)): the
+  shadowed FM4 shaders multiply the sun term by it. The converter now reads it as 1 in those
+  shaders (9bdd806, `FM4_SHADERS_TIME_GAIN=0` leaves it). Spot 9 against today: mean 48 with
+  the fix alone, 18 with TimeGain 1; the road keeps its tyre marks.
+- Release build (no 0439), the new converter, marks off: all 9 spots match today (0.7-4.1).
+- PR build, marks off: spots 1-7 match today (0.2-3.1); 8 and 9 gain a sunlit lane (5.8, 18.2).
+  PR build, marks on: the car's soft shadow ahead of the car (sun behind the camera) at most
+  spots, no black.
+- Colorado (40 s in): release against release differs by a mean of 8.2 (traffic, time of day);
+  release against the PR build by 2.2 and 8.4: the same lighting, other traffic.
+- Left: the D3D12 check on the Windows laptop (the marked fetch's constant 1, and today's
+  sunlit lane there), then the PR text (scratchpad/reiglue-648-pr.txt in the main checkout).
+
 ## Towards players: a plan
 
 What a player would need, beyond the spike (none of this is built yet):
