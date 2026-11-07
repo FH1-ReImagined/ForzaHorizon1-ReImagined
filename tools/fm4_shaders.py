@@ -41,15 +41,17 @@ MUL, MAX = 1, 3
 # SpirvShaderTranslator::Fh1Fm4ShadowFetch) samples the mask at the pixel's position for a
 # marked fetch; elsewhere (D3D12, or an SDK without it) the fetch still reads 1, no shadows.
 # shad_color is then 0: the shadow takes the sun's light away, not the lightmap's.
-# A test, off by default (FM4_SHADERS_FH1_SHADOWS=1). The mask holds the car's shadow (FH1's
-# own cascades hold only FH1's track objects, see CSM_SHADOWS): with the sun behind the camera
-# it falls ahead of the car, and with shad_color 0 it drew black (taken for a misplaced
-# silhouette at first). The SDK branch now maps the mask's 0 to a floor (FH1_FM4_SHADOW_FLOOR,
-# 0.45): a soft car shadow at Suzuka's spots 1-7; at 8 and 9 part of the road draws pale. Not
-# safe without that branch: with the release SDK's Vulkan translator the shadowed surfaces drew
-# black (the fetch's constant 1 did not reach them; not understood), so this must stay off
-# unless the game runs with the branch.
+# Off by default (FM4_SHADERS_FH1_SHADOWS=1). The mask holds the car's shadow (FH1's own
+# cascades hold only FH1's track objects, see CSM_SHADOWS): with the sun behind the camera it
+# falls ahead of the car. The SDK branch maps the mask's 0 to a floor (FH1_FM4_SHADOW_FLOOR,
+# 0.45). It needs the SDK's fix for constant-only fetch results (see below): without it the
+# shadowed surfaces draw black under Vulkan; with it, and without the branch (the D3D12
+# translator, ReGPU), the marked fetch reads 1 as before and the surfaces draw as with the
+# switch off. To stay off until a release ships that SDK.
 FH1_SHADOWS = __import__("os").environ.get("FM4_SHADERS_FH1_SHADOWS", "0") == "1"
+# FM4_SHADERS_FH1_SHADOW_COLOUR=1 (a test) keeps shad_color 1 with them (the shadow then takes
+# only the sun term away).
+FH1_SHADOW_COLOUR_ZERO = __import__("os").environ.get("FM4_SHADERS_FH1_SHADOW_COLOUR", "0") == "0"
 FH1_SHADOW_MASK = 13
 # FH1's cascaded shadow map read by FM4's own shaders (FM4_SHADERS_CSM_SHADOWS=1, off by
 # default): FH1's shadow-receiving track shaders take the first cascade's matrix
@@ -268,7 +270,7 @@ def shadow_colour(data, start, alus, floats, literals):
     if reg is None or unit is None:
         return []
     lit, one, zero = unit
-    if FH1_SHADOWS or CSM_SHADOWS:
+    if CSM_SHADOWS or (FH1_SHADOWS and FH1_SHADOW_COLOUR_ZERO):
         return constant_reads(data, start, alus, {reg[0]}, lit, zero, "shad_color", 0)
     return constant_reads(data, start, alus, {reg[0]}, lit, one, "shad_color", 1)
 
@@ -373,6 +375,15 @@ def one_layer(data, second):
 ATLAS_MASK_SHADERS = set()
 
 
+# The constant-1 shadow fetches: the SDK's Vulkan shader translator stored nothing for a texture
+# fetch whose result is all constants (SpirvShaderTranslator::ProcessTextureFetchInstruction
+# skipped StoreResult when no component comes from the texture) while its D3D12 translator and
+# ReGPU store the constants. Under Vulkan the shadow registers stayed unset (read as 0: FM4's sun
+# term missing on converted tracks), and with FH1_SHADOWS (shad_color 0) the shadowed surfaces
+# drew black. ReIGlue's fix (local, FH1 #648) stores them as D3D12 does; FH1's own shaders have
+# no such fetch (3823 shaders of the game and title update scanned). FH1_SHADOWS needs that fix.
+
+
 def patch_fxobj(name, data):
     """The patched file and a list of what was done."""
     data = bytearray(data)
@@ -429,6 +440,13 @@ def patch_fxobj(name, data):
             done += lightmap_colours(data, start, alus, literals)
         if SHADOW_COLOUR:
             done += shadow_colour(data, start, alus, floats, literals)
+        for spec in filter(None, os.environ.get("FM4_SHADERS_CONST_TEST", "").split(",")):
+            # a test: "NAME=0" or "NAME=1" makes that float constant's reads the literal 0 or 1
+            name, value = spec.split("=")
+            unit = one_and_zero(literals)
+            if name in floats and unit:
+                done += constant_reads(data, start, alus, {floats[name][0]}, unit[0],
+                                       unit[1] if value == "1" else unit[2], name, value)
         if TINTS:
             done += material_tints(data, start, ins, alus)
         if "BLND" in base:

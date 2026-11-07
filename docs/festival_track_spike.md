@@ -834,6 +834,48 @@ maps the mask's 0 to 0.45 (`FH1_FM4_SHADOW_FLOOR`), close to FM4's TrackSettings
   FM4's road under it never shows. Next: what A4A965 is (its draws' objects), and why FM4's
   road at spots 5 and 6 is hidden behind it (depth, pass or culling).
 
+### Car shadows made shippable (3-hour box, stopped for the night): state
+
+- Root cause of the black fallback: the SDK's Vulkan translator stores nothing for a texture
+  fetch whose result is all constants (SpirvShaderTranslator::ProcessTextureFetchInstruction
+  returned before StoreResult unless a component came from the texture; the register array is
+  not initialised). The D3D12 translator stores them (StoreResult(LF(0))), and so does ReGPU
+  (hlsl.cpp, `s == 5 ? 1.0`). The converter's shadow fetches have been constant 1 all along, so
+  under Vulkan their registers read undefined (0 here): today Vulkan draws FM4 tracks without
+  FM4's sun term, while D3D12 and ReGPU include it. With FM4_SHADERS_FH1_SHADOWS (shad_color 0)
+  that 0 drew black.
+- Decision (A), the coordinator's: ReIGlue stores constant-only fetch results on Vulkan as
+  D3D12 does; FM4_SHADERS_FH1_SHADOWS stays off by default until a release ships that ReIGlue.
+  Local ReIGlue: fh1-648-fm4-shadow 779fb22 (the fix on the dev branch), and a PR-ready branch
+  fh1-648-fm4-shadows-pr on origin/main: 0439 (the fix) and 0440 (the mask fetch for marked
+  fetches plus the 0.45 floor, without the cascade test or the dev switches), both with
+  docs/reiglue/commits.md rows. Not pushed. It builds (overlay-pr) but has not been run yet.
+- Scan of FH1's own shaders: no texture fetch with an all-constant result among 3823 unique
+  shaders (media incl. Colorado's bin.zip, and default.xex's image), nor among 3004 from the
+  title update (media.zip and its default.xex); the scanner finds 19 in Suzuka's converted
+  archive (positive control). So the fix changes nothing of FH1 itself. A Colorado
+  before/after (release plugin twice, then the fix) was started and stopped for the night: not
+  measured yet. DLC content is not scanned.
+- Pale road (Suzuka 8, 9): it is FM4's sun term itself. The ReIGlue fix alone, with the
+  shadows switch off, gives the same pale left lane (fixDef against today: spot 8 mean 15.2,
+  16.7% of pixels over 24). D3D12 and ReGPU should already draw it today (not yet checked on
+  the laptop). Forcing SunGainScale to 0 changed nothing (FH1 sets it 0); forcing
+  RoadSpecularParams1/2 to 0 turned the road red, so it is not those alone. FM4's own
+  s_grayscaleShadowMap is its dynamic car shadow (TrackSettings ShadowNear 25, end 202); the
+  ribbon .sh files are not a shadow map. Open: whether the lane is FM4's look or a stale FH1
+  constant.
+- Converter: with FM4_SHADERS_FH1_SHADOWS, shad_color 0 again by default
+  (FM4_SHADERS_FH1_SHADOW_COLOUR=1, a test, keeps it 1: exactly today's look on the release
+  SDK, Suzuka 1 and 8 mean 4.3, but the shadow then removes only the sun term).
+  FM4_SHADERS_CONST_TEST=NAME=0|1 is a test that forces a float constant's reads to a literal.
+  A per-fetch "dead component" workaround (so every SDK stores the 1s) was tried and dropped:
+  many shadow fetches (ROAD_BLND_2's third, into an interpolator register) have no free
+  component.
+- Next: run the PR branch (overlay-pr) on Suzuka 1-9 with and without the shadows switch;
+  finish the Colorado before/after; check D3D12 on the Windows laptop when the coordinator
+  frees it (pale lane today, and the fallback with the switch on); decide on the pale lane;
+  then the ReIGlue PR text with the scan and the shots.
+
 ## Towards players: a plan
 
 What a player would need, beyond the spike (none of this is built yet):
