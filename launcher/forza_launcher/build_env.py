@@ -576,3 +576,55 @@ def usable_vs_installed() -> bool:
     """Is there a Visual Studio whose toolset can build the game (the same test the build makes; runs
     vcvars64.bat, so it takes a second or two)?"""
     return find_msvc()[0] is not None
+
+
+def _version_key(name: str):
+    return tuple(int(p) if p.isdigit() else -1 for p in name.split("."))
+
+
+def _newest_version_dir(parent: Path, need) -> Path | None:
+    """The highest-versioned folder in `parent` that holds every relative path in `need`."""
+    try:
+        dirs = [d for d in parent.iterdir() if d.is_dir() and not d.is_symlink()]
+    except OSError:
+        return None
+    dirs = [d for d in dirs if all((d / p).is_dir() for p in need)]
+    return max(dirs, key=lambda d: _version_key(d.name)) if dirs else None
+
+
+# Written by the launcher into the xwin folder once `xwin splat` exits cleanly (#739).
+XWIN_DONE = "splat-done.txt"
+
+
+def xwin_dirs(xdir: Path):
+    """(INCLUDE dirs, LIB dirs) of a complete `xwin splat` in `xdir`, else None.
+
+    Two layouts. The launcher splats in xwin's /winsysroot layout (VC/Tools/MSVC/<crt version>,
+    Windows Kits/10/Include/<sdk version>) and marks it complete with XWIN_DONE. The plain layout
+    (crt/, sdk/) is what launchers up to 0.2.8 made; it always links sdk/include/<sdk version> and
+    sdk/lib/<sdk version> to their parent, even with --disable-symlinks, and Windows lets a normal
+    user make that link only with Developer Mode on (os error 1314, #739). Such a splat is used only
+    with both links: the one that failed on the first link leaves crt/ and most of sdk/, which looks
+    complete but is not."""
+    crt = _newest_version_dir(xdir / "VC" / "Tools" / "MSVC", ("include", "lib/x86_64"))
+    sdk = _newest_version_dir(xdir / "Windows Kits" / "10" / "Include", ("ucrt", "um", "shared"))
+    if crt and sdk and (xdir / XWIN_DONE).is_file():
+        lib = xdir / "Windows Kits" / "10" / "Lib" / sdk.name
+        if all((lib / p).is_dir() for p in ("um/x86_64", "ucrt/x86_64")):
+            return ([crt / "include", sdk / "ucrt", sdk / "um", sdk / "shared", sdk / "winrt"],
+                    [crt / "lib" / "x86_64", lib / "um" / "x86_64", lib / "ucrt" / "x86_64"])
+    inc = xdir / "sdk" / "include"
+    lib = xdir / "sdk" / "lib"
+
+    def versioned_link(d):
+        try:
+            return any(re.fullmatch(r"10\.0\.\d+(\.\d+)?", e.name) for e in d.iterdir())
+        except OSError:
+            return False
+
+    if (all(p.is_dir() for p in (xdir / "crt/include", xdir / "crt/lib/x86_64", inc / "ucrt", inc / "um",
+                                 inc / "shared", lib / "um/x86_64", lib / "ucrt/x86_64"))
+            and versioned_link(inc) and versioned_link(lib)):
+        return ([xdir / "crt" / "include", inc / "ucrt", inc / "um", inc / "shared", inc / "winrt"],
+                [xdir / "crt" / "lib" / "x86_64", lib / "um" / "x86_64", lib / "ucrt" / "x86_64"])
+    return None

@@ -1114,7 +1114,7 @@ class SetupPage(QWidget):
                                     "the base game.")
                 return
         if self.ms is not None and not self.ms.isChecked():
-            if not build_env.usable_vs_installed() and not (cfg.data_home() / "xwin" / "crt" / "include").is_dir():
+            if not build_env.usable_vs_installed() and build_env.xwin_dirs(cfg.data_home() / "xwin") is None:
                 QMessageBox.information(self, "Microsoft license",
                                         "Accept Microsoft's license for the C++ runtime and Windows SDK to continue "
                                         "(or install Visual Studio 2022 Build Tools).")
