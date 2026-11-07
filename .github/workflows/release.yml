@@ -201,6 +201,11 @@ jobs:
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/benchmark_label_test.cpp -o "$RUNNER_TEMP/benchmark-label-test"
           "$RUNNER_TEMP/benchmark-label-test"
       - if: runner.os == 'Linux'
+        name: Benchmark start limit
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/benchmark_start_test.cpp -o "$RUNNER_TEMP/benchmark-start-test"
+          "$RUNNER_TEMP/benchmark-start-test"
+      - if: runner.os == 'Linux'
         name: World detail levels
         run: |
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/world_detail_test.cpp -o "$RUNNER_TEMP/world-detail-test"

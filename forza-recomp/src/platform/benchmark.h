@@ -32,6 +32,8 @@ void PreRaceReady(uint32_t screen);
 uint16_t Pad(uint16_t buttons, bool &block_all);
 void Tick(PPCContext &ctx, uint8_t *base);
 void OnSwap();
+// Seconds since the last guest frame (VdSwap), or -1 before the first.
+double SecondsSinceSwap();
 void FlowTick(PPCContext &ctx, uint8_t *base);
 void Progress(const char *text, double elapsed, double duration);
 void Completed(bool valid, const char *reason,
