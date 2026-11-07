@@ -10,7 +10,7 @@ from forza_launcher.config import Config
 
 
 class WorldDetailTests(unittest.TestCase):
-    """Settings > Display > World detail (forza-recomp/src/hooks/world_detail.cpp)."""
+    """Settings > Graphics > World detail (forza-recomp/src/hooks/world_detail.cpp)."""
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

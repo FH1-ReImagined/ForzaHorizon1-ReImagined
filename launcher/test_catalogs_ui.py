@@ -86,8 +86,14 @@ class CatalogUITests(unittest.TestCase):
 
     def test_navigation_keeps_gallery_and_about_routes(self):
         from forza_launcher.ui.catalogs import CATALOG_PAGE_ID
-        self.win.navs.button(CATALOG_PAGE_ID).click()
+        # Library in the sidebar, then its Designs & vinyls tab.
+        self.win.nav_button(CATALOG_PAGE_ID).click()
+        self.assertIs(self.win.stack.currentWidget(), self.win.gallery)
+        tabs = self.win.subnav
+        tabs.setCurrentIndex(next(i for i in range(tabs.count()) if tabs.tabData(i) == CATALOG_PAGE_ID))
         self.assertIs(self.win.stack.currentWidget(), self.page)
+        self.assertTrue(self.win.nav_button(CATALOG_PAGE_ID).isChecked())
+        self.assertEqual(self.win.section_title.text(), "Library")
         self.win.show_page(3)
         self.assertIs(self.win.stack.currentWidget(), self.win.about)
         self.assertEqual(self.win.stack.currentIndex(), 3)

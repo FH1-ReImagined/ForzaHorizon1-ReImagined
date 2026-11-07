@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QAbstractButton, QAbstractItemView, QAbstractSlid
                                QLineEdit, QPlainTextEdit, QPushButton, QScrollArea,
                                QTabBar, QTextEdit, QWidget)
 
-from .. import gamepad, paths, schema
+from .. import gamepad, paths
 from . import theme
 from .controller_widgets import ControllerGuide, button_icon
 
@@ -50,7 +50,7 @@ class Navigation(QObject):
         # present, the same status card belongs in its scrollable Controls page.
         controls = getattr(self.window, "controls", None)
         scroll = (controls.findChild(QScrollArea) if controls is not None else
-                  self.window.settings.stack.widget(schema.GROUPS.index("Controls")))
+                  self.window.settings.stack.widget(self.window.settings.tab_index("Controls")))
         scroll.widget().layout().insertWidget(2 if controls is not None else 0,
                                                self.window.controller_guide)
 
@@ -188,9 +188,7 @@ class Navigation(QObject):
             if scope is self.window:
                 buttons = sorted(self.window.navs.buttons(),
                                  key=lambda b: b.parentWidget().layout().indexOf(b))
-                page = self.window.stack.currentWidget()
-                current = next((self.window.navs.button(i) for i, p in self.window._pages.items()
-                                if p is page), None)
+                current = self.window.current_nav_button()
                 index = buttons.index(current) if current in buttons else 0
                 button = buttons[(index + (1 if action == "next" else -1)) % len(buttons)]
                 self.window.show_page(self.window.navs.id(button))

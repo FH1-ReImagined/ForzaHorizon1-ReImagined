@@ -436,7 +436,7 @@ def build_plan(cfg: Config, game: GameInstall, write=True, refresh_xenia=False, 
 
 def texture_pack_folder(cfg: Config) -> Path:
     """Texture packs and dumps (#384): <data folder>/textures, also with a Xenia save (whose user
-    data root is a copy elsewhere); Settings > Display > Open textures folder opens it."""
+    data root is a copy elsewhere); Settings > Graphics > Open textures folder opens it."""
     return cfg.data_home() / "textures"
 
 

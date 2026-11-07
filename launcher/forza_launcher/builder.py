@@ -1268,7 +1268,7 @@ def _run_build(opts: Options, rep: Reporter, game_files: Path) -> Path:
         except BuildError as e:
             if regpu_plugin and regpu_only_failure(getattr(e, "failed", ())):
                 rep.log("Warning: the experimental ReGPU renderer did not compile (the lines above); building "
-                        "the game without it. Settings > Graphics API > ReGPU then plays with Vulkan.")
+                        "the game without it. Settings > Graphics > Graphics API > ReGPU then plays with Vulkan.")
                 regpu_plugin = False
                 (bdir / "rexgpu-regpu.dll").unlink(missing_ok=True)
                 attempt -= 1

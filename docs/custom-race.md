@@ -9,7 +9,7 @@ Title Update 4 only. Off by default.
 ## Playing
 
 1. In the launcher, enable **Settings > Gameplay > Custom Race** and set
-   **Settings > Online > Sign in to Xbox LIVE: off**. Custom Race is offered only
+   **Online > Online > Sign in to Xbox LIVE: off**. Custom Race is offered only
    offline, the same gate as [car tuning](car-tuning.md).
 2. Drive to a festival race (point-to-point or circuit) or a street race you have
    already won and open its title card.

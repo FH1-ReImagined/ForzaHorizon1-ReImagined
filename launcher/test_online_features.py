@@ -239,7 +239,7 @@ class FirstRunWindowTests(Base):
         win, asked, checks = self.window(answer=False)
         self.assertEqual(asked, [True])
         self.assertEqual(features(self.cfg), ALL_OFF)
-        self.assertTrue(win.settings.radios["offline"].isChecked())
+        self.assertEqual(win.settings.server_status.text(), "Play uses: Offline")
         self.assertFalse(win.about.updates.automatic.isChecked())
         self.wait(lambda: checks, 2)
         self.assertEqual(checks, [])
@@ -261,7 +261,7 @@ class FirstRunWindowTests(Base):
         self.assertEqual(asked, [])
         self.assertEqual(features(self.cfg), ALL_OFF)
         self.assertEqual(Config(self.cfg.path).online["mode"], "offline")
-        self.assertTrue(win.settings.radios["offline"].isChecked())
+        self.assertEqual(win.settings.server_status.text(), "Play uses: Offline")
         self.assertFalse(win.about.updates.automatic.isChecked())
 
     def test_the_dialog_closes_with_the_choice_it_shows(self):

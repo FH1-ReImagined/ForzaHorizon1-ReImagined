@@ -359,7 +359,7 @@ def locked_note(result):
 
 
 def enabled(cfg) -> bool:
-    """Settings > Online > "Co-op campaign results" (the "Online features" choice turns it off)."""
+    """Online > Online > "Co-op campaign results" (the "Online features" choice turns it off)."""
     return cfg.settings.get('coop_results', True) is True
 
 

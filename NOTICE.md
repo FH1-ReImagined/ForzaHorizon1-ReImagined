@@ -115,6 +115,7 @@ this project does not change them.
 | `forza-recomp/LICENSE-Pinyon-Shift` | notice for code adapted from Pinyon Shift (the ideas ReIGlue takes from it, such as the present step on the submission thread and the thread placement by name, are credited in ReIGlue's `NOTICE`) | BSD-3-Clause |
 | `launcher/forza_launcher/haptics/vendor/` | HorizonHaptics (Haritha Rathnayake) | MIT |
 | `launcher/forza_launcher/ui/controller_art/` | Gamepad Viewer artwork (Michaël Ferrand) | MIT |
+| `launcher/forza_launcher/ui/fonts/` | Bitter ExtraBold (The Bitter Project Authors; the weight-800 instance of Google Fonts' variable Bitter) and Saira Semi Condensed SemiBold and Bold (The Saira Project Authors), from github.com/google/fonts, with their `OFL-*.txt` | SIL Open Font License 1.1 |
 | `tools/native_menu/icons/` | Font Awesome Free icons (Fonticons, Inc.) | CC BY 4.0 |
 | `patches/rexglue-sdk/` | the old patch series for the ReXGlue SDK (kept for reference, no longer applied) | BSD-3-Clause for the parts derived from the SDK, with its notices |
 

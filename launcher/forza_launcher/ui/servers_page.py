@@ -14,9 +14,10 @@ from .workers import Probe
 from . import theme
 
 COLUMNS = ["Server", "Region", "Players", "Ping", "Status"]
-LEAD = ("The server the game connects to when you press Play. The main server is the shared online "
-        "world. Community servers are run by their owners and keep their own leaderboards: only the "
+LEAD = ("The server the game connects to when you press Play, or Offline. The main server is the shared "
+        "online world. Community servers are run by their owners and keep their own leaderboards: only the "
         "main server's are the official ones.")
+OFFLINE = "(offline)"   # the Offline row's address: no server (cfg.online mode "offline")
 
 
 class ServersPage(QWidget):
@@ -179,15 +180,19 @@ class ServersPage(QWidget):
     # ---- the table ---------------------------------------------------------------------------
     def fill(self):
         keep = self._current()
-        chosen = server_list.chosen(self.cfg)
+        offline = self.cfg.online.get("mode") == "offline"
+        chosen = OFFLINE if offline else server_list.chosen(self.cfg)
         self.rows = server_list.entries(self.listed, server_list.page_addresses(self.cfg))
+        self.rows.append(server_list.Server("Offline", OFFLINE, kind="offline"))
         self.table.setRowCount(len(self.rows))
         self.table.setMinimumHeight(48 + 44 * min(len(self.rows), 8))  # up to 8 rows without scrolling
         for i, s in enumerate(self.rows):
             st = self.statuses.get(s.address)
             in_use = s.address == chosen or (s.kind == "main" and server_list.is_main(chosen))
             name = s.name + ("  (in use)" if in_use else "")
-            if s.kind == "local":
+            if s.kind == "offline":
+                players, ping, state = "", "", "No Xbox LIVE, no server"
+            elif s.kind == "local":
                 players, ping, state = "", "", "Starts with the game"
             elif st is None:
                 players, ping, state = "", "", "Checking…" if self.busy() else ""
@@ -207,7 +212,8 @@ class ServersPage(QWidget):
                 if col == 4 and state in ("Up", "Down"):
                     item.setForeground(QColor(theme.OK if state == "Up" else theme.ERR))
                 if col == 0:
-                    item.setToolTip(s.address if s.kind != "local" else "A server on this PC, only for you")
+                    item.setToolTip({"local": "A server on this PC, only for you",
+                                     "offline": "Play without a server"}.get(s.kind, s.address))
                 self.table.setItem(i, col, item)
         self._select(keep or chosen or self.rows[0].address)
         if self.busy():
@@ -247,7 +253,9 @@ class ServersPage(QWidget):
         if s is None:
             self.details.setText("")
             return
-        if s.kind == "local":
+        if s.kind == "offline":
+            text = "No Xbox LIVE and no server: online features are off in the game."
+        elif s.kind == "local":
             text = "Starts a Forza Live server just for your session on this PC. Only you are in it."
         else:
             parts = [s.address]
@@ -272,10 +280,13 @@ class ServersPage(QWidget):
         if s is None:
             return
         # The main server is "Public server", at the address this launcher has for it.
-        server_list.choose(self.cfg, server_list.PUBLIC_SERVER if s.kind == "main" else s.address)
+        if s.kind == "offline":
+            self.cfg.online["mode"] = "offline"
+        else:
+            server_list.choose(self.cfg, server_list.PUBLIC_SERVER if s.kind == "main" else s.address)
         self.changed.emit()
         self.fill()
-        self._say(f"Play now uses {s.name}.")
+        self._say("Play now starts the game offline." if s.kind == "offline" else f"Play now uses {s.name}.")
 
     def remove_selected(self):
         s = self.current_server()

@@ -380,7 +380,7 @@ def prebuild(cfg, game, status_cb=None, progress=None, cancelled=None, log=print
         raise PrebuildError(REBUILD_FIRST)
     plan = game_mod.build_plan(cfg, game, write=True, log=log, battery_saver=False)
     if not uses_vulkan(plan):
-        raise PrebuildError("Shader prebuild needs the Vulkan graphics API (Settings > Graphics API).")
+        raise PrebuildError("Shader prebuild needs the Vulkan graphics API (Settings > Graphics > Graphics API).")
     if ambiguous_paths(plan):
         raise PrebuildError(f"{ambiguous_paths(plan)} is given twice (Advanced > extra arguments): the game "
                             "would ignore both. Keep one.")

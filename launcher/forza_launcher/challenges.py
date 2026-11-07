@@ -10,8 +10,8 @@ weekly credits gift through the game's Message Center for finished challenges; t
 far the player is.
 
 The card asks `GET /challenges/progress` of the main server, signed like the co-op results
-(live_auth: the XUID and a signature, never a key), when Server is "Public server", Settings >
-Online > "Daily and weekly challenges" is on (the "Online features" choice turns it off) and this
+(live_auth: the XUID and a signature, never a key), when the server is the main one ("Public server"),
+Online > Online > "Daily and weekly challenges" is on (the "Online features" choice turns it off) and this
 PC has a Forza Live identity (the game makes it at its first online start). Otherwise nothing is
 sent."""
 from dataclasses import dataclass
@@ -47,12 +47,12 @@ class ChallengeSet:
 
 
 def enabled(cfg) -> bool:
-    """Settings > Online > "Daily and weekly challenges" (the "Online features" choice turns it off)."""
+    """Online > Online > "Daily and weekly challenges" (the "Online features" choice turns it off)."""
     return cfg.settings.get("challenges", True) is True
 
 
 def state(cfg) -> str:
-    """What the card does: 'hidden' (Offline, This PC), 'other' (My own server: challenges count on
+    """What the card does: 'hidden' (Offline, This PC), 'other' (another server: challenges count on
     the main server only), 'off' (the setting is off) or 'on' (it may ask the main server)."""
     mode = cfg.online.get("mode")
     if mode not in ("public", "custom"):

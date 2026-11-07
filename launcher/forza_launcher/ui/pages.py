@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QTimer, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QPixmap
-from PySide6.QtWidgets import (QCheckBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+from PySide6.QtWidgets import (QCheckBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
                                QPlainTextEdit, QProgressBar, QPushButton, QScrollArea,
                                QTabBar, QStackedWidget, QVBoxLayout, QWidget)
 
@@ -89,7 +89,7 @@ class IntelDriverNotice(QFrame):
             except OSError as e:
                 self.window.status(f"Could not save launcher settings: {e}", True)
         self.window.refresh_intel_driver_notices()
-        self.window.status("Graphics API: Direct3D 12 (Settings > Display)", False)
+        self.window.status("Graphics API: Direct3D 12 (Settings > Graphics)", False)
 
 
 # ================================================================== Play ==================
@@ -145,15 +145,11 @@ class PlayPage(QWidget):
         self.tuning_setup.hide()
         lay.addWidget(self.tuning_setup, 0, Qt.AlignLeft)
 
-        c, cl = card()
-        self.r_files = StatusRow("Game files")
-        self.r_build = StatusRow("Game")
-        self.r_dlc = StatusRow("DLC")
-        self.r_online = StatusRow("Online")
-        for r in (self.r_files, self.r_build, self.r_dlc, self.r_online):
-            cl.addWidget(r)
-
+        # The play card: one big Play (Play in VR and Stop beside it), what the game is doing, and
+        # the four things it needs at a glance.
+        c, cl = card(margins=(24, 22, 24, 20), spacing=14)
         row = QHBoxLayout()
+        row.setSpacing(12)
         self.play = QPushButton("Play")
         self.play.setObjectName("play")
         self.play.setCursor(Qt.PointingHandCursor)
@@ -164,42 +160,65 @@ class PlayPage(QWidget):
         self.play_vr.setToolTip("Experimental: starts the game in your VR headset.")
         self.play_vr.clicked.connect(self.play_vr_requested.emit)
         self.play_vr.hide()
-        row.addWidget(self.play_vr)
+        row.addWidget(self.play_vr, 0, Qt.AlignVCenter)
         self.stop = QPushButton("Stop")
         self.stop.clicked.connect(window.stop_game)
         self.stop.hide()
-        row.addWidget(self.stop)
+        row.addWidget(self.stop, 0, Qt.AlignVCenter)
         row.addStretch(1)
-        logs = QPushButton("Open log folder")
-        logs.clicked.connect(lambda: open_folder(cfg.data_home()))
-        row.addWidget(logs)
-        lay.addLayout(row)
+        cl.addLayout(row)
         self.vr_note = label("VR is experimental: it is playable, but expect rough edges. "
                              "Take a break if you feel motion sickness.", "warn")
         self.vr_note.hide()
-        lay.addWidget(self.vr_note)
-        launcher_logs = QPushButton("Open launcher log folder")
-        launcher_logs.setObjectName("link")
-        launcher_logs.setToolTip("Open the folder containing launcher.log (launcher errors and tracebacks).")
-        launcher_logs.clicked.connect(lambda: open_folder(paths.launcher_log().parent))
-        lay.addWidget(launcher_logs, 0, Qt.AlignLeft)
+        cl.addWidget(self.vr_note)
         self.msg = label("", "muted")
         self.msg.hide()
-        lay.addWidget(self.msg)
+        cl.addWidget(self.msg)
         self.crash_report = QPushButton("Review crash report…")
         self.crash_report.setObjectName("link")
         self.crash_report.hide()
         self.crash_report.clicked.connect(window.review_crash_report)
-        lay.addWidget(self.crash_report, 0, Qt.AlignLeft)
+        cl.addWidget(self.crash_report, 0, Qt.AlignLeft)
         self.shader_label = label("", "muted")
         self.shader_label.hide()
-        lay.addWidget(self.shader_label)
+        cl.addWidget(self.shader_label)
         self.shader_progress = QProgressBar()
         self.shader_progress.setTextVisible(False)
         self.shader_progress.setMaximumHeight(10)
         self.shader_progress.hide()
-        lay.addWidget(self.shader_progress)
+        cl.addWidget(self.shader_progress)
+        sep = QFrame()
+        sep.setObjectName("separator")
+        sep.setFixedHeight(1)
+        cl.addWidget(sep)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(28)
+        grid.setVerticalSpacing(10)
+        self.r_files = StatusRow("Game files")
+        self.r_build = StatusRow("Game")
+        self.r_dlc = StatusRow("DLC")
+        self.r_online = StatusRow("Online")
+        for i, r in enumerate((self.r_files, self.r_build, self.r_dlc, self.r_online)):
+            grid.addWidget(r, i // 2, i % 2)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        cl.addLayout(grid)
         lay.addWidget(c)
+        # Troubleshooting stays one click away, under the card.
+        links = QHBoxLayout()
+        links.setSpacing(22)
+        logs = QPushButton("Open log folder")
+        logs.setObjectName("link")
+        logs.setToolTip("Open the game's data folder, with forza.log.")
+        logs.clicked.connect(lambda: open_folder(cfg.data_home()))
+        links.addWidget(logs)
+        launcher_logs = QPushButton("Open launcher log folder")
+        launcher_logs.setObjectName("link")
+        launcher_logs.setToolTip("Open the folder containing launcher.log (launcher errors and tracebacks).")
+        launcher_logs.clicked.connect(lambda: open_folder(paths.launcher_log().parent))
+        links.addWidget(launcher_logs)
+        links.addStretch(1)
+        lay.addLayout(links)
         self.challenges = ChallengesCard(cfg)   # daily and weekly challenges (forza-live #1)
         lay.addWidget(self.challenges)
         self.install_details = Disclosure("Installation details")
@@ -265,7 +284,7 @@ class PlayPage(QWidget):
             "local": "Local server on this PC (only you)",
             "custom": "Your server: " + (cfg.online.get("custom_server") or "(no address set)"),
             "offline": "Offline",
-        }[mode] + "   (Settings > Online)")
+        }[mode] + "   (Online > Servers)")
         details = [f"Game files: {root}", f"Saves and data: {cfg.data_home()}"]
         if install:
             details.append(f"Game executable: {install.exe}")
@@ -355,8 +374,9 @@ class StepCard:
         n = QLabel(str(number))
         n.setFixedSize(30, 30)
         n.setAlignment(Qt.AlignCenter)
-        n.setStyleSheet(f"background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 {theme.ORANGE}, stop:1 {theme.PINK});"
-                        f"color: #1a0f33; font-weight: 800; border-radius: 15px;")
+        n.setStyleSheet(f"background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 {theme.GRAD_START}, stop:1 {theme.RUST});"
+                        f"color: {theme.INK}; font-family: \"{theme.HEADLINE}\"; font-size: 15px; font-weight: 800; "
+                        "border-radius: 15px;")
         head.addWidget(n)
         t = label(title)
         t.setObjectName("cardTitle")
@@ -460,7 +480,7 @@ class SetupPage(QWidget):
         # 0. where --------------------------------------------------------------------
         f0, l0 = card(margins=(24, 24, 24, 24), spacing=20)
         t0 = QLabel("Game and save folder")
-        t0.setStyleSheet("font-weight: 700; font-size: 15px;")
+        t0.setObjectName("cardTitle")
         l0.addWidget(t0)
         folder_help = "Your game files, downloads, build and saves live here. Allow at least 15 GB of free space."
         if sys.platform == "win32":
@@ -832,6 +852,7 @@ class SetupPage(QWidget):
         while self.checks.count():
             w = self.checks.takeAt(0).widget()
             if w:
+                w.hide()   # out of the layout until deleteLater runs: never painted over the new rows
                 w.deleteLater()
         root = self.cfg.data_home()
         tools = build_env.cached_tools(root)
@@ -1253,14 +1274,18 @@ class AboutPage(QWidget):
         sc, lay = scroll_page("About", "")
         outer.addWidget(sc)
         head = QHBoxLayout()
+        head.setSpacing(18)
         logo = QLabel()
-        pm = QPixmap(str(paths.asset("logo.png")))
+        pm = QPixmap(str(paths.asset("logo-mark.png")))
         if not pm.isNull():
-            logo.setPixmap(pm.scaled(96, 96, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            ratio = self.devicePixelRatioF() or 1
+            scaled = pm.scaledToHeight(int(64 * ratio), Qt.SmoothTransformation)
+            scaled.setDevicePixelRatio(ratio)
+            logo.setPixmap(scaled)
         head.addWidget(logo)
         col = QVBoxLayout()
         t = QLabel("Forza Horizon 1: ReImagined")
-        t.setStyleSheet(f"font-size: 20px; font-weight: 800; color: {theme.CREAM};")
+        t.setStyleSheet(f"font-family: \"{theme.HEADLINE}\"; font-size: 22px; font-weight: 800; color: {theme.CREAM};")
         col.addWidget(t)
         self.ver = label("", "muted")
         col.addWidget(self.ver)

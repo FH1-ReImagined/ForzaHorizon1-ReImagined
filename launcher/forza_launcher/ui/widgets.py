@@ -40,19 +40,24 @@ class Switch(QAbstractButton):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         on = self.isChecked()
-        track = QColor(theme.ORANGE if on else "#2b2055")
-        if not self.isEnabled():
-            track = QColor("#2b2055" if not on else "#7a5a45")
-        p.setPen(Qt.NoPen)
+        enabled = self.isEnabled()
+        # On: the orange track; off: a dark track with a CONTROL edge (3:1 against the card).
+        track = QColor(theme.ORANGE if on else theme.BG_DEEP)
+        edge = QColor(theme.ORANGE if on else theme.CONTROL)
+        if not enabled:
+            track = QColor(theme.DISABLED if on else theme.DISABLED_BG)
+            edge = QColor(theme.DISABLED if on else theme.BORDER)
+        p.setPen(QPen(edge, 1.5))
         p.setBrush(track)
-        p.drawRoundedRect(QRectF(1, 3, 44, 20), 10, 10)
-        p.setBrush(QColor("#fff4e6" if self.isEnabled() else "#8c7fb3"))
-        x = 26 if on else 3
-        p.drawEllipse(QRectF(x, 4, 18, 18))
+        p.drawRoundedRect(QRectF(1.5, 3.5, 43, 19), 9.5, 9.5)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(theme.INK if on and enabled else theme.SAND if enabled else theme.DISABLED))
+        x = 27 if on else 5
+        p.drawEllipse(QRectF(x, 6.5, 14, 14) if not on else QRectF(x - 1, 5.5, 16, 16))
         if self.hasFocus():
             p.setBrush(Qt.NoBrush)
-            p.setPen(QPen(QColor(theme.ORANGE), 1))
-            p.drawRoundedRect(QRectF(0.5, 0.5, 45, 25), 6, 6)
+            p.setPen(QPen(QColor(theme.CREAM), 1.5))
+            p.drawRoundedRect(QRectF(0.75, 0.75, 44.5, 24.5), 12, 12)
 
 
 class Disclosure(QWidget):
@@ -156,7 +161,7 @@ class StatusRow(QWidget):
         col = QVBoxLayout()
         col.setSpacing(1)
         self.title = QLabel(title)
-        self.title.setStyleSheet("font-weight: 700;")
+        self.title.setObjectName("statusTitle")
         self.detail = label("", "muted")
         col.addWidget(self.title)
         col.addWidget(self.detail)

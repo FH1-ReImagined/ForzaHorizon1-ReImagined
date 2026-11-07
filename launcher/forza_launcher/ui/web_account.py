@@ -1,4 +1,4 @@
-"""Settings > Online > Website account (web_account.py): the link's status, Link, Unlink and Sign
+"""Online > Online > Website account (web_account.py): the link's status, Link, Unlink and Sign
 out everywhere, and the link dialog. Network calls run off the GUI thread: the dialog's start,
 polling and confirm in workers.Task threads, the card's status and buttons in workers.Probe.
 

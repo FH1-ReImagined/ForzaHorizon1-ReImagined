@@ -70,11 +70,11 @@ class ChallengesCard(QWidget):
         st = challenges.state(self.cfg)
         self.setVisible(st != "hidden")
         if st == "other":
-            self._fill([], "Challenges count on the main server only: choose Public server (Settings > "
-                           "Online, or the Servers page) to take part.")
+            self._fill([], "Challenges count on the main server only: choose the main server in "
+                           "Online > Servers to take part.")
         elif st == "off":
             self._fill([], 'Daily and weekly challenges are off: turn on "Daily and weekly challenges" '
-                           "in Settings > Online to see them. Nothing is asked of the server meanwhile.")
+                           "in Online > Online to see them. Nothing is asked of the server meanwhile.")
         elif st == "on":
             if self.busy() and not self.sets:
                 self._fill([], "Asking the main server…")

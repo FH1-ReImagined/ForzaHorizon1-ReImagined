@@ -33,7 +33,7 @@ copies, and imports selected FH1 package designs into an existing local profile 
 backing up its catalog. Apply the imported design to a matching car in-game. See
 [UGC preservation](ugc-preservation.md) for the workflow and recovery findings.
 
-**Website account (website #4):** Settings > Online > Website account, shown with the public
+**Website account (website #4):** Online > Online > Website account, shown with the public
 server only, links the game to an optional account on forza.dyotson.dev (Discord, GitHub or an
 emailed code), the second factor the website's player features need. **Link to website account**
 signs `POST https://forza.dyotson.dev/api/game/link/start` with the game's key (`live_auth.py`,
@@ -52,16 +52,16 @@ once a session when the card is shown. The calls are in `web_account.py` (HTTPS 
 `ui/web_account.py`; `test_web_account.py` runs them against a fake service that checks every
 signature. The service is forza-live's `accounts/` (its README has the API and the rules).
 
-Discord status sharing is available under **Settings > Online > Discord** (off by
+Discord status sharing is available under **Online > Online > Discord** (off by
 default). See [Discord Rich Presence](discord.md) for the one-time public application
 ID setup, supported activities, privacy and local IPC tests.
 
-**HDR output (#33):** Settings > Display > HDR provides the Vulkan scRGB toggle,
+**HDR output (#33):** Settings > Graphics > HDR provides the Vulkan scRGB toggle,
 paper white, display peak, highlight strength, source gamma, comparison and
 calibration controls. It defaults off and falls back to SDR on unsupported
 surfaces. See [HDR setup, Windows online steps and validation](hdr.md).
 
-**Texture packs (#384):** Settings > Display > Texture packs has **Dump textures**
+**Texture packs (#384):** Settings > Graphics > Texture packs has **Dump textures**
 (`texture_dump`), **Use texture packs** (`texture_replace`, Vulkan only), **Open textures
 folder** (`textures` in the data folder, passed to the game as `texture_pack_root` while
 either option is on) and **Texture packs page…** (below). Both default off. See
@@ -136,9 +136,9 @@ machine from their own copy:
    gone), a launcher, list or GPU plugin update, or a graphics setting that selects other pipeline
    stores (split scene/HUD rendering, output size, render scale, render target path, API). Every later
    start also warms the listed pipelines. The step refuses to start the game while the Build step says "Rebuild needed" or "Not built" (a game built by an older launcher does not know `--shader_prebuild_only`): it shows "Rebuild first" and asks for Setup > Build. Before it builds, the step also fetches the server's list (below) and merges it with the shipped one; offline or on any failure it uses the shipped list alone. [Shader prebuild](shader_prebuild.md).
-   **Share shader list (#276, Settings > Online, on by default):** after a game session the launcher uploads the pipeline descriptions of your own pipeline cache that it has not sent before to the server you play on: shader hashes and render settings, plus how to rebuild each shader from game files (no shader code, no game data, nothing personal). The server publishes entries that at least 3 different players reported. Only the public server and your own server are used, never offline or "This PC"; the upload runs in the background with short timeouts, failures only go to the launcher log, and the launcher keeps a record of what was sent (`shader_share.json` in the data folder). The setting is launcher-only and is not written to `forza.toml`.
+   **Share shader list (#276, Online > Online, on by default):** after a game session the launcher uploads the pipeline descriptions of your own pipeline cache that it has not sent before to the server you play on: shader hashes and render settings, plus how to rebuild each shader from game files (no shader code, no game data, nothing personal). The server publishes entries that at least 3 different players reported. Only the public server and your own server are used, never offline or "This PC"; the upload runs in the background with short timeouts, failures only go to the launcher log, and the launcher keeps a record of what was sent (`shader_share.json` in the data folder). The setting is launcher-only and is not written to `forza.toml`.
    **Co-op campaign results (#309):** after a game session the launcher asks the server you play on (the public one or your own, never offline or "This PC") for your results of the Co-op Festival events you raced, as the world's host or as a guest (a guest's place counts when the host's game saw the same place), and applies each to the save of the session it was earned in (the launcher keeps which save each session used; another save's results wait for that save's next session, and a game started outside the launcher gets none), when that save has the event unlocked and the result beats its place for the event: the event's and race's result, the wristband XP of the improvement, the event's prize at that place less the online winnings that race already paid (you get the larger of the two once; no prize when that amount is not known, for example after races in another save), and the event's own unlock rewards, with a backup ("Before co-op results") and the save editor's checks. The wristband level and the unlocks by XP are left to the game (Race Central and your next race). The Play page lists what was added and each result that waits for an event your career has not unlocked yet (a guest behind the host's wristband): it is added at the first session after you unlock the event. Results it settled are confirmed to the server; results of a game it did not start can never go to a save and are dropped with a note; the others, and failures, wait on the server (30 days, at most 20 a player; results earned as a guest go first, then the oldest) for a later session, and failures only go to the launcher log (`coop_grant.py`, `docs/coop_campaign.md`).
-   **Daily and weekly challenges (forza-live #1, Settings > Online, on by default):** the Play page's Challenges card shows the main Forza Live server's three objectives of the day (00:00 to 00:00 UTC) and three of the week (from Monday 00:00 UTC), the same for every player, with your progress and the time left. The server counts progress from the results your game sends it while you play signed in: races won, on the podium or finished (in a class, or against other players), speed traps and zones at a speed (different ones count), 1000 Club medals and Big Shots (server `forza_live/competition/objectives.py`, `docs/website-data.md` there). The main server may also send a weekly credits gift through the game's Message Center for finished challenges (server `--daily-challenges-gifts`); the card then says how many of the week's challenges you finished toward it, or that this week's gift was sent. A community server may run challenges of its own, but the card shows only the main server's. The card asks `GET /challenges/progress` of the main server, signed like the co-op results, two seconds after it shows, then at most every 5 minutes while the launcher is open, and after each game session; only with Server set to Public server and a Forza Live identity on this PC (the game makes it at its first online start). With "My own server" it says challenges count on the main server only, with "This PC" and "Offline" it is hidden, and with the setting off (the "Online features" choice turns it off) it sends nothing and says how to turn it on (`challenges.py`, `ui/challenges_card.py`).
+   **Daily and weekly challenges (forza-live #1, Online > Online, on by default):** the Play page's Challenges card shows the main Forza Live server's three objectives of the day (00:00 to 00:00 UTC) and three of the week (from Monday 00:00 UTC), the same for every player, with your progress and the time left. The server counts progress from the results your game sends it while you play signed in: races won, on the podium or finished (in a class, or against other players), speed traps and zones at a speed (different ones count), 1000 Club medals and Big Shots (server `forza_live/competition/objectives.py`, `docs/website-data.md` there). The main server may also send a weekly credits gift through the game's Message Center for finished challenges (server `--daily-challenges-gifts`); the card then says how many of the week's challenges you finished toward it, or that this week's gift was sent. A community server may run challenges of its own, but the card shows only the main server's. The card asks `GET /challenges/progress` of the main server, signed like the co-op results, two seconds after it shows, then at most every 5 minutes while the launcher is open, and after each game session; only with Server set to Public server and a Forza Live identity on this PC (the game makes it at its first online start). With "My own server" it says challenges count on the main server only, with "This PC" and "Offline" it is hidden, and with the setting off (the "Online features" choice turns it off) it sends nothing and says how to turn it on (`challenges.py`, `ui/challenges_card.py`).
 5. **Play**, **Settings**, log folders, versions. On Play, **Open log folder** opens the game data folder containing `forza.log` (the current or last session; each start moves the one before to `forza.previous.log`, #609); **Open launcher log folder** opens the separate configuration folder containing `launcher.log` (launcher errors and tracebacks). Start failures also show the full launcher log path.
 
 Data lives in the game's user folder (`~/.local/share/forza`; on Windows `%LOCALAPPDATA%\ForzaReImagined`, or
@@ -151,10 +151,13 @@ The launcher's own config is `~/.config/forza-reimagined/launcher.json`
 
 Use the search field above the Settings categories, or press **Ctrl+F** while in
 Settings. Search matches setting names, help text, option names and configuration
-keys across every category, including the launcher's server, profile and advanced
-options. Select a result or press Enter to open its category and focus the existing
-control. Results overlay the tabs without shifting the page. Down moves into the
-results; Escape clears the search, and clicking outside dismisses the dropdown.
+keys across every category, including the launcher's profile and advanced options, the
+Online settings (shown as **Online** in the results; they open Online > Online) and the Servers
+list and address field (they open Online > Servers). Select a result or press Enter to open its
+category and focus the existing control; a folded card (Racing wheel, Shifter and clutch, Keyboard bindings) or a card's
+**More options** that holds the result opens first. Results overlay the tabs without
+shifting the page. Down moves into the results; Escape clears the search, and clicking
+outside dismisses the dropdown.
 
 Searching does not change configuration. Disabled settings remain disabled with
 their existing explanations, and unsupported graphics options stay hidden. Search
@@ -196,7 +199,7 @@ remain editable for review before the player chooses to copy, save or open a dra
 
 ## Photo gallery
 
-Open **Photo gallery** in the launcher sidebar to browse locally saved photo-mode
+Open **Library > Photos** in the launcher sidebar to browse locally saved photo-mode
 pictures. The page uses the data folder and profile selected under Settings,
 including the launcher's local copy of an imported Xenia profile. It does not
 copy or modify the original Xenia save. A profile without photos shows instructions
@@ -237,27 +240,70 @@ before saving one).
 
 ## Launcher interface
 
+The sidebar has seven sections and **About** at its foot. A section of several pages shows
+them as tabs under its title; the section button returns to the page shown last.
+
+| Section | Pages (tabs) | What is there |
+| --- | --- | --- |
+| **Play** | | The banner, one big **Play** (with **Play in VR** when a VR app is found, and **Stop**), the game's messages, and four status rows: Game files, Game, DLC, Online. **Open log folder**, **Open launcher log folder**, Challenges and **Installation details** follow. |
+| **Library** | Photos, Designs & vinyls, Saves | What the game saved: photo-mode pictures, designs and vinyl groups, save backups and the profile editor. |
+| **Mods** | Mods, Texture packs, Radio | What changes the game's files or adds to them: mods and the FM4 cars, texture packs (HD pack, decal pack, compression), the custom radio stations. |
+| **Online** | Online, Servers | **Online**: the server Play uses (changed in Servers) and every online option: Website account, Forza Live (Sign in to Xbox LIVE, room, invites, friends and chat keys), Horizon World, Shader prebuild, Co-op campaign, Challenges, Discord. **Servers**: the server list with players and ping, This PC, a server added by address, and Offline. |
+| **Controls** | | The controller guide, bindings and calibration, DualSense and Xbox trigger effects. **Control settings** opens Settings > Controls. |
+| **Settings** | Graphics, Display, Controls, Gameplay, Audio, VR, Profile, Advanced | Every other forza.toml key and the launcher's own options, with search (which finds the Online ones too and opens Online). |
+| **Setup** | Game files, Updates & DLC, Build | Building the game, step by step. |
+| **About** | | The notices, launcher updates, Add to Steam (Linux) and the project links. |
+
+The Online settings were a Settings tab; they are now the first tab of the **Online** section, next
+to Servers. Their keys and schema group ("Online") did not change: the Settings page still builds
+them (`HOSTED` in `ui/settings_page.py`, shown by the window as page 12, `ONLINE_PAGE_ID`), saves
+them and finds them in search, where a result opens Online > Online. The old Server card with four
+radio buttons (Public server, This PC, My own server, Offline) repeated the Servers page: Servers now
+has an **Offline** row as well, and Online > Online shows the server Play uses with a link to
+Servers. Search also finds the Servers list and its address field.
+
+Settings categories, and what moved between them: **Graphics** has the graphics card card,
+Picture (Graphics API, resolution, upscaling, anti-aliasing), NVIDIA DLSS (Windows), AMD FSR 3,
+World detail, HDR and Texture packs, which were the old Display tab's picture sections; **Display** keeps Frame rate,
+Window, Camera and Ultrawide and HUD. **Gameplay** also shows the native pause menu (Menu),
+which was under Advanced. The forza.toml keys, their values in `launcher.json` and their schema
+groups did not change (`ui/settings_page.py`, `TABS` and `TAB_SECTIONS`, maps sections to
+categories; a section no category names stays in its group's category). Racing wheel, Shifter
+and clutch and Keyboard bindings start folded (**Show**) unless they are in use (Racing wheel
+On, a shifter chosen, keyboard and mouse on). Settings few players change, such as the guest
+refresh rate, the input backend, a wheel's raw axis numbers or the event lobby timings, sit
+under **More options** in their card (`MORE_OPTIONS`).
+
 Play keeps the launch action above the readiness checks. **Installation details**
 expands to show game, save and executable paths; normal status rows stay short.
 Setup's **Build log** is collapsed initially, continues recording while hidden,
 and opens automatically on a build failure. Cancelling a build does not force it open.
 
-Setup has top tabs for **Game files**, **Updates & DLC**, and **Build**. Settings
-has top tabs for its eight categories. Each tab switches to a separate page with its
-own scroll position; tabs are not scroll shortcuts. Related settings are grouped
-in padded cards, with space between descriptions and controls. File-location
-controls in Advanced and Profile sit below their descriptions. Setup's **Build
-options** expands to show the parallel-job count and low-priority option. Starting
-a setup task or reporting its failure reveals the corresponding tab.
-Setup checks compiler and build-tool availability in the background, so opening
-it after browsing the gallery does not block navigation while version probes run.
+Each tab switches to a separate page with its own scroll position; tabs are not scroll
+shortcuts. Related settings are grouped in padded cards, with space between descriptions and
+controls. File-location controls in Advanced and Profile sit below their descriptions. Setup's
+**Build options** expands to show the parallel-job count and low-priority option. Starting a
+setup task or reporting its failure reveals the corresponding tab. Setup checks compiler and
+build-tool availability in the background, so opening it after browsing the gallery does not
+block navigation while version probes run.
 
-Display settings explain when DLSS/DLAA, FSR 3, ultrawide or HUD customization
-controls an unavailable option. Buttons, expandable sections and switches have
+Graphics settings explain when DLSS/DLAA, FSR 3, ultrawide or HUD customization
+controls an unavailable option. Buttons, tabs, expandable sections and switches have
 visible keyboard focus. The Controls introduction reflects the existing keyboard
 and mouse support.
 
-Windows uses the existing ReImagined logo for the launcher, installer and game
+**Look (`ui/theme.py`).** The launcher uses the website's look (forza.dyotson.dev,
+`style.css`): an umber window (`#1c140f`, cards `#2a1f17`), sand and cream text
+(`#f4ebdd`, `#f3dfbf`, help text `#c4ae92`), dusty orange (`#e8964f`) and rust (`#d0703f`)
+accents, and the website's orange-to-rust gradient on Play. Headings use Bitter ExtraBold and
+the navigation, tabs and buttons Saira Semi Condensed; body text stays on the system's UI font.
+Both fonts are under the SIL Open Font License and ship in `launcher/forza_launcher/ui/fonts/`
+with their licence texts (from github.com/google/fonts; Bitter is the weight-800 instance of its
+variable font). Every text color passes WCAG AA (4.5:1) on the surface it is drawn on; input,
+switch and check-box edges keep 3:1. The sidebar shows the logo mark (`docs/images/logo-mark.png`,
+the website's); the window icon is `docs/images/logo.png` (Linux) or `forza.ico` (Windows).
+
+Windows uses the ReImagined logo mark for the launcher, installer and game
 executable. The shared `forza-recomp/resources/forza.ico` includes nine sizes from
 16 to 256 pixels. PyInstaller embeds it in the launcher; CMake compiles a Windows
 resource into both base-game and TU4 builds. Existing game executables receive
@@ -279,16 +325,17 @@ Deck's gamepad mode. Connect a controller, release its buttons/stick, and use:
 | Left/right | Change a list, dropdown, number or slider; otherwise move focus |
 | A / cross | Activate the focused button/toggle, or open a dropdown |
 | B / circle | Close a dropdown/dialog; otherwise return to Play |
-| LB/RB / L1/R1 | Previous/next launcher page (wraps) |
+| LB/RB / L1/R1 | Previous/next sidebar section (wraps) |
 
 Play starts focused. An orange outline marks the focused control, skipping page containers
-and descriptive labels. The focused action button carries an A badge; sidebar page tabs
+and descriptive labels. The focused action button carries an A badge; sidebar section buttons
 stay text-only. **Settings > Controls** shows launcher button hints and connected,
 paused, unavailable or disconnected status. When the separate controller-guide
 feature is installed, the same card appears on its **Controls** page alongside
 the diagrams and haptics. Settings resets preserve the status card.
-Shoulders follow the sidebar's visible page order. Left/right switches the Settings
-and Setup category tabs; search results support up/down, A to select and B to dismiss.
+Shoulders follow the sidebar's visible section order (each section opens on its first page).
+Left/right switches a section's page tabs (Library, Mods) and the Settings and Setup category
+tabs; search results support up/down, A to select and B to dismiss.
 Dropdowns use up/down and A to select, B to close.
 File pickers use Qt dialogs so controller focus works there too. Text entry still needs a
 keyboard or the system's on-screen keyboard. Steam Input users should select a gamepad
@@ -614,7 +661,7 @@ none), except an option that **Extra command-line flags** (**Settings > Advanced
 
 ### Texture packs (#384)
 
-**Texture packs** has the two switches of Settings > Display > Texture packs (the same settings,
+**Texture packs** has the two switches of Settings > Graphics > Texture packs (the same settings,
 through `SettingsPage.apply_external`), the list of packs and **Make HD pack**. The list is the
 Mods page's (`FolderListPage` in `ui/mods_page.py`): the folders in `<data folder>/textures` but
 `dump/` (`texture_packs.py`), ticked to use, **Move up** / **Move down** (a lower pack wins for the
@@ -791,13 +838,14 @@ and keeps `--present_effect=fsr` as the presenter filter and fallback (`fsr3.py`
 when it is on). See [Rendering issues](rendering.md#temporal-upscaling-with-amd-fsr-3-51-2026-10-16).
 Online: public (`forza-reimagined.playit.plus:56677`, written as `live_server` and `FORZA_SERVER`),
 local (the launcher starts the Forza Live server inside its own executable, or reuses one
-on port 21201, like `play.sh`), your own, or offline. The **Servers** page (#587,
+on port 21201, like `play.sh`), your own, or offline. **Online > Servers** (#587,
 `server_list.py`, `ui/servers_page.py`) picks among them: the main server first, then the servers of
 the main server's signed list (`/servers.json`, taken only when the list key the launcher ships
-signed it and it has not expired), This PC, and addresses added by hand. It pings each server's
+signed it and it has not expired), This PC, addresses added by hand, and Offline. It pings each server's
 `/status` (players online, round trip, up or down) in a background thread when the page opens and
 every 30 s while it stays open; a server that does not answer shows as down and stays listed. Using a
-server sets the same Online mode and "My own server" address as Settings > Online. With "Online
+server sets the Online mode (`online.mode`, `online.custom_server` in launcher.json; Offline is mode
+`offline`), and Online > Online shows it in its Server card. With "Online
 features" off, only the page's "Check servers" button checks them. The Xenia save logic is `play.sh --xenia`
 ported (copy once, `--user_data_root/--cache_root/--profile_xuid`, DLC folder shared).
 The DLC is shared into the Xenia copy (`xenia-<XUID>/0000000000000000`) with a link, a junction
@@ -889,7 +937,7 @@ missing-content message after the intro is in that language).
 
 ### GPU choice (#52)
 
-Many glitches depend on the graphics card, so Settings > Display starts with **Graphics card**: NVIDIA, AMD, Intel,
+Many glitches depend on the graphics card, so Settings > Graphics starts with **Graphics card**: NVIDIA, AMD, Intel,
 Steam Deck, or "Other / not sure". The launcher detects the card once (first start; the answer is kept in
 `launcher.json` under `gpu`) and preselects it; the player can change it at any time.
 
@@ -934,7 +982,7 @@ Steam Deck, or "Other / not sure". The launcher detects the card once (first sta
   always win). On an entry card (low graphics, or a GTX / RX 400-500-era card with 4 GB; not a Steam Deck) it also gets
   the 540p 3D scene (#640: a GTX 1650 Ti laptop is limited by its GPU at the 720p scene, 46.8 -> 54.3 fps in the
   benchmark, docs/perf.md). An existing launcher.json on an entry card gets it too, once (`migrated.scene_540`),
-  with a notice on the Play page that says where to change it back (Settings > Display > 3D scene resolution);
+  with a notice on the Play page that says where to change it back (Settings > Graphics > 3D scene resolution);
   a player who sets 720p again keeps it. Only where 540p is drawn: FSR 3, DLSS, a separate anti-aliasing method and
   Ultrawide gameplay keep 720p. Settings that are heavy for the PC get an orange line with the numbers (render scale 2 renders 2560x1440
   ...). A launcher with existing settings is never changed silently: a banner on the Settings page offers "Use
@@ -954,7 +1002,7 @@ Steam Deck, or "Other / not sure". The launcher detects the card once (first sta
   1 fps, #640). At each start the launcher asks the Vulkan driver in a process of its own
   (`forza-launcher --vulkan-devices`, `launcher/forza_launcher/vulkan_probe.py`) and, when the GPU the game would use
   is such an iGPU, Setup and Play say so: update the Intel driver from intel.com, or use Direct3D 12 ("Use Direct3D
-  12" switches Settings > Display > Graphics API). A new launcher.json on Windows starts on Direct3D 12 there; an
+  12" switches Settings > Graphics > Graphics API). A new launcher.json on Windows starts on Direct3D 12 there; an
   existing one is never switched by itself. ReGPU (experimental) is a Direct3D 12 renderer too, so with it chosen there
   is no warning either; it is never the advice, as it was not tested on Intel graphics (the Intel preset marks it
   untested). On Linux, which has no Direct3D 12, the warning asks to update Mesa. No

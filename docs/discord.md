@@ -1,6 +1,6 @@
 # Discord Rich Presence
 
-Status display for #146. **Settings > Online > Discord > Share activity on Discord**
+Status display for #146. **Online > Online > Discord > Share activity on Discord**
 is on by default and applies at the next game launch. The Discord desktop client
 must be running as the same OS user; Discord in a browser cannot receive local RPC.
 Playing offline in Forza Live settings still supports Discord status display.
@@ -8,7 +8,7 @@ Playing offline in Forza Live settings still supports Discord status display.
 The game publishes its activity (free roam, festival/street/showcase races, rivals,
 PR stunts, autoshow, paint shop, workshop, race central, car club, lobby and online
 game type), elapsed game-session time, and session-local player counts when known.
-With **Settings > Online > Discord > Share car, event and area** (`discord_presence_details`,
+With **Online > Online > Discord > Share car, event and area** (`discord_presence_details`,
 on by default) it also publishes the current car with its class and PI, the event and, in
 free roam, the zone of Colorado, all with the names the game shows:
 
@@ -34,7 +34,7 @@ Closing the game closes the connection and clears its activity; a crash closes t
 The project has its own Discord application (ID `1563015276583460934`, named **Forza Horizon 1:
 ReImagined**), set by default, so there is nothing to create:
 
-1. **Settings > Online > Share activity on Discord** is on by default; turn it off to stop
+1. **Online > Online > Share activity on Discord** is on by default; turn it off to stop
    sharing. Discord's own activity privacy settings must also allow sharing.
 2. To use another Discord application (a fork), put its public **Application ID** in
    **Settings > Advanced > Discord setup > Discord application ID**. No bot, OAuth login, token
