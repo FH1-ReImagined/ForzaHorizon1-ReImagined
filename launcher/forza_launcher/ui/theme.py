@@ -41,6 +41,7 @@ FONT_DIR = Path(__file__).resolve().parent / "fonts"
 FONT_FILES = ("Bitter-ExtraBold.ttf", "SairaSemiCondensed-SemiBold.ttf", "SairaSemiCondensed-Bold.ttf")
 HEADLINE = "Bitter"                 # the families Qt registers, set again by load_fonts()
 UI = "Saira SemiCondensed"
+LOADED = []                         # the FONT_FILES Qt took
 
 ARROW = (Path(__file__).resolve().parent / "down.svg").as_posix()
 CHECK = (Path(__file__).resolve().parent / "check.svg").as_posix()
@@ -52,10 +53,13 @@ def load_fonts():
     global HEADLINE, UI
     from PySide6.QtGui import QFontDatabase
     for name in FONT_FILES:
+        if name in LOADED:
+            continue
         font_id = QFontDatabase.addApplicationFont(str(FONT_DIR / name))
         families = QFontDatabase.applicationFontFamilies(font_id) if font_id >= 0 else []
         if not families:
             continue
+        LOADED.append(name)
         if name.startswith("Bitter"):
             HEADLINE = families[0]
         elif name.endswith("SemiBold.ttf"):
