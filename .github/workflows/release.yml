@@ -226,6 +226,11 @@ jobs:
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/ai_catchup_test.cpp -o "$RUNNER_TEMP/ai-catchup-test"
           "$RUNNER_TEMP/ai-catchup-test"
       - if: runner.os == 'Linux'
+        name: Fast Travel Anywhere owned
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/fast_travel_anywhere_test.cpp -o "$RUNNER_TEMP/fast-travel-anywhere-test"
+          "$RUNNER_TEMP/fast-travel-anywhere-test"
+      - if: runner.os == 'Linux'
         name: Custom Race statements
         run: |
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/custom_race_test.cpp -o "$RUNNER_TEMP/custom-race-test"

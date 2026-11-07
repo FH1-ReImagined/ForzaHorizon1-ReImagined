@@ -69,6 +69,14 @@ tools/run_forza.sh 120        # a two-minute test run; logs in ${XDG_RUNTIME_DIR
   driver in the torque cut (down to 0.19 of their torque) and the first reached the finish,
   about 5 km on, after 182 s; Off had no cut, and six of seven finished after 150-159 s.
   Details in `src/hooks/ai_catchup.cpp`.
+- **Fast Travel Anywhere (#424, Title Update 4):** the map's Y offered it for Tokens, which were
+  bought on Xbox LIVE and can no longer be bought (offline the offer ends at "You must have an
+  Xbox LIVE enabled profile"). `fast_travel_anywhere = true` (the default; launcher: Gameplay,
+  Map, Fast Travel Anywhere) makes the game read the unlock as bought: Y on any road asks "Are
+  you sure you want to Fast Travel here?" and travels for free, offline and online. It gives no
+  Tokens, the Token balance is not touched, and the other Token offer (RB, BUY TREASURE MAP)
+  stays as it is. Nothing is written to the save, so `false` brings the offer back unless the
+  profile bought it. Details in `src/hooks/fast_travel_anywhere.cpp`.
 - **VR headset (experimental, #333):** launcher Display, VR (experimental), VR headset (experimental): Virtual
   screen or Cockpit (`vr_mode = "screen"` / `"cockpit"`). Start the OpenXR runtime (WiVRn,
   Monado, SteamVR) and connect the headset first; Home or both sticks held for a second

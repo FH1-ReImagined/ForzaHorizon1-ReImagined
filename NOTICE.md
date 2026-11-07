@@ -99,6 +99,11 @@ launcher/forza_launcher/steam_shortcuts.py and deck_clock.py are inspired by Pin
 tools/pinyon_steam.py and tools/pinyon_deck.py (BSD-3-Clause). Its notice is retained in
 forza-recomp/LICENSE-Pinyon-Shift.
 
+The Fast Travel Anywhere unlock in forza-recomp/src/hooks/fast_travel_anywhere.cpp builds on
+Pinyon Shift's src/dlc_token_unlocks.cpp (BSD-3-Clause): the unlock's profile path
+"Main/FastTravelAnywhere", its reader and the purchase completion that stores it. Its notice is
+retained in forza-recomp/LICENSE-Pinyon-Shift.
+
 Files and directories of other holders keep their own licenses and notices; the relicensing of
 this project does not change them.
 
