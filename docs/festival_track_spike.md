@@ -805,6 +805,35 @@ maps the mask's 0 to 0.45 (`FH1_FM4_SHADOW_FLOOR`), close to FM4's TrackSettings
   fallback is no shadow), the pale road at spots 8 and 9, and FM4 models in FH1's cascade pass
   for the track's own shadows.
 
+### The five leftovers, sampler 7 and Infineon's grey road (3-hour box): parked
+
+- The instance's lightmap is in the model's own texture table already. For each listed model
+  looked at (Hockenheim 269, 271, 272), slot 2 holds the very record its instances name as
+  their lightmap (863, 863, 925), the same slot healthy road models (257) use for theirs.
+- The material's sampler map sits just before the shader names: u32 1, u32 8, then for sampler
+  registers 0 to 7 the texture slot each reads (-1 none, -2 not used), then u32 1 and the
+  shader count. Model 257 (healthy) has 0 1 3 4 -2 -2 -2 2; model 269 (listed) has the same
+  with -1 for sampler 7. The binder (sub_82EAF1B0) copies each mapped slot's texture and
+  rectangle into the draw's block.
+- `FM4_PVS_LMUV_MAP=slot` (a test, off) points sampler 7 at that slot in 363 of Hockenheim's 365
+  listed models. Spot 7 stayed flat red; at spot 8 the grass got black patches. That is not
+  enough on its own: the listed models' command buffers have no fetch constant 7 write (healthy
+  257: PS c116-c127 and fetch constants 0-3, 7 and 31; listed 269: PS c120-c127 and fetch
+  constants 0-3 and 31) and no fixups for it (257's pass groups have type 3 for fetch constant
+  7 and type 8 for c116; 269's have neither). So the block's texture never reaches the GPU.
+  The fix needs a fetch-constant-7 packet, a type-3 fixup and a c116 write (or the c12x
+  rectangle above) inserted into each pass of each listed model. That means growing the pass
+  buffers and every offset after them in an undocumented layout, more than this box allowed.
+- Infineon's grey road (spots 5, 6) is not lighting. With every FM4 lightmap read forced to 1
+  (`FM4_SHADERS_NO_LIGHTMAP=1`) the scene around it turned green, but the road stayed grey.
+  With the converter's ground off (`FM4_PVS_GROUND=0`) it was the same. Leaving out the FM4
+  road shader's draws (ROAD_BLND_REFL_NORM_NOCUBE_4, 20 draws; a local SDK switch,
+  `FH1_SKIP_PS=<hash>`) changed nothing. Leaving out pixel shader A4A965C189287B99 (471 draws a
+  frame, at Suzuka too; in neither FM4's nor FH1's track shader lists) turned the lower half of
+  the screen black with a few glows. So FH1 draws the grey there with a shader of its own, and
+  FM4's road under it never shows. Next: what A4A965 is (its draws' objects), and why FM4's
+  road at spots 5 and 6 is hidden behind it (depth, pass or culling).
+
 ## Towards players: a plan
 
 What a player would need, beyond the spike (none of this is built yet):

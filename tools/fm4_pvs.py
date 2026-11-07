@@ -646,6 +646,52 @@ def _c120_writes(data):
     return out
 
 
+# A model's material holds its sampler map before the shader names: u32 1, u32 8, then per
+# sampler register 0 to 7 the model texture slot it reads (-1 none, -2 not used), then u32 1,
+# u32 the shader count (Hockenheim's road model 257: 0 1 3 4 -2 -2 -2 2, its lightmap at slot 2;
+# the listed 269: the same with -1 for sampler 7, though slot 2 holds its instance's lightmap).
+# FM4_PVS_LMUV_MAP=slot (a test) points a listed model's sampler 7 at the slot holding its
+# instances' lightmap record; =count at the slot after the model's own (where FH1's table keeps
+# the instance's lightmap).
+LMUV_MAP = os.environ.get("FM4_PVS_LMUV_MAP", "")
+_SHADER_NAME = re.compile(rb"\x00\x00\x00[\x01-\x7f]shaders\\track\\", re.I)
+
+
+def lightmap_sampler_map(F, files, bin_dir):
+    """Point the listed models' sampler 7 at their lightmap (see LMUV_MAP); the number done."""
+    if LMUV_MAP not in ("slot", "count"):
+        return 0
+    T = F["textures"]
+    records = {}
+    for inst in F["instances"]:
+        if inst["u12"] != 0xFFFFFFFF:
+            records.setdefault(inst["model"], set()).add(inst["idx"] & 0xFFFFFF)
+    done = 0
+    for m in lightmap_uv_models(F, bin_dir):
+        p = os.path.join(bin_dir, f"{F['prefix']}.{m:05d}.rmb.bin")
+        tex = [t & 0xFFFFFF for t in F["models"][m]["textures"]]
+        recs = records.get(m, set())
+        if LMUV_MAP == "slot":
+            slots = {k for k, t in enumerate(tex) if t in recs}
+            if len(slots) != 1:
+                continue
+            value = slots.pop()
+        else:
+            value = len(tex)
+        data = bytearray(open(p, "rb").read())
+        hit = _SHADER_NAME.search(bytes(data))
+        if not hit:
+            continue
+        i = hit.start()
+        head = [struct.unpack_from(">i", data, i - 4 * k)[0] for k in range(12, 0, -1)]
+        if head[0] != 1 or head[1] != 8 or head[-2] != 1 or head[9] != -1:
+            continue  # u32 1, u32 8, map[0..7], u32 1, u32 count; sampler 7 (head[9]) unmapped
+        struct.pack_into(">i", data, i - 4 * 3, value)
+        open(p, "wb").write(bytes(data))
+        done += 1
+    return done
+
+
 def lightmap_rect_copies(Fs, files, bin_dir):
     """Give the models described above their rectangles (in every ribbon's F, before the
     zones are made); the models done (their numbers and their copies')."""
@@ -1353,6 +1399,9 @@ def convert_mod(mod, fh1_disc, loose):
     converted = []
     Fs = [read_fm4(data) for _, _, data, _ in ribbons]
     n_models = len(Fs[0]["models"]) if Fs else 0
+    n_map = lightmap_sampler_map(Fs[0], files, bin_dir) if Fs else 0
+    if n_map:
+        print(f"{track}: {n_map} models' sampler 7 pointed at their lightmap ({LMUV_MAP})")
     rect_done = lightmap_rect_copies(Fs, files, bin_dir)
     if rect_done:
         print(f"{track}: {len(rect_done)} models drawn with their instance lightmap's rectangle "
