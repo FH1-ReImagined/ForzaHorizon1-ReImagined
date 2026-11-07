@@ -719,6 +719,55 @@ Followed further:
   emitting it), or give the listed models shader copies that read Light_Map_uvOS as the
   identity, or as their instances' rectangle passed another way.
 
+### The shader copies (2-hour box, converter only): parked
+
+Both tests are in tools/fm4_pvs.py, off by default (the default output is byte-for-byte the
+same as before: Suzuka's and Hockenheim's bin.zip and stx files match the previous converter's).
+
+- Is the identity right? An instance's lightmap record (T[idx & 0xFFFFFF]) is either a
+  streamed tile with a file of its own (`_0x<id>.bix`, the tile alone once it is in) or an atlas
+  tile with no file (the record's rectangle, e.g. (0.0625, 0.0625, 0.3906, 0.0156) as scale u, v,
+  offset u, v). Listed models whose instances all have their own file: Tsukuba 12 of 65,
+  Infineon 68 of 110, Hockenheim 164 of 365, Suzuka 49 of 118, Top Gear 3 of 38,
+  Indianapolis 45 of 79. The identity is wrong for the rest.
+- `FM4_PVS_LMUV_IDENTITY=1`: those all-own models get copies of their shaders in which the
+  lightmap coordinate's mad, uv * c116.zw + c116.xy, becomes max(uv, uv) (most passes have no
+  literal holding a 1 and a 0; fm4_shaders.lightmap_uv_identity). The copies are named like the
+  shader with another last letter, so the model files' shader names keep their length.
+  Infineon: 68 models, 14 shaders; Hockenheim 108; Top Gear 1.
+- `FM4_PVS_LMUV_RECT=1`: every other listed model writes its instance's rectangle into a
+  register of its own c120..c127 block (FM4 writes 8 registers there; the shaders read
+  one to three of them). It uses the lowest register that no shader blob reads and that no
+  type-8 fixup sets (0x780408 sets c121). Its shader copies read the mad's offset and scale from
+  that register (fm4_shaders.lightmap_uv_register). A model whose instances have different
+  rectangles gets one model-file copy per rectangle, with the same new model numbers in every
+  ribbon. Infineon: 883 models (841 copies); Hockenheim 781 (526); Top Gear 132 (95). The trace
+  confirms the values arrive: the copies' draws read c122 = (0, 0, 1, 1) from their own
+  buffer. Draws reading a stale c116 went from 514 to none at Hockenheim 7. At Infineon 5,
+  with identity copies for every listed model (`FM4_PVS_LMUV_ALL=1`), they went from 70 to 12;
+  the 12 were from a shader whose copy name collided, a bug fixed since.
+- The shots did not get right (before against after, 30 fps, hidden display):
+  - Infineon 5 and 6: the road is still flat grey. At spot 5 the dark wedge past the barrier
+    turned into sand.
+  - Top Gear 3: one patch turned into grass; the orange ground stays.
+  - Hockenheim 7: the flat red runoff turned into a green-to-brown wash. At 8 it turned into black
+    and green blocks; with the record's rectangle for the own-file lightmaps too
+    (`FM4_PVS_LMUV_OWN=rect`) it turned into green and orange blocks.
+  - Tsukuba 9 and Indianapolis 7 and 8 were not shot with the copies: the cause below showed
+    first.
+- Why: these draws do not have the instance lightmap at their lightmap sampler (s7). At
+  Hockenheim 7, every draw that sets its own c116 has a texture at s7. Of the listed models'
+  draws, 334 of 514 had nothing there (with the copies, 330 of 498). So the sampler reads
+  whatever another draw left at fetch constant 7: grass and gravel textures, or one texel of one
+  (the flat red). The rectangle only moves which part of that texture is read. At Infineon 5,
+  66 of the 70 stale draws had a texture at s7, and the grey road did not change either: there
+  the grey road is something else again.
+- Next, if these are taken up again: in FM4, the c116 write and the s7 texture come together
+  with the instance's lightmap, and both are missing here. A converter-only route would give
+  each instance's model copy its lightmap record as an extra texture slot, point the material's
+  sampler 7 (now -1, no slot) at it, and keep the rectangle above. A game-side route would bind
+  it in FH1's per-instance lightmap path. Infineon's grey road needs its own trace.
+
 ## Towards players: a plan
 
 What a player would need, beyond the spike (none of this is built yet):

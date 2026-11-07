@@ -607,6 +607,257 @@ def lightmap_uv_models(F, bin_dir):
     return out
 
 
+# Tests, both off: they do not fix the five leftovers (docs/festival_track_spike.md, "The
+# shader copies"). The draws of the models lightmap_uv_models lists have no texture at their
+# lightmap sampler (s7), so whatever rectangle they read, they read another draw's texture.
+#
+# FM4_PVS_LMUV_IDENTITY=1: models whose instances' lightmaps all have a file of their own (a
+# streamed tile: the tile alone once in) and whose command buffers never set Light_Map_uvOS are
+# drawn with copies of their shaders that read it as the identity
+# (fm4_shaders.lightmap_uv_identity). The copy's name is the shader's with its last letter "l"
+# (or the next letter no shader has; the same length: the model files name their shaders).
+# FM4_PVS_LMUV_ALL=1 gives every listed model these copies.
+LMUV_IDENTITY = os.environ.get("FM4_PVS_LMUV_IDENTITY", "0") == "1"
+LMUV_COPIES = {}  # copy in the track's bin folder: the shader file it is a copy of
+
+
+# FM4_PVS_LMUV_RECT=1: the listed models with an instance lightmap that is an atlas tile:
+# their command buffers' write of c120..c127 (Diffuse_Texture_uvOS at c120, the rest unread by
+# their shaders) gets the instance's rectangle in a free register of it, the lowest no fixup
+# sets either (offset u, v, scale u, v; the identity for a lightmap with a file of its own,
+# FM4_PVS_LMUV_OWN=rect the record's rectangle there too), and their shaders' copies read the
+# lightmap's offset and scale from there (fm4_shaders.lightmap_uv_register). A model whose
+# instances have different rectangles is drawn by one copy of its model file per rectangle
+# (new model numbers, the same in every ribbon), each instance by its own.
+LMUV_RECT = os.environ.get("FM4_PVS_LMUV_RECT", "0") == "1"
+RECT_COPIES = {}  # shader copy in the track's bin folder: (the shader file, the register)
+IDENTITY_RECT = (0.0, 0.0, 1.0, 1.0)
+OWN_RECT = os.environ.get("FM4_PVS_LMUV_OWN", "identity") == "rect"
+
+
+def _c120_writes(data):
+    """(offset of the data, registers) of each PM4 write of PS constants from c120."""
+    out = []
+    for m in _PS_WRITE.finditer(data):
+        cnt = m.group(1)[0] + 1
+        low = (m.group(2)[0] << 8) | m.group(3)[0]
+        if not low & 3 and not cnt % 4 and (low - 0x4400) // 4 == 120:
+            out.append((m.start() + 4, cnt // 4))
+    return out
+
+
+def lightmap_rect_copies(Fs, files, bin_dir):
+    """Give the models described above their rectangles (in every ribbon's F, before the
+    zones are made); the models done (their numbers and their copies')."""
+    RECT_COPIES.clear()
+    if not LMUV_RECT or not Fs or len({len(F["models"]) for F in Fs}) != 1:
+        return set()
+    F0 = Fs[0]
+    listed = set(lightmap_uv_models(F0, bin_dir))
+    own = {int(p.split("_0x")[1][:8], 16) for p in files if "_0x" in p and p.lower().endswith(".bix")}
+    shader_files = {p.upper(): p for p in files if p.lower().endswith(".fxobj")}
+    original = {n.lower() for F in Fs for n in F["shaders"]}
+    blobs_of = {}
+
+    def shader_blobs(p):
+        if p not in blobs_of:
+            blobs_of[p] = fm4_shaders.blobs(open(os.path.join(bin_dir, p), "rb").read())
+        return blobs_of[p]
+
+    def rect_of(F, inst):
+        T, r = F["textures"], inst["idx"] & 0xFFFFFF
+        if inst["u12"] == 0xFFFFFFFF or r >= len(T):
+            return None
+        if T[r][0] in own and not OWN_RECT:
+            return IDENTITY_RECT
+        su, sv, ou, ov = T[r][2:6]
+        return (ou, ov, su, sv)
+    rects = {}
+    for F in Fs:
+        for inst in F["instances"]:
+            if inst["model"] in listed:
+                rects.setdefault(inst["model"], set()).add(rect_of(F, inst))
+    variant_of, taken = {}, set()
+    number = {}  # (model, rectangle): the model number drawing it
+    new_models = []  # (copy's number, model, its shaders)
+    done = set()
+    next_number = len(F0["models"])
+    for m in sorted(rects):
+        rs = rects[m]
+        if None in rs or rs == {IDENTITY_RECT}:
+            continue  # no lightmap, or whole ones only (lightmap_uv_copies)
+        mfile = f"{F0['prefix']}.{m:05d}.rmb.bin"
+        if mfile not in files:
+            continue
+        data = open(os.path.join(bin_dir, mfile), "rb").read()
+        writes = _c120_writes(data)
+        names = [F0["shaders"][si] for si in F0["models"][m]["shaders"]]
+        srcs = [shader_files.get(f"SHADERS/TRACK/{n.split(chr(92))[-1].upper()}.FXOBJ") for n in names]
+        if not writes or not all(srcs):
+            continue
+        used = set()
+        for p in srcs:
+            for _, _, _, fl, li in shader_blobs(p):
+                for r, k in fl.values():
+                    used.update(range(r, r + k))
+                used.update(li)
+        # and none a type-8 fixup sets at load (word (120 << 16) | (register - 120) << 10 |
+        # slot << 4 | 8: a texture's uvOS; 0x780408 sets c121); the lowest first (the
+        # trace showed c122 and c123 arrive as written; with c127 Hockenheim 7 stayed flat)
+        for f in re.finditer(rb"(?=\x00\x78([\x00-\xff])([\x00-\xff]))", data):
+            if f.group(2)[0] & 0xF == 8:
+                used.add(120 + (f.group(1)[0] >> 2))
+        free = [r for r in range(121, 128) if r not in used and all(n > r - 120 for _, n in writes)]
+        lm = [p for p in srcs if any(fl.get("Light_Map_uvOS", (0,))[0] == 116 for _, _, _, fl, _ in shader_blobs(p))]
+        if not free or not lm:
+            continue
+        reg = free[0]
+        if any(fm4_shaders.lightmap_uv_register(open(os.path.join(bin_dir, p), "rb").read(), reg)[2]
+               for p in lm):
+            continue  # a read of c116 other than the lightmap coordinate's mad
+        new_names, new_data = list(names), data
+        for k, (n, p) in enumerate(zip(names, srcs)):
+            if p not in lm:
+                continue
+            key = (n.lower(), reg)
+            if key not in variant_of:
+                variant_of[key] = None
+                for letter in "lmnpqrtuvwxyz":
+                    v = n[:-1] + letter
+                    vf = f"SHADERS/TRACK/{v.split(chr(92))[-1].upper()}.FXOBJ"
+                    if v.lower() not in original and v.lower() not in taken and vf not in shader_files:
+                        variant_of[key] = v
+                        taken.add(v.lower())
+                        dst = f"shaders/track/{v.split(chr(92))[-1].upper()}.fxobj"
+                        RECT_COPIES[dst] = (p, reg)
+                        open(os.path.join(bin_dir, dst), "wb").write(open(os.path.join(bin_dir, p), "rb").read())
+                        files.append(dst)
+                        break
+            v = variant_of[key]
+            if v is None:
+                break
+            new_names[k] = v
+            old, new = (n + ".fx\0").encode(), (v + ".fx\0").encode()
+            if old not in new_data:
+                old, new = old.lower(), new.lower()
+            new_data = new_data.replace(old, new)
+        else:
+            for j, rect in enumerate(sorted(rs)):
+                out = bytearray(new_data)
+                for off, _ in writes:
+                    struct.pack_into(">4f", out, off + 16 * (reg - 120), *rect)
+                n = m if j == 0 else next_number
+                if j:
+                    next_number += 1
+                    files.append(f"{F0['prefix']}.{n:05d}.rmb.bin")
+                    new_models.append((n, m))
+                open(os.path.join(bin_dir, f"{F0['prefix']}.{n:05d}.rmb.bin"), "wb").write(bytes(out))
+                number[(m, rect)] = n
+                done.add(n)
+            done.add(m)
+            for F in Fs:
+                for v in new_names:
+                    if v not in F["shaders"]:
+                        F["shaders"].append(v)
+                F["models"][m] = dict(F["models"][m], shaders=[F["shaders"].index(v) for v in new_names])
+    for F in Fs:
+        for n, m in new_models:
+            assert len(F["models"]) == n
+            F["models"].append(dict(F["models"][m]))
+        for inst in F["instances"]:
+            if inst["model"] in rects and (inst["model"], rect_of(F, inst)) in number:
+                inst["model"] = number[(inst["model"], rect_of(F, inst))]
+    return done
+
+
+def lightmap_uv_copies(converted, files, bin_dir, skip=()):
+    """Give the models described above their shader copies (in every ribbon, in their model
+    files and in the files list); the number of models changed."""
+    LMUV_COPIES.clear()
+    if not LMUV_IDENTITY or not converted:
+        return 0
+    listed = set(lightmap_uv_models(converted[0][2], bin_dir))
+    own = {int(p.split("_0x")[1][:8], 16) for p in files if "_0x" in p and p.lower().endswith(".bix")}
+    original = {n.lower() for c in converted for n in c[2]["shaders"]}
+    kinds = {}
+    for c in converted:
+        F = c[2]
+        T = F["textures"]
+        for inst in F["instances"]:
+            m = inst["model"]
+            if m not in listed:
+                continue
+            r = inst["idx"] & 0xFFFFFF
+            if inst["u12"] == 0xFFFFFFFF or r >= len(T):
+                kinds.setdefault(m, set()).add("none")
+            else:
+                kinds.setdefault(m, set()).add("own" if T[r][0] in own else "tile")
+    models = sorted(m for m, k in kinds.items() if m not in skip and
+                    (k == {"own"} or os.environ.get("FM4_PVS_LMUV_ALL")))
+    shader_files = {p.upper(): p for p in files if p.lower().endswith(".fxobj")}
+    reads = {}
+
+    def reads_lmuv(p):
+        if p not in reads:
+            reads[p] = any(fl.get("Light_Map_uvOS", (0,))[0] == 116 for _, _, _, fl, _ in
+                           fm4_shaders.blobs(open(os.path.join(bin_dir, p), "rb").read()))
+        return reads[p]
+    changed = 0
+    variant_of, taken = {}, set()  # shader name (lower case): its copy's; the copies' names
+    for m in models:
+        mfile = f"{converted[0][2]['prefix']}.{m:05d}.rmb.bin"
+        if mfile not in files:
+            continue
+        data = open(os.path.join(bin_dir, mfile), "rb").read()
+        new_data = data
+        for c in converted:
+            F, P = c[2], c[3]
+            if m >= len(F["models"]):
+                continue
+            shaders = list(F["models"][m]["shaders"])
+            for k, si in enumerate(shaders):
+                name = F["shaders"][si]
+                base = name.split("\\")[-1]
+                src = shader_files.get(f"SHADERS/TRACK/{base.upper()}.FXOBJ")
+                if not src or not reads_lmuv(src) or name.lower() in taken:
+                    continue
+                if name.lower() not in variant_of:
+                    # the first last letter giving a name no shader has
+                    for letter in "lmnpqrtuvwxyz":
+                        v = name[:-1] + letter
+                        if (v.lower() not in original and v.lower() not in taken and
+                                f"SHADERS/TRACK/{v.split(chr(92))[-1].upper()}.FXOBJ" not in shader_files):
+                            variant_of[name.lower()] = v
+                            taken.add(v.lower())
+                            break
+                    else:
+                        variant_of[name.lower()] = None
+                variant = variant_of[name.lower()]
+                if variant is None:
+                    continue
+                dst = f"shaders/track/{variant.split(chr(92))[-1].upper()}.fxobj"
+                if variant not in F["shaders"]:
+                    F["shaders"].append(variant)
+                    P["shaders"].append(shader_of(variant))
+                shaders[k] = F["shaders"].index(variant)
+                old = (name + ".fx\0").encode()
+                new = (variant + ".fx\0").encode()
+                if old not in new_data:
+                    old, new = old.lower(), new.lower()
+                new_data = new_data.replace(old, new)
+                if dst not in LMUV_COPIES:
+                    LMUV_COPIES[dst] = src
+                    open(os.path.join(bin_dir, dst), "wb").write(open(os.path.join(bin_dir, src), "rb").read())
+                    if dst not in files:
+                        files.append(dst)
+            F["models"][m] = dict(F["models"][m], shaders=shaders)
+            P["models"][m] = dict(P["models"][m], shaders=list(shaders))
+        if new_data != data:
+            open(os.path.join(bin_dir, mfile), "wb").write(new_data)
+            changed += 1
+    return changed
+
+
 def stream_blocks(F, cells, grid, bin_dir):
     """Blocks the zones of one ribbon need at most (see STREAM_MARGIN), without the margin."""
     size = {}
@@ -1100,12 +1351,20 @@ def convert_mod(mod, fh1_disc, loose):
                 if struct.unpack_from(">I", cdata, 0x2C)[0] == 2:
                     open(col, "wb").write(fm4_col.convert_col(cdata, surfaces(fh1_disc)))
     converted = []
-    for ribbon, path, data, _ in ribbons:
-        F = read_fm4(data)
+    Fs = [read_fm4(data) for _, _, data, _ in ribbons]
+    n_models = len(Fs[0]["models"]) if Fs else 0
+    rect_done = lightmap_rect_copies(Fs, files, bin_dir)
+    if rect_done:
+        print(f"{track}: {len(rect_done)} models drawn with their instance lightmap's rectangle "
+              f"({len(Fs[0]['models']) - n_models} model copies, {len(RECT_COPIES)} shaders)")
+    for (ribbon, path, data, _), F in zip(ribbons, Fs):
         P, cells, grid = convert(F, files)
         nn = ribbon[-2:]
         converted.append((ribbon, path, F, P, cells, grid,
                           [f"__R{int(nn):02d}Z{k:05d}.pvsz" for k in range(len(cells))]))
+    n_lmuv = lightmap_uv_copies(converted, files, bin_dir, rect_done)
+    if n_lmuv:
+        print(f"{track}: {n_lmuv} models drawn with lightmap-identity shader copies ({len(LMUV_COPIES)} shaders)")
     for dst, (src, renames) in GROUND_COPIES.items():
         data = open(os.path.join(bin_dir, src), "rb").read()
         for a, b in renames:  # the shader names in the model's material table
@@ -1221,9 +1480,10 @@ def convert_mod(mod, fh1_disc, loose):
     # <track>_stx_lmuv.bin: the models (ribbon 0's numbers) whose pixel shaders read
     # Light_Map_uvOS (PS c116) but whose command buffers never write it: FM4 sets their
     # instance lightmap's rectangle there at run time, FH1 does not (its shaders read their
-    # lightmap with no uvOS). The game (hooks/fm4_track.cpp, InstanceLightmapUv) writes c116
-    # for those models' draws from the lightmap slot's rectangle. u32 count, then per model
-    # its number and texture slot count.
+    # lightmap with no uvOS). No game code reads it now (writing c116 from a hook had no
+    # effect); the converter draws those models with their rectangles itself
+    # (lightmap_rect_copies, lightmap_uv_copies). u32 count, then per model its number and
+    # texture slot count.
     lmuv = lightmap_uv_models(F0, bin_dir)
     words = [len(lmuv)]
     for m in lmuv:  # the model and its texture slot count (the table holds one more: the
@@ -1247,6 +1507,9 @@ def convert_mod(mod, fh1_disc, loose):
             print(f"{track}: blend masks from an atlas in {sorted(fm4_shaders.ATLAS_MASK_SHADERS)}")
         members = [(p, fm4_shaders.patch_fxobj(p, d)[0] if p.lower().endswith(".fxobj") else d)
                    for p, d in members]
+    members = [(p, fm4_shaders.lightmap_uv_identity(d)[0] if p in LMUV_COPIES else
+                fm4_shaders.lightmap_uv_register(d, RECT_COPIES[p][1])[0] if p in RECT_COPIES else d)
+               for p, d in members]
     # The ground's blend shader copies: the mask read as the one layer (see GROUND_LAYER).
     members = [(p, fm4_shaders.one_layer(d, GROUND_LAYER == "B")
                 if p in GROUND_COPIES and p.lower().endswith(".fxobj") else d) for p, d in members]

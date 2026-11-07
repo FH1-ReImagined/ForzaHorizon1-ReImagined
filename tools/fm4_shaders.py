@@ -447,3 +447,64 @@ def main(argv):
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv))
+
+
+def lightmap_uv_identity(data):
+    """The shader file with every pixel shader's lightmap coordinate uv * Light_Map_uvOS.zw +
+    Light_Map_uvOS.xy (a mad whose B and C are c116) made uv itself, as the identity (0, 0, 1, 1)
+    would give: the mad becomes max(uv, uv) (B takes A's register, swizzle and sign), so no
+    literal is needed (most of the passes have none holding a 1 and a 0). For copies drawn by
+    models whose instance lightmaps are whole textures and whose command buffers never set the
+    constant (tools/fm4_pvs.py, lightmap_uv_copies)."""
+    data = bytearray(data)
+    done = []
+    for start, size, samplers, floats, literals in blobs(bytes(data)):
+        reg = floats.get("Light_Map_uvOS")
+        if reg is None:
+            continue
+        for s, kind, w in instructions(bytes(data), start, size):
+            if kind != "alu":
+                continue
+            f = alu_fields(w)
+            (ra, sa, ia), (rb, sb, ib), (rc, sc, ic) = f["src"]
+            if f["vop"] != 11 or not ia or ib or ic or rb != reg[0] or rc != reg[0] or f["smask"]:
+                continue
+            # B must read only c116's scale (z, w) and C only its offset (x, y)
+            if any(((j + ((sb >> (2 * j)) & 3)) & 3) < 2 or ((j + ((sc >> (2 * j)) & 3)) & 3) > 1
+                   for j in range(4)):
+                continue
+            w1 = (w[1] & ~((0xFF << 8) | (1 << 25))) | (sa << 8) | (((w[1] >> 26) & 1) << 25)
+            w2 = (w[2] & ~((0xFF << 8) | (0x1F << 24) | (1 << 30))) | (ra << 8) | (2 << 24) | (1 << 30)
+            struct.pack_into(">3I", data, start + 12 * s, w[0], w1, w2)
+            done.append(s)
+    return bytes(data), done
+
+
+def lightmap_uv_register(data, reg):
+    """The shader file with the lightmap coordinate's mad (as in lightmap_uv_identity) reading
+    its offset and scale from pixel constant reg instead of Light_Map_uvOS (c116): for copies
+    drawn by models whose command buffers set reg to their instance lightmap's rectangle
+    (tools/fm4_pvs.py, lightmap_rect_copies). Also the number of c116 reads left."""
+    data = bytearray(data)
+    done, left = [], 0
+    for start, size, samplers, floats, literals in blobs(bytes(data)):
+        uv = floats.get("Light_Map_uvOS")
+        if uv is None:
+            continue
+        for s, kind, w in instructions(bytes(data), start, size):
+            if kind != "alu":
+                continue
+            f = alu_fields(w)
+            (ra, sa, ia), (rb, sb, ib), (rc, sc, ic) = f["src"]
+            reads = sum(1 for r, _, i in f["src"] if not i and r == uv[0])
+            if not reads:
+                continue
+            if (f["vop"] != 11 or not ia or ib or ic or rb != uv[0] or rc != uv[0] or f["smask"] or
+                    any(((j + ((sb >> (2 * j)) & 3)) & 3) < 2 or ((j + ((sc >> (2 * j)) & 3)) & 3) > 1
+                        for j in range(4))):
+                left += reads
+                continue
+            w2 = (w[2] & ~0xFFFF) | (reg << 8) | reg
+            struct.pack_into(">3I", data, start + 12 * s, w[0], w[1], w2)
+            done.append(s)
+    return bytes(data), done, left
