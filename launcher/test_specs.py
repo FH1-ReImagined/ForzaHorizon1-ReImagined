@@ -314,7 +314,7 @@ class Flow(unittest.TestCase):
             c = self.cfg(t, old)
             self.assertEqual(c.settings["scene_resolution"], "540")
             self.assertEqual(len(c.notices), 1)
-            self.assertIn("Settings > Display > 3D scene resolution", c.notices[0])
+            self.assertIn("Settings > Graphics > 3D scene resolution", c.notices[0])
             self.assertIn("GeForce GTX 1650 Ti", c.notices[0])
             c.save()
             c = Config(c.path)

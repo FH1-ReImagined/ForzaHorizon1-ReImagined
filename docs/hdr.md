@@ -1,6 +1,6 @@
 # HDR output (#33)
 
-HDR output is opt-in under **Settings > Display > HDR**. It requires Vulkan,
+HDR output is opt-in under **Settings > Graphics > HDR**. It requires Vulkan,
 an HDR-capable display, HDR enabled in the desktop settings, and a Vulkan surface
 offering `R16G16B16A16_SFLOAT` with `EXTENDED_SRGB_LINEAR_EXT`. Otherwise the
 presenter logs the reason and keeps ordinary SDR. Direct3D 12 does not use this

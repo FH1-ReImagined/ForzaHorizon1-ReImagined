@@ -10,7 +10,7 @@ from forza_launcher.config import Config
 
 
 class MotionBlurTests(unittest.TestCase):
-    """Settings > Display > Picture > Motion blur (#588)."""
+    """Settings > Graphics > Picture > Motion blur (#588)."""
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

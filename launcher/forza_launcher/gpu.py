@@ -1,7 +1,7 @@
 """Which GPU the player has, and what is known to work on it (issue #52).
 
 Many glitches are vendor specific (docs/launcher.md, "GPU choice"): the launcher detects the
-graphics card, preselects NVIDIA / AMD / Intel / Steam Deck in Settings > Display, and per vendor
+graphics card, preselects NVIDIA / AMD / Intel / Steam Deck in Settings > Graphics, and per vendor
 offers safe defaults and marks the options that are known to misbehave there, with the reason
 and the issue number. The player's own choices always win: the presets are written into the
 settings once (first run, or when the player changes the vendor and agrees), after which only
@@ -340,7 +340,7 @@ def old_intel_vulkan_text(device, windows=None) -> str:
             "and the game needs 1.3 (on 1.2 it closes before the title screen or runs at about 1 fps). ")
     if windows:
         return text + ("Update the Intel graphics driver from intel.com, or use Direct3D 12 "
-                       "(Settings > Display > Graphics API).")
+                       "(Settings > Graphics > Graphics API).")
     return text + ("Update Mesa: install your distribution's updates (with the Flatpak launcher, run "
                    "flatpak update).")
 

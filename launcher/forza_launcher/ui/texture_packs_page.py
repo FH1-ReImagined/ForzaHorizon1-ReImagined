@@ -61,7 +61,7 @@ class TexturePacksPage(FolderListPage):
             row.addWidget(sw)
             self.switches[key] = sw
             cl.addLayout(row)
-        self.vulkan_note = label("Texture packs need the Vulkan renderer (Settings > Display > Graphics "
+        self.vulkan_note = label("Texture packs need the Vulkan renderer (Settings > Graphics > Graphics "
                                  "API); Direct3D 12 only dumps.", "warn")
         cl.addWidget(self.vulkan_note)
         cl.addWidget(label("Both apply the next time the game starts.", "muted"))
@@ -561,7 +561,7 @@ class TexturePacksPage(FolderListPage):
         cl.addWidget(label(
             "Upscales the Paint Shop's 478 decals (the sponsor and brand logos) from your game files, on "
             "this PC, with the same upscaler as Make HD pack: no dump needed. The game's decals are "
-            "256x256, so a big decal on a car looks soft, most of all with Settings > Display > World "
+            "256x256, so a big decal on a car looks soft, most of all with Settings > Graphics > World "
             "detail > Paint job detail at 2x. The result is the pack \"Decal pack (made on this PC)\"; "
             "it also sharpens the Paint Shop's decal pictures.", "muted"))
         row = QHBoxLayout()

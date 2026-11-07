@@ -16,7 +16,7 @@ none of them (they are derived from the game's art):
 
 ## The Texture packs page
 
-The launcher's **Texture packs** page (also **Settings > Display > Texture packs > Texture packs
+The launcher's **Texture packs** page (also **Settings > Graphics > Texture packs > Texture packs
 page…**):
 
 | Launcher | cvar | What it does |
@@ -26,7 +26,7 @@ page…**):
 | The list of packs | `texture_packs` | The packs to use, in order (the launcher passes it) |
 | Open textures folder | | Opens `textures/` in the game's data folder |
 
-Both switches are off by default, are the same settings as in Settings > Display, and apply from
+Both switches are off by default, are the same settings as in Settings > Graphics, and apply from
 the next start. The folder is `textures` in the game's data folder
 (`~/.local/share/forza/textures` on Linux, `%LOCALAPPDATA%\ForzaReImagined\textures` on
 Windows): the launcher passes it as `texture_pack_root`; without the launcher it is
@@ -247,7 +247,7 @@ only where something moved between runs (foliage in the wind, traffic's tyre tra
 Shop's decals, the sponsor and brand logos you put on a car, into the pack "Decal pack (made on
 this PC)" (`textures/decal-pack`), at **2x** (default) or **4x**. A decal is a 256x256 picture (7
 of them 256x128) that the game stretches over part of the car: with **Paint job detail** at 2x
-(Settings > Display > World detail, see [graphics detail](graphics-detail.md#paint-job-detail-659)),
+(Settings > Graphics > World detail, see [graphics detail](graphics-detail.md#paint-job-detail-659)),
 a large decal covers about 900 pixels of the car's 2048x2048 paint job, so the decal itself is
 what looks soft. The pack also sharpens the decals' pictures in the Paint Shop's Decal Select.
 

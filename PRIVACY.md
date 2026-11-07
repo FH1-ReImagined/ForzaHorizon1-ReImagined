@@ -98,7 +98,7 @@ Each of these downloads shows the site it comes from your IP address, and its Us
 - Build (the first time, or when a tool is missing): LLVM, CMake and Ninja from GitHub. On Linux, also the ReXGlue SDK from GitHub.
 - Build on Windows without Visual Studio 2022: the xwin tool from GitHub. xwin then downloads Microsoft's C++ runtime and Windows SDK files from Microsoft's servers. Only the xwin archive is checked against a checksum kept in the launcher; the files xwin downloads from Microsoft are not. This runs only after you tick "I accept Microsoft's license terms...".
 - Make HD pack and Make decal pack: the Real-ESRGAN upscaler from GitHub, after you confirm (once for both).
-- NVIDIA DLSS (Windows with an NVIDIA graphics card): when you press Play, the launcher downloads NVIDIA's DLSS runtime (about 56 MB) and its license from NVIDIA's repository on GitHub, if they are not on your PC yet. With Settings > Display > "Graphics API" set to Vulkan (the default), this happens even when DLSS is off, so that the in-game menu can turn DLSS on later. To avoid it, set "Graphics API" to Direct3D 12 and leave "NVIDIA DLSS" and "NVIDIA DLAA" off. If the download fails, the game still starts.
+- NVIDIA DLSS (Windows with an NVIDIA graphics card): when you press Play, the launcher downloads NVIDIA's DLSS runtime (about 56 MB) and its license from NVIDIA's repository on GitHub, if they are not on your PC yet. With Settings > Graphics > "Graphics API" set to Vulkan (the default), this happens even when DLSS is off, so that the in-game menu can turn DLSS on later. To avoid it, set "Graphics API" to Direct3D 12 and leave "NVIDIA DLSS" and "NVIDIA DLAA" off. If the download fails, the game still starts.
 
 ### Crash reports
 
@@ -311,7 +311,7 @@ With a linked account you can like community photos and designs on the website (
 - Update check: About > "Check for updates when the launcher opens".
 - Discord activity: Settings > Online > "Share activity on Discord". Only the car, event and area in it: Settings > Online > "Share car, event and area".
 - Your computer's login name as gamertag: set Settings > Profile > Gamertag.
-- The DLSS download: Settings > Display > "Graphics API" set to Direct3D 12, with "NVIDIA DLSS" and "NVIDIA DLAA" off.
+- The DLSS download: Settings > Graphics > "Graphics API" set to Direct3D 12, with "NVIDIA DLSS" and "NVIDIA DLAA" off.
 - Website accounts: don't make one. To end one: "Sign out" or "Sign out everywhere" on the account page, or "Delete my account" there.
 - The website account link: don't link. To end it: "Unlink" in Settings > Online > Website account, or on the account page.
 - Likes: don't like, or take a like back with the same button. Deleting the website account deletes your game's likes.

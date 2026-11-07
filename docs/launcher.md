@@ -56,12 +56,12 @@ Discord status sharing is available under **Settings > Online > Discord** (off b
 default). See [Discord Rich Presence](discord.md) for the one-time public application
 ID setup, supported activities, privacy and local IPC tests.
 
-**HDR output (#33):** Settings > Display > HDR provides the Vulkan scRGB toggle,
+**HDR output (#33):** Settings > Graphics > HDR provides the Vulkan scRGB toggle,
 paper white, display peak, highlight strength, source gamma, comparison and
 calibration controls. It defaults off and falls back to SDR on unsupported
 surfaces. See [HDR setup, Windows online steps and validation](hdr.md).
 
-**Texture packs (#384):** Settings > Display > Texture packs has **Dump textures**
+**Texture packs (#384):** Settings > Graphics > Texture packs has **Dump textures**
 (`texture_dump`), **Use texture packs** (`texture_replace`, Vulkan only), **Open textures
 folder** (`textures` in the data folder, passed to the game as `texture_pack_root` while
 either option is on) and **Texture packs page…** (below). Both default off. See
@@ -153,8 +153,10 @@ Use the search field above the Settings categories, or press **Ctrl+F** while in
 Settings. Search matches setting names, help text, option names and configuration
 keys across every category, including the launcher's server, profile and advanced
 options. Select a result or press Enter to open its category and focus the existing
-control. Results overlay the tabs without shifting the page. Down moves into the
-results; Escape clears the search, and clicking outside dismisses the dropdown.
+control; a folded card (Racing wheel, Shifter and clutch, Keyboard bindings) or a card's
+**More options** that holds the result opens first. Results overlay the tabs without
+shifting the page. Down moves into the results; Escape clears the search, and clicking
+outside dismisses the dropdown.
 
 Searching does not change configuration. Disabled settings remain disabled with
 their existing explanations, and unsupported graphics options stay hidden. Search
@@ -196,7 +198,7 @@ remain editable for review before the player chooses to copy, save or open a dra
 
 ## Photo gallery
 
-Open **Photo gallery** in the launcher sidebar to browse locally saved photo-mode
+Open **Library > Photos** in the launcher sidebar to browse locally saved photo-mode
 pictures. The page uses the data folder and profile selected under Settings,
 including the launcher's local copy of an imported Xenia profile. It does not
 copy or modify the original Xenia save. A profile without photos shows instructions
@@ -237,27 +239,62 @@ before saving one).
 
 ## Launcher interface
 
+The sidebar has seven sections and **About** at its foot. A section of several pages shows
+them as tabs under its title; the section button returns to the page shown last.
+
+| Section | Pages (tabs) | What is there |
+| --- | --- | --- |
+| **Play** | | The banner, one big **Play** (with **Play in VR** when a VR app is found, and **Stop**), the game's messages, and four status rows: Game files, Game, DLC, Online. **Open log folder**, **Open launcher log folder**, Challenges and **Installation details** follow. |
+| **Library** | Photos, Designs & vinyls, Saves | What the game saved: photo-mode pictures, designs and vinyl groups, save backups and the profile editor. |
+| **Mods** | Mods, Texture packs, Radio | What changes the game's files or adds to them: mods and the FM4 cars, texture packs (HD pack, decal pack, compression), the custom radio stations. |
+| **Servers** | | The server list, the server Play uses, and adding a server by address. |
+| **Controls** | | The controller guide, bindings and calibration, DualSense and Xbox trigger effects. **Control settings** opens Settings > Controls. |
+| **Settings** | Graphics, Display, Controls, Gameplay, Audio, VR, Online, Profile, Advanced | Every forza.toml key and the launcher's own options, with search. |
+| **Setup** | Game files, Updates & DLC, Build | Building the game, step by step. |
+| **About** | | The notices, launcher updates, Add to Steam (Linux) and the project links. |
+
+Settings categories, and what moved between them: **Graphics** has the graphics card card,
+Picture (Graphics API, resolution, upscaling, anti-aliasing), AMD FSR 3, World detail, HDR and
+Texture packs, which were the lower half of the old Display tab; **Display** keeps Frame rate,
+Window, Camera and Ultrawide and HUD. **Gameplay** also shows the native pause menu (Menu),
+which was under Advanced. The forza.toml keys, their values in `launcher.json` and their schema
+groups did not change (`ui/settings_page.py`, `TABS` and `TAB_SECTIONS`, maps sections to
+categories; a section no category names stays in its group's category). Racing wheel, Shifter
+and clutch and Keyboard bindings start folded (**Show**) unless they are in use (Racing wheel
+On, a shifter chosen, keyboard and mouse on). Settings few players change, such as the guest
+refresh rate, the input backend, a wheel's raw axis numbers or the event lobby timings, sit
+under **More options** in their card (`MORE_OPTIONS`).
+
 Play keeps the launch action above the readiness checks. **Installation details**
 expands to show game, save and executable paths; normal status rows stay short.
 Setup's **Build log** is collapsed initially, continues recording while hidden,
 and opens automatically on a build failure. Cancelling a build does not force it open.
 
-Setup has top tabs for **Game files**, **Updates & DLC**, and **Build**. Settings
-has top tabs for its eight categories. Each tab switches to a separate page with its
-own scroll position; tabs are not scroll shortcuts. Related settings are grouped
-in padded cards, with space between descriptions and controls. File-location
-controls in Advanced and Profile sit below their descriptions. Setup's **Build
-options** expands to show the parallel-job count and low-priority option. Starting
-a setup task or reporting its failure reveals the corresponding tab.
-Setup checks compiler and build-tool availability in the background, so opening
-it after browsing the gallery does not block navigation while version probes run.
+Each tab switches to a separate page with its own scroll position; tabs are not scroll
+shortcuts. Related settings are grouped in padded cards, with space between descriptions and
+controls. File-location controls in Advanced and Profile sit below their descriptions. Setup's
+**Build options** expands to show the parallel-job count and low-priority option. Starting a
+setup task or reporting its failure reveals the corresponding tab. Setup checks compiler and
+build-tool availability in the background, so opening it after browsing the gallery does not
+block navigation while version probes run.
 
-Display settings explain when DLSS/DLAA, FSR 3, ultrawide or HUD customization
-controls an unavailable option. Buttons, expandable sections and switches have
+Graphics settings explain when DLSS/DLAA, FSR 3, ultrawide or HUD customization
+controls an unavailable option. Buttons, tabs, expandable sections and switches have
 visible keyboard focus. The Controls introduction reflects the existing keyboard
 and mouse support.
 
-Windows uses the existing ReImagined logo for the launcher, installer and game
+**Look (`ui/theme.py`).** The launcher uses the website's look (forza.dyotson.dev,
+`style.css`): an umber window (`#1c140f`, cards `#2a1f17`), sand and cream text
+(`#f4ebdd`, `#f3dfbf`, help text `#c4ae92`), dusty orange (`#e8964f`) and rust (`#d0703f`)
+accents, and the website's orange-to-rust gradient on Play. Headings use Bitter ExtraBold and
+the navigation, tabs and buttons Saira Semi Condensed; body text stays on the system's UI font.
+Both fonts are under the SIL Open Font License and ship in `launcher/forza_launcher/ui/fonts/`
+with their licence texts (from github.com/google/fonts; Bitter is the weight-800 instance of its
+variable font). Every text color passes WCAG AA (4.5:1) on the surface it is drawn on; input,
+switch and check-box edges keep 3:1. The sidebar shows the logo mark (`docs/images/logo-mark.png`,
+the website's); the window icon is `docs/images/logo.png` (Linux) or `forza.ico` (Windows).
+
+Windows uses the ReImagined logo mark for the launcher, installer and game
 executable. The shared `forza-recomp/resources/forza.ico` includes nine sizes from
 16 to 256 pixels. PyInstaller embeds it in the launcher; CMake compiles a Windows
 resource into both base-game and TU4 builds. Existing game executables receive
@@ -279,16 +316,17 @@ Deck's gamepad mode. Connect a controller, release its buttons/stick, and use:
 | Left/right | Change a list, dropdown, number or slider; otherwise move focus |
 | A / cross | Activate the focused button/toggle, or open a dropdown |
 | B / circle | Close a dropdown/dialog; otherwise return to Play |
-| LB/RB / L1/R1 | Previous/next launcher page (wraps) |
+| LB/RB / L1/R1 | Previous/next sidebar section (wraps) |
 
 Play starts focused. An orange outline marks the focused control, skipping page containers
-and descriptive labels. The focused action button carries an A badge; sidebar page tabs
+and descriptive labels. The focused action button carries an A badge; sidebar section buttons
 stay text-only. **Settings > Controls** shows launcher button hints and connected,
 paused, unavailable or disconnected status. When the separate controller-guide
 feature is installed, the same card appears on its **Controls** page alongside
 the diagrams and haptics. Settings resets preserve the status card.
-Shoulders follow the sidebar's visible page order. Left/right switches the Settings
-and Setup category tabs; search results support up/down, A to select and B to dismiss.
+Shoulders follow the sidebar's visible section order (each section opens on its first page).
+Left/right switches a section's page tabs (Library, Mods) and the Settings and Setup category
+tabs; search results support up/down, A to select and B to dismiss.
 Dropdowns use up/down and A to select, B to close.
 File pickers use Qt dialogs so controller focus works there too. Text entry still needs a
 keyboard or the system's on-screen keyboard. Steam Input users should select a gamepad
@@ -614,7 +652,7 @@ none), except an option that **Extra command-line flags** (**Settings > Advanced
 
 ### Texture packs (#384)
 
-**Texture packs** has the two switches of Settings > Display > Texture packs (the same settings,
+**Texture packs** has the two switches of Settings > Graphics > Texture packs (the same settings,
 through `SettingsPage.apply_external`), the list of packs and **Make HD pack**. The list is the
 Mods page's (`FolderListPage` in `ui/mods_page.py`): the folders in `<data folder>/textures` but
 `dump/` (`texture_packs.py`), ticked to use, **Move up** / **Move down** (a lower pack wins for the
@@ -885,7 +923,7 @@ missing-content message after the intro is in that language).
 
 ### GPU choice (#52)
 
-Many glitches depend on the graphics card, so Settings > Display starts with **Graphics card**: NVIDIA, AMD, Intel,
+Many glitches depend on the graphics card, so Settings > Graphics starts with **Graphics card**: NVIDIA, AMD, Intel,
 Steam Deck, or "Other / not sure". The launcher detects the card once (first start; the answer is kept in
 `launcher.json` under `gpu`) and preselects it; the player can change it at any time.
 
@@ -930,7 +968,7 @@ Steam Deck, or "Other / not sure". The launcher detects the card once (first sta
   always win). On an entry card (low graphics, or a GTX / RX 400-500-era card with 4 GB; not a Steam Deck) it also gets
   the 540p 3D scene (#640: a GTX 1650 Ti laptop is limited by its GPU at the 720p scene, 46.8 -> 54.3 fps in the
   benchmark, docs/perf.md). An existing launcher.json on an entry card gets it too, once (`migrated.scene_540`),
-  with a notice on the Play page that says where to change it back (Settings > Display > 3D scene resolution);
+  with a notice on the Play page that says where to change it back (Settings > Graphics > 3D scene resolution);
   a player who sets 720p again keeps it. Only where 540p is drawn: FSR 3, DLSS, a separate anti-aliasing method and
   Ultrawide gameplay keep 720p. Settings that are heavy for the PC get an orange line with the numbers (render scale 2 renders 2560x1440
   ...). A launcher with existing settings is never changed silently: a banner on the Settings page offers "Use
@@ -950,7 +988,7 @@ Steam Deck, or "Other / not sure". The launcher detects the card once (first sta
   1 fps, #640). At each start the launcher asks the Vulkan driver in a process of its own
   (`forza-launcher --vulkan-devices`, `launcher/forza_launcher/vulkan_probe.py`) and, when the GPU the game would use
   is such an iGPU, Setup and Play say so: update the Intel driver from intel.com, or use Direct3D 12 ("Use Direct3D
-  12" switches Settings > Display > Graphics API). A new launcher.json on Windows starts on Direct3D 12 there; an
+  12" switches Settings > Graphics > Graphics API). A new launcher.json on Windows starts on Direct3D 12 there; an
   existing one is never switched by itself. ReGPU (experimental) is a Direct3D 12 renderer too, so with it chosen there
   is no warning either; it is never the advice, as it was not tested on Intel graphics (the Intel preset marks it
   untested). On Linux, which has no Direct3D 12, the warning asks to update Mesa. No

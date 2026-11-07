@@ -175,7 +175,7 @@ def scene_540_applies(settings: dict) -> bool:
 def scene_540_notice(s: Specs) -> str:
     """The one-time notice of the launcher.json migration to the 540p scene (config.Config)."""
     return (f"3D scene resolution is now 540p on {_gpu_label(s)}: a GTX 1650 Ti laptop got 16% more fps in the "
-            "benchmark (47 to 54). The HUD and menus stay sharp. To go back to 720p: Settings > Display > "
+            "benchmark (47 to 54). The HUD and menus stay sharp. To go back to 720p: Settings > Graphics > "
             "3D scene resolution.")
 
 

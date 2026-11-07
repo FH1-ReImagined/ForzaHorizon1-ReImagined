@@ -343,7 +343,7 @@ original assessment.
 
 ## Temporal upscaling with AMD FSR 3 (#51, 2026-10-16)
 
-Settings > Display > Upscaling filter > **AMD FSR 3 (temporal)**, with **FSR 3 quality**
+Settings > Graphics > Upscaling filter > **AMD FSR 3 (temporal)**, with **FSR 3 quality**
 (Quality, Balanced, Performance, Native AA) and **FSR 3 output resolution** (1080p, 1440p, 4K).
 Any GPU with Vulkan; on NVIDIA with DLSS on, DLSS wins. It is the FidelityFX FSR 3.1 upscaler
 only (no frame generation), as a second backend behind the plumbing DLSS added (#60,
@@ -1006,7 +1006,7 @@ Aventador's digital display (drawn from a UI texture) is lit either way.
 ReGPU is a second Direct3D 12 renderer (FH1-ReImagined/ReGPU, `forza-recomp/thirdparty/ReGPU`), built as
 the GPU plugin `rexgpu-regpu.dll` (`forza-recomp/regpu-plugin`). The launcher's Windows build always
 compiles it (`-DFORZA_REGPU_PLUGIN=ON`). When only the plugin fails to compile, the build warns and
-builds the game without it. Players turn it on in Settings > Display > Picture > Graphics API >
+builds the game without it. Players turn it on in Settings > Graphics > Picture > Graphics API >
 ReGPU (experimental) (`launcher/forza_launcher/regpu.py`). forza.toml then gets
 `gpu_backend = "d3d12"` and `gpu_plugin = "regpu"`. A build without the plugin plays with Vulkan
 and shows a note. The Vulkan-only features (DLSS, FSR 3, SMAA, HDR, VR, ultrawide, shader prebuild)

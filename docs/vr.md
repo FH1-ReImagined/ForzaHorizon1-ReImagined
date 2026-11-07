@@ -512,14 +512,13 @@ when they are not there.
    is connected and waiting for an application. While it runs, WiVRn makes itself the active
    OpenXR runtime (`~/.config/openxr/1/active_runtime.json`). Connect first, then start the
    game: WiVRn makes the game wait until a headset is there (20 s, then the game starts flat).
-3. **Launcher:** Settings > Display > VR (experimental) > **VR headset (experimental)**:
-   **Virtual screen**. Press Play. For the trace, add `--vr_trace=true` to the extra arguments.
+3. **Launcher:** Settings > VR > **Mode**: **Big screen**. Press Play in VR. For the trace, add `--vr_trace=true` to the extra arguments.
 4. **What you should see:** the game in its window on the desktop as always, and in the headset a
    screen 2.2 m wide 2.5 m in front of you at eye height (47 degrees: the whole picture in view
    without turning the head) with the game on it, smooth when you move your head. Press **Home**
    on the keyboard, or hold **both sticks pressed** for a second, to bring the screen in front of
    you again. The pad works while you wear the headset, whichever window has the focus.
-5. **Cockpit:** close the game, set **VR headset (experimental)** to **Cockpit**, Play, sit as
+5. **Cockpit:** close the game, set **Mode** to **Cockpit**, Play in VR, sit as
    you would drive. Load into free roam, press **Home** (or hold both sticks) once while looking
    straight ahead, then switch to the in-car view (**RB** cycles the cameras; the one with the
    driver's hands on the wheel). You should be inside the car: turning and moving your head

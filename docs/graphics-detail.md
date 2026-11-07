@@ -1,6 +1,6 @@
 # World detail beyond the console (#361)
 
-**Settings > Display > World detail** has two options; both default to the console's values
+**Settings > Graphics > World detail** has two options; both default to the console's values
 and apply from the next start (the game reads them when it loads the track):
 
 | Launcher | cvar | Console | High | Ultra |
@@ -128,7 +128,7 @@ every frame, so a live change only needs the settings struct the hook already se
 
 ## Car detail (#361)
 
-**Settings > Display > World detail > Car detail** and the in-game **Graphics** screen (Title
+**Settings > Graphics > World detail > Car detail** and the in-game **Graphics** screen (Title
 Update 4) offer Console (default), High and Ultra (`world_car_detail`). It applies live (Save in
 the Graphics screen).
 
@@ -232,7 +232,7 @@ are logged), so the cars keep the models they had when it opened.
 
 ## Paint job detail (#659)
 
-**Settings > Display > World detail > Paint job detail** (`livery_bake_scale`): Console (1,
+**Settings > Graphics > World detail > Paint job detail** (`livery_bake_scale`): Console (1,
 default) or 2x. Vinyls and decals look sharp in the Paint Shop and soft when driving and in
 photos; 2x draws the paint job for driving at twice the game's resolution (photo mode's own
 copy stays at the game's size, below). It applies from the next start.
@@ -369,7 +369,7 @@ Without that the car showed the game's decal.
 
 ## Shadow softness (#380)
 
-**Settings > Display > World detail > Shadow softness** and the in-game **Graphics** screen
+**Settings > Graphics > World detail > Shadow softness** and the in-game **Graphics** screen
 (Title Update 4) offer Console (default), Soft and Softer. The value is read at every shadow
 pass, so the Graphics screen's Save applies it without a restart.
 
@@ -445,7 +445,7 @@ Softer; the shadowed areas themselves stay as dark.
 
 ## Ambient occlusion (#380)
 
-**Settings > Display > World detail > Ambient occlusion** and the in-game **Graphics** screen
+**Settings > Graphics > World detail > Ambient occlusion** and the in-game **Graphics** screen
 offer Off (default), Low and High (`world_ambient_occlusion`). It applies live (Save in the
 Graphics screen) and needs Vulkan: SDK patch 0350 (`src/graphics/vulkan/fh1_world_ao.cpp`)
 does the work; the Graphics screen dims the row on Direct3D 12.
