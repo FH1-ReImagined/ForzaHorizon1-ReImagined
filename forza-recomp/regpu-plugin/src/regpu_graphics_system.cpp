@@ -796,6 +796,15 @@ X_STATUS ReGpuGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* di
     for (const char* name : { "REGPU_ASYNC_SHADERS", "REGPU_ASYNC_PIPELINES" })
         if (!std::getenv(name))
             regpu::driver::SetSwitch(name, true);
+    // REGPU_NO_SETTLED_SKIP: with async pipelines, an opaque draw whose pipeline is still building is
+    // skipped once the game has settled, on the assumption the next frame draws it again. FH1 draws a
+    // car's paint job (vinyls and decals) once, when the car loads, into textures the CPU then
+    // compresses: a skipped draw of that pass is gone for good, and the car came out with no paint job
+    // (FH1R #690: the side composites, the pristine copy and its mips were the skipped draws). Opaque
+    // draws wait for their pipeline instead (a hitch the first time a new one appears, then it is in
+    // the pipeline library). GLUE2GPU_SETTLED_SKIP=1 skips them as before.
+    if (!std::getenv("GLUE2GPU_SETTLED_SKIP") && !std::getenv("REGPU_NO_SETTLED_SKIP"))
+        regpu::driver::SetSwitch("REGPU_NO_SETTLED_SKIP", true);
     // REGPU_NO_TILE_MERGE: FH1 draws its scene in three tiles. Merging them once lost the sky for a frame now
     // and then (fixed in ReGPU: later-tile stencil draws are kept); with that fix it saves nothing here (FX
     // 31.5 fps merged, 32.8 not), so FH1 draws its tiles as they come. GLUE2GPU_TILE_MERGE=1 merges.
