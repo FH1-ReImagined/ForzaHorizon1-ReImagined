@@ -180,6 +180,14 @@ tools/run_forza.sh 120        # a two-minute test run; logs in ${XDG_RUNTIME_DIR
   cannot hold 30 can run 20 (`frame_rate = 20`): each frame then stays on a 60 Hz screen for
   exactly 3 refreshes, where 22 fps alternates 2 and 3 and judders; 40 does the same on a
   120 Hz screen (#263).
+- **Present without waiting for the replay** (Vulkan, on by default on Linux and Windows
+  without a VR headset, #607): the swap no longer waits for the submission thread to replay the
+  frame before the game goes on, which gives a CPU-bound frame about 1 ms back (more fps
+  uncapped and on slow CPUs, nothing at a frame cap the PC already holds).
+  `vulkan_present_on_submission_thread = false` in `forza.toml` (or
+  `--vulkan_present_on_submission_thread=false`, the launcher's extra arguments) turns it off,
+  `true` turns it on in VR too; it can be switched while the game runs. Details:
+  [sdk_patches.md](sdk_patches.md#vulkan_present_on_submission_thread-on-by-default-607).
 - **Title Update 4 (default):** `play.sh` runs `forza-recomp/out/build/linux-tu4` when it
   exists (how to build it: README, Building; `FORZA_BUILD=linux-tu4`) and mounts the
   update's files (`extracted/tu4/`, or `FORZA_UPDATE`) as `update:` with
