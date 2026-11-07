@@ -576,6 +576,13 @@ add("custom_race", "Custom Race", "Gameplay", "bool", False,
     "Online > Sign in to Xbox LIVE: off. Title Update 4 only. Applies on the next game launch.",
     "Custom Race", restart=True)
 
+add("fast_travel_anywhere", "Fast Travel Anywhere", "Gameplay", "bool", True,
+    "Fast travel from the map to any road for free, as the Fast Travel Anywhere unlock did. "
+    "The game sold it for Tokens bought on Xbox LIVE, which can no longer be bought. Gives no "
+    "Tokens: your Token balance and the other Token offers (the Treasure Map) stay as they are. "
+    "Works offline and online. Nothing is saved, so turning it off locks it again unless your "
+    "profile bought it. Title Update 4 only.", "Map")
+
 add("skip_startup_movies", "Skip startup videos", "Gameplay", "bool", False,
     "Skips the videos at the start (Microsoft Studios, Dolby, Playground Games, about 45 s) "
     "and goes to the title screen. The in-game videos (the festival intro, the 1000 Club "

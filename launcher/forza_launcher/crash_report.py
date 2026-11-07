@@ -24,7 +24,7 @@ SETTING_KEYS = (
     "fh1_upscaler", "fh1_output_resolution", "fsr3_mode", "fsr3_output_resolution",
     "fh1_upscale_quality", "fh1_aa", "resolution", "forza_ultrawide",
     "fullscreen", "audio", "apu", "audio_driver", "time_scalar", "ai_rubber_banding",
-    "forza_car_tuning", "skip_startup_movies",
+    "forza_car_tuning", "skip_startup_movies", "fast_travel_anywhere",
 )
 MAX_ISSUE_URL = 7500
 # What to attach (#609): forza.log holds this session only; the launcher keeps the one before.
