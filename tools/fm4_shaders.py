@@ -41,12 +41,57 @@ MUL, MAX = 1, 3
 # SpirvShaderTranslator::Fh1Fm4ShadowFetch) samples the mask at the pixel's position for a
 # marked fetch; elsewhere (D3D12, or an SDK without it) the fetch still reads 1, no shadows.
 # shad_color is then 0: the shadow takes the sun's light away, not the lightmap's.
-# A test, off by default (FM4_SHADERS_FH1_SHADOWS=1): FH1 fills its mask in a collector pass
-# over its own track meshes, which FM4's models do not have, so the mask holds no right shadow
-# for FM4's surfaces: the car's shadow drew as a black silhouette in front of the car and part
-# of the road white (Suzuka, 9 spots, midday and evening).
+# A test, off by default (FM4_SHADERS_FH1_SHADOWS=1). The mask holds the car's shadow (FH1's
+# own cascades hold only FH1's track objects, see CSM_SHADOWS): with the sun behind the camera
+# it falls ahead of the car, and with shad_color 0 it drew black (taken for a misplaced
+# silhouette at first). The SDK branch now maps the mask's 0 to a floor (FH1_FM4_SHADOW_FLOOR,
+# 0.45): a soft car shadow at Suzuka's spots 1-7; at 8 and 9 part of the road draws pale. Not
+# safe without that branch: with the release SDK's Vulkan translator the shadowed surfaces drew
+# black (the fetch's constant 1 did not reach them; not understood), so this must stay off
+# unless the game runs with the branch.
 FH1_SHADOWS = __import__("os").environ.get("FM4_SHADERS_FH1_SHADOWS", "0") == "1"
 FH1_SHADOW_MASK = 13
+# FH1's cascaded shadow map read by FM4's own shaders (FM4_SHADERS_CSM_SHADOWS=1, off by
+# default): FH1's shadow-receiving track shaders take the first cascade's matrix
+# (CSMShadowMapLevel0TM, VS c180-c183) times the world position, and its depth map at fetch
+# constant 8 (1024 x 1024, 24-bit depth; still bound when FM4's draws run). FM4's vertex
+# shaders put M_shad_near (c232, c233) and M_shad_far (c236, c237) times the world position in
+# one interpolator (near u, v, far u, v); those four dot products read c180-c183 instead, so
+# the interpolator holds the cascade's x, y, z, w. Each s_grayscaleShadowMap fetch is pointed at
+# fetch constant 8 and at that interpolator, its result made 1 and marked (texel offsets x -16
+# and y -16, raw); the SDK's Vulkan shader translator (ReIGlue, SpirvShaderTranslator::
+# Fh1Fm4CsmShadowFetch) compares the depth there with z for a marked fetch. shad_color is 0
+# then, as with FM4_SHADERS_FH1_SHADOWS. A test that found no shadows: on a converted track the
+# cascade's matrix is set (VS c180-c183 every frame, from FH1's per-pass constants) but its depth
+# map reads 1 (empty) everywhere FM4's draws look: FH1 draws its own track objects into it, and
+# FM4's models have no pass of that kind. The car's shadow is in FH1's mask
+# (FM4_SHADERS_FH1_SHADOWS).
+CSM_SHADOWS = __import__("os").environ.get("FM4_SHADERS_CSM_SHADOWS", "0") == "1"
+FH1_CSM_MAP = 8
+CSM_ROWS = {232: 180, 233: 181, 236: 182, 237: 183}  # M_shad_near, M_shad_far: the TM's rows
+
+
+def csm_vertex(data):
+    """FM4's vertex shaders' M_shad_near and M_shad_far dot products reading
+    CSMShadowMapLevel0TM's rows (see CSM_SHADOWS); the interpolator they export to (or None)
+    and what was done."""
+    done, out = [], None
+    for start, size, _, floats, _ in blobs(bytes(data), VS_MAGIC):
+        if floats.get("M_shad_near", (0,))[0] != 232 or floats.get("M_shad_far", (0,))[0] != 236:
+            continue
+        for s, kind, w in instructions(bytes(data), start, size):
+            if kind != "alu":
+                continue
+            f = alu_fields(w)
+            a = f["src"][0]
+            if f["vop"] != 15 or a[2] or a[0] not in CSM_ROWS:
+                continue
+            w2 = (w[2] & ~(0xFF << 16)) | (CSM_ROWS[a[0]] << 16)
+            struct.pack_into(">3I", data, start + 12 * s, w[0], w[1], w2)
+            if f["export"]:
+                out = f["vdst"]
+            done.append(f"VS slot {s}: c{a[0]} -> c{CSM_ROWS[a[0]]} (FH1's cascade 0)")
+    return out, done
 
 
 def blobs(data, kind=PS_MAGIC):
@@ -223,7 +268,7 @@ def shadow_colour(data, start, alus, floats, literals):
     if reg is None or unit is None:
         return []
     lit, one, zero = unit
-    if FH1_SHADOWS:
+    if FH1_SHADOWS or CSM_SHADOWS:
         return constant_reads(data, start, alus, {reg[0]}, lit, zero, "shad_color", 0)
     return constant_reads(data, start, alus, {reg[0]}, lit, one, "shad_color", 1)
 
@@ -350,6 +395,10 @@ def patch_fxobj(name, data):
     if base.endswith(".FXOBJ") and base[:-6] in ATLAS_MASK_SHADERS:
         data = bytearray(atlas_mask_one(bytes(data)))
         done.append("atlas blend mask -> 1")
+    csm_coords = None
+    if CSM_SHADOWS:
+        csm_coords, vs_done = csm_vertex(data)
+        done += vs_done
     for start, size, samplers, floats, literals in blobs(bytes(data)):
         shadow = {r for n, r in samplers.items() if n in SHADOW_SAMPLERS}
         fm4_shadow = samplers.get("s_grayscaleShadowMap")
@@ -363,12 +412,18 @@ def patch_fxobj(name, data):
                     one |= (7 if sel == 7 else 5) << (3 * c)
                 w0, w2 = w[0], w[2]
                 marked = FH1_SHADOWS and ((w[0] >> 20) & 0x1F) == fm4_shadow
+                csm = (CSM_SHADOWS and csm_coords is not None and not marked and
+                       ((w[0] >> 20) & 0x1F) == fm4_shadow)
                 if marked:
                     w0 = (w0 & ~(0x1F << 20)) | (FH1_SHADOW_MASK << 20)
                     w2 = (w2 & ~(0x3FF << 16)) | (0x10 << 16) | (0x0F << 21)
+                if csm:  # fetch constant 8, the cascade's interpolator, marked
+                    w0 = (w0 & ~((0x1F << 20) | (0x3F << 5))) | (FH1_CSM_MAP << 20) | (csm_coords << 5)
+                    w2 = (w2 & ~(0x3FF << 16)) | (0x10 << 16) | (0x10 << 21)
                 w = [w0, (w[1] & ~0xFFF) | one, w2]
                 struct.pack_into(">3I", data, start + 12 * s, *w)
-                done.append(f"slot {s}: shadow map fetch -> 1" + (", FH1's mask (marked)" if marked else ""))
+                done.append(f"slot {s}: shadow map fetch -> 1" + (", FH1's mask (marked)" if marked else "")
+                            + (f", FH1's cascade 0 at r{csm_coords} (marked)" if csm else ""))
         alus = [(s, alu_fields(w), w) for s, kind, w in ins if kind == "alu"]
         if LIGHTMAP_COLOURS:
             done += lightmap_colours(data, start, alus, literals)

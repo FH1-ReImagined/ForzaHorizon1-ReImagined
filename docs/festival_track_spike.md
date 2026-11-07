@@ -768,6 +768,43 @@ same as before: Suzuka's and Hockenheim's bin.zip and stx files match the previo
   sampler 7 (now -1, no slot) at it, and keep the rectangle above. A game-side route would bind
   it in FH1's per-instance lightmap path. Infineon's grey road needs its own trace.
 
+## Dynamic shadows on FM4 tracks (4-hour box): car shadows with an SDK branch, off
+
+Route (b), FH1's cascades read by FM4's own shaders, was tried first. FH1's shadow-receiving
+track shaders (Colorado's H_BLND1, H_ROAD_DIFF1_...) take CSMShadowMapLevel0TM (VS c180-c183)
+times the world position and sample CSMShadowMapLevel0Samp at fetch constant 8 (1024 x 1024,
+k_24_8). FM4's vertex shaders export M_shad_near and M_shad_far times the world position to
+one interpolator; `FM4_SHADERS_CSM_SHADOWS=1` makes those four dot products read c180-c183, and
+points the s_grayscaleShadowMap fetches at fetch constant 8 and that register, marked. A local
+ReIGlue commit (fh1-648-fm4-shadow, 21da36b, not pushed) gives a marked fetch a four-tap depth
+compare.
+- The matrix is right: in FM4's draws, c180-c183 are written every frame from FH1's per-pass
+  constants (Suzuka's grid: rows (0, 0.0029, -0.0086, -2.62), (0.0084, -0.0033, -0.0011,
+  -3.00), (-0.0002, -0.0004, -0.0001, 0.858), (0, 0, 0, 1), both traced frames). The
+  coordinates land on the map (u 0.3-0.6, z about 0.7 on the road).
+- The map is empty there: debug views of the depth at the pixel, of depth < 0.9999, and of the
+  map zoomed out 4x over the road all read 1. FH1's cascades hold its own track objects (FM4's
+  models have no caster pass); the car's shadow is not drawn into them.
+- So for track objects' shadows, route (a) would still be needed: FM4 models drawn into FH1's
+  cascade pass.
+
+The car's shadow is in FH1's screen-space mask (s13), which the earlier test
+(`FM4_SHADERS_FH1_SHADOWS=1`) already samples at the pixel. Its "black silhouette in front of
+the car" was the car's real shadow: the sun is behind the camera (sunDir (-0.63, 0.48, 0.61)
+against the grid's heading (0.61, -0.79)), and shad_color 0 made the shadow black. The branch now
+maps the mask's 0 to 0.45 (`FH1_FM4_SHADOW_FLOOR`), close to FM4's TrackSettings ShadowColor.
+- Suzuka, 9 spots (bin-csm, the spike build with the branch): a soft car shadow ahead of the
+  car at spots 1 to 7; a darker contact patch under the car; at 8 and 9 part of the road draws
+  pale (the mask is lighter than lit there). Elsewhere the image matches the unshadowed one.
+- Not safe without the branch: with the release SDK's Vulkan translator (the plain build), the
+  shadowed surfaces drew black (2 of 2 spots). The marked fetch's result is the constant 1,
+  which should leave them lit, but did not reach the shader; not understood. The D3D12
+  translator has no branch either, and ReGPU would see the same marked fetch, so both must
+  be expected to draw black too. Both switches stay off; the default output is unchanged.
+- Next: why the constant-1 fetch result does not arrive without the branch (then the
+  fallback is no shadow), the pale road at spots 8 and 9, and FM4 models in FH1's cascade pass
+  for the track's own shadows.
+
 ## Towards players: a plan
 
 What a player would need, beyond the spike (none of this is built yet):
