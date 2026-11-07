@@ -68,8 +68,14 @@ def member_data(zip_path, zf, info, fh, tmp):
         return raw
     if info.compress_type != 21:
         return zf.read(info)
-    if not os.path.exists(UNXMEM):
-        raise SystemExit("tools/unxmem is missing: build it from tools/unxmem.c")
+    if not os.path.exists(UNXMEM):  # no tools/unxmem (players): the Python decoder, slower
+        if HERE not in sys.path:
+            sys.path.insert(0, HERE)
+        import fxobj_shaders
+        data = fxobj_shaders.decode_xmem(raw, info.file_size)
+        if len(data) != info.file_size:
+            raise SystemExit(f"{info.filename}: decoded {len(data)} bytes of {info.file_size}")
+        return data
     src, dst = os.path.join(tmp, "m.lzx"), os.path.join(tmp, "m.out")
     with open(src, "wb") as f:
         f.write(raw)

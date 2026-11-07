@@ -16,7 +16,8 @@ Usage:
   carbin_dump.py --media DIR FILE...      also each material's effect, samplers and textures
   carbin_dump.py --json FILE...           everything as JSON (no vertex data)
 FILE is a .carbin, or a car archive from media/cars (its .carbin members are read; the
-archives' LZX members need tools/unxmem, built from tools/unxmem.c). DIR is the game's
+archives' LZX members use tools/unxmem, built from tools/unxmem.c, or else the slower Python
+decoder in tools/fxobj_shaders.py). DIR is the game's
 media folder (with shaders/Cars and cars/Shared.zip).
 
 Nothing is written anywhere; vertex data is not printed.
@@ -288,8 +289,11 @@ def unxmem_member(zip_path, name, out_dir):
     if info.compress_type != 21:
         return zf.read(name)
     tool = os.path.join(HERE, "unxmem")
-    if not os.path.exists(tool):
-        raise SystemExit("tools/unxmem is missing: build it from tools/unxmem.c")
+    if not os.path.exists(tool):  # no tools/unxmem (players): the Python decoder, slower
+        if HERE not in sys.path:
+            sys.path.insert(0, HERE)
+        import fxobj_shaders
+        return fxobj_shaders.decode_xmem(raw, info.file_size)
     src = os.path.join(out_dir, "m.lzx")
     dst = os.path.join(out_dir, "m.out")
     with open(src, "wb") as f:
