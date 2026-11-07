@@ -4,6 +4,12 @@ Work notes for putting a Forza Motorsport 4 circuit (Suzuka so far) into FH1 TU4
 roam. Everything here is dev tooling: it reads the player's own FM4 and FH1 files and writes
 converted files next to a copy of the game folder. Nothing from either game is in the repo.
 
+Status (converter at 577494a): the sections below are in the order the work was done, so the
+dark or black road patches the batch sections describe were fixed later ("The black roads",
+"Atlas tiles", the lightmap binding). Road-level shots at spots 1 and 5 of all 24 converted
+circuits (2026-11-07) show textured, lit roads; the known faults left are Infineon 5-6,
+Indianapolis 7-8 and Top Gear 3 (see "The five leftovers").
+
 ## Pipeline
 
 1. `tools/fm4_track_mod.py` builds a mod from FM4's track folder (`media/tracks/<track>`),
@@ -857,6 +863,13 @@ maps the mask's 0 to 0.45 (`FH1_FM4_SHADOW_FLOOR`), close to FM4's TrackSettings
   Indianapolis 7-8 and Top Gear 3 stay as they were. A fix needs a fetch constant packet and a
   type-3 fixup added to their command buffers, or the normal map given up. Infineon's grey is
   also behind FH1's own full-screen passes (pixel shader A4A965, a rect-list clear/copy shader).
+- The three left need a fetch constant packet and its fixup added. The fixups are D3D's
+  precompiled command buffer fixups: sub_82D19210 dispatches a record by its type (type 3 to
+  sub_824AAAC0), which takes the record's second word (kind 0x47, data offset) to a patch list
+  of the buffer (sub_824AAA28) and writes the texture's fetch constant into each place listed.
+  Infineon's road model 211 has, per pass, a buffer of 0x254 bytes (fetch constants 0-2 at
+  +0x19c, fetch constant 31 after it) and the pass group's sizes 0x110, 0x254, 0x10; where the
+  patch lists live in the file is not found yet, so nothing is inserted.
 - Sweep: all 24 converted circuits (Suzuka with them), spots 1 and 5, against each one's latest
   pass: no crash but Catalunya 5 before the cap above; mean differences 1.3-7.7 except where a
   fix shows (Hockenheim 1 10.6, Mugello 1 10.6, Autopark 1 11.2: the barrier's lightmap) and
