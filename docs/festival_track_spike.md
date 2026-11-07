@@ -933,8 +933,10 @@ What a player would need, beyond the spike (none of this is built yet):
 ## Open
 
 - (c) The road, terrain and buildings draw with FM4's own shaders, at 13:00, over a ground.
-  Still to do: FM4's shadows (the shadow map reads 1, `shad_color` 1 and the shadow clip
-  constants 0: no shadows on the circuit; the shader rewrite they need is below).
+  Car shadows: done behind `FM4_SHADERS_FH1_SHADOWS` (off) with ReIGlue 0439 and 0440 (local
+  branch fh1-648-fm4-shadows-pr), see "Car shadows made shippable" and the morning runs above;
+  left: the D3D12 check on Windows, then the ReIGlue PR. Shadows from the track's own objects
+  are still open (FM4 models are not in FH1's cascade pass). The older notes below are kept.
 - Shadows, as far as looked into:
   - Shadows: FH1's colour-pass track shaders take shadows from a screen-space mask on s13
     (`ShadowMaskSamp`, fetched at the clip position the VS exports, divided by w in the PS);
