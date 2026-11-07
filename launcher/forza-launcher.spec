@@ -33,8 +33,11 @@ datas = [
     (str(images / "logo.png"), "assets"),
     (str(repo / "forza-recomp" / "resources" / "forza.ico"), "assets"),
     (str(images / "social-preview.png"), "assets"),
+    (str(images / "logo-mark.png"), "assets"),
     (str(root / "forza_launcher" / "ui" / "down.svg"), "forza_launcher/ui"),
     (str(root / "forza_launcher" / "ui" / "check.svg"), "forza_launcher/ui"),
+    # Bitter ExtraBold and Saira Semi Condensed with their OFL texts (ui/theme.py)
+    (str(root / "forza_launcher" / "ui" / "fonts"), "forza_launcher/ui/fonts"),
     (str(root / "forza_launcher" / "ui" / "controller_art"), "forza_launcher/ui/controller_art"),
     (str(repo / "tools" / "xcontent_extract.py"), "tools"),
     (str(repo / "tools" / "xiso_extract.py"), "tools"),

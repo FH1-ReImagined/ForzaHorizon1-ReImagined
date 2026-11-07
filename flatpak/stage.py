@@ -3,7 +3,7 @@
 
   stage/
     forza_launcher/ main.py          the launcher (plain Python, run by the SDK's python3)
-    assets/                          logo.svg, logo.png, social-preview.png
+    assets/                          logo.svg, logo.png, logo-mark.png, social-preview.png
     tools/                           the Python tools the launcher runs (extraction, DLC, title update)
     project/forza-recomp, project/tools/cmake   the project's own sources (no generated code)
     server/                          the Forza Live server (the server/ submodule, FH1-ReImagined/forza-live)
@@ -28,7 +28,7 @@ from forza_launcher import builder  # noqa: E402
 
 TOOLS = ("xcontent_extract.py", "xiso_extract.py", "install_dlc.py", "apply_title_update.py", "lzx_delta.py", "xdc_decode.py", "livery_codec.py",
          "pipeline_list.py", "fxobj_shaders.py", "xxh3.py")
-ASSETS = ("logo.svg", "logo.png", "social-preview.png")
+ASSETS = ("logo.svg", "logo.png", "logo-mark.png", "social-preview.png")
 
 
 def copy(src: Path, dst: Path):
