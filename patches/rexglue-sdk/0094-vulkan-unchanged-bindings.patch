@@ -1,0 +1,285 @@
+diff --git a/include/rex/graphics/pipeline/texture/cache.h b/include/rex/graphics/pipeline/texture/cache.h
+index 61d9dcf..bf1278b 100644
+--- a/include/rex/graphics/pipeline/texture/cache.h
++++ b/include/rex/graphics/pipeline/texture/cache.h
+@@ -114,8 +114,17 @@ class TextureCache {
+     uint32_t bit_count = last_index - first_index + 1;
+     uint32_t mask = bit_count == 32 ? UINT32_MAX : ((UINT32_C(1) << bit_count) - 1) << first_index;
+     texture_bindings_in_sync_ &= ~mask;
++    sampler_fetch_writes_ |= mask;
+   }
+ 
++  // Consumed only by the Vulkan sampler acquisition path, on the GPU thread.
++  uint32_t ConsumeSamplerFetchWrites() {
++    uint32_t written = sampler_fetch_writes_; sampler_fetch_writes_ = 0; return written;
++  }
++  bool TextureRequestBindingsReady(uint32_t mask) const {
++    return !(mask & ~texture_bindings_in_sync_) &&
++           !texture_became_outdated_.load(std::memory_order_acquire);
++  }
+   virtual void RequestTextures(uint32_t used_texture_mask);
+ 
+   // "ActiveTexture" means as of the latest RequestTextures call.
+@@ -666,6 +675,7 @@ class TextureCache {
+   // Bit vector with bits reset on fetch constant writes to avoid parsing fetch
+   // constants again and again.
+   uint32_t texture_bindings_in_sync_ = 0;
++  uint32_t sampler_fetch_writes_ = UINT32_MAX;
+ };
+ 
+ }  // namespace rex::graphics
+diff --git a/include/rex/graphics/vulkan/binding_reuse.h b/include/rex/graphics/vulkan/binding_reuse.h
+new file mode 100644
+index 0000000..91531ba
+--- /dev/null
++++ b/include/rex/graphics/vulkan/binding_reuse.h
+@@ -0,0 +1,52 @@
++#pragma once
++#include <cstdint>
++#include <cstdlib>
++
++namespace rex::graphics::vulkan {
++inline bool BindingReuseEnabled() {
++  static const bool enabled = [] { const char* p = std::getenv("FORZA_VK_BINDING_REUSE"); return p && p[0] == '1'; }();
++  return enabled;
++}
++inline bool BindingReuseVerify() {
++  static const bool enabled = [] { const char* p = std::getenv("FORZA_VK_BINDING_VERIFY"); return p && p[0] == '1'; }();
++  return enabled;
++}
++inline bool BindingReuseStats() {
++  static const bool enabled = [] { const char* p = std::getenv("FORZA_VK_BINDING_STATS"); return p && p[0] == '1'; }();
++  return enabled;
++}
++// Set N is compatible only when layouts 0 through N are compatible.
++inline uint32_t BindingCompatiblePrefixMask(uint32_t first_incompatible) {
++  return first_incompatible >= 32 ? UINT32_MAX :
++      ((UINT32_C(1) << first_incompatible) - 1);
++}
++struct SamplerBindingReuse {
++  const void* shader = nullptr;
++  const void* cache = nullptr;
++  uint64_t submission = UINT64_MAX;
++  int32_t anisotropy = INT32_MIN;
++  uint32_t dirty = UINT32_MAX;
++  bool Matches(const void* next_shader, const void* next_cache,
++               uint64_t next_submission, int32_t next_anisotropy,
++               uint32_t sampled_mask) const {
++    return shader == next_shader && cache == next_cache &&
++           submission == next_submission && anisotropy == next_anisotropy &&
++           !(dirty & sampled_mask);
++  }
++};
++// A request has already marked these resources used and transitioned them in
++// this submission. Any invalidation or intervening usage change rejects reuse.
++struct TextureRequestReuse {
++  uint64_t submission = UINT64_MAX;
++  uint64_t usage = 0;
++  uint32_t mask = 0;
++  bool Matches(uint64_t next_submission, uint64_t next_usage,
++               uint32_t requested, uint32_t in_sync, bool outdated) const {
++    return submission == next_submission && usage == next_usage &&
++           !(requested & ~mask) && !(requested & ~in_sync) && !outdated;
++  }
++  void Remember(uint64_t next_submission, uint64_t next_usage, uint32_t requested) {
++    submission = next_submission; usage = next_usage; mask = requested;
++  }
++};
++}  // namespace rex::graphics::vulkan
+diff --git a/include/rex/graphics/vulkan/command_processor.h b/include/rex/graphics/vulkan/command_processor.h
+index f26f786..fe929cd 100644
+--- a/include/rex/graphics/vulkan/command_processor.h
++++ b/include/rex/graphics/vulkan/command_processor.h
+@@ -919,6 +919,9 @@ class VulkanCommandProcessor : public CommandProcessor {
+   bool dynamic_stencil_reference_front_update_needed_;
+   bool dynamic_stencil_reference_back_update_needed_;
+ 
++  SamplerBindingReuse sampler_reuse_[2];
++  uint64_t binding_sampler_calls_ = 0, binding_sampler_hits_ = 0;
++  uint64_t binding_sampler_verified_ = 0, binding_mismatches_ = 0;
+   // Currently used samplers.
+   std::vector<std::pair<VulkanTextureCache::SamplerParameters, VkSampler>> current_samplers_vertex_;
+   std::vector<std::pair<VulkanTextureCache::SamplerParameters, VkSampler>> current_samplers_pixel_;
+diff --git a/include/rex/graphics/vulkan/texture_cache.h b/include/rex/graphics/vulkan/texture_cache.h
+index 8e6c436..cd1f8e0 100644
+--- a/include/rex/graphics/vulkan/texture_cache.h
++++ b/include/rex/graphics/vulkan/texture_cache.h
+@@ -18,6 +18,7 @@
+ 
+ #include <rex/graphics/pipeline/texture/cache.h>
+ #include <rex/graphics/vulkan/shader.h>
++#include <rex/graphics/vulkan/binding_reuse.h>
+ #include <rex/graphics/vulkan/shared_memory.h>
+ #include <rex/hash.h>
+ #include <rex/ui/vulkan/mem_alloc.h>
+@@ -221,6 +222,9 @@ class VulkanTextureCache final : public TextureCache {
+     // Doesn't transition (the caller must insert the barrier).
+     Usage SetUsage(Usage new_usage) {
+       Usage old_usage = usage_;
++      if (old_usage != new_usage) {
++        ++static_cast<VulkanTextureCache&>(texture_cache()).binding_usage_epoch_;
++      }
+       usage_ = new_usage;
+       return old_usage;
+     }
+@@ -396,6 +400,11 @@ class VulkanTextureCache final : public TextureCache {
+   uint32_t sampler_max_count_;
+ 
+   xenos::AnisoFilter max_anisotropy_;
++  uint64_t binding_usage_epoch_ = 0;
++  TextureRequestReuse binding_request_reuse_;
++  uint64_t binding_request_calls_ = 0, binding_request_hits_ = 0;
++  uint64_t binding_request_verified_ = 0, binding_request_mismatches_ = 0;
++  uint32_t binding_stats_frames_ = 0;
+ 
+   std::unordered_map<SamplerParameters, Sampler, SamplerParameters::Hasher> samplers_;
+   std::pair<const SamplerParameters, Sampler>* sampler_used_first_ = nullptr;
+diff --git a/src/graphics/vulkan/command_processor.cpp b/src/graphics/vulkan/command_processor.cpp
+index 7a376f8..8a8bc97 100644
+--- a/src/graphics/vulkan/command_processor.cpp
++++ b/src/graphics/vulkan/command_processor.cpp
+@@ -76,6 +76,7 @@ REXCVAR_DECLARE(double, forza_ultrawide_hud_offset_y);
+ #include <rex/graphics/vulkan/render_target_cache.h>
+ #include <rex/graphics/vulkan/shader.h>
+ #include <rex/graphics/vulkan/shared_memory.h>
++#include <rex/graphics/vulkan/binding_reuse.h>
+ #include <rex/graphics/xenos.h>
+ #include <rex/kernel/xboxkrnl/video.h>
+ #include <rex/types.h>
+@@ -5289,19 +5290,25 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t
+     // different for some reason (like a race condition with the guest in index
+     // buffer processing in the primitive processor resulting in different host
+     // vertex shader types), the bindings will stay the same.
+-    // TODO(Triang3l): Sampler caching and reuse for adjacent draws within one
+-    // submission.
++    const uint32_t sampler_fetch_writes = texture_cache_->ConsumeSamplerFetchWrites();
++    for (auto& state : sampler_reuse_) state.dirty |= sampler_fetch_writes;
+     uint32_t samplers_overflowed_count = 0;
+     for (uint32_t j = 0; j < 2; ++j) {
+       std::vector<std::pair<VulkanTextureCache::SamplerParameters, VkSampler>>& shader_samplers =
+           j ? current_samplers_pixel_ : current_samplers_vertex_;
+-      if (!i) {
+-        shader_samplers.clear();
+-      }
+       const VulkanShader* shader = j ? pixel_shader : vertex_shader;
+-      if (!shader) {
+-        continue;
+-      }
++      auto& reuse_state = sampler_reuse_[j];
++      const uint32_t sampled_mask = shader ? shader->GetUsedTextureMaskAfterTranslation() : 0;
++      const int32_t anisotropy = REXCVAR_GET(anisotropic_override);
++      const bool reuse_samplers = BindingReuseEnabled() && !i &&
++          reuse_state.Matches(shader, texture_cache_.get(), GetCurrentSubmission(),
++                              anisotropy, sampled_mask);
++      if (BindingReuseStats()) { ++binding_sampler_calls_; binding_sampler_hits_ += reuse_samplers; }
++      if (reuse_samplers && !BindingReuseVerify()) continue;
++      const auto previous_samplers = reuse_samplers ? shader_samplers :
++          std::vector<std::pair<VulkanTextureCache::SamplerParameters, VkSampler>>{};
++      if (!i) shader_samplers.clear();
++      if (!shader) { reuse_state = {}; continue; }
+       const std::vector<VulkanShader::SamplerBinding>& shader_sampler_bindings =
+           shader->GetSamplerBindingsAfterTranslation();
+       if (!i) {
+@@ -5334,6 +5341,19 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t
+           ++samplers_overflowed_count;
+         }
+       }
++      if (reuse_samplers) {
++        ++binding_sampler_verified_;
++        bool same = previous_samplers.size() == shader_samplers.size();
++        for (size_t k = 0; same && k < shader_samplers.size(); ++k) {
++          same = previous_samplers[k].first.value == shader_samplers[k].first.value &&
++                 previous_samplers[k].second == shader_samplers[k].second;
++        }
++        if (!same) { ++binding_mismatches_; REXGPU_ERROR("VKBINDING: sampler mismatch"); }
++      }
++      reuse_state.shader = shader; reuse_state.cache = texture_cache_.get();
++      reuse_state.submission = samplers_overflowed_count ||
++          anisotropy != REXCVAR_GET(anisotropic_override) ? UINT64_MAX : GetCurrentSubmission();
++      reuse_state.anisotropy = anisotropy; reuse_state.dirty = 0;
+     }
+     if (!samplers_overflowed_count) {
+       break;
+@@ -5491,6 +5511,8 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t
+         descriptor_sets_kept = std::min(
+             descriptor_sets_kept, uint32_t(SpirvShaderTranslator::kDescriptorSetTexturesPixel));
+       }
++      current_graphics_descriptor_sets_bound_up_to_date_ &=
++          BindingCompatiblePrefixMask(descriptor_sets_kept);
+     } else {
+       // No or unknown pipeline layout previously bound - all bindings are in an
+       // indeterminate state.
+@@ -7206,6 +7228,12 @@ bool VulkanCommandProcessor::BeginSubmission(bool is_guest_command) {
+ 
+     primitive_processor_->BeginFrame();
+ 
++    if (frame_current_ == 1) REXLOG_INFO("VKBINDING: reuse={} verify={}", BindingReuseEnabled(), BindingReuseVerify());
++    if (BindingReuseStats() && frame_current_ % 300 == 0) {
++      REXLOG_INFO("VKBINDING: samplers={} sampler_hits={} verified={} mismatches={}",
++          binding_sampler_calls_, binding_sampler_hits_, binding_sampler_verified_, binding_mismatches_);
++      binding_sampler_calls_ = binding_sampler_hits_ = binding_sampler_verified_ = binding_mismatches_ = 0;
++    }
+     texture_cache_->BeginFrame();
+     if (fh1_other_textures_) fh1_other_textures_->BeginFrame();
+   }
+@@ -8674,7 +8702,8 @@ bool VulkanCommandProcessor::UpdateBindings(const VulkanShader* vertex_shader,
+     sampler_count_pixel = 0;
+     texture_count_pixel = 0;
+   }
+-  // TODO(Triang3l): Reuse texture and sampler bindings if not changed.
++  // Always allocate/write texture descriptors and bind their fresh sets.
++  // Matching payloads alone did not preserve rendering correctness.
+   current_graphics_descriptor_set_values_up_to_date_ &=
+       ~((UINT32_C(1) << SpirvShaderTranslator::kDescriptorSetTexturesVertex) |
+         (UINT32_C(1) << SpirvShaderTranslator::kDescriptorSetTexturesPixel));
+diff --git a/src/graphics/vulkan/texture_cache.cpp b/src/graphics/vulkan/texture_cache.cpp
+index a6b310c..a38ce8b 100644
+--- a/src/graphics/vulkan/texture_cache.cpp
++++ b/src/graphics/vulkan/texture_cache.cpp
+@@ -581,6 +581,11 @@ void VulkanTextureCache::BeginSubmission(uint64_t new_submission_index) {
+ 
+ void VulkanTextureCache::BeginFrame() {
+   TextureCache::BeginFrame();
++  if (BindingReuseStats() && ++binding_stats_frames_ % 300 == 0) {
++    REXLOG_INFO("VKBINDING_TEXTURE: calls={} hits={} verified={} mismatches={}",
++        binding_request_calls_, binding_request_hits_, binding_request_verified_, binding_request_mismatches_);
++    binding_request_calls_ = binding_request_hits_ = binding_request_verified_ = binding_request_mismatches_ = 0;
++  }
+ 
+   std::memset(unsupported_format_features_used_, 0, sizeof(unsupported_format_features_used_));
+ }
+@@ -609,6 +614,16 @@ void VulkanTextureCache::RequestTextures(uint32_t used_texture_mask) {
+   SCOPE_profile_cpu_f("gpu");
+ #endif  // XE_GPU_FINE_GRAINED_DRAW_SCOPES
+ 
++  bool reuse = BindingReuseEnabled() &&
++      binding_request_reuse_.Matches(command_processor_.GetCurrentSubmission(),
++          binding_usage_epoch_, used_texture_mask, UINT32_MAX,
++          !TextureRequestBindingsReady(used_texture_mask));
++  if (BindingReuseStats()) { ++binding_request_calls_; binding_request_hits_ += reuse; }
++  if (reuse && !BindingReuseVerify()) return;
++  // Verification runs the complete request, including ownership selection,
++  // uploads, usage transitions and lifetime marking.
++  const auto previous_bindings = reuse ? vulkan_texture_bindings_ : decltype(vulkan_texture_bindings_){};
++  const uint64_t previous_usage = binding_usage_epoch_;
+   TextureCache::RequestTextures(used_texture_mask);
+ 
+   // Pre-create 3D-as-2D wrappers while still in texture request phase.
+@@ -680,6 +695,17 @@ void VulkanTextureCache::RequestTextures(uint32_t used_texture_mask) {
+       }
+     }
+   }
++  if (reuse) {
++    ++binding_request_verified_;
++    bool same = previous_usage == binding_usage_epoch_;
++    for (uint32_t i = 0; i < xenos::kTextureFetchConstantCount; ++i) {
++      if (!(used_texture_mask & (UINT32_C(1) << i))) continue;
++      same &= previous_bindings[i].image_view_unsigned == vulkan_texture_bindings_[i].image_view_unsigned &&
++              previous_bindings[i].image_view_signed == vulkan_texture_bindings_[i].image_view_signed;
++    }
++    if (!same) { ++binding_request_mismatches_; REXGPU_ERROR("VKBINDING: texture request mismatch"); }
++  }
++  binding_request_reuse_.Remember(command_processor_.GetCurrentSubmission(), binding_usage_epoch_, used_texture_mask);
+ }
+ 
+ VkImageView VulkanTextureCache::GetActiveBindingOrNullImageView(uint32_t fetch_constant_index,

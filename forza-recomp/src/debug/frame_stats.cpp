@@ -87,7 +87,21 @@ std::atomic<uint64_t> g_pipelines{0};
 
 // Seconds since the first timed event.
 double Seconds(Clock::time_point now) {
-  static const Clock::time_point start = now;
+  static const Clock::time_point start = [now] {
+    if (const char* path = std::getenv("RECOMP_PERF_EPOCH"); path && *path) {
+      const auto wall = std::chrono::system_clock::now();
+      const auto steady = Clock::now();
+      const double epoch = std::chrono::duration<double>(wall.time_since_epoch()).count() -
+          std::chrono::duration<double>(steady - now).count();
+      if (std::FILE* file = std::fopen(path, "w")) {
+        std::fprintf(file, "%.9f\n", epoch);
+        std::fclose(file);
+      } else {
+        REXLOG_WARN("PERF: cannot write clock epoch {}", path);
+      }
+    }
+    return now;
+  }();
   return std::chrono::duration<double>(now - start).count();
 }
 

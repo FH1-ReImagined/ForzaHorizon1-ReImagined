@@ -1,0 +1,13 @@
+cmake_minimum_required(VERSION 3.25)
+project(binding_reuse_test LANGUAGES CXX)
+if(NOT SDK_SOURCE)
+  message(FATAL_ERROR "Set SDK_SOURCE to the patched SDK source directory")
+endif()
+add_executable(binding_reuse_test reuse_test.cpp)
+target_compile_features(binding_reuse_test PRIVATE cxx_std_17)
+target_include_directories(binding_reuse_test PRIVATE "${SDK_SOURCE}/include")
+enable_testing()
+add_test(NAME binding_reuse COMMAND binding_reuse_test)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+add_test(NAME descriptor_writes COMMAND "${Python3_EXECUTABLE}"
+  "${CMAKE_CURRENT_SOURCE_DIR}/test_descriptor_writes.py" "${SDK_SOURCE}")

@@ -1,0 +1,902 @@
+{
+  "date": "2026-10-20",
+  "source_provenance": {
+    "main": "54d5177204dfeb65b5ca7dc3739de5af95f9f96f",
+    "sdk_base": "bd833a2ab69d305f99ddf57418fc38ffec8af93d",
+    "base_tree": "00f4783bc3e15abaa19d1e39fb7224c878f7e750",
+    "patches": 67,
+    "game_source_base": "fc55901",
+    "AI_benchmark_source_commit": "ec7300244e369d2802b1112ecd02bc681cb8cf94",
+    "common_game_runtime": "build/cpu-fence/runtime",
+    "sampler_parameter_memo": false,
+    "dynamic_constants": false
+  },
+  "source_verification": {
+    "tree": "c752ee7ad5b2379cc7e7dc42738b768945c9ac3c",
+    "files": 1323,
+    "mismatches": []
+  },
+  "hardware": {
+    "cpu": "Intel Core i9-13900K",
+    "ram_gb": 64,
+    "gpu": "NVIDIA RTX 5060 Ti",
+    "driver": "617.14",
+    "os": "Windows"
+  },
+  "display": {
+    "primary": true,
+    "width": 2560,
+    "height": 1440,
+    "hz": 360
+  },
+  "toolchain": "clang-cl 23.1.3; CMake 4.4.4; Ninja 1.13.2",
+  "binary_sha256": {
+    "forza.exe": "0eca96d4a97f849f04812dcff6b60a17839ab7fccbeeba8da019fa3c614838b6",
+    "forza_SpeechFacade_default.dll": "f4b31ae25ba5385437d26104f0074012a925910d850476f19e51d2ef1971b08d",
+    "forza_XMediaFacade_default.dll": "3fbf755549f8e232a9905c649b5f63ab6196c67030936c18fc124830a75a02e0",
+    "rexgpu-xenos.dll": "3867baf593cad9afe39884bd0d04d76f02f70558494a08bb616ac57b755d8d9e",
+    "rexruntime.dll": "a17276a30a63f74966b470778d16482fdf1ff0b4b316f79168d8392b43138e39",
+    "TracyClient.dll": "1c705440aefdb14f7c568e67d20564f156bfa1adea614e8ac8125aa4c7feec3d"
+  },
+  "patch_sha256": "da9bb444ef4535c8d1cfb5689d8691fedb93a67ad70f33ae5abb8290b6406785",
+  "protocol": {
+    "render_resolution": "1280x720",
+    "frame_target": 240,
+    "vsync": false,
+    "present_mode": "IMMEDIATE",
+    "upscaler": "off",
+    "cpu_affinity": null,
+    "AI_settle_s": 15,
+    "AI_score_s": 60,
+    "CPU_window_s": 30,
+    "CPU_start_offset_from_AI_marker_s": 10,
+    "race": "eight-car Recaro Rush / Montano Dirt Cross; native AI drives Evo",
+    "dynamic_constants": false,
+    "sampler_parameter_memo": false,
+    "gpu_wait": "yield",
+    "score_diagnostics": false,
+    "independent_copied_saves": true,
+    "traffic_is_deterministic": false
+  },
+  "runs": [
+    {
+      "label": "baseline-1",
+      "variant": "baseline",
+      "guest": {
+        "frames": 2907,
+        "fps": 96.3059144950572,
+        "low1_fps": 74.21792857761339,
+        "p99_ms": 12.916,
+        "worst_ms": 14.435,
+        "over50ms": 0
+      },
+      "present": {
+        "frames": 2907,
+        "fps": 96.31002405464605,
+        "low1_fps": 74.03751233958539,
+        "p99_ms": 12.844,
+        "worst_ms": 15.08,
+        "over50ms": 0
+      },
+      "cpu_cores": 3.1941522840958134,
+      "cpu_ms_per_guest_frame": 33.16885964912281,
+      "cpu_window_s": 30.186999999999898,
+      "focused_fraction": 1.0,
+      "ai_focused_fraction": 1.0,
+      "ai_race": {
+        "valid": true,
+        "reason": "completed",
+        "source": "guest_vdswap",
+        "warmup_seconds": 15,
+        "frames": 5638,
+        "seconds": 59.9929,
+        "average_fps": 93.9779,
+        "low_1_percent_fps": 72.8761,
+        "p99_ms": 13.1687,
+        "worst_ms": 15.411,
+        "stalls_over_50ms": 0,
+        "stalls_over_100ms": 0
+      },
+      "binding_reuse": false,
+      "new_pipeline_creation_entries_during_AI_score": 0,
+      "gpu_command_thread_cpu_ms_per_frame": 9.14280185758514
+    },
+    {
+      "label": "candidate-1",
+      "variant": "candidate",
+      "guest": {
+        "frames": 3041,
+        "fps": 100.71041077395405,
+        "low1_fps": 74.43674197583927,
+        "p99_ms": 12.581,
+        "worst_ms": 17.252,
+        "over50ms": 0
+      },
+      "present": {
+        "frames": 3040,
+        "fps": 100.70627230134603,
+        "low1_fps": 74.67630231857875,
+        "p99_ms": 12.491,
+        "worst_ms": 16.875,
+        "over50ms": 0
+      },
+      "cpu_cores": 3.2437350934145908,
+      "cpu_ms_per_guest_frame": 32.200550805656036,
+      "cpu_window_s": 30.188000000000102,
+      "focused_fraction": 1.0,
+      "ai_focused_fraction": 1.0,
+      "ai_race": {
+        "valid": true,
+        "reason": "completed",
+        "source": "guest_vdswap",
+        "warmup_seconds": 15,
+        "frames": 6013,
+        "seconds": 59.9913,
+        "average_fps": 100.231,
+        "low_1_percent_fps": 74.7474,
+        "p99_ms": 12.6913,
+        "worst_ms": 17.2551,
+        "stalls_over_50ms": 0,
+        "stalls_over_100ms": 0
+      },
+      "binding_reuse": true,
+      "new_pipeline_creation_entries_during_AI_score": 0,
+      "gpu_command_thread_cpu_ms_per_frame": 8.868382111147648
+    },
+    {
+      "label": "candidate-2",
+      "variant": "candidate",
+      "guest": {
+        "frames": 2989,
+        "fps": 99.00845467279329,
+        "low1_fps": 76.53861755948964,
+        "p99_ms": 12.442,
+        "worst_ms": 14.433,
+        "over50ms": 0
+      },
+      "present": {
+        "frames": 2989,
+        "fps": 99.00511289033983,
+        "low1_fps": 76.82891225626028,
+        "p99_ms": 12.253,
+        "worst_ms": 14.72,
+        "over50ms": 0
+      },
+      "cpu_cores": 3.1541920630714086,
+      "cpu_ms_per_guest_frame": 31.856390097022416,
+      "cpu_window_s": 30.188000000000102,
+      "focused_fraction": 1.0,
+      "ai_focused_fraction": 1.0,
+      "ai_race": {
+        "valid": true,
+        "reason": "completed",
+        "source": "guest_vdswap",
+        "warmup_seconds": 15,
+        "frames": 5777,
+        "seconds": 59.9972,
+        "average_fps": 96.2878,
+        "low_1_percent_fps": 73.0531,
+        "p99_ms": 12.8195,
+        "worst_ms": 18.339,
+        "stalls_over_50ms": 0,
+        "stalls_over_100ms": 0
+      },
+      "binding_reuse": true,
+      "new_pipeline_creation_entries_during_AI_score": 0,
+      "gpu_command_thread_cpu_ms_per_frame": 8.96516393442623
+    },
+    {
+      "label": "baseline-2",
+      "variant": "baseline",
+      "guest": {
+        "frames": 2941,
+        "fps": 97.41925753805936,
+        "low1_fps": 76.56264355495667,
+        "p99_ms": 12.545,
+        "worst_ms": 14.889,
+        "over50ms": 0
+      },
+      "present": {
+        "frames": 2941,
+        "fps": 97.42284928542774,
+        "low1_fps": 76.31568236395458,
+        "p99_ms": 12.527,
+        "worst_ms": 14.492,
+        "over50ms": 0
+      },
+      "cpu_cores": 3.184729859546829,
+      "cpu_ms_per_guest_frame": 32.68977388643319,
+      "cpu_window_s": 30.188000000000102,
+      "focused_fraction": 1.0,
+      "ai_focused_fraction": 1.0,
+      "ai_race": {
+        "valid": true,
+        "reason": "completed",
+        "source": "guest_vdswap",
+        "warmup_seconds": 15,
+        "frames": 5605,
+        "seconds": 59.9958,
+        "average_fps": 93.4233,
+        "low_1_percent_fps": 71.6922,
+        "p99_ms": 13.3827,
+        "worst_ms": 16.6888,
+        "stalls_over_50ms": 0,
+        "stalls_over_100ms": 0
+      },
+      "binding_reuse": false,
+      "new_pipeline_creation_entries_during_AI_score": 0,
+      "gpu_command_thread_cpu_ms_per_frame": 8.989289357361441
+    },
+    {
+      "label": "baseline-3",
+      "variant": "baseline",
+      "guest": {
+        "frames": 2849,
+        "fps": 94.34741426820351,
+        "low1_fps": 65.68233756644675,
+        "p99_ms": 13.806,
+        "worst_ms": 19.247,
+        "over50ms": 0
+      },
+      "present": {
+        "frames": 2849,
+        "fps": 94.3500575902949,
+        "low1_fps": 66.11359227063713,
+        "p99_ms": 13.923,
+        "worst_ms": 18.445,
+        "over50ms": 0
+      },
+      "cpu_cores": 3.213821346937434,
+      "cpu_ms_per_guest_frame": 34.05251842751843,
+      "cpu_window_s": 30.186999999999898,
+      "focused_fraction": 1.0,
+      "ai_focused_fraction": 1.0,
+      "ai_race": {
+        "valid": true,
+        "reason": "completed",
+        "source": "guest_vdswap",
+        "warmup_seconds": 15,
+        "frames": 5575,
+        "seconds": 59.9945,
+        "average_fps": 92.9252,
+        "low_1_percent_fps": 69.0265,
+        "p99_ms": 13.5215,
+        "worst_ms": 19.25,
+        "stalls_over_50ms": 0,
+        "stalls_over_100ms": 0
+      },
+      "binding_reuse": false,
+      "new_pipeline_creation_entries_during_AI_score": 0,
+      "gpu_command_thread_cpu_ms_per_frame": 9.50991575991576
+    },
+    {
+      "label": "candidate-3",
+      "variant": "candidate",
+      "guest": {
+        "frames": 3153,
+        "fps": 104.53580284938803,
+        "low1_fps": 80.57774241310194,
+        "p99_ms": 11.972,
+        "worst_ms": 13.691,
+        "over50ms": 0
+      },
+      "present": {
+        "frames": 3153,
+        "fps": 104.53205296542649,
+        "low1_fps": 81.182833889774,
+        "p99_ms": 11.925,
+        "worst_ms": 13.764,
+        "over50ms": 0
+      },
+      "cpu_cores": 3.2180084184012125,
+      "cpu_ms_per_guest_frame": 30.79408499841421,
+      "cpu_window_s": 30.17199999999957,
+      "focused_fraction": 1.0,
+      "ai_focused_fraction": 1.0,
+      "ai_race": {
+        "valid": true,
+        "reason": "completed",
+        "source": "guest_vdswap",
+        "warmup_seconds": 15,
+        "frames": 6142,
+        "seconds": 59.9926,
+        "average_fps": 102.379,
+        "low_1_percent_fps": 77.007,
+        "p99_ms": 12.4871,
+        "worst_ms": 15.4795,
+        "stalls_over_50ms": 0,
+        "stalls_over_100ms": 0
+      },
+      "binding_reuse": true,
+      "new_pipeline_creation_entries_during_AI_score": 0,
+      "gpu_command_thread_cpu_ms_per_frame": 8.483983507770377
+    },
+    {
+      "label": "candidate-4",
+      "variant": "candidate",
+      "guest": {
+        "frames": 3101,
+        "fps": 102.77924899888835,
+        "low1_fps": 78.43829357492328,
+        "p99_ms": 11.9,
+        "worst_ms": 14.512,
+        "over50ms": 0
+      },
+      "present": {
+        "frames": 3101,
+        "fps": 102.77926603141943,
+        "low1_fps": 79.46598855689766,
+        "p99_ms": 11.868,
+        "worst_ms": 14.069,
+        "over50ms": 0
+      },
+      "cpu_cores": 3.1895258849265633,
+      "cpu_ms_per_guest_frame": 31.033336020638504,
+      "cpu_window_s": 30.17199999999866,
+      "focused_fraction": 1.0,
+      "ai_focused_fraction": 1.0,
+      "ai_race": {
+        "valid": true,
+        "reason": "completed",
+        "source": "guest_vdswap",
+        "warmup_seconds": 15,
+        "frames": 6006,
+        "seconds": 59.9929,
+        "average_fps": 100.112,
+        "low_1_percent_fps": 77.0881,
+        "p99_ms": 12.232,
+        "worst_ms": 15.5052,
+        "stalls_over_50ms": 0,
+        "stalls_over_100ms": 0
+      },
+      "binding_reuse": true,
+      "new_pipeline_creation_entries_during_AI_score": 0,
+      "gpu_command_thread_cpu_ms_per_frame": 8.636326991293132
+    },
+    {
+      "label": "baseline-4",
+      "variant": "baseline",
+      "guest": {
+        "frames": 2860,
+        "fps": 94.81463093189421,
+        "low1_fps": 73.1514133357549,
+        "p99_ms": 12.781,
+        "worst_ms": 19.013,
+        "over50ms": 0
+      },
+      "present": {
+        "frames": 2860,
+        "fps": 94.81966675263428,
+        "low1_fps": 73.34530463592908,
+        "p99_ms": 12.703,
+        "worst_ms": 15.751,
+        "over50ms": 0
+      },
+      "cpu_cores": 3.186554914444796,
+      "cpu_ms_per_guest_frame": 33.59921328671329,
+      "cpu_window_s": 30.15600000000086,
+      "focused_fraction": 1.0,
+      "ai_focused_fraction": 1.0,
+      "ai_race": {
+        "valid": true,
+        "reason": "completed",
+        "source": "guest_vdswap",
+        "warmup_seconds": 15,
+        "frames": 5581,
+        "seconds": 59.9915,
+        "average_fps": 93.0298,
+        "low_1_percent_fps": 70.3419,
+        "p99_ms": 13.3335,
+        "worst_ms": 19.0134,
+        "stalls_over_50ms": 0,
+        "stalls_over_100ms": 0
+      },
+      "binding_reuse": false,
+      "new_pipeline_creation_entries_during_AI_score": 0,
+      "gpu_command_thread_cpu_ms_per_frame": 9.353146853146853
+    },
+    {
+      "label": "baseline-5",
+      "variant": "baseline",
+      "guest": {
+        "frames": 2924,
+        "fps": 96.9575040300035,
+        "low1_fps": 75.77250064406626,
+        "p99_ms": 12.679,
+        "worst_ms": 15.614,
+        "over50ms": 0
+      },
+      "present": {
+        "frames": 2925,
+        "fps": 96.95579680809584,
+        "low1_fps": 76.0411940495231,
+        "p99_ms": 12.518,
+        "worst_ms": 16.61,
+        "over50ms": 0
+      },
+      "cpu_cores": 3.1962935636834704,
+      "cpu_ms_per_guest_frame": 32.965330027359784,
+      "cpu_window_s": 30.156999999999243,
+      "focused_fraction": 1.0,
+      "ai_focused_fraction": 1.0,
+      "ai_race": {
+        "valid": true,
+        "reason": "completed",
+        "source": "guest_vdswap",
+        "warmup_seconds": 15,
+        "frames": 5763,
+        "seconds": 59.9933,
+        "average_fps": 96.0607,
+        "low_1_percent_fps": 73.432,
+        "p99_ms": 13.0919,
+        "worst_ms": 16.6277,
+        "stalls_over_50ms": 0,
+        "stalls_over_100ms": 0
+      },
+      "binding_reuse": false,
+      "new_pipeline_creation_entries_during_AI_score": 0,
+      "gpu_command_thread_cpu_ms_per_frame": 9.20720759233926
+    },
+    {
+      "label": "candidate-5",
+      "variant": "candidate",
+      "guest": {
+        "frames": 3052,
+        "fps": 101.18022824296887,
+        "low1_fps": 74.09372617348927,
+        "p99_ms": 12.804,
+        "worst_ms": 15.034,
+        "over50ms": 0
+      },
+      "present": {
+        "frames": 3051,
+        "fps": 101.17632483284184,
+        "low1_fps": 74.5866456220045,
+        "p99_ms": 12.689,
+        "worst_ms": 14.501,
+        "over50ms": 0
+      },
+      "cpu_cores": 3.2419957885662263,
+      "cpu_ms_per_guest_frame": 32.033297837483616,
+      "cpu_window_s": 30.15599999999904,
+      "focused_fraction": 1.0,
+      "ai_focused_fraction": 1.0,
+      "ai_race": {
+        "valid": true,
+        "reason": "completed",
+        "source": "guest_vdswap",
+        "warmup_seconds": 15,
+        "frames": 6055,
+        "seconds": 59.9875,
+        "average_fps": 100.938,
+        "low_1_percent_fps": 75.3399,
+        "p99_ms": 12.5043,
+        "worst_ms": 15.0384,
+        "stalls_over_50ms": 0,
+        "stalls_over_100ms": 0
+      },
+      "binding_reuse": true,
+      "new_pipeline_creation_entries_during_AI_score": 0,
+      "gpu_command_thread_cpu_ms_per_frame": 8.728907273918741
+    }
+  ],
+  "averages": {
+    "baseline": {
+      "cpu_cores": 3.1951103937416687,
+      "cpu_ms_per_guest_frame": 33.2951390554295,
+      "gpu_command_thread_cpu_ms_per_frame": 9.240472284069691,
+      "average_fps": 93.88338,
+      "low_1_percent_fps": 71.47373999999999,
+      "p99_ms": 13.29966,
+      "worst_ms": 17.39818
+    },
+    "candidate": {
+      "cpu_cores": 3.2094914496760003,
+      "cpu_ms_per_guest_frame": 31.583531951842957,
+      "gpu_command_thread_cpu_ms_per_frame": 8.736552763711225,
+      "average_fps": 99.98956,
+      "low_1_percent_fps": 75.4471,
+      "p99_ms": 12.54684,
+      "worst_ms": 16.323439999999998
+    }
+  },
+  "pairs": [
+    {
+      "number": 1,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "fps_change_percent": 6.653798393026444,
+      "CPU_ms_per_frame_change_percent": -2.9193311247659337,
+      "gpu_command_thread_cpu_ms_per_frame_change_percent": -3.0014841261141956
+    },
+    {
+      "number": 2,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "fps_change_percent": 3.066151591733557,
+      "CPU_ms_per_frame_change_percent": -2.549371532229039,
+      "gpu_command_thread_cpu_ms_per_frame_change_percent": -0.26837964577761664
+    },
+    {
+      "number": 3,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "fps_change_percent": 10.173558948487592,
+      "CPU_ms_per_frame_change_percent": -9.568847120778656,
+      "gpu_command_thread_cpu_ms_per_frame_change_percent": -10.78802670860326
+    },
+    {
+      "number": 4,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "fps_change_percent": 7.612829437449076,
+      "CPU_ms_per_frame_change_percent": -7.636718289143552,
+      "gpu_command_thread_cpu_ms_per_frame_change_percent": -7.663943195893996
+    },
+    {
+      "number": 5,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "fps_change_percent": 5.077310492220022,
+      "CPU_ms_per_frame_change_percent": -2.8273103563732582,
+      "gpu_command_thread_cpu_ms_per_frame_change_percent": -5.194846685312959
+    }
+  ],
+  "diagnostics": {
+    "baseline-warmup": {
+      "command_processor": {
+        "sampler_stage_calls": 58791644,
+        "sampler_stage_hits": 0,
+        "sampler_stage_verified": 0,
+        "descriptor_calls": 0,
+        "descriptor_hits": 0,
+        "mismatches": 0
+      },
+      "texture_requests": {
+        "requests": 29395822,
+        "hits": 0,
+        "verified": 0,
+        "mismatches": 0
+      },
+      "counter_windows": 19,
+      "scope": "Counter windows emitted during AI scoring may straddle interval boundaries; sampler stage checks include stages with no samplers; excluded from scores"
+    },
+    "candidate-warmup": {
+      "command_processor": {
+        "sampler_stage_calls": 9236418,
+        "sampler_stage_hits": 4514704,
+        "sampler_stage_verified": 4514704,
+        "descriptor_calls": 2949879,
+        "descriptor_hits": 969311,
+        "mismatches": 0
+      },
+      "texture_requests": {
+        "requests": 4618209,
+        "hits": 2799856,
+        "verified": 2799856,
+        "mismatches": 0
+      },
+      "counter_windows": 3,
+      "scope": "Counter windows emitted during AI scoring may straddle interval boundaries; sampler stage checks include stages with no samplers; excluded from scores"
+    },
+    "candidate-native-verify": {
+      "command_processor": {
+        "sampler_stage_calls": 9383302,
+        "sampler_stage_hits": 4591773,
+        "sampler_stage_verified": 4591773,
+        "descriptor_calls": 3001322,
+        "descriptor_hits": 997196,
+        "mismatches": 0
+      },
+      "texture_requests": {
+        "requests": 4691651,
+        "hits": 2856320,
+        "verified": 2856320,
+        "mismatches": 0
+      },
+      "counter_windows": 3,
+      "scope": "Counter windows emitted during AI scoring may straddle interval boundaries; sampler stage checks include stages with no samplers; excluded from scores"
+    },
+    "guard_test": "PASS: descriptor layout compatibility; sampler shader/cache/submission/policy/fetch guards; ordered descriptor fields; texture request masks, invalidation and usage transitions"
+  },
+  "overlap_audit": {
+    "main": "54d5177204dfeb65b5ca7dc3739de5af95f9f96f",
+    "base": {
+      "pass": true,
+      "tree": "00f4783bc3e15abaa19d1e39fb7224c878f7e750"
+    },
+    "ours": {
+      "pass": true,
+      "tree": "c752ee7ad5b2379cc7e7dc42738b768945c9ac3c"
+    },
+    "prs": [
+      {
+        "number": 179,
+        "head": "600eb0e19bb1fc4be2a531afbebd7381dcae29af",
+        "patches": [
+          "0092-vulkan-dynamic-constant-descriptors.patch"
+        ],
+        "before": {
+          "pass": true,
+          "tree": "bcd4f745e514dd3e84f9ea9c9e7984eb376523bf"
+        },
+        "after": {
+          "pass": true,
+          "tree": "09c3fab7385a108605d657eb64b79dc1b7247049"
+        },
+        "ours_first": {
+          "pass": true,
+          "tree": "09c3fab7385a108605d657eb64b79dc1b7247049"
+        }
+      },
+      {
+        "number": 157,
+        "head": "911d55c86e5bef9a3c26acc5772151ad22447895",
+        "patches": [
+          "0079-native-depth-motion-bridge.patch",
+          "0080-native-attachment-storage-output.patch",
+          "0081-native-rgba8-resolve.patch",
+          "0082-native-owned-rgba8-resolve.patch",
+          "0083-native-resolve-half-pixel-fill.patch",
+          "0084-native-rigid-geometry-bridge.patch",
+          "0085-combine-validated-native-renderer-passes.patch",
+          "0087-native-world-color-composition.patch",
+          "0088-native-scene-transfer.patch",
+          "0089-native-scene-cached-output.patch"
+        ],
+        "before": {
+          "pass": true,
+          "tree": "06d5f2c6c357e04734b92d3d5650a649d53eed1d"
+        },
+        "after": {
+          "pass": true,
+          "tree": "565f70a2178c03492609b8ff054a04b660cbfc84"
+        },
+        "ours_first": {
+          "pass": true,
+          "tree": "565f70a2178c03492609b8ff054a04b660cbfc84"
+        }
+      }
+    ],
+    "combined_prs": {
+      "before": {
+        "pass": true,
+        "tree": "050f64cd67153bc165939900924909e947291be0"
+      },
+      "after": {
+        "pass": true,
+        "tree": "d61ef21b2eba3dce829bc9e5199e10c9fbfeac22"
+      },
+      "ours_first": {
+        "pass": true,
+        "tree": "d61ef21b2eba3dce829bc9e5199e10c9fbfeac22"
+      }
+    }
+  },
+  "seed_provenance": {
+    "files": 71,
+    "bytes": 161520980,
+    "tree_sha256": "a990353d66acd2cbcb48cf28c594450928d3741f131c8d0434eaf032aea9d28d"
+  },
+  "post_benchmark_source_verification": {
+    "tree": "c752ee7ad5b2379cc7e7dc42738b768945c9ac3c",
+    "files": 1323,
+    "mismatches": [],
+    "patch_added_source_whitespace": "passed"
+  },
+  "visual_check": {
+    "passed": true,
+    "scope": "Visual spot check of pair 2, pair 5 and both final native captures; no obvious new rendering corruption observed. Traffic poses differ; not pixel-equivalence proof.",
+    "labels": [
+      "baseline-2",
+      "candidate-2",
+      "baseline-5",
+      "candidate-5",
+      "baseline-native",
+      "candidate-native"
+    ],
+    "contact": "build/binding-reuse/contact.png"
+  },
+  "combined_build": {
+    "tree": "d61ef21b2eba3dce829bc9e5199e10c9fbfeac22",
+    "PRs": [
+      {
+        "number": 179,
+        "head": "600eb0e19bb1fc4be2a531afbebd7381dcae29af",
+        "patches": [
+          "0092-vulkan-dynamic-constant-descriptors.patch"
+        ],
+        "before": {
+          "pass": true,
+          "tree": "bcd4f745e514dd3e84f9ea9c9e7984eb376523bf"
+        },
+        "after": {
+          "pass": true,
+          "tree": "09c3fab7385a108605d657eb64b79dc1b7247049"
+        },
+        "ours_first": {
+          "pass": true,
+          "tree": "09c3fab7385a108605d657eb64b79dc1b7247049"
+        }
+      },
+      {
+        "number": 157,
+        "head": "911d55c86e5bef9a3c26acc5772151ad22447895",
+        "patches": [
+          "0079-native-depth-motion-bridge.patch",
+          "0080-native-attachment-storage-output.patch",
+          "0081-native-rgba8-resolve.patch",
+          "0082-native-owned-rgba8-resolve.patch",
+          "0083-native-resolve-half-pixel-fill.patch",
+          "0084-native-rigid-geometry-bridge.patch",
+          "0085-combine-validated-native-renderer-passes.patch",
+          "0087-native-world-color-composition.patch",
+          "0088-native-scene-transfer.patch",
+          "0089-native-scene-cached-output.patch"
+        ],
+        "before": {
+          "pass": true,
+          "tree": "06d5f2c6c357e04734b92d3d5650a649d53eed1d"
+        },
+        "after": {
+          "pass": true,
+          "tree": "565f70a2178c03492609b8ff054a04b660cbfc84"
+        },
+        "ours_first": {
+          "pass": true,
+          "tree": "565f70a2178c03492609b8ff054a04b660cbfc84"
+        }
+      }
+    ],
+    "build": "Windows x64 Release rexgpu-xenos and rexruntime",
+    "passed": true,
+    "benchmarked": false,
+    "updated_files": [
+      "include/rex/graphics/vulkan/binding_reuse.h",
+      "src/graphics/vulkan/command_processor.cpp"
+    ]
+  },
+  "final_PR_overlap_recheck": [
+    {
+      "number": 179,
+      "head": "600eb0e19bb1fc4be2a531afbebd7381dcae29af"
+    },
+    {
+      "number": 157,
+      "head": "911d55c86e5bef9a3c26acc5772151ad22447895"
+    }
+  ],
+  "native_diagnostic": {
+    "repeats_per_mode": 1,
+    "order": [
+      "candidate",
+      "baseline"
+    ],
+    "render_resolution": "2560x1440",
+    "gpu_telemetry_interval_s": 1,
+    "runs": [
+      {
+        "label": "candidate-native",
+        "variant": "candidate",
+        "guest": {
+          "frames": 1755,
+          "fps": 58.16740652514344,
+          "low1_fps": 36.136015964088834,
+          "p99_ms": 19.264,
+          "worst_ms": 35.307,
+          "over50ms": 0
+        },
+        "present": {
+          "frames": 1755,
+          "fps": 58.1673236259859,
+          "low1_fps": 35.45708117307783,
+          "p99_ms": 19.861,
+          "worst_ms": 39.355,
+          "over50ms": 0
+        },
+        "cpu_cores": 2.5763746188518746,
+        "cpu_ms_per_guest_frame": 44.293091168091166,
+        "cpu_window_s": 30.17200000000048,
+        "focused_fraction": 1.0,
+        "ai_focused_fraction": 1.0,
+        "ai_race": {
+          "valid": true,
+          "reason": "completed",
+          "source": "guest_vdswap",
+          "warmup_seconds": 15,
+          "frames": 3477,
+          "seconds": 59.9984,
+          "average_fps": 57.9516,
+          "low_1_percent_fps": 33.0958,
+          "p99_ms": 19.775,
+          "worst_ms": 36.187,
+          "stalls_over_50ms": 0,
+          "stalls_over_100ms": 0
+        },
+        "binding_reuse": true,
+        "new_pipeline_creation_entries_during_AI_score": 0,
+        "gpu_command_thread_cpu_ms_per_frame": 9.232549857549857,
+        "gpu_utilization_cpu_window": {
+          "samples": 30,
+          "mean_percent": 97.7,
+          "min_percent": 94.0,
+          "max_percent": 98.0
+        }
+      },
+      {
+        "label": "baseline-native",
+        "variant": "baseline",
+        "guest": {
+          "frames": 1754,
+          "fps": 58.1409128222756,
+          "low1_fps": 40.66041550426821,
+          "p99_ms": 18.983,
+          "worst_ms": 35.142,
+          "over50ms": 0
+        },
+        "present": {
+          "frames": 1754,
+          "fps": 58.14099762062774,
+          "low1_fps": 39.724926950273215,
+          "p99_ms": 19.564,
+          "worst_ms": 41.114,
+          "over50ms": 0
+        },
+        "cpu_cores": 2.5290365101471624,
+        "cpu_ms_per_guest_frame": 43.48097206385405,
+        "cpu_window_s": 30.15600000000086,
+        "focused_fraction": 1.0,
+        "ai_focused_fraction": 1.0,
+        "ai_race": {
+          "valid": true,
+          "reason": "completed",
+          "source": "guest_vdswap",
+          "warmup_seconds": 15,
+          "frames": 3479,
+          "seconds": 59.9974,
+          "average_fps": 57.9859,
+          "low_1_percent_fps": 40.2989,
+          "p99_ms": 18.7729,
+          "worst_ms": 37.4068,
+          "stalls_over_50ms": 0,
+          "stalls_over_100ms": 0
+        },
+        "binding_reuse": false,
+        "new_pipeline_creation_entries_during_AI_score": 0,
+        "gpu_command_thread_cpu_ms_per_frame": 9.487243443557583,
+        "gpu_utilization_cpu_window": {
+          "samples": 30,
+          "mean_percent": 97.8,
+          "min_percent": 95.0,
+          "max_percent": 98.0
+        }
+      }
+    ],
+    "excluded_capture_sample": {
+      "reason": "An external Windows Graphics Capture snapshot occurred after the AI measurement interval began. Excluded for timing purity; repeat after baseline.",
+      "decision_utc": "2026-10-20T15:40:13.400745+00:00",
+      "decision_before_reading_performance_result": true,
+      "included_in_scores": false,
+      "runner_rejection": "AI scored interval was not entirely in the foreground; no retained result.json was produced."
+    }
+  },
+  "rejected_attempts": [
+    {
+      "folder": "baseline-warmup-rejected-1792507949675654900",
+      "reason": {
+        "reason": "Another task launched issue182/retest-20261020/ci-runtime/forza.exe PID 36836 during startup. Runner terminated only its own disposable process. No scored result collected.",
+        "included_in_scores": false
+      }
+    }
+  ]
+}

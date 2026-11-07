@@ -1,0 +1,146 @@
+{
+  "date": "2026-10-24",
+  "scope": "Excluded background correctness diagnostic; no performance scores",
+  "superseded_visual_qualification": {
+    "reason": "Subsequent foreground testing found tiled/duplicated rendering with full reuse enabled, including with reference checks reporting zero mismatches. Reuse-off was clean.",
+    "full_reuse_on_incorrect_resolve_warnings": 26561,
+    "descriptor_off_control": {
+      "sampler_reuse": true,
+      "texture_request_reuse": true,
+      "descriptor_reuse": false,
+      "reference_execution": false,
+      "stats_enabled": true,
+      "final_capture": "clean visual spot check",
+      "incorrect_resolve_warnings": 0,
+      "sampler_hits": 71114357,
+      "texture_request_hits": 43219868,
+      "descriptor_hits": 0,
+      "ai_foreground_fraction": 1.0,
+      "cpu_foreground_fraction": 1.0,
+      "cpu_affinity_audited": true,
+      "performance_claim": false
+    },
+    "revised_production_check": {
+      "revision": "6ac17d2",
+      "reuse_enabled": true,
+      "stats_enabled": false,
+      "reference_execution": false,
+      "api_validation": false,
+      "ai_interval_completed": true,
+      "final_capture": "clean visual spot check",
+      "incorrect_resolve_warnings": 0,
+      "ai_foreground_fraction": 1.0,
+      "cpu_foreground_fraction": 1.0,
+      "audited_cpu_affinity": [0, 2, 4, 6],
+      "frame_clock_audit_passed": true,
+      "performance_claim": false
+    },
+    "resolution": "Descriptor reuse removed; sampler and texture-request reuse retained. Revised production-ON correctness check passed. Exact underlying binding/lifetime failure remains unproven. Default off and PR draft pending repeatable revised-build performance measurements and broader hardware qualification."
+  },
+  "public_head": "6058849b992c2954da0f2c3f813b7625c7a9e6a2",
+  "main": "da9bf350dc5bd94f057270d233ab8df2293dd668",
+  "sdk": {
+    "main": "da9bf350dc5bd94f057270d233ab8df2293dd668",
+    "base": "bd833a2ab69d305f99ddf57418fc38ffec8af93d",
+    "tree": "7d397a176ce27bedb24fbed9e6ff714a01d0bff1",
+    "patch_count": 119,
+    "private_extras": false
+  },
+  "runtime_binary_sha256": {
+    "forza.exe": "0d1fd457eccb54adbf495981e72e430bcea4138b4bc554b88ac85722992aa211",
+    "forza_SpeechFacade_default.dll": "aed3c9169e31f6bee8ea38f185128de1f4e1703753469868e4a6fc5f6c5c55d9",
+    "forza_XMediaFacade_default.dll": "40e80d107636af2022e3856ca5f20ec43ccf3863ed5d78324de3f5f43e463c17",
+    "rexgpu-xenos.dll": "ca89d5600ac0a6a7c4d80258d5085ac5f859aa263c3c81da2c217a203241d6ce",
+    "rexruntime.dll": "110a2ec8b40452d4c3a4ed85a95e91afbde78923dd9f7a3b9a170797874b61b2",
+    "TracyClient.dll": "1c705440aefdb14f7c568e67d20564f156bfa1adea614e8ac8125aa4c7feec3d"
+  },
+  "host_authored_objects": 82,
+  "host_private_instrumentation": [
+    "controller queue and cvar graphics request polling",
+    "silent audio driver because host has no audio endpoint",
+    "symbol-only keyboard/import rewiring (same known fixture as standalone-car-tuning)"
+  ],
+  "generated_code": "Previously compiled private generated objects reused; not a fresh generated-code build",
+  "hardware": {
+    "cpu": "Intel Core i9-13900K",
+    "gpu": "NVIDIA GeForce RTX 5060 Ti",
+    "driver": "617.14",
+    "os": "Windows x64"
+  },
+  "mode": {
+    "binding_reuse": true,
+    "binding_verify": true,
+    "binding_stats": true,
+    "vulkan_validation": true,
+    "cpu_affinity": [
+      0,
+      2,
+      4,
+      6
+    ],
+    "resolution": "1280x720",
+    "vsync": false,
+    "present_mode": "IMMEDIATE",
+    "offline": true,
+    "copied_profile": true,
+    "seed_unchanged": true
+  },
+  "diagnostic_summary": {
+    "label": "candidate-warmup",
+    "warmup": true,
+    "run_kind": "correctness_diagnostic",
+    "qualified_for_performance": false,
+    "ai_race_completed": true,
+    "ai_source": "guest_vdswap",
+    "audited_cpu_affinities": [
+      [
+        0,
+        2,
+        4,
+        6
+      ]
+    ],
+    "focused_fraction": 0.0
+  },
+  "reference_checks": {
+    "sampler_verified_hits": 8706849,
+    "texture_verified_hits": 5278876,
+    "total_verified_hits": 13985725,
+    "mismatches": 0
+  },
+  "vulkan_api_validation": {
+    "enabled_layer_confirmed": true,
+    "error_or_VUID_ID_lines": 0,
+    "warning_messages": 10,
+    "warning_class": "Undefined-Value-ShaderOutputNotConsumed-DynamicRendering (including duplicate suppression notice)",
+    "warning_free": false
+  },
+  "process_audit": {
+    "samples": 384,
+    "external_conflicts": 0,
+    "observed_affinities": [
+      [
+        0,
+        2,
+        4,
+        6
+      ]
+    ],
+    "focused_fraction": 0.0
+  },
+  "performance_qualification": {
+    "qualified": false,
+    "reasons": [
+      "Run was a reference/API diagnostic with validation and counters enabled",
+      "Foreground audit was false throughout; Computer Use app approval timed out",
+      "Current host lacked optional RECOMP_PERF_EPOCH marker; timing parser rejected the run after process closure"
+    ],
+    "fps_or_CPU_per_frame_claimed": false
+  },
+  "limitations": [
+    "Single NVIDIA desktop workload; no AMD, Steam Deck or BC-250 qualification",
+    "Combined #179/#192 enabled features not runtime tested",
+    "Foreground scoring and repeated native-resolution frame-time tests remain pending"
+  ],
+  "private_raw_output": "build/pr192-20261024/diagnostics/candidate-warmup"
+}
