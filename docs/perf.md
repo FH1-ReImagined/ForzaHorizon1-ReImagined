@@ -3429,5 +3429,28 @@ seconds after free roam has loaded):
 - A throttle that made begin wait while all 12 slots were recorded and not consumed (an experiment, not kept)
   removed the crash (0 of 4) but not the hang: the worker waited for a free slot for 30 s while the render thread
   waited, after its command list, for the event at render object +0x1A10 (sub_826164D0, when +0x1A19 is set; not
-  the ring). Who sets that event, and why it is missed after a long hold, is the next step; until then a frame of
-  a few seconds in that phase ends either in the null read (with #512's wake) or in no frame.
+  the ring).
+
+**Who sets +0x1A10.** The FFCB worker (guest thread F8001204, from 824A2118, called from 82B3A4FC), once it has
+recorded the frame's slots. The render thread's waits pair with the worker's signals only while the two stay
+within a frame or two of each other. During a hold of seconds the main loop does not wait for the render thread
+(it free-runs some 1,300 frames in a 10 s hold), the worker records and signals for every one of them, and when the
+render thread comes back its consume index and the worker's produce index no longer point at the same frames: it
+either applies a slot the worker is rewriting (the null read) or waits on an event whose signal was spent on an
+earlier frame (no frame).
+
+**The fix** (`src/hooks/frame_time.cpp`): the main loop (sub_8247C168) waits while the render thread has been
+inside one render pass (sub_8259F3E8) for more than 250 ms, until the pass ends, for at most 10 s. The worker then
+cannot run more than a frame or two past the render thread, so it stays within the ring. A pass of normal length
+never triggers it; `FORZA_MAIN_WAITS_RENDER=0` turns it off. Linux, the knob above, the benchmark at 30 fps:
+
+| Build | Wake on | Wake off |
+| --- | --- | --- |
+| Before (8b83c6c) | 2 of 2 crashed (null read) | no frame (`benchmark_stalled`) |
+| Fix, `FORZA_MAIN_WAITS_RENDER=0` | crashed (null read) | no frame (`benchmark_stalled`) |
+| Fix | 3 of 3 complete, 30.0 fps, 1% low 28.4-28.7 | 3 of 3 complete, 30.0 fps, 1% low 28.7-28.8 |
+
+With the fix the main loop logged 4 waits per run (5.7, 7.7, 9.7 and 9.7 s, the knob's holds less the time to
+reach the main loop's next frame). Without the knob: the benchmark 2 of 2 complete (30.0 fps, 1% low 28.5 and
+27.8), 3 minutes of free roam 2 of 2 without a crash (30.0 fps, 1% low 25.9 and 25.8), and the main loop waited 0 times in all of them. Still to measure: the Intel UHD's cold first
+race on the Windows laptop (frames of 7-12 s for real), and #582 on WARP.
