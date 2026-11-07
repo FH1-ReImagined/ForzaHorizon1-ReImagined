@@ -3403,3 +3403,31 @@ without running out of memory.
   alternated: without the limit 1 of 10 lost the device, with it 0 of 10 (4.8-5.1 fps either way). With the earlier
   runs without it (5 of 36) that is 6 of 46 without and 0 of 10 with: a hint, not proof. On the GeForce (not UMA, so
   no split) the benchmark gives 55.3 fps on Vulkan and 45.5 on Direct3D 12, as before.
+
+## The render thread held for seconds breaks the HUD command buffers (#725, #582, 2026-11-07)
+
+**The repro.** `FORZA_TEST_SWAP_STALLS="s:ms,..."` (testing only, `src/debug/frame_dump.cpp`) holds the render
+thread in its swap for `ms` once, `s` seconds after the first swap, as a slow GPU compiling shaders does (an Intel
+UHD with an empty Direct3D shader cache of the driver: frames of 7-12 s right after free roam appears). On Linux,
+the benchmark from a fresh profile with `12:6000,20:8000,30:10000,42:10000,54:8000` (the first hold lands a few
+seconds after free roam has loaded):
+- #512's wake on (the default): 2 of 2 crashed 6 s later, `Unhandled read fault at host 0x100000004 = guest
+  0x00000004` on the render thread (F80011AC), chain `8249E118 824A1E6C 8247F9E4 82616BFC 8261E1C0`, lr 824469B8,
+  r4 = 0. The signature of #66, #457, #540 and #582 (#582: the same on WARP at about 1 fps), and of the Intel UHD's
+  cold first races.
+- `FORZA_FFCB_WAKE=0`: no crash, but no frame again (`benchmark_stalled` after 60 s).
+- Without the knob the same build starts the benchmark as before (below).
+
+**The HUD's fixed-function command buffers** (TU4): a ring of 12 slots of 60 bytes at render object +0x470.
+- The worker records slot `produce` (+0x760): sub_8249E800 begins recording into the slot's command buffer
+  (+0x14), sub_824198A8 ends it, signals the slot's event (+0x1C) and moves `produce` on (mod 12).
+- The render thread's command list (sub_8247F818) consumes slot `consume` (+0x75C): sub_824A1E40 ->
+  sub_8249E0E0 waits for the slot's event (sub_82419270, infinite) and applies its command buffer
+  (sub_824469B0(device, slot+0x14, 0)), then moves `consume` on. Nothing keeps `produce` within 12 of
+  `consume`: with the render thread held, the worker goes round the ring, and the slot the render thread then
+  applies has no command buffer (the null read).
+- A throttle that made begin wait while all 12 slots were recorded and not consumed (an experiment, not kept)
+  removed the crash (0 of 4) but not the hang: the worker waited for a free slot for 30 s while the render thread
+  waited, after its command list, for the event at render object +0x1A10 (sub_826164D0, when +0x1A19 is set; not
+  the ring). Who sets that event, and why it is missed after a long hold, is the next step; until then a frame of
+  a few seconds in that phase ends either in the null read (with #512's wake) or in no frame.
