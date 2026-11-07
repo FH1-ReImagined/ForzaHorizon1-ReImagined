@@ -904,6 +904,7 @@ def run(argv):
     # the real paths needed for a Games on Demand package and its adjacent .data folder.
     app.setAttribute(_Qt.ApplicationAttribute.AA_DontUseNativeDialogs)
     theme.load_fonts()
+    theme.apply_palette(app)
     app.setStyleSheet(theme.stylesheet())
 
     def report(exc_type, exc, tb):

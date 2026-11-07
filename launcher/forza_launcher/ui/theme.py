@@ -67,6 +67,15 @@ def load_fonts():
     return HEADLINE, UI
 
 
+def apply_palette(app):
+    """Links in rich text (QLabel <a>) follow the palette: the website's orange, not Qt's blue."""
+    from PySide6.QtGui import QColor, QPalette
+    palette = app.palette()
+    palette.setColor(QPalette.Link, QColor(ORANGE))
+    palette.setColor(QPalette.LinkVisited, QColor(ORANGE))
+    app.setPalette(palette)
+
+
 def stylesheet(headline=None, ui=None):
     h = f'"{headline or HEADLINE}"'
     u = f'"{ui or UI}"'

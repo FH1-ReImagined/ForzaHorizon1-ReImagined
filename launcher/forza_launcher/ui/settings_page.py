@@ -728,8 +728,8 @@ class SettingsPage(QWidget):
         else:
             self.vr_status.setText(
                 "No VR app found: install "
-                f"<a href=\"{vr.WIVRN_URL}\">WiVRn</a> (Linux) or "
-                f"<a href=\"{vr.STEAMVR_URL}\">SteamVR</a> / Meta Quest Link (Windows).")
+                f"<a href=\"{vr.WIVRN_URL}\" style=\"color: {theme.ORANGE};\">WiVRn</a> (Linux) or "
+                f"<a href=\"{vr.STEAMVR_URL}\" style=\"color: {theme.ORANGE};\">SteamVR</a> / Meta Quest Link (Windows).")
         frame, content = card(margins=(24, 16, 24, 16), spacing=6)
         content.addWidget(self.vr_status)
         lay.addWidget(frame)

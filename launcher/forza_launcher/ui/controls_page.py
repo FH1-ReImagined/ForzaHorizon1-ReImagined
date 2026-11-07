@@ -176,7 +176,7 @@ class ControlsPage(QWidget):
         self.all_controls = Disclosure('All driving controls')
         self.legend = label('', 'muted')
         self.all_controls.content.addWidget(self.legend)
-        credit = QLabel('Controller artwork: <a href="https://github.com/e7d/gamepad-viewer">Gamepad Viewer</a> · MIT license')
+        credit = QLabel('Controller artwork: <a href="https://github.com/e7d/gamepad-viewer" style="color: ' + theme.ORANGE + ';">Gamepad Viewer</a> · MIT license')
         credit.setObjectName('help')
         credit.setOpenExternalLinks(True)
         self.all_controls.content.addWidget(credit)
