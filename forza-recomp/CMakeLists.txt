@@ -120,6 +120,7 @@ set(FORZA_SOURCES
     src/debug/audio_level.cpp
     src/hooks/radio_station.cpp
     src/hooks/radio_events.cpp
+    src/hooks/car_audio_volume.cpp
     src/debug/cpu_profile.cpp
     src/debug/codriver_log.cpp
     src/debug/dlc_log.cpp

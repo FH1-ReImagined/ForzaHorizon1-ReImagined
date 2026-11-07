@@ -97,6 +97,12 @@ jobs:
           cmake -S forza-recomp/tests/radio-station -B "$RUNNER_TEMP/radio-station" -DCMAKE_BUILD_TYPE=Release
           cmake --build "$RUNNER_TEMP/radio-station" --parallel 1
           ctest --test-dir "$RUNNER_TEMP/radio-station" --output-on-failure
+      - if: runner.os == 'Linux'
+        name: Car audio volume wrappers (disc and TU4, #730)
+        run: |
+          cmake -S forza-recomp/tests/car-audio-volume -B "$RUNNER_TEMP/car-audio-volume" -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$RUNNER_TEMP/car-audio-volume" --parallel 1
+          ctest --test-dir "$RUNNER_TEMP/car-audio-volume" --output-on-failure
       - name: Render comparison and session safety tests (no game)
         run: |
           python -m pip install Pillow

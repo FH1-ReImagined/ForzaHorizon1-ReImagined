@@ -592,6 +592,15 @@ add("skip_startup_movies", "Skip startup videos", "Gameplay", "bool", False,
 add("audio_mute", "Mute", "Audio", "bool", False, "", "Output")
 add("audio_maxqframes", "Audio buffer (frames)", "Audio", "int", 8,
     "4 to 64. Lower is less delay but may crackle.", "Output", lo=4, hi=64)
+# The game's own level of each car sound bus, scaled (forza-recomp/src/hooks/car_audio_volume.cpp, #730).
+add("car_engine_volume", "Engine (%)", "Audio", "int", 100,
+    "The engine sound of every car, yours and the others, 0 to 200 percent of the game's level. "
+    "100 is the game's mix. The turbo, supercharger, tyres, wind and the rest stay as they are. "
+    "Applies on the next game launch.", "Car sounds", lo=0, hi=200, step=5, restart=True)
+add("car_turbo_volume", "Turbo and supercharger (%)", "Audio", "int", 100,
+    "The turbo spool and whistle, the blow-off valve and the supercharger whine of every car, "
+    "0 to 200 percent of the game's level. 100 is the game's mix. Applies on the next game launch.",
+    "Car sounds", lo=0, hi=200, step=5, restart=True)
 add("radio_station_switch", "Station changes", "Audio", "choice", "game",
     "Game: original radio HUD delay and 0.5 s fades. Fast: 0.15 s repeat guard and 0.25 s fades. "
     "Instant: 0.075 s repeat guard and 0.04 s fades. Fast and Instant accept the latest station "

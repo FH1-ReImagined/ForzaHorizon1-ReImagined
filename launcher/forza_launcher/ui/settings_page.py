@@ -70,7 +70,7 @@ TAB_LEADS = {
     "Controls": "Controller, keyboard and racing wheel options. The button layout, bindings and "
                 "trigger effects are on the Controls page.",
     "Gameplay": "How the game plays in single player. Online games always play as shipped.",
-    "Audio": "Sound output and the in-game radio. Your own stations are made in Mods > Radio.",
+    "Audio": "Sound output, the engine and turbo levels, and the in-game radio. Your own stations are made in Mods > Radio.",
     "Online": "Xbox LIVE is gone, so the game signs in to a Forza Live server instead: what it shares "
               "and does online. Pick the server, or play offline, in Servers.",
     "Profile": "Your saves live in the game's data folder. You can also continue a Xenia Canary save.",
