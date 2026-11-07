@@ -890,8 +890,9 @@ maps the mask's 0 to 0.45 (`FH1_FM4_SHADOW_FLOOR`), close to FM4's TrackSettings
   spots, no black.
 - Colorado (40 s in): release against release differs by a mean of 8.2 (traffic, time of day);
   release against the PR build by 2.2 and 8.4: the same lighting, other traffic.
-- Left: the D3D12 check on the Windows laptop (the marked fetch's constant 1, and today's
-  sunlit lane there), then the PR text (scratchpad/reiglue-648-pr.txt in the main checkout).
+- D3D12 on Windows (GTX 1650 Ti, this branch built with a release SDK overlay): Suzuka spots 1,
+  8 and 9 with the marks off and on draw the same (mean difference 4.7, 1.7, 2.6), no shadow and
+  no black; the sunlit lane at 8 and 9 shows there too. Left: the ReIGlue PR.
 
 ## Towards players: a plan
 
@@ -935,7 +936,7 @@ What a player would need, beyond the spike (none of this is built yet):
 - (c) The road, terrain and buildings draw with FM4's own shaders, at 13:00, over a ground.
   Car shadows: done behind `FM4_SHADERS_FH1_SHADOWS` (off) with ReIGlue 0439 and 0440 (local
   branch fh1-648-fm4-shadows-pr), see "Car shadows made shippable" and the morning runs above;
-  left: the D3D12 check on Windows, then the ReIGlue PR. Shadows from the track's own objects
+  left: the ReIGlue PR (the D3D12 fallback checked). Shadows from the track's own objects
   are still open (FM4 models are not in FH1's cascade pass). The older notes below are kept.
 - Shadows, as far as looked into:
   - Shadows: FH1's colour-pass track shaders take shadows from a screen-space mask on s13
