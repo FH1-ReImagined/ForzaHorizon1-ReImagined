@@ -85,6 +85,28 @@ class PackagingTests(unittest.TestCase):
         self.assertIn("SIL Open Font License", notice)
 
 
+class CategoryTests(unittest.TestCase):
+    def test_every_section_is_placed_on_linux_and_windows(self):
+        # Windows has its own settings (Graphics API, NVIDIA DLSS): the schema is made per platform.
+        import subprocess
+        script = (
+            "import sys; sys.path.insert(0, sys.argv[1]); import forza_launcher.paths as p; "
+            "p.IS_WINDOWS = sys.argv[2] == 'win'; from forza_launcher import schema; "
+            "from forza_launcher.ui import settings_page as sp; "
+            "placed = {sec for secs in sp.TAB_SECTIONS.values() for sec in secs}; "
+            "print('\\n'.join(f'{s.group}|{s.section}|{sp.tab_of(s)}' for s in schema.S if s.applies() "
+            "and (s.group, s.section) not in placed))")
+        for platform in ("linux", "win"):
+            with self.subTest(platform=platform):
+                out = subprocess.run([sys.executable, "-c", script, str(HERE), platform], capture_output=True,
+                                     text=True, env={**os.environ, "QT_QPA_PLATFORM": "offscreen"}, check=True)
+                left = [line.split("|") for line in out.stdout.splitlines() if line]
+                # Display's and Controls' sections are all placed by hand; others stay in their group.
+                self.assertEqual([x for x in left if x[0] in ("Display", "Controls")], [])
+                for group, _section, tab in left:
+                    self.assertEqual(group, tab)
+
+
 @unittest.skipIf(QApplication is None, "PySide6 is not installed")
 class LayoutTests(unittest.TestCase):
     @classmethod

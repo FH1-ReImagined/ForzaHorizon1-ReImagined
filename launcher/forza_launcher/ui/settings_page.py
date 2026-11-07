@@ -48,8 +48,8 @@ class DSpin(_Wheelless, DoubleSpinBox):
 # Advanced key) shows under Gameplay. A section no category names stays in its group's category.
 TABS = ["Graphics", "Display", "Controls", "Gameplay", "Audio", "VR", "Online", "Profile", "Advanced"]
 TAB_SECTIONS = {
-    "Graphics": [("Display", "Picture"), ("Display", "AMD FSR 3"), ("Display", "World detail"),
-                 ("Display", "HDR"), ("Display", "Texture packs")],
+    "Graphics": [("Display", "Picture"), ("Display", "NVIDIA DLSS"), ("Display", "AMD FSR 3"),
+                 ("Display", "World detail"), ("Display", "HDR"), ("Display", "Texture packs")],
     "Display": [("Display", "Frame rate"), ("Display", "Window"), ("Display", "Camera"),
                 ("Display", "Ultrawide and HUD")],
     "Controls": [("Controls", "Controller"), ("Controls", "Auto-pause"), ("Controls", "Keyboard"),

@@ -254,8 +254,8 @@ them as tabs under its title; the section button returns to the page shown last.
 | **About** | | The notices, launcher updates, Add to Steam (Linux) and the project links. |
 
 Settings categories, and what moved between them: **Graphics** has the graphics card card,
-Picture (Graphics API, resolution, upscaling, anti-aliasing), AMD FSR 3, World detail, HDR and
-Texture packs, which were the lower half of the old Display tab; **Display** keeps Frame rate,
+Picture (Graphics API, resolution, upscaling, anti-aliasing), NVIDIA DLSS (Windows), AMD FSR 3,
+World detail, HDR and Texture packs, which were the old Display tab's picture sections; **Display** keeps Frame rate,
 Window, Camera and Ultrawide and HUD. **Gameplay** also shows the native pause menu (Menu),
 which was under Advanced. The forza.toml keys, their values in `launcher.json` and their schema
 groups did not change (`ui/settings_page.py`, `TABS` and `TAB_SECTIONS`, maps sections to
