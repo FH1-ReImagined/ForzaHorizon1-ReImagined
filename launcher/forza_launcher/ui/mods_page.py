@@ -399,6 +399,11 @@ class ModsPage(FolderListPage):
         lay.addWidget(c)
 
         lay.addWidget(self._fm4_card())
+        # FM4's circuits (#648, experimental): next to the cars, chosen on the Play page
+        from .fm4_tracks import Fm4TracksCard
+        self.fm4_tracks = Fm4TracksCard(cfg, self)
+        self.fm4_tracks.changed.connect(self._tracks_changed)
+        lay.addWidget(self.fm4_tracks)
 
         c, cl = card(spacing=8)
         cl.addWidget(label("How mods work", "cardTitle"))
@@ -443,6 +448,11 @@ class ModsPage(FolderListPage):
         self.fm4_task = None
         self._fm4_state()
         return c
+
+    def _tracks_changed(self):
+        play = getattr(self.window, "play", None)
+        if play is not None and hasattr(play, "track_picker"):
+            play.track_picker.refresh()
 
     def _fm4_state(self):
         info = fm4cars.status(self.cfg)

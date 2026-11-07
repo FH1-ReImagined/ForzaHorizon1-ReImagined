@@ -320,6 +320,7 @@ class LaunchPlan:
     save_profile: object = None
     log_before_start: tuple | None = None  # identify a leftover log if this process never writes one
     roll_before_start: tuple | None = None  # the same for its roll (forza.1.log, session_roll)
+    fm4_track: str = ""  # the FM4 circuit this start drives on (#648), "" for Colorado
 
     def command_line(self) -> str:
         return " ".join(shlex.quote(a) for a in self.argv)
@@ -666,6 +667,12 @@ def _build_plan(cfg: Config, game: GameInstall, write, refresh_xenia, log, saver
     named = {a[2:].split("=", 1)[0] for a in extra if a.startswith("--")}
     args += mods.launch_args(cfg, named)
     args += texture_packs.launch_args(cfg, named)  # the packs turned on, in order (#384)
+    # An imported FM4 circuit chosen on the Play page (#648, experimental): its game folder, mods
+    # and switches, offline. Colorado (the default) changes nothing here.
+    from . import fm4tracks
+    track = fm4tracks.configure(cfg, env, args, unset, notes, write)
+    if track is not None:
+        server_argv = None
     args += extra
     env.update(parse_env(cfg.advanced.get("extra_env", "")))
 
@@ -686,7 +693,7 @@ def _build_plan(cfg: Config, game: GameInstall, write, refresh_xenia, log, saver
         save_profile = saves.profile_for(cfg, root=root)
     return LaunchPlan(game, game.dir, [str(game.exe)] + args, env, unset, toml_path,
                       toml_text, server_argv, notes, home, dlss_status_file, dict(cfg.d['haptics']),
-                      save_profile=save_profile)
+                      save_profile=save_profile, fm4_track=track["key"] if track else "")
 
 
 def log_path_of(plan: "LaunchPlan"):

@@ -167,6 +167,11 @@ class PlayPage(QWidget):
         row.addWidget(self.stop, 0, Qt.AlignVCenter)
         row.addStretch(1)
         cl.addLayout(row)
+        # Where Play starts: FH1's Colorado, or an imported FM4 circuit (#648, experimental). Hidden
+        # until a circuit is imported (Mods > Mods), so nothing changes for anyone else.
+        from .fm4_tracks import TrackPicker
+        self.track_picker = TrackPicker(cfg)
+        cl.addWidget(self.track_picker)
         self.vr_note = label("VR is experimental: it is playable, but expect rough edges. "
                              "Take a break if you feel motion sickness.", "warn")
         self.vr_note.hide()
@@ -253,6 +258,7 @@ class PlayPage(QWidget):
             self._clock_probe.start()
         cfg = self.cfg
         self.intel_driver.refresh()
+        self.track_picker.refresh()
         root = cfg.game_files()
         if (root / "default.xex").is_file():
             files_ok, files_msg = installer.check_game_folder(root)
