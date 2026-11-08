@@ -579,4 +579,6 @@ swaps and fence writes in order (after Pinyon Shift's ShiftGlue `9362a07`, `7440
 ReIGlue's NOTICE). `--gpu_split_elide_unchanged_registers` (default on) only matters with the split. With the split
 off nothing changes but the draw's code moving into `ExecuteDraw`. What waits for what, the measurements and the
 picture checks are in [perf.md](perf.md#decoding-and-recording-on-two-threads-474-reiglue-0420): +5 % uncapped on
-eight cores, -11 % in free roam on four cores without SMT, so it stays off until a Deck has tried it.
+eight cores, -11 % in free roam on four cores without SMT. The game turns it on by default with 6 or more physical
+cores and no VR headset (+5.8 % in the benchmark on six cores, +13.1 % on eight, with #607's present default), and
+leaves it off below, the Steam Deck included.

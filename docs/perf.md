@@ -2723,6 +2723,46 @@ were left out.
   travel work; a 10-minute free-roam session at 60 fps (paint shop, then 10 minutes of driving): 59.98 fps, longest
   frame 47 ms, no hang; one 760 ms frame entering the paint shop's editor (a loading screen, not compared with off).
 
+#### On by default with 6 or more cores (2026-11-08)
+
+Measured again on main 2e28667 with ReIGlue main a5fd408 and 0420 rebased on it, and with
+`vulkan_present_on_submission_thread=true` in both arms (on by default since #607's #613; the swap's wait for the
+replay was a fixed part of the command processor's frame in the runs above). The PC's default preset (AMD FSR 1, the
+game's 4x MSAA, 1280x720, render scale 1) instead of the Deck preset, uncapped (`--frame_rate=240`), on the hidden
+display (headless gamescope), one build with the cvar on the command line. Benchmark: 3 runs per state, interleaved
+(off first, then on first); free roam: 3 minutes of driving from the spawn, one run per state. "6 cores" is
+`taskset -c 0-5` on this 8-core CPU without SMT, standing in for a Ryzen 5 5600X (6 cores, 12 threads: more than
+this). Command processor ms/frame: unsplit, the frame cost CSV's `cpu_ms` (`fh1_frame_cost_csv`); split, each
+thread's CPU time per guest frame from `/proc` (the CSV then times the recorder only).
+
+| Scene | Split | Runs | fps | 1% low fps | p99 ms | Command processor ms/frame | Decoder ms/frame | Recorder ms/frame | Process CPU ms/frame |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Benchmark, 8 cores | off | 3 | 147.0 [146.4-147.9] | 96.0 [93.9-98.5] | 9.37 [9.22-9.48] | 6.00 [5.96-6.07] | - | - | 17.8 |
+| Benchmark, 8 cores | on | 3 | **166.3** [164.5-168.3] | 109.0 [107.1-110.3] | 8.00 [7.76-8.24] | - | 3.83 | 4.84 | 19.7 |
+| Benchmark, 6 cores | off | 3 | 148.9 [146.7-151.4] | 95.6 [93.1-97.8] | 9.36 [9.28-9.47] | 5.86 [5.73-6.09] | - | - | 17.3 |
+| Benchmark, 6 cores | on | 3 | **157.5** [155.2-162.0] | 100.2 [93.6-104.1] | 8.76 [8.58-9.02] | - | 4.12 | 5.26 | 20.5 |
+| Free roam, 8 cores | off | 1 | 174.1 | 109.8 | 7.61 | 4.70 | - | - | 14.6 |
+| Free roam, 8 cores | on | 1 | **232.7** | 131.2 | 6.15 | - | 2.56 | 3.32 | 14.8 |
+| Free roam, 6 cores | off | 1 | 198.4 | 111.3 | 7.27 | 4.14 | - | - | 13.3 |
+| Free roam, 6 cores | on | 1 | **227.5** | 128.3 | 6.41 | - | 2.29 | 3.05 | 14.1 |
+
+- The benchmark: +13.1 % on eight cores, +5.8 % on six; every run with the split was faster than every run without,
+  at both core counts, and the 1% lows and p99 are better. No frame over 50 ms in any of the 12 runs.
+- Free roam: +14.7 % on six cores; on eight the run without the split was the slowest of the four (8 % other load on
+  the machine), so its +34 % overstates it. Frames over 50 ms in the 3 minutes: 0 and 1 (six cores), 0 and 2 (eight).
+- The gain is larger than in the runs above (+5 % on eight cores) because the swap no longer waits for the replay:
+  then the unsplit thread's frame held an idle wait the split could not shorten.
+- Two benchmark runs from empty game and driver shader caches (8 cores, one per state) ran at 30 fps (the fresh
+  cache folder had no frame-rate setting), so they show only the hitches: 1 frame over 50 ms without the split, 0 with
+  it. The split turns off the pipeline lookahead (#378); with the prebuilt pipelines (#276) that did not show.
+- Correctness: `tools/render_test.py` (festival session, 6 scenes) against the stored baselines: with the split, 6 of 6 in the last run; in two earlier runs on the same build each state failed one scene by a little (without the split `freeroam_dawn`, with it `freeroam_midday` at 0.68 % changed against 0.50 %), and a first run with it (the #613 build) failed four, among them `photo_mode` with the camera turned the other way (yaw 100 against 280), the scripted input's timing rather than the picture.
+
+The game turns it on by default (`ApplyForzaGpuCvarDefaults`, `src/main.cpp`) when the process may run on 6 or more
+physical cores (its affinity; SMT siblings count once, `src/platform/cpu_cores.h`) and no VR headset is used: a
+Steam Deck (4 cores, 8 threads) and the four-core runs above stay off. `gpu_split_command_processor` in `forza.toml`
+or on the command line still sets it either way. The log says which: `Physical CPU cores available: N
+(gpu_split_command_processor default true|false)`, and the performance settings line lists it.
+
 ### Where this leaves #559
 
 Nothing here is on by default and nothing here was measured on a Deck. `--vulkan_present_on_submission_thread=true`
