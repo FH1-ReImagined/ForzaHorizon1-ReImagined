@@ -839,6 +839,254 @@ class Fm4WindowsFileTests(_Setup, unittest.TestCase):
         self.assertIsNone(fm4cars.status(self.cfg))
 
 
+# ---- FM4 DLC (stand-in STFS packages of FM4's DLC layout; no game file) -------------------------
+
+def stfs(path, files, title=fm4cars.FM4_TITLE, content_type=0x2, name="", magic=b"LIVE"):
+    """A read-only STFS package (as tools/xcontent_extract.py reads it) holding files
+    ({"Media/DLCZips/27_pri_65.zip": bytes}): one hash table, the file table, the files' blocks."""
+    import hashlib
+    entries, blocks, dirs = [], [], {}
+
+    def entry(n, is_dir, parent, start=0, size=0, count=0):
+        e = bytearray(0x40)
+        e[:len(n)] = n.encode("latin-1")
+        e[0x28] = len(n) | (0x80 if is_dir else 0)
+        e[0x29:0x2C] = count.to_bytes(3, "little")
+        e[0x2F:0x32] = start.to_bytes(3, "little")
+        struct.pack_into(">H", e, 0x32, parent)
+        struct.pack_into(">I", e, 0x34, size)
+        entries.append(bytes(e))
+        return len(entries) - 1
+    chains = []
+    for rel, data in sorted(files.items()):
+        parent = 0xFFFF
+        parts = rel.split("/")
+        for k in range(1, len(parts)):
+            d = "/".join(parts[:k])
+            if d not in dirs:
+                dirs[d] = entry(parts[k - 1], True, parent)
+            parent = dirs[d]
+        n = max(1, (len(data) + 4095) // 4096)
+        start = 1 + len(blocks)
+        blocks += [data[i * 4096:(i + 1) * 4096].ljust(4096, b"\0") for i in range(n)]
+        chains.append((start, n))
+        entry(parts[-1], False, parent, start, len(data), n)
+    assert len(entries) <= 0x40 and len(blocks) < 169, "too big for the stand-in"
+    allb = [b"".join(entries).ljust(4096, b"\0")] + blocks
+    nxt = {s + k: (s + k + 1 if k + 1 < n else 0xFFFFFF) for s, n in chains for k in range(n)}
+    hashes = bytearray(4096)
+    for i, b in enumerate(allb):
+        hashes[i * 0x18:i * 0x18 + 20] = hashlib.sha1(b).digest()
+        struct.pack_into(">I", hashes, i * 0x18 + 0x14, nxt.get(i, 0xFFFFFF))
+    head = bytearray(0x2000)
+    head[:4] = magic
+    struct.pack_into(">I", head, 0x340, 0x2000)
+    struct.pack_into(">I", head, 0x344, content_type)
+    struct.pack_into(">I", head, 0x360, title)
+    head[0x379 + 2] = 1  # read only
+    struct.pack_into("<H", head, 0x379 + 3, 1)  # file table blocks (from block 0)
+    struct.pack_into(">II", head, 0x379 + 0x1C, len(allb), 0)
+    head[0x411:0x411 + 2 * len(name)] = name.encode("utf-16-be")
+    raw = bytes(head) + bytes(hashes) + b"".join(allb)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(raw.ljust(fm4cars.PACK_MIN + 0x1000, b"\0"))  # car packs are big
+    return path
+
+
+def zip_bytes(members):
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for n, data in members.items():
+            z.writestr(n, data)
+    return buf.getvalue()
+
+
+def patch_db(cars):
+    """A pack's database patch (media/db/patch/<n>_merge.slt): Data_Car rows (id, MediaName)."""
+    import sqlite3
+    with tempfile.TemporaryDirectory() as t:
+        db = sqlite3.connect(Path(t) / "p.slt")
+        db.execute("create table Data_Car (Id INTEGER, MediaName TEXT)")
+        db.executemany("insert into Data_Car values (?,?)", cars)
+        db.commit()
+        db.close()
+        return (Path(t) / "p.slt").read_bytes()
+
+
+def dlc_pack(path, offer, cars, name="Car Pack", zipname=None):
+    """An FM4 DLC car pack: its cars' files and their rows in the pack's database patch."""
+    members = {f"media/cars/{c}/{c.lower()}.carbin": b"car" for _, c in cars}
+    members[f"media/db/patch/{offer}000_merge.slt"] = patch_db(cars)
+    return stfs(path, {f"Media/{offer}.puboffer": b" \r\n",
+                       f"Media/DLCZips/{zipname or offer}_pri_65.zip": zip_bytes(members),
+                       f"Media/DLCZips/StringTables_pri_250{offer}.zip": zip_bytes({"EN/Data_Car.str": b""})},
+                name=name)
+
+
+def track_pack(path):
+    return stfs(path, {"Media/21.puboffer": b" \r\n",
+                       "Media/DLCZips/0015_pri_65.zip": zip_bytes({"media/Tracks/x/bin.zip": b"t",
+                                                                    "media/db/patch/21000_merge.slt": b""}),
+                       "Media/DLCZips/PhysicsTrack_pri_65.zip": zip_bytes({"a.bin": b"t"})},
+                name="Launch Track Pack")
+
+
+def disc2_pack(path, n=1):
+    return stfs(path, {f"Media/{n}.puboffer": b" \r\n",
+                       f"Media/DLCZips/000{n}_pri_65.zip": zip_bytes({"media/cars/BUG_Veyron_09/x.carbin": b"c"})},
+                name="1950-2000 Model Year Car Pack", magic=b"PIRS")
+
+
+FM4_DLC = "Content/0000000000000000/4D530910/00000002/"
+
+
+class Fm4DlcChoiceTests(unittest.TestCase):
+    """What the player chose for their FM4 DLC: packages, a folder (the console's content tree)
+    or an archive of them; car packs used, Disc 2's packs and the rest named."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.t = Path(self.tmp.name)
+        fm4cars.paths.ensure_tools_importable()
+        self.addCleanup(fm4cars._tools().ZIPS.close)
+        self.drive = self.t / "drive"
+        dlc_pack(self.drive / FM4_DLC / "A1B2C3", 27, [(1424, "HYU_Veloster_12")], "January Car Pack")
+        dlc_pack(self.drive / FM4_DLC / "D4E5F6", 25, [(1216, "AUD_RS3_11")], "November Speed Pack", "5c00")
+        track_pack(self.drive / FM4_DLC / "778899")
+        disc2_pack(self.drive / FM4_DLC / "PIRS01")
+        package(self.drive / "Content/0000000000000000/4D530910/000B0000/TU1", fm4cars.FM4_TITLE, 0xB0000, "TU")
+        package(self.drive / "Content/0000000000000000/4D5309C9/00000002/FH1DLC", 0x4D5309C9, 0x2, "Car Pack",
+                size=2 << 20)
+        package(self.drive / FM4_DLC / "OFFER", fm4cars.FM4_TITLE, 0x2, "Token")
+
+    def choose(self, chosen, have_disc2=False):
+        work = self.t / "work"
+        shutil.rmtree(work, ignore_errors=True)
+        prog, cancel = (lambda n, total, text: None), (lambda: False)
+        found = fm4cars.dlc_choice(chosen, work, {}, prog, cancel)
+        cars, content, notes = fm4cars.prepare_dlc(found, work, have_disc2, prog, cancel)
+        self.assertEqual(open_files_under(work.resolve()), [])  # Windows moves and deletes it later (#707)
+        return sorted(n for _, n in cars), content, notes
+
+    def test_the_consoles_content_tree(self):
+        for chosen in (self.drive, self.drive / "Content", self.drive / FM4_DLC):
+            cars, content, notes = self.choose([chosen])
+            self.assertEqual(cars, ["January Car Pack", "November Speed Pack"], chosen)
+            self.assertEqual(len(content), 1)  # Disc 2 was skipped: its pack here is taken
+            text = "; ".join(notes)
+            self.assertIn("Launch Track Pack: no cars (tracks or other content)", text)
+            self.assertIn('OFFER ("Token") is too small to hold a car', text)
+            if chosen == self.drive:
+                self.assertIn('TU1 ("TU") is a Forza Motorsport 4 title update', text)
+                self.assertIn('FH1DLC ("Car Pack") is a Forza Horizon content package (DLC), not Forza '
+                              'Motorsport 4 DLC', text)
+
+    def test_disc_2s_packs_are_not_read_twice(self):
+        _, content, notes = self.choose([self.drive / FM4_DLC], have_disc2=True)
+        self.assertEqual(content, [])
+        self.assertIn("1950-2000 Model Year Car Pack: Disc 2's car packs, read from Disc 2 already", notes)
+
+    def test_single_packages_and_the_same_one_twice(self):
+        a = self.drive / FM4_DLC / "A1B2C3"
+        copy = self.t / "elsewhere/A1B2C3"
+        copy.parent.mkdir()
+        shutil.copy(a, copy)
+        cars, content, _ = self.choose([a, copy, self.drive / FM4_DLC / "D4E5F6"])
+        self.assertEqual(cars, ["January Car Pack", "November Speed Pack"])
+        self.assertEqual(content, [])
+
+    def test_an_archive_of_packages_and_unpacked_ones(self):
+        import zipfile
+        arc = self.t / "packs.zip"
+        with zipfile.ZipFile(arc, "w") as z:
+            z.write(self.drive / FM4_DLC / "A1B2C3", "dlc/A1B2C3")
+        self.assertEqual(self.choose([arc])[0], ["January Car Pack"])
+        # a pack someone already unpacked (its Media/DLCZips), read where it is
+        import xcontent_extract
+        out = self.t / "unpacked/Pack27"
+        p = xcontent_extract.open_package(str(self.drive / FM4_DLC / "D4E5F6"))
+        for e in p.entries():
+            if not e.is_dir:
+                xcontent_extract.extract(p, e, str(out))
+        for f in p.files:
+            f.close()
+        self.assertEqual(self.choose([self.t / "unpacked"])[0], ["Pack27"])
+
+    def test_nothing_of_fm4s_dlc_is_named(self):
+        with self.assertRaises(fm4cars.Fm4Error) as e:
+            self.choose([self.drive / "Content/0000000000000000/4D5309C9"])
+        self.assertIn("No Forza Motorsport 4 DLC was found", str(e.exception))
+        self.assertIn("a Forza Horizon content package (DLC)", str(e.exception))
+        with self.assertRaises(fm4cars.Fm4Error) as e:
+            self.choose([track_pack(self.t / "only/track")])
+        self.assertIn("None of the chosen Forza Motorsport 4 packages has cars", str(e.exception))
+        self.assertIn("Launch Track Pack: no cars", str(e.exception))
+
+
+class DlcConverter(FakeConverter):
+    """The stand-in converter, adding the DLC's cars the FM4 files hold (fm4.dlc_car_ids)."""
+
+    def __init__(self, fm4, fh1, out, package=None):
+        super().__init__(fm4, fh1, out, package)
+        self.fm4 = fm4
+
+    def candidates(self):
+        dlc = sorted(self.fm4.dlc_car_ids)
+        return super().candidates() + [(cid, f"DLC_Car_{cid}", None) for cid in dlc if cid < 1500] + \
+            [(1530, "DLC_Needy_11", "needs its engine (EngineID 77), which is not in the FM4 files given")]
+
+    def run(self, ids, progress=None, cancelled=lambda: False):
+        report = super().run([i for i in ids if i == 1119], progress, cancelled)
+        FakeConverter.runs[-1] = list(ids)
+        dlc = [(cid, f"DLC_Car_{cid}") for cid in ids if cid in self.fm4.dlc_car_ids]
+        report["cars"] += [(cid, name, 3, 600) for cid, name in dlc]
+        report["dlc_cars"] = dlc
+        return report
+
+
+class Fm4DlcBuildTests(_Setup, unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        import sqlite3
+        db = sqlite3.connect(self.disc1 / "Media/db/gamedb.slt")
+        db.execute("create table Data_Car (Id INTEGER, MediaName TEXT)")
+        db.execute("insert into Data_Car values (1119, 'BUG_Veyron_09')")
+        db.commit()
+        db.close()
+        t = Path(self.tmp.name)
+        self.dlc = t / "dlc"
+        dlc_pack(self.dlc / "A1", 27, [(1424, "HYU_Veloster_12"), (1528, "HYU_VelosterRMR_11"),
+                                       (1530, "DLC_Needy_11")], "January Car Pack")
+        track_pack(self.dlc / "T1")
+
+    def test_dlc_cars_join_the_discs_in_the_same_mod(self):
+        msg = fm4cars.build(self.cfg, self.disc1, None, converter=DlcConverter, dlc=[self.dlc])
+        self.assertIn("Added 2 Forza Motorsport 4 car(s), 1 of them from your FM4 DLC", msg)
+        self.assertIn("Launch Track Pack: no cars", msg)
+        self.assertIn("1 of the DLC's cars are in FH1 or its DLC already", msg)
+        self.assertIn("DLC_Needy_11: needs its engine", msg)
+        self.assertEqual(FakeConverter.runs, [[1119, 1424]])
+        info = fm4cars.status(self.cfg)
+        self.assertEqual(info["cars"], ["BUG_Veyron_09", "DLC_Car_1424"])
+        self.assertEqual(info["fm4_dlc"]["packs"], ["January Car Pack"])
+        self.assertEqual(info["fm4_dlc"]["cars"], ["DLC_Car_1424"])
+        self.assertEqual([p.name for p in mods.mods_dir(self.cfg).iterdir()], [fm4cars.MOD])  # temp folder gone
+        # an import without the DLC drops its cars again
+        fm4cars.build(self.cfg, self.disc1, None, converter=DlcConverter)
+        self.assertNotIn("fm4_dlc", fm4cars.status(self.cfg))
+
+    def test_a_wrong_dlc_choice_is_named_before_the_discs_are_read(self):
+        other = package(Path(self.tmp.name) / "fh1/PACK", 0x4D5309C9, 0x2, "Car Pack", size=2 << 20)
+        with patch.object(fm4cars, "prepare", side_effect=AssertionError("discs read")):
+            with self.assertRaises(fm4cars.Fm4Error) as e:
+                fm4cars.build(self.cfg, self.disc1, None, converter=DlcConverter, dlc=[other])
+        self.assertIn("a Forza Horizon content package (DLC)", str(e.exception))
+        self.assertIsNone(fm4cars.status(self.cfg))
+
+
 try:
     from PySide6.QtCore import QCoreApplication, QEvent
     from PySide6.QtWidgets import QApplication
@@ -864,6 +1112,33 @@ class Fm4CardTests(_Setup, unittest.TestCase):
             self.assertFalse(package.exists())
             self.assertFalse(header.exists())
             self.assertFalse(page.fm4_remove.isEnabled())
+        finally:
+            page.deleteLater()
+            QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+
+    def test_card_counts_the_dlc_cars_and_passes_the_dlc_step_on(self):
+        from forza_launcher.ui.mods_page import ModsPage
+        self.build()
+        marker = mods.mods_dir(self.cfg) / fm4cars.MOD / fm4cars.MARKER
+        import json
+        info = json.loads(marker.read_text())
+        info["cars"] += ["HYU_Veloster_12", "AUD_RS3_11"]
+        info["fm4_dlc"] = {"packs": ["January Car Pack", "November Speed Pack"],
+                           "cars": ["HYU_Veloster_12", "AUD_RS3_11"], "notes": []}
+        marker.write_text(json.dumps(info))
+        page = ModsPage(self.cfg, window=None)
+        try:
+            self.assertIn("3 FM4 car(s) imported, 2 of them from 2 FM4 DLC pack(s).", page.fm4_message.text())
+            from PySide6.QtWidgets import QLabel
+            self.assertTrue(any("then Add FM4 DLC for the car packs" in w.text() for w in page.findChildren(QLabel)))
+            chosen = []
+            with patch.object(ModsPage, "_fm4_pick", side_effect=["/d1", None]), \
+                    patch.object(ModsPage, "_fm4_pick_dlc", return_value=["/dlc"]), \
+                    patch.object(ModsPage, "_game_running", return_value=False), \
+                    patch.object(fm4cars, "build", side_effect=lambda *a, **kw: chosen.append(kw.get("dlc")) or "ok"):
+                page._fm4_import()
+                page.fm4_task.wait()
+            self.assertEqual(chosen, [["/dlc"]])
         finally:
             page.deleteLater()
             QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)

@@ -7,6 +7,7 @@ player's PC from their discs and stay there.
 
 - [For players](#for-players)
   - [What the import accepts](#what-the-import-accepts)
+  - [FM4 DLC](#fm4-dlc)
 - [What a converted car is made of](#what-a-converted-car-is-made-of)
 - [physicsdefinition.bin](#physicsdefinitionbin)
 - [FH1's handling retune](#fh1s-handling-retune)
@@ -20,12 +21,13 @@ player's PC from their discs and stay there.
 2. Choose FM4's **Disc 1** (the play disc): a disc image (`.iso`), a Games on Demand package,
    a folder with its files or an archive of one of them ([what is accepted](#what-the-import-accepts)).
 3. Choose **Disc 2** (the content install disc) for its three car packs, or **Skip**.
-4. The launcher checks that Disc 1 is FM4 (title `4D530910`), unpacks what it needs into a
+4. **Add FM4 DLC**: choose the car packs you bought for FM4 ([below](#fm4-dlc)), or **Skip**.
+5. The launcher checks that Disc 1 is FM4 (title `4D530910`), unpacks what it needs into a
    temporary folder next to the mods folder, converts every car, and adds the **FM4 cars** mod
    and a package of the cars' files (below). With the discs' files already unpacked it takes
    about 2 seconds a car; it needs about 5 GB for the result and as much again while it runs
    from disc images (and room for what an archive holds, unpacked, while it runs from one).
-5. Start the game: the cars are in the **Autoshow** with the other cars of their makes (and
+6. Start the game: the cars are in the **Autoshow** with the other cars of their makes (and
    in **Change Car** once bought).
 
 ### What the import accepts
@@ -60,6 +62,44 @@ and an archive with no program here to unpack it. A file named like `4D5309C9000
 Xbox 360 content package of that title (here Forza Horizon's), and renaming one to `.iso` does
 not make it a disc image (#681).
 
+### FM4 DLC
+
+FM4's car packs from Xbox Live (the monthly packs, the Porsche Expansion, the Limited
+Collector's Edition and bonus packs, the SRT Viper and Hyundai packs and the like) are content
+packages of FM4's title (`4D530910`, content type `00000002`), STFS `LIVE` or `PIRS` files with
+a hash name. The **Add FM4 DLC** step takes them in any of these forms: the package files (pick
+several at once), the folder holding them (the console's `Content/0000000000000000/4D530910/00000002`,
+a folder above it, or any folder of packages), unpacked packages (each with `Media/DLCZips`), or a
+`.zip`, `.7z` or `.rar` of any of these. A package is found by its header, not its name.
+
+A car pack holds its cars' files in `Media/DLCZips/<offer>_pri_65.zip` (`media/cars`, `media/wheels`,
+the cars' pictures and sound tuning; one pack names it in hex, `5c00_pri_65.zip`), their database
+rows in that zip's `media/db/patch/<n>_merge.slt`, and their names in `StringTables_pri_<n>.zip`.
+The import merges each pack's rows over a copy of Disc 1's database (a table keyed by its first
+column takes the pack's row, as the game reads the patch; the others get the rows they lack), then
+converts the DLC's cars like the discs', with the same fixes (engine level, makes, logos), into
+the same **FM4 cars** mod and package. The Mods page says how many came from the DLC.
+
+Two things the disc cars never met: FH1's database has the stock wheel rows (`List_Wheels`) of
+every disc car but not of 33 DLC cars (the Porsche Expansion's and some later packs'), and a car
+without its wheel row did not load (the 959 in a grey void, the 997 GT3 RS standing still with its
+textures wrong), so the import adds those rows. And FH1 gives two of the DLC's engine ids to other
+engines (`999`, the Porsche GT2 RS engine, is FH1's Camry engine; `1034`, the Austin-Healey
+Sprite's, a Fiat 500's): the engine swap of four Porsches that names `999` is left out, and the
+Sprite, whose own engine is `1034`, is not converted ("its engine's id is another engine's in FH1").
+
+Left out, each named in the import's message: a pack with no cars (the Launch Track Pack: tracks,
+a soccer field and events), Disc 2's three car packs and its Autovista pack when they are among the
+DLC (the same content type, without a database patch: used as Disc 2 when Disc 2 was skipped, else
+not read twice), small packages (offers, tokens), title updates, other games' packages, the DLC
+cars FH1 or its own DLC has already, and a car whose rows name something no file given has (its
+engine, body, drivetrain, make or wheel, as for a car that relies on another pack): such a car is
+skipped with that reason rather than added broken.
+
+Sixteen of FM4's packs, checked with the converter's list: 116 cars FH1 lacks are converted, on
+top of the discs' 381; 5 more are FH1 DLC cars, the Sprite is left out (above) and the rest are in
+FH1 already.
+
 The result is in two parts: the **FM4 cars** mod in the mods folder (the database and the car
 names, a few MB) and a DLC-style package with the cars' files, `464D34434152530...4D` in the
 data folder's `0000000000000000/4D5309C9/00000002` (where installed DLC goes), with its header.
@@ -82,8 +122,8 @@ loses by its place in the load order: keep **FM4 cars** below it, or merge the t
 
 The tool behind it can also be run by hand:
 
-    tools/fm4_cars.py list    --fm4 FM4_DISC1 --fm4-content FM4_PACKS --fh1 GAME --update TU4
-    tools/fm4_cars.py convert --fm4 FM4_DISC1 --fm4-content FM4_PACKS --fh1 GAME --update TU4 \
+    tools/fm4_cars.py list    --fm4 FM4_DISC1 --fm4-content FM4_PACKS [--fm4-dlc FM4_DLC] --fh1 GAME --update TU4
+    tools/fm4_cars.py convert --fm4 FM4_DISC1 --fm4-content FM4_PACKS [--fm4-dlc FM4_DLC] --fh1 GAME --update TU4 \
                               [--dlc USER_DATA/0000000000000000/4D5309C9/00000002] \
                               --out MODS/FM4Cars [--package USER_DATA/0000000000000000/4D5309C9/00000002/464D3443415253000000000000000000000000004D] \
                               (--cars BUG_Veyron_09,1106 | --all)
@@ -92,7 +132,8 @@ Without `--package` the cars' files go into the mod too (for a few cars: the mod
 4 GB limit).
 
 `FM4_DISC1` is the unpacked disc 1, `FM4_PACKS` a folder with the unpacked Disc 2 packages
-(`tools/xcontent_extract.py`), `GAME` FH1's game folder and `TU4` its title update folder.
+(`tools/xcontent_extract.py`), `FM4_DLC` a folder with unpacked FM4 DLC packs, `GAME` FH1's game
+folder and `TU4` its title update folder.
 
 ## What a converted car is made of
 
@@ -354,7 +395,8 @@ folder removed). A game started on that data folder lists the new makes in the A
 - The physicsdefinition.bin rigid-body fields are a scaled stand-in, not decoded semantics.
 - Career events, online (other players without the import see FH1's placeholder car, as for a
   car mod) and the 381 cars one by one were not checked; the three above and the RSX were.
-- FM4's title updates and FM4 DLC car packs are not read.
+- FM4's title updates are not read. Of the DLC packs' extra content only the cars are used:
+  liveries, events, tracks and achievements are not.
 
 ## Credits
 
