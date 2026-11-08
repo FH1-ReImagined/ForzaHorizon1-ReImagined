@@ -19,10 +19,11 @@ def _string(s):
     return struct.pack(">I", len(s)) + s.encode()
 
 
-def fm4_carbin_file(vertices, sections=None):
+def fm4_carbin_file(vertices, sections=None, morphs=None):
     """An FM4 car model (root 2, base 16, buffers v2/v3, 32-byte vertices): one "body" section
     with one mesh of the given vertices, or sections [(name, [(material, [(x, y, z)...])...])]
-    with their vertices placed at those positions."""
+    with their vertices placed at those positions. morphs: FM4 morph entries (u32, one per
+    vertex) for every section's LOD1-5 and LOD0 morph buffers."""
     if sections is None:
         sections = [("body", [("body", vertices)], (0, 0.5, 0), (1, 1, 1))]
     else:
@@ -63,8 +64,13 @@ def fm4_carbin_file(vertices, sections=None):
             out += struct.pack(">I", 1) + struct.pack(">12f", 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1)
             out += struct.pack(">III", 3, len(idx), 2) + struct.pack(">%dH" % len(idx), *idx) + struct.pack(">I", 0)
         out += struct.pack(">III", 2, 0, 0)         # VertexBuffer_LOD0, empty
-        out += struct.pack(">I", 1) + b"\0"         # MorphTargets
-        out += struct.pack(">III", 2, 0, 0) * 2
+        if morphs is None:
+            out += struct.pack(">I", 1) + b"\0"     # MorphTargets
+            out += struct.pack(">III", 2, 0, 0) * 2
+        else:
+            out += struct.pack(">I", 1) + b"\1"
+            entries = struct.pack(">III", 2, len(morphs), 4) + struct.pack(">%dI" % len(morphs), *morphs)
+            out += entries * 2
     return out + fm4_carbin.TAIL
 
 
@@ -114,6 +120,49 @@ class CarbinTests(unittest.TestCase):
         self.assertEqual(vb["flags"], 3)
         self.assertEqual(vb["key"], a["sections"][0]["vertex_buffer"]["key"])
         self.assertEqual(s["sections"][0]["meshes"][0]["index_buffer"]["flags"], 2)
+
+    @staticmethod
+    def fm4_morph(dx, size, dz):
+        """An FM4 morph entry: unit direction x and z fields, the size in the y field."""
+        return (round(dx * 1023) & 0x7FF) | (round(size * 1023) & 0x7FF) << 11 | (round(dz * 511) & 0x3FF) << 22
+
+    def test_fm4_morphs_become_offsets(self):
+        # FM4's entries are directions with the dent's size in y (#747): read as FH1's offsets
+        # they moved damaged vertices by up to 2 m.
+        fm4 = [self.fm4_morph(1.0, 8 / 1023, 0.0),            # 8 steps along +x
+               self.fm4_morph(0.0, -12 / 1023, -1.0),         # -12 steps along -z: +z
+               self.fm4_morph(0.6, 20 / 1023, 0.0),           # y is the rest of the unit vector
+               0x000003FF]                                    # no dent (FM4's filler)
+        out = fm4_carbin.convert(fm4_carbin_file([vertex((0, 0, 0, 0))] * 4, morphs=fm4), "m")
+        m = carbin_dump.parse(out)
+        self.assertTrue(m["parsed_to_end"])
+        for key in ("morph", "morph_lod0"):
+            mb = m["sections"][0][key]
+            self.assertEqual((mb["version"], mb["count"], mb["stride"]), (3, 4, 4))
+            raw = [carbin_dump.morph_raw(v) for v in struct.unpack_from(">4I", out, mb["data_at"])]
+            self.assertEqual(raw, [(8, 0, 0), (0, 0, 6), (12, 16, 0), (0, 0, 0)])
+        # every converted offset stays small: FM4's unit directions are gone
+        for v in struct.unpack_from(">4I", out, m["sections"][0]["morph"]["data_at"]):
+            self.assertLess(max(abs(c) for c in carbin_dump.morph_entry(v)), 0.03)
+
+    def test_fh1_morphs_not_converted_again(self):
+        fm4 = [self.fm4_morph(1.0, 30 / 1023, 0.0)] * 3
+        once = fm4_carbin.convert(fm4_carbin_file([vertex((0, 0, 0, 0))] * 3, morphs=fm4), "m")
+        # an FH1 file (version 3 buffers) through the converter again keeps its entries
+        again = fm4_carbin.convert(once, "m")
+        a, b = carbin_dump.parse(once)["sections"][0], carbin_dump.parse(again)["sections"][0]
+        self.assertEqual(once[a["morph"]["data_at"]:a["morph"]["data_at"] + 12],
+                         again[b["morph"]["data_at"]:b["morph"]["data_at"] + 12])
+        self.assertEqual(carbin_dump.morph_raw(struct.unpack_from(">I", once, a["morph"]["data_at"])[0]), (30, 0, 0))
+
+    def test_fm4_morph_offset_edge_cases(self):
+        # quantized directions a little longer than 1 are scaled back, never a NaN
+        x, y, z = fm4_carbin.fm4_morph_offset(self.fm4_morph(1.0, 0.5, 1.0))
+        self.assertAlmostEqual(x, z, places=3)
+        self.assertEqual(y, 0.0)
+        self.assertAlmostEqual((x * x + z * z) ** 0.5, 0.5, places=2)
+        # the most negative field values clamp to -1
+        self.assertEqual(fm4_carbin.morph_entry(-2.0, -2.0, -2.0), fm4_carbin.morph_entry(-1.0, -1.0, -1.0))
 
     def test_truncated_file_refused(self):
         src = fm4_carbin_file([vertex((0, 0, 0, 0))] * 3)
