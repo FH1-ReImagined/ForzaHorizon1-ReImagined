@@ -12,7 +12,8 @@ from .haptics.settings import DEFAULTS as HAPTICS_DEFAULTS, normalize as normali
 
 # Settings of the launcher itself: not game cvars, never written to forza.toml.
 LAUNCHER_ONLY = ("share_shader_list", "coop_results", "challenges", "battery_saver", "game_language",
-                 "vr_mode", "vr_picture", "vr_seat_height_cm", "vr_swap_eyes")
+                 "vr_mode", "vr_picture", "vr_seat_height_cm", "vr_swap_eyes",
+                 "reimagined_loading_tips")
 ONLINE_MODES = ["public", "local", "custom", "offline"]
 # First-run values that differ from the game's own defaults.
 FIRST_RUN = {"frame_rate": 60, "present_effect": "fsr"}
