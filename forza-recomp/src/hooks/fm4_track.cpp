@@ -1660,6 +1660,7 @@ extern "C" REX_FUNC(sub_82CEDEE0) {
 }
 #endif
 
+#if FORZA_TU4  // the streamed-model heap fallback and the hooks below use TU4 addresses
 // Streamed track models on a converted FM4 track. Their vertex and index buffers come from one
 // of the game's own fixed-size heaps (sub_825CB038, the game's XMemAlloc, called from the
 // buffer helpers at 82AA5030, vertex data, and 82AA50FC, index data; attributes B2800000).
@@ -1828,3 +1829,4 @@ extern "C" REX_FUNC(sub_82AFFA70) {
   if (told.fetch_add(1) < 3)
     REXLOG_INFO("FM4TRACK: static pack texture copied whole: base {} + mips {} bytes", bsize, msize);
 }
+#endif  // FORZA_TU4
