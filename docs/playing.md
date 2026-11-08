@@ -185,7 +185,7 @@ tools/run_forza.sh 120        # a two-minute test run; logs in ${XDG_RUNTIME_DIR
   exactly 3 refreshes, where 22 fps alternates 2 and 3 and judders; 40 does the same on a
   120 Hz screen (#263).
 - **Present without waiting for the replay** (Vulkan, on by default on Linux and Windows
-  without a VR headset, #607): the swap no longer waits for the submission thread to replay the
+  without a VR headset or NVIDIA DLSS, #607): the swap no longer waits for the submission thread to replay the
   frame before the game goes on, which gives a CPU-bound frame about 1 ms back (more fps
   uncapped and on slow CPUs, nothing at a frame cap the PC already holds).
   `vulkan_present_on_submission_thread = false` in `forza.toml` (or

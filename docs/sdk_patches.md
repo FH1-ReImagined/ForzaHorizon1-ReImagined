@@ -581,8 +581,17 @@ presenter reconnect test needs. The setting was off by default; step 1 of #607
 ([perf.md](perf.md#where-a-frames-cpu-time-goes-607-2026-11-03)) found the command processor off the
 CPU at the swap for 0.7-1.1 ms a frame, the replay it waits for.
 
-The game now gives it the default `true` (`ApplyForzaGpuCvarDefaults`, `src/main.cpp`) on Linux and
-Windows when `vr_mode` is `off`. The code of 0414 and 0419 has nothing platform-specific; macOS
+The game now gives it the default `true` (`ApplyPresentOnSubmissionDefault`, `src/main.cpp`) on Linux
+and Windows when `vr_mode` is `off` and the upscaler is not NVIDIA DLSS (`fh1_upscaler` `quality`,
+`balanced`, `performance`, `dlss` or `dlaa`), which keeps the old wait until an RTX card has run it.
+The graphics menu sets the default again when it switches the upscaler, before a switch to DLSS and
+after the switch has finished. Reading the code, DLSS needs nothing from the wait: its evaluation
+(`Fh1Dlss::Execute`) is recorded on the submission thread in either state, from a copy of the frame's
+inputs in the deferred command (`ArgsFh1Dlss::input`); the presenter's step queues behind that
+submission; the command processor's side of the next frame (`BeginFrame`, `Observe`) touches only its
+own copy and the atomic `Evaluating()`; and the live switch and shutdown wait for the submission
+thread before they free the feature (`AwaitAllQueueOperationsCompletion`). Only MetalFX splits the
+submission in the replay (`native_upscale`), and macOS keeps the setting off. The code of 0414 and 0419 has nothing platform-specific; macOS
 (MoltenVK) was not tested and keeps `false`. With a VR headset it stays `false`: in the emulated
 Quest 3 the game's part of the latency grew by about 5 ms at the same frame rate (below).
 `vulkan_present_on_submission_thread` in `forza.toml` or on the command line still sets it either
@@ -612,5 +621,9 @@ the Design Creator, and a 2 s freeze in free roam in which `vkAcquireNextImageKH
 waited 2 s. Runs with the setting off had the same 2 s freezes (twice in 2.5 minutes, and in the VR
 runs in both states), so they come from this machine, not from the setting.
 
-Not checked: Windows (NVIDIA, DLSS, whose replay splits the submission), a Steam Deck, the real
-headset.
+On Windows (a GTX 1650 Ti laptop, Vulkan, 540p scene, FSR 1, 3 alternating runs each), on against
+off: benchmark 54.5 against 54.7 fps (GPU-bound at 97 %), 1% low 38.4 against 37.4; free roam at
+60 fps p99 16.7-21.6 ms against 20.3-21.5 ms, 1% low 46.8 against 42.7; FSR 3 at 1080p (one run
+each) 36.3 fps, p99 33.8 ms against 35.0 fps, p99 36.2 ms, and it looked right.
+
+Not checked: DLSS (no RTX card; it keeps the setting off, above), a Steam Deck, the real headset.
