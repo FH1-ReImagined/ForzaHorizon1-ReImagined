@@ -3403,3 +3403,52 @@ without running out of memory.
   alternated: without the limit 1 of 10 lost the device, with it 0 of 10 (4.8-5.1 fps either way). With the earlier
   runs without it (5 of 36) that is 6 of 46 without and 0 of 10 with: a hint, not proof. On the GeForce (not UMA, so
   no split) the benchmark gives 55.3 fps on Vulkan and 45.5 on Direct3D 12, as before.
+
+## The benchmark's event that never loads after an empty driver shader cache (#725, 2026-11-07)
+
+**The symptom.** On the Intel UHD with its driver caches emptied (Direct3D 12, 540p, 30 fps), the benchmark asks for
+its event (`BENCHMARK: fixed event FR02 requested`) and the game takes the request: the world pauses (`Wheel: not
+driving (pause)`), and then nothing more happens. The world stays paused and keeps updating, the game draws a
+steady 10 fps for 29 minutes, and the load never begins (`benchmark_start_timeout`, 4 of 4 runs). In a warm run the
+world stops updating 4.5 s after the request (`Wheel: still not driving (menu or loading)`) and the race loads.
+After the first minute nothing is held and nothing spins. The busiest guest thread is F80012FC (one of four job
+workers started at 83075D18), at 15% of a core.
+
+**On Linux:** lavapipe (Mesa's CPU Vulkan driver, `VK_DRIVER_FILES=.../lvp_icd.x86_64.json`, about 2 fps) with an
+empty scratch `MESA_SHADER_CACHE_DIR`, the benchmark from a fresh profile. Right after the request it has the long
+frames the Intel UHD has: waits of 1-3.4 s for submissions full of the transition's new pipelines.
+
+| Build | Mesa cache | Runs | Race loads |
+| --- | --- | --- | --- |
+| No main-loop wait (`FORZA_MAIN_WAITS_RENDER=0`, main before #738) | empty | 7 | 0: stuck as on the Intel UHD in 5; the #725 null read 6 s after the request in 1; no frame (`benchmark_stalled`) in 1 |
+| No main-loop wait | warm | 2 | 2 |
+| #738 (the main loop waits for a render pass held over 1 s) | empty | 7 | 6; the 7th hung in the HUD slot wait (lr 8249E108) after the race loaded |
+
+So the event doesn't load when the render thread is held for seconds right after the request while the main loop
+runs on. Compiles alone don't cause it: with a warm cache the same slow renderer loads. Keeping the main loop with
+the render thread lets it load. On the Intel UHD, #738's first version (250 ms, waits for the HUD worker counted as
+held, the waits capped at 10 s, one run hitting the cap) did not help. The current version is untested there.
+
+**Where it stops.** The request is taken: the activity's state machine (activity + 0x164) accepts `load_into_event`.
+Then its current state object (state machine + 0x2C) stays the same for minutes. In a run that loads, the activity
+is freed within 6 s. The state machine is script-driven, so its logic is in the game's data, not the executable:
+- the definition object's vtable is 8209004C, with methods 829B9AD0, 829B9B78, 829B9B80, 829BB2A0 and 829BC990;
+- 829BB2A0 sets the script context (833F6CA0) and runs 82F111F0;
+- 829BC990 drains its event queue.
+
+So this is a waiting state machine: not a dropped request, and not a stuck file load (no reads are pending). What
+the script waits for is the next step.
+
+**The HUD worker, for reference** (render object `ro`):
+- The UI object (`ro + 0x978`, made by sub_82D13BC0 with pointers to `ro + 0x1A0C` and `ro + 0x1A19`) asks for a
+  HUD frame in sub_82D11BA0. If the pending flag `ro + 0x1A19` is clear, it sets it and the worker's event
+  `ro + 0x1A0C`.
+- The worker (sub_824A2080, guest thread F8001204) waits for that event, records with
+  `sub_824A3558(ro, *(ro + 0x1A1C) == 1)`, sets `ro + 0x1A10`, and waits again. `ro + 0x1A18` ends it.
+- The render pass (sub_826164D0) clears the pending flag, builds its command list (sub_8247F818; `ro + 0x1A1C` = 1
+  for the HUD path, 0 without), then, if the pending flag is set again, waits for `ro + 0x1A10` and clears it.
+
+**Diagnostic.** When the event was requested but no race has started 2 and 10 minutes later, and when the benchmark
+gives up, the log lists every guest thread's call chain:
+`BENCHMARK: the race has not started N s after the event's request (...); guest threads below (#725)`. Players' logs
+then show where it waits. Laptop runs ended with `terminate()` never reached the dump at window close.

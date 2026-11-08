@@ -680,6 +680,45 @@ def llvm_member_wanted(name: str) -> bool:
     return parts[0] in ("lib",) and len(parts) > 1 and parts[1] == "clang" or parts[0].upper().startswith("LICENSE")
 
 
+def llvm_incomplete_message(folder: Path, lacking) -> str:
+    """The build cannot go on: a freshly unpacked LLVM still lacks files (#744)."""
+    first = folder.joinpath(*lacking[0].split("/"))
+    one = len(lacking) == 1
+    return (f"The downloaded LLVM compiler is incomplete after unpacking it: {', '.join(lacking)} "
+            f"{'is' if one else 'are'} missing in {folder} (for example {first}). An antivirus may have "
+            f"quarantined {'it' if one else 'them'}: look in its quarantine or protection history, restore "
+            f"or allow the {'file' if one else 'files'} (or the folder {folder.parent}), then press Build again.")
+
+
+def install_llvm(name: str, arc: Path, dest: Path, rep: Reporter, progress) -> None:
+    """Unpacks the LLVM archive into <dest>.part, checks that every file the build needs is there,
+    then puts it in place of dest, which may be an incomplete folder (an unpack that stopped
+    halfway, or a file an antivirus took away, #744). When something is still missing the archive
+    is kept, so the next try needs no download."""
+    stage = dest.with_name(dest.name + ".part")
+    if stage.exists():
+        _rmtree(stage)
+    fetch.unpack(name, arc, stage, strip=1, only=llvm_member_wanted, progress=progress,
+                 cancelled=rep.cancelled)
+    lacking = build_env.llvm_missing_files(stage)
+    if lacking:
+        raise BuildError(llvm_incomplete_message(stage, lacking))
+    for attempt in range(5):
+        try:
+            if dest.exists():
+                _rmtree(dest)
+            os.replace(stage, dest)
+            break
+        except OSError as e:  # an antivirus scanning the new files holds them open for a moment
+            if attempt == 4:
+                raise BuildError(f"Could not replace the LLVM folder {dest} with the new one ({e}). "
+                                 f"Close any program that uses it, or delete the folder, then press "
+                                 f"Build again.") from e
+            time.sleep(1)
+    rep.log(f"LLVM unpacked into {dest}")
+    arc.unlink(missing_ok=True)  # 2 GB: not needed any more
+
+
 def ensure_toolchain(opts: Options, rep: Reporter, lo, hi):
     tools = build_env.detect_tools(opts.root, opts.prefer_downloaded, max_age=0)
     for p in tools.problems:
@@ -703,10 +742,8 @@ def ensure_toolchain(opts: Options, rep: Reporter, lo, hi):
         arc = fetch.download(name, cache, _dl_progress(rep, a, a + (b - a) * 0.6, name), rep.cancelled)
         rep.status(f"Unpacking {name}")
         if name.startswith("llvm"):
-            dest = tdir / f"llvm-{pins.LLVM_VERSION}"
-            fetch.unpack(name, arc, dest, strip=1, only=llvm_member_wanted,
-                         progress=_dl_progress(rep, a + (b - a) * 0.6, b, "unpack"), cancelled=rep.cancelled)
-            arc.unlink(missing_ok=True)  # 2 GB: not needed any more
+            install_llvm(name, arc, tdir / f"llvm-{pins.LLVM_VERSION}", rep,
+                         _dl_progress(rep, a + (b - a) * 0.6, b, "unpack"))
         elif name.startswith("cmake"):
             fetch.unpack(name, arc, tdir / f"cmake-{pins.CMAKE_VERSION}", strip=1, cancelled=rep.cancelled)
         elif name.startswith("ninja"):
@@ -717,6 +754,9 @@ def ensure_toolchain(opts: Options, rep: Reporter, lo, hi):
     tools = build_env.detect_tools(opts.root, opts.prefer_downloaded, max_age=0)
     for p in tools.problems:
         raise BuildError(p)
+    if tools.llvm_incomplete:  # gone again after the check in install_llvm
+        raise BuildError(llvm_incomplete_message(build_env.downloaded_paths(opts.root)["llvm"].parent,
+                                                 tools.llvm_incomplete))
     if tools.missing:
         raise BuildError("The toolchain is incomplete after the download: " + ", ".join(tools.missing))
     for k, v in tools.source.items():
@@ -1054,6 +1094,17 @@ def sync_toolchain_file(root: Path) -> Path:
 XWIN_MSVC_COMPAT = "19.33"
 
 
+def xwin_splat_command(exe, root: Path, xdir: Path) -> list:
+    """The xwin command that unpacks the CRT and SDK into `xdir` without making any link, so a
+    normal user can run it with Developer Mode off (#634, #739). --use-winsysroot-style: the plain
+    layout always links sdk/include/<sdk version> and sdk/lib/<sdk version> to their parent
+    (`symlink_on_windows_too` in xwin's splat.rs, 0.10.0), --disable-symlinks or not, which fails
+    with os error 1314; the /winsysroot layout puts the files in versioned folders and links nothing.
+    --disable-symlinks: the case aliases, which a file system that ignores case does not need."""
+    return [exe, "--accept-license", "--cache-dir", root / "downloads" / "xwin-cache", "splat",
+            "--disable-symlinks", "--use-winsysroot-style", "--output", xdir]
+
+
 def msvc_environment(opts: Options, rep: Reporter, tools, lo, hi):
     """Windows: the environment (INCLUDE, LIB, PATH) of the MSVC CRT and Windows SDK, from an
     installed Visual Studio, else from xwin, which needs the player to accept Microsoft's license."""
@@ -1061,8 +1112,8 @@ def msvc_environment(opts: Options, rep: Reporter, tools, lo, hi):
     if env:
         return env
     xdir = opts.root / "xwin"
-    # All of it: a splat that failed half way leaves the CRT without the SDK.
-    if not all((xdir / p).is_dir() for p in ("crt/include", "sdk/include/ucrt", "sdk/lib/um/x86_64")):
+    dirs = build_env.xwin_dirs(xdir)
+    if dirs is None:
         if not opts.accept_ms_license:
             raise BuildError("The Microsoft C++ runtime and Windows SDK are needed and are not installed. "
                              "Accept Microsoft's license in the setup page to download them, or install "
@@ -1072,15 +1123,19 @@ def msvc_environment(opts: Options, rep: Reporter, tools, lo, hi):
         fetch.unpack("xwin-windows", arc, tooldir, strip=1)
         exe = next(tooldir.rglob("xwin.exe"))
         rep.status("Downloading the Microsoft C++ runtime and Windows SDK")
-        # --disable-symlinks: xwin links the SDK's versioned folders and case aliases, and Windows
-        # lets a normal user make symlinks only with Developer Mode on (os error 1314). Its file
-        # system ignores case, and the paths below need no links.
-        run([exe, "--accept-license", "--cache-dir", opts.root / "downloads" / "xwin-cache", "splat",
-             "--disable-symlinks", "--output", xdir], opts.root, cleanenv.clean_environment(), rep)
-    inc = [xdir / "crt" / "include", xdir / "sdk" / "include" / "ucrt", xdir / "sdk" / "include" / "um",
-           xdir / "sdk" / "include" / "shared", xdir / "sdk" / "include" / "winrt"]
-    lib = [xdir / "crt" / "lib" / "x86_64", xdir / "sdk" / "lib" / "um" / "x86_64",
-           xdir / "sdk" / "lib" / "ucrt" / "x86_64"]
+        # A plain-layout splat that stopped half way (the 0.2.8 error of #739) leaves crt/ and most
+        # of sdk/; xwin itself only clears the folders of the layout it makes.
+        (xdir / build_env.XWIN_DONE).unlink(missing_ok=True)
+        for old in ("crt", "sdk", "vcrd"):
+            shutil.rmtree(xdir / old, ignore_errors=True)
+        run(xwin_splat_command(exe, opts.root, xdir), opts.root, cleanenv.clean_environment(), rep)
+        xdir.mkdir(parents=True, exist_ok=True)
+        (xdir / build_env.XWIN_DONE).write_text(f"xwin {pins.XWIN_VERSION} splat --use-winsysroot-style\n")
+        dirs = build_env.xwin_dirs(xdir)
+        if dirs is None:
+            raise BuildError(f"xwin finished but the Microsoft C++ runtime or Windows SDK is missing from {xdir}. "
+                             "Delete that folder and build again.")
+    inc, lib = dirs
     env = cleanenv.clean_environment()
     env["INCLUDE"] = os.pathsep.join(map(str, inc))
     env["LIB"] = os.pathsep.join(map(str, lib))

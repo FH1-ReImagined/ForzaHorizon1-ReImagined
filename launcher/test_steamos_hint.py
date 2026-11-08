@@ -29,6 +29,8 @@ class SteamOSHint(unittest.TestCase):
         llvm = self.root / "toolchain" / f"llvm-{build_env.pins.LLVM_VERSION}" / "bin"
         llvm.mkdir(parents=True)
         (llvm / "clang").write_text("")
+        (llvm / "clang++").write_text("")
+        (llvm.parent / "lib" / "clang" / "23" / "include").mkdir(parents=True)
 
     def release(self, text):
         path = Path(self.tmp.name) / "os-release"

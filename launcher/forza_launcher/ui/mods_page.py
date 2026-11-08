@@ -423,8 +423,8 @@ class ModsPage(FolderListPage):
         cl.addWidget(label("Forza Motorsport 4 cars", "cardTitle"))
         cl.addWidget(label("Add the cars of your own Forza Motorsport 4 discs that FH1 lacks, with FH1's "
                            "handling. Choose Disc 1 (a disc image, a Games on Demand package or a folder with "
-                           "its files), then Disc 2 for its car packs, or skip it. The cars are converted on "
-                           "this PC and appear as the "
+                           "its files), then Disc 2 for its car packs, then Add FM4 DLC for the car packs you "
+                           "bought for FM4; skip either. The cars are converted on this PC and appear as the "
                            "\"FM4 cars\" mod: untick it to hide them, remove it to delete them.", "muted"))
         row = QHBoxLayout()
         row.setSpacing(12)
@@ -459,7 +459,12 @@ class ModsPage(FolderListPage):
         self.fm4_remove.setEnabled(bool(info) and self.fm4_task is None)
         if self.fm4_task is None:
             if info:
-                text = f"{len(info.get('cars', []))} FM4 car(s) imported."
+                text = f"{len(info.get('cars', []))} FM4 car(s) imported"
+                dlc = info.get("fm4_dlc")
+                if dlc:
+                    text += (f", {len(dlc.get('cars', []))} of them from {len(dlc.get('packs', []))} "
+                             "FM4 DLC pack(s)")
+                text += "."
                 if fm4cars.stale(self.cfg):
                     text += " Your DLC changed since: import again so the DLC cars keep their names."
                 self.fm4_message.setText(text)
@@ -488,6 +493,29 @@ class ModsPage(FolderListPage):
         del skip
         return None
 
+    def _fm4_pick_dlc(self):
+        """The optional third step: the player's FM4 DLC packages ([paths], or None to skip)."""
+        ask = QMessageBox(self)
+        ask.setWindowTitle("Add FM4 DLC")
+        ask.setText("Add FM4 DLC: the car packs you bought for Forza Motorsport 4 (their packages, any "
+                    "name, as in the console's Content/0000000000000000/4D530910/00000002 folder, or an "
+                    "archive of them), or the folder holding them? Their cars join the discs' cars. "
+                    "Track packs and other DLC are left out.")
+        files = ask.addButton("Packages or archives…", QMessageBox.AcceptRole)
+        folder = ask.addButton("Folder…", QMessageBox.AcceptRole)
+        ask.addButton("Skip", QMessageBox.RejectRole)
+        ask.exec()
+        if ask.clickedButton() is files:
+            # all files first: a package's file has no extension
+            chosen, _ = QFileDialog.getOpenFileNames(
+                self, "Forza Motorsport 4 DLC", str(Path.home()),
+                "FM4 DLC packages, archives (*);;Archives (*.zip *.7z *.rar *.tar *.tar.gz *.tgz *.7z.001 *.zip.001)")
+            return chosen or None
+        if ask.clickedButton() is folder:
+            chosen = QFileDialog.getExistingDirectory(self, "Forza Motorsport 4 DLC", str(Path.home()))
+            return [chosen] if chosen else None
+        return None
+
     def _fm4_import(self):
         if self._game_running():
             self.fm4_message.setText("Close the game before importing cars.")
@@ -496,12 +524,13 @@ class ModsPage(FolderListPage):
         if not disc1:
             return
         disc2 = self._fm4_pick("Forza Motorsport 4 Disc 2")
+        dlc = self._fm4_pick_dlc()
         from .workers import Task
 
         def job(task):
             try:
                 return fm4cars.build(self.cfg, disc1, disc2, lambda n, total, text: task.progress.emit(
-                    n / total if total else 0, text), task.cancelled)
+                    n / total if total else 0, text), task.cancelled, dlc=dlc)
             except (OSError, ValueError) as exc:
                 from ..installer import InstallError
                 raise InstallError(f"Import FM4 cars stopped: {exc}") from exc

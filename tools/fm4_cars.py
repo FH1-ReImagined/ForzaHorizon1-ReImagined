@@ -20,12 +20,14 @@ Nothing of either game is in this tool; it only reads the files the player point
 docs/modding/fm4-cars.md has the format notes and what was checked in the game.
 
 Usage:
-  fm4_cars.py list    --fm4 FM4_DISC1 [--fm4-content DIR] --fh1 GAME [--update TU]
-  fm4_cars.py convert --fm4 FM4_DISC1 [--fm4-content DIR] --fh1 GAME [--update TU]
+  fm4_cars.py list    --fm4 FM4_DISC1 [--fm4-content DIR] [--fm4-dlc DIR] --fh1 GAME [--update TU]
+  fm4_cars.py convert --fm4 FM4_DISC1 [--fm4-content DIR] [--fm4-dlc DIR] --fh1 GAME [--update TU]
                       [--dlc DIR] --out MOD_DIR (--cars A,B,... | --all)
 
 FM4_DISC1 is the unpacked disc 1 (the folder with default.xex and Media); --fm4-content is a
-folder holding the unpacked disc 2 car packs (each with Media/DLCZips/*_pri_65.zip). GAME is
+folder holding the unpacked disc 2 car packs (each with Media/DLCZips/*_pri_65.zip); --fm4-dlc
+one holding unpacked FM4 DLC packs (the same layout, their cars' rows in the pack's
+media/db/patch/<n>_merge.slt). GAME is
 FH1's game folder (with media), TU its title update folder (with media.zip); --dlc the
 installed FH1 DLC folder (.../4D5309C9/00000002), so their car names are kept and their cars
 are not added twice. Standard library only (LZX through tools/fxobj_shaders.py).
@@ -39,6 +41,7 @@ import sqlite3
 import struct
 import sys
 import tempfile
+import time
 import zipfile
 import zlib
 
@@ -245,34 +248,210 @@ def logo_members(path):
             if re.match(r"(?i)ui4/logos/[^/]+/l_man_[^/]+\.xds$", i.filename)}
 
 
-class FM4:
-    """The player's FM4 files: disc 1 and the disc 2 car packs."""
+# A pack's car zip: Disc 2's are 0001_pri_65.zip..., a DLC pack's its offer (27_pri_65.zip) or a
+# hex name (5c00_pri_65.zip); other zips of a pack (tracks, cameras, string tables) hold no car.
+PACK_ZIP = re.compile(r"(?i)[0-9a-f]+_pri_65\.zip$")
+PACK_STRINGS = re.compile(r"(?i)stringtables_pri_\d+\.zip$")
+PACK_CMT = re.compile(r"(?i)carmodeltuning_pri_\d+\.zip$")  # mounted at media/audio/cars/carmodeltuning
+PATCH = re.compile(r"(?i)^media/db/patch/(\d+)_merge\.slt$")
+PACK_AUDIO = {"cmt": "media/audio/cars/carmodeltuning/", "et": "media/audio/cars/engines/enginetuning/",
+              "ht": "media/audio/cars/engines/harmonictuning/"}
 
-    def __init__(self, disc1, content=None):
+
+def pack_folders(root):
+    """The packages under root: each folder holding a Media/DLCZips with a car zip, sorted."""
+    out = []
+    if not root or not os.path.isdir(root):
+        return out
+    for folder, dirs, files in os.walk(root):
+        dirs.sort()
+        if os.path.basename(folder).lower() == "dlczips" and any(PACK_ZIP.match(f) for f in files):
+            out.append(os.path.dirname(os.path.dirname(folder)))
+            dirs[:] = []
+    return sorted(out)
+
+
+def pack_patches(pack):
+    """[(number, zip path, zipfile.ZipInfo)] of the database patches (media/db/patch/N_merge.slt)
+    in a package folder's zips: FM4's DLC packs carry their cars' rows in one; Disc 2's car packs
+    have none (their rows are in Disc 1's database)."""
+    dz = find_ci(pack, "Media", "DLCZips")
+    out = []
+    for f in sorted(os.listdir(dz)) if dz else []:
+        if PACK_ZIP.match(f):
+            path = os.path.join(dz, f)
+            for i in ZIPS.get(path).infolist():
+                m = PATCH.match(i.filename)
+                if m:
+                    out.append((int(m.group(1)), path, i))
+    return out
+
+
+def pack_cars(pack):
+    """(MediaNames of the cars whose files a package folder has, Data_Car rows of its database
+    patches as (Id, MediaName))."""
+    dz = find_ci(pack, "Media", "DLCZips")
+    names = set()
+    for f in sorted(os.listdir(dz)) if dz else []:
+        if PACK_ZIP.match(f):
+            for i in ZIPS.get(os.path.join(dz, f)).infolist():
+                m = re.match(r"(?i)media/cars/([^/]+)/", i.filename)
+                if m and not m.group(1).lower().endswith("_slod"):
+                    names.add(m.group(1))
+    rows = []
+    for _, path, info in pack_patches(pack):
+        fd, tmp = tempfile.mkstemp(suffix=".slt")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(Member(ZIPS.get(path), path, info).read())
+            db = sqlite3.connect("file:%s?mode=ro" % tmp, uri=True)
+            try:
+                if "Data_Car" in tables(db):
+                    rows += db.execute("select Id, MediaName from Data_Car order by Id").fetchall()
+            finally:
+                db.close()
+        except sqlite3.Error:
+            pass
+        finally:
+            remove_file(tmp)
+    return names, rows
+
+
+def merge_patch(db, patch_path):
+    """Merges a DLC pack's database patch into db (FM4's database, a copy): the patch's rows are
+    added to the tables both have; a table whose first column is a unique key (Data_Engine,
+    List_FamilyModel...) takes the patch's row over its own of the same key, as the game reads the
+    patch over the disc's database; other tables (several rows a car) get the rows they lack."""
+    db.execute("attach database ? as p", (patch_path,))
+    try:
+        mine = set(tables(db))
+        for (t,) in db.execute("select name from p.sqlite_master where type='table'").fetchall():
+            pcols = [r[1] for r in db.execute("pragma p.table_info([%s])" % t)]
+            if t not in mine:
+                db.execute("create table main.[%s] as select * from p.[%s]" % (t, t))
+                continue
+            cols = [c for c in columns(db, t) if c in pcols]
+            if not cols:
+                continue
+            key = columns(db, t)[0]
+            c = ",".join("[%s]" % x for x in cols)
+            (n, distinct), = db.execute("select count(*), count(distinct [%s]) from main.[%s]" % (key, t)).fetchall()
+            if key in pcols and n == distinct:
+                db.execute("delete from main.[%s] where [%s] in (select [%s] from p.[%s])" % (t, key, key, t))
+                db.execute("insert or replace into main.[%s] (%s) select %s from p.[%s]" % (t, c, c, t))
+            else:
+                db.execute("insert or ignore into main.[%s] (%s) select %s from p.[%s] except select %s "
+                           "from main.[%s]" % (t, c, c, t, c, t))
+        db.commit()
+    except BaseException:
+        db.rollback()
+        raise
+    finally:
+        db.execute("detach database p")
+
+
+
+def remove_file(path):
+    """Deletes a file of ours; on Windows retried for a few seconds while another program (an
+    antivirus scan, the search indexer) has it open. True when it is gone."""
+    for wait in (0.1, 0.2, 0.4, 0.8, 1.5, None):
+        try:
+            os.unlink(path)
+            return True
+        except FileNotFoundError:
+            return True
+        except OSError as e:
+            if wait is None or getattr(e, "winerror", None) not in (5, 32, 33):
+                return False
+            time.sleep(wait)
+    return False
+
+
+class FM4:
+    """The player's FM4 files: disc 1, the disc 2 car packs (content) and the DLC packs (dlc);
+    each a folder of unpacked packages, or a list of such folders. A DLC pack's cars have their rows in the
+    pack's database patch, which goes into a copy of disc 1's database (db_path)."""
+
+    def __init__(self, disc1, content=None, dlc=None):
         self.media = find_ci(disc1, "Media")
         if not self.media:
             raise ConvertError("no Media folder in %s: point at FM4's unpacked disc 1" % disc1)
         self.db_path = find_ci(self.media, "db", "gamedb.slt")
         if not self.db_path:
             raise ConvertError("no Media/db/gamedb.slt in %s" % disc1)
+        def roots(r):
+            return [] if not r else [r] if isinstance(r, (str, os.PathLike)) else [x for x in r if x]
+        content_roots, dlc_roots = roots(content), roots(dlc)
         self.packs = []  # (zip path, string table zip path)
-        if content:
-            for root, dirs, files in os.walk(content):
+        self.pack_dirs = []  # the Media/DLCZips folders, in pack order
+        self.dlc_packs = []  # the DLC packages' folders (those with a database patch)
+        self.dlc_car_ids = set()  # the cars whose rows come from a DLC pack's patch
+        self._tmp = []
+        for root, is_dlc in [(r, False) for r in content_roots] + [(r, True) for r in dlc_roots]:
+            for pack in pack_folders(str(root) if root else None):
+                dz = find_ci(pack, "Media", "DLCZips")
+                files = sorted(os.listdir(dz))
+                st = [os.path.join(dz, g) for g in files if PACK_STRINGS.match(g)]
+                self.pack_dirs.append(dz)
                 for f in files:
-                    if re.match(r"(?i)\d+_pri_65\.zip$", f) and "dlczips" in root.lower():
-                        st = [os.path.join(root, g) for g in files if re.match(r"(?i)stringtables_pri_\d+\.zip$", g)]
-                        self.packs.append((os.path.join(root, f), st[0] if st else None))
+                    if PACK_ZIP.match(f):
+                        self.packs.append((os.path.join(dz, f), st[0] if st else None))
+                if is_dlc and pack_patches(pack):
+                    self.dlc_packs.append(pack)
         self.packs.sort()
-        self._cars = None
-        self._roots = (disc1, content)
+        self._roots = (disc1, *content_roots, *dlc_roots)
+        self._cars = self._thumbs = self._audio = self._wheels = None
+        self._dbs = []  # every connection db() handed out: closed by close() before the delete
+        if self.dlc_packs:
+            try:
+                self._merge_dlc()
+            except BaseException:
+                self.close()  # nobody else can: the caller never gets this object
+                raise
+
+    def _merge_dlc(self):
+        """disc 1's database with the DLC packs' patches (in their number's order) merged in."""
+        fd, merged = tempfile.mkstemp(suffix=".slt")
+        self._tmp.append(merged)
+        with os.fdopen(fd, "wb") as g, open(self.db_path, "rb") as f:
+            while True:
+                chunk = f.read(1 << 22)
+                if not chunk:
+                    break
+                g.write(chunk)
+        db = sqlite3.connect(merged)
+        try:
+            before = {r[0] for r in db.execute("select Id from Data_Car")}
+            for _, path, info in sorted(p for pack in self.dlc_packs for p in pack_patches(pack)):
+                fd, tmp = tempfile.mkstemp(suffix=".slt")
+                self._tmp.append(tmp)
+                with os.fdopen(fd, "wb") as f:
+                    f.write(Member(ZIPS.get(path), path, info).read())
+                try:
+                    merge_patch(db, tmp)
+                except sqlite3.Error as e:
+                    raise ConvertError("the database patch of %s could not be read (%s)"
+                                       % (os.path.basename(path), e))
+            self.dlc_car_ids = {r[0] for r in db.execute("select Id from Data_Car")} - before
+        finally:
+            db.close()
+        self.db_path = merged
 
     def db(self):
-        return sqlite3.connect("file:%s?mode=ro" % self.db_path, uri=True)
+        db = sqlite3.connect("file:%s?mode=ro" % self.db_path, uri=True)
+        self._dbs.append(db)
+        return db
 
     def close(self):
-        """Close FM4's zips: the launcher deletes the unpacked discs next (#551)."""
-        self._cars = None
+        """Close FM4's zips and every connection to its database, then delete the merged copy:
+        Windows deletes no file a connection still holds open, and the launcher deletes the
+        unpacked discs next (#551, #707)."""
+        self._cars = self._thumbs = self._audio = self._wheels = None
+        for db in self._dbs:
+            db.close()  # a second close (the converter's own) does nothing
+        self._dbs = []
         ZIPS.close(*self._roots)
+        self._tmp = [p for p in self._tmp if not remove_file(p)]
 
     def car_files(self):
         """MediaName (lower) -> (display MediaName, [(relative name, Member)])."""
@@ -312,9 +491,55 @@ class FM4:
                 return out
         return None
 
+    def has_wheel(self, name):
+        """True when disc 1 or a pack has the wheel's files."""
+        if self._wheels is None:
+            disc = find_ci(self.media, "wheels")
+            self._wheels = {f[:-4].lower() for f in os.listdir(disc) if f.lower().endswith(".zip")} if disc else set()
+            for path, _ in self.packs:
+                for i in ZIPS.get(path).infolist():
+                    m = re.match(r"(?i)media/wheels/([^/]+)/.", i.filename)
+                    if m:
+                        self._wheels.add(m.group(1).lower())
+        return name.lower() in self._wheels
+
     def thumbnail(self, car_id):
+        """The car's picture: disc 1's UI/Textures.zip, else a pack's media/UI/Textures (a DLC car's)."""
         z = find_ci(self.media, "UI", "Textures.zip")
-        return zip_member(z, "Thumbnails/Thumbnail_%d.xds" % car_id)
+        data = zip_member(z, "Thumbnails/Thumbnail_%d.xds" % car_id)
+        if data is not None:
+            return data
+        if self._thumbs is None:
+            self._thumbs = {}
+            for path, _ in self.packs:
+                z = ZIPS.get(path)
+                for i in z.infolist():
+                    m = re.match(r"(?i)media/ui/textures/thumbnails/thumbnail_(\d+)\.xds$", i.filename)
+                    if m:
+                        self._thumbs[int(m.group(1))] = Member(z, path, i)
+        m = self._thumbs.get(car_id)
+        return m.read() if m else None
+
+    def pack_audio(self):
+        """{"cmt" | "et" | "ht": {lower file name: (zip path, ZipInfo)}}: the sound tuning files the
+        packs add (a DLC car's CarModelTuning, EngineTuning and harmonic tuning: in its car zip
+        under media/audio/cars, and in a CarModelTuning_pri_N.zip), later packs over earlier ones."""
+        if self._audio is None:
+            self._audio = {k: {} for k in PACK_AUDIO}
+            for dz in self.pack_dirs:
+                for f in sorted(os.listdir(dz)):
+                    path = os.path.join(dz, f)
+                    if PACK_ZIP.match(f):
+                        for i in ZIPS.get(path).infolist():
+                            low = i.filename.lower()
+                            for k, pre in PACK_AUDIO.items():
+                                if low.startswith(pre) and "/" not in low[len(pre):]:
+                                    self._audio[k][low[len(pre):]] = (path, i)
+                    elif PACK_CMT.match(f):
+                        for i in ZIPS.get(path).infolist():
+                            if not i.is_dir():
+                                self._audio["cmt"][i.filename.lower()] = (path, i)
+        return self._audio
 
     def logos(self):
         """Lowercase member name -> Member: the make logos in UI/Textures.zip (UI4/Logos/...)."""
@@ -727,6 +952,16 @@ def make_merges(fm4db, fh1db, fm4_names, fh1_names):
     return out
 
 
+def engine_clash(fm4db, fh1db, engine_id):
+    """True when FH1's database has an engine of that id that is not FM4's (another MediaName)."""
+    try:
+        theirs = fh1db.execute("select MediaName from Data_Engine where EngineID=?", (engine_id,)).fetchone()
+        ours = fm4db.execute("select MediaName from Data_Engine where EngineID=?", (engine_id,)).fetchone()
+    except sqlite3.Error:
+        return False
+    return bool(theirs and ours and str(theirs[0]).lower() != str(ours[0]).lower())
+
+
 class Database:
     """Builds the DB patch: the selected cars' rows from FM4's database in FH1's tables.
     merges: {FM4 make id: FH1 make id} (make_merges), the cars of those makes join FH1's."""
@@ -777,6 +1012,11 @@ class Database:
         first = {}
         for table, col in CAR_TABLES:
             rows = self._select(table, col, car_ids)
+            if table == "List_UpgradeEngine":
+                # an engine swap whose engine id FH1 gives another engine (the DLC's Porsche GT2 RS
+                # engine is FH1's Camry's): left out, the car would get FH1's engine instead.
+                # A car whose stock engine clashes is not converted at all (Converter.needs).
+                rows = [r for r in rows if r.get("IsStock") or not engine_clash(self.fm4, self.fh1, r.get("EngineID"))]
             first[table] = rows
             self._add(table, rows)
         level2 = []
@@ -804,6 +1044,10 @@ class Database:
                 if name and "MakeName" in r:
                     r["MakeName"] = name[0]
                     self.fh1_refs.add(name[0])
+        # the stock wheels' rows: FH1's database has those of most FM4 cars, not of the DLC's
+        # Porsche Expansion and some later packs (a car without its wheel row did not load)
+        self._add("List_Wheels", self._select("List_Wheels", "ID", {
+            r["StockWheelID"] for r in first.get("Data_Car", []) if r.get("StockWheelID") is not None}))
         makes = {r["MakeID"] for r in first.get("Data_Car", []) if r.get("MakeID") is not None}
         makes -= set(self.merges.values())  # FH1's own rows
         self._add("List_CarMake", self._select("List_CarMake", "ID", makes))
@@ -1136,13 +1380,14 @@ class Converter:
             raise ConvertError("no physicsdefinition.bin in the FH1 car archives")
 
     def candidates(self):
-        """[(id, MediaName, has files, reason)] for every FM4 car FH1 lacks."""
+        """[(id, MediaName, reason)] for every FM4 car FH1 lacks; reason (None for a car that
+        can be converted) says why one is left out."""
         fh_ids = {r[0] for r in self.fh1db.execute("select Id from Data_Car")}
         fh_names = {str(r[0]).lower() for r in self.fh1db.execute("select MediaName from Data_Car")}
         dlc_names, dlc_ids = self.fh1.dlc_car_names()
         files = self.fm4.car_files()
         out = []
-        for cid, name, make in self.fm4db.execute("select Id, MediaName, MakeID from Data_Car order by Id"):
+        for cid, name, make in self.fm4db.execute("select Id, MediaName, MakeID from Data_Car order by Id").fetchall():
             low = str(name).lower()
             if cid in fh_ids or low in fh_names or cid in dlc_ids or low in dlc_names:
                 continue
@@ -1151,8 +1396,59 @@ class Converter:
                 reason = "an FH1 DLC car"
             elif low not in files:
                 reason = "no model in the FM4 files given"
+            else:
+                reason = self.needs(cid)
             out.append((cid, name, reason))
         return out
+
+    def _have(self, table, col, value):
+        """True when FM4's database (with the DLC patches) or FH1's has a row of table with col = value."""
+        for db in (self.fm4db, self.fh1db):
+            try:
+                if db.execute("select 1 from [%s] where [%s]=? limit 1" % (table, col), (value,)).fetchone():
+                    return True
+            except sqlite3.Error:  # a table or column that database lacks
+                pass
+        return False
+
+    def needs(self, cid):
+        """Why a car can't be converted whole, in words, or None: its rows name something neither
+        game's files have (its engine, body or drivetrain rows, its make or its stock wheel: a DLC
+        car that relies on another pack's rows or files), or its stock engine's id is another
+        engine's in FH1. Such a car is left out rather than added broken."""
+        miss = "needs %s, which is not in the FM4 files given (is it in another DLC pack?)"
+        db = self.fm4db
+        if not hasattr(self, "_fm4_tables"):
+            self._fm4_tables = set(tables(db))
+        for upgrade, col, table, key, what in (
+                ("List_UpgradeEngine", "EngineID", "Data_Engine", "EngineID", "its engine"),
+                ("List_UpgradeCarBody", "CarBodyID", "Data_CarBody", "Id", "its body"),
+                ("List_UpgradeDrivetrain", "DrivetrainID", "Data_Drivetrain", "DrivetrainID", "its drivetrain")):
+            if upgrade not in self._fm4_tables or col not in columns(db, upgrade):
+                continue
+            q = "select distinct [%s] from [%s] where Ordinal=?" % (col, upgrade)
+            for (v,) in db.execute(q, (cid,)).fetchall():
+                if v is not None and not self._have(table, key, v):
+                    return miss % ("%s (%s %s)" % (what, key, v))
+        if "List_UpgradeEngine" in self._fm4_tables and "IsStock" in columns(db, "List_UpgradeEngine"):
+            for (v,) in db.execute("select EngineID from List_UpgradeEngine where Ordinal=? and IsStock",
+                                   (cid,)).fetchall():
+                if engine_clash(db, self.fh1db, v):
+                    return "its engine's id (EngineID %s) is another engine's in FH1" % v
+        cols = columns(db, "Data_Car")
+        row = dict(zip(cols, db.execute("select * from Data_Car where Id=?", (cid,)).fetchone()))
+        if row.get("MakeID") is not None and "List_CarMake" in self._fm4_tables \
+                and not self._have("List_CarMake", "ID", row["MakeID"]):
+            return miss % ("its make (%s)" % row["MakeID"])
+        wid = row.get("StockWheelID")
+        if wid is not None and "List_Wheels" in self._fm4_tables:
+            wheel = db.execute("select MediaName from List_Wheels where ID=?", (wid,)).fetchone()
+            if not wheel:
+                if not self._have("List_Wheels", "ID", wid):
+                    return miss % ("its wheel (%s)" % wid)
+            elif not (self.fh1.has_wheel(wheel[0]) or self.fm4.has_wheel(wheel[0])):
+                return miss % ("the files of its wheel %s" % wheel[0])
+        return None
 
     def convert_wheel(self, name):
         if name in self.wheels_done or self.fh1.has_wheel(name):
@@ -1180,11 +1476,14 @@ class Converter:
     def audio(self, car_name, engine_names, report):
         """The car's engine sound set-up. FH1 has every FM4 sound bank and harmonic tuning
         file, and the car and engine tuning (CarModelTuning, EngineTuning) of most FM4 cars;
-        what it lacks is taken from FM4's copy (its audio/cars archives). The EngineTuning of
+        what it lacks is taken from FM4's copy (its audio/cars archives, and a DLC pack's own
+        tuning files for its cars). The EngineTuning of
         an engine no FH1 car uses goes into the mod at FH1's level (louder_engine, #712)."""
         if not hasattr(self, "_fh_audio"):
             self._fh_audio = {k: self._audio_zip_names(self.fh1.media, v) for k, v in AUDIO_ZIPS.items()}
             self._fm_audio = {k: self._audio_zip_names(self.fm4.media, v) for k, v in AUDIO_ZIPS.items()}
+            for k, members in self.fm4.pack_audio().items():  # a DLC car's, over disc 1's
+                self._fm_audio[k].update(members)
             if self.fh1.update:
                 for i in ZIPS.get(self.fh1.update).infolist():
                     for k, v in AUDIO_ZIPS.items():
@@ -1394,6 +1693,8 @@ class Converter:
                 report["skipped"].append((cid, "%s: %s" % (name, e)))
         if not done:
             raise ConvertError("no car converted")
+        dlc = getattr(self.fm4, "dlc_car_ids", set())
+        report["dlc_cars"] = [(cid, name) for cid, name, _, _ in report["cars"] if cid in dlc]
         keep = set(done)
         rows = {t: [r for r in rs if t not in dict(CAR_TABLES) or r.get(dict(CAR_TABLES)[t]) in keep]
                 for t, rs in rows.items()}
@@ -1405,7 +1706,8 @@ class Converter:
         write_full_db(self.fh1.db_file, self.fh1db, rows, os.path.join(dbdir, "gamedb.slt"))
         with open(os.path.join(self.out, "mod.toml"), "w", encoding="utf-8") as f:
             f.write('name = "%s"\nversion = "1"\ndescription = "%d Forza Motorsport 4 cars, '
-                    'converted on this PC from your own FM4 discs"\n' % (MOD_NAME, len(done)))
+                    'converted on this PC from your own FM4 discs%s"\n'
+                    % (MOD_NAME, len(done), " and DLC" if report["dlc_cars"] else ""))
         return report
 
 
@@ -1414,6 +1716,7 @@ def main(argv=None):
     ap.add_argument("cmd", choices=["list", "convert"])
     ap.add_argument("--fm4", required=True)
     ap.add_argument("--fm4-content")
+    ap.add_argument("--fm4-dlc", help="a folder of unpacked FM4 DLC packages (each with Media/DLCZips)")
     ap.add_argument("--fh1", required=True)
     ap.add_argument("--update")
     ap.add_argument("--dlc")
@@ -1424,7 +1727,7 @@ def main(argv=None):
     ap.add_argument("--all", action="store_true")
     a = ap.parse_args(argv)
     try:
-        fm4 = FM4(a.fm4, a.fm4_content)
+        fm4 = FM4(a.fm4, a.fm4_content, a.fm4_dlc)
         fh1 = FH1(a.fh1, a.update, a.dlc)
         if a.cmd == "list":
             c = Converter(fm4, fh1, None)
@@ -1451,6 +1754,8 @@ def main(argv=None):
             print("added %5d %-28s class %d PI %d" % (cid, name, cls, pi))
         for cid, why in rep["skipped"]:
             print("skipped %5d %s" % (cid, why))
+        if rep.get("dlc_cars"):
+            print("from the FM4 DLC: %d" % len(rep["dlc_cars"]))
         if rep.get("louder"):
             print("engine tunings at FH1's level: %d" % rep["louder"])
         for car, files in rep.get("audio", []):
