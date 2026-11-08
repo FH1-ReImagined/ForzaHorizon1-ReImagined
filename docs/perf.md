@@ -3577,3 +3577,82 @@ with `FORZA_MAIN_WAITS_RENDER=0`; no crash, no device lost. That stall is not th
 pass is held and nothing spins (the busiest guest thread, F80012FC, at 15% of a core); it stays open in #725. On
 Vulkan its old driver (1.2.131) shows no frame at all, 4 of 4 in both arms (#672). The GeForce, warm caches, the
 benchmark with the fix: 52.7 and 54.8 fps (52.8-56.0 before), the main loop waiting 0 times.
+
+## Descriptor reuse in the command processor (#192, #179, 2026-11-08)
+
+The biggest cost of the GPU command processor was descriptor setup (20-23 % of its CPU time, #607 above): every
+draw wrote a new constants set and a new texture set for each stage, and acquired its samplers and requested its
+textures again. ReIGlue 0442-0445 reuse what has not changed, on by default; each part has an off switch:
+
+- `vulkan_dynamic_constants` (0442, Sean O'Connor's #179; at startup): the guest constants are bound as dynamic
+  uniform buffers, the draw's slices selected by offsets at bind time, and the frame's sets with the same buffers
+  and ranges are used again.
+- `vulkan_binding_request_reuse` (0443, Sean's #192): within a submission, unchanged samplers are kept and a texture
+  request whose bindings are all in sync is skipped. 0443 also clears the bound flags of the descriptor sets a
+  pipeline layout change makes incompatible (missing upstream).
+- `vulkan_texture_descriptor_reuse` (0444): the texture sets written in a frame are remembered by their exact
+  contents (layout, then every view and sampler handle) and used again, still bound if it is the bound one;
+  forgotten at each frame, when the pools are reset and when any view or sampler is destroyed (a later handle may
+  have the same value). Sean's first version of #192 reused texture sets by comparing a draw with the previous
+  one only, and drew wrong textures; it was removed.
+
+`FORZA_VK_DYNAMIC_CONSTANTS`, `FORZA_VK_BINDING_REUSE` and `FORZA_VK_TEXTURE_SET_REUSE` (0/1) override the cvars
+for A/B runs; `FORZA_VK_BINDING_VERIFY=1` runs the full sampler and texture path on predicted hits and logs a
+mismatch; `FORZA_VK_BINDING_STATS=1` logs the hits every 300 frames.
+
+**Method.** TU4 game of main 2e28667 with the ReIGlue branch's plugin and runtime, Ryzen 7 7800X3D, RX 9060 XT
+(RADV), the built-in benchmark (Recaro Rush, 60 s measured) uncapped (`--frame_rate=240`), 1280x720, the golden
+TU4 save in a scratch `--user_data_root`, scratch XDG dirs and caches (warmed by a run first), audio muted,
+`nice -n 10 ionice -c3`, BENCH lock held, each run started with a 1-minute load under 2 and no compiler running.
+Six cores: `taskset -c 0-5` from the start (a Ryzen 5 5600X stand-in; only Mesa's disk cache threads escaped it).
+The command processor's CPU time from `--fh1_frame_cost_csv` over the measured minute. Each race's AI draws a
+different amount (4,070-5,170 draws a frame), and the frame rate follows that; the command processor's time per
+draw is the steady figure.
+
+**All three off and on**, three interleaved pairs each:
+
+| | fps | 1% low | p99 ms | Command processor, ms a frame | us a draw |
+| --- | --- | --- | --- | --- | --- |
+| 8 cores, off | 133.4 (126.8, 146.2, 127.2) | 89.4 | 10.22 | 6.04 | 1.319 |
+| 8 cores, on | 147.3 (145.0, 150.7, 146.1) | 94.7 | 9.44 | 5.31 | 1.221 |
+| 6 cores, off | 136.8 (135.1, 145.7, 129.8) | 90.7 | 10.15 | 5.88 | 1.317 |
+| 6 cores, on | 142.2 (151.6, 149.4, 125.6) | 95.0 | 9.51 | 5.45 | 1.221 |
+
+- Time per draw: 1.311-1.330 us off and 1.194-1.243 us on in all 12 runs (7.4 % less on both core counts). With
+  the same draws (about 4,130 a frame): 146.2 to 150.7 fps on 8 cores, 145.7 to 149.4 on 6.
+- Hits in the race: about 95 % of the constants sets, 75-82 % of the texture sets (30-40 % still bound), 54 % of
+  the sampler acquisitions and 57 % of the texture requests; the texture set memo was never cleared within a frame.
+
+**Each part**, 8 cores (one off run and two of each, then two pairs of the other two parts without the texture set
+memo against all three, the same session):
+
+| | fps | 1% low | Command processor, us a draw |
+| --- | --- | --- | --- |
+| Off | 138.1 | 90.6 | 1.320 |
+| Dynamic constants only | 132.9, 134.1 | 87.9, 91.3 | 1.264, 1.265 |
+| Sampler and texture-request reuse only | 147.0, 147.8 | 94.0, 96.5 | 1.294, 1.301 |
+| Texture set memo only | 135.6, 133.2 | 89.6, 86.3 | 1.336, 1.314 |
+| Dynamic constants and request reuse | 139.8, 139.8 | 89.5, 90.1 | 1.273, 1.229 |
+| All three | 146.1, 141.1 | 94.4, 91.9 | 1.227, 1.243 |
+
+The dynamic constants save the most (4 % of the time per draw), the request reuse 2 %. The texture set memo alone
+saves nothing measurable (hashing the set costs about what writing it did); with the other two it is about 1 % more,
+within the runs' spread, and it also leaves 30-40 % of the texture sets bound, which the submission thread then does
+not bind again (not measured separately). The frame rates of the single parts follow their races' draws (4,140-4,680
+a frame).
+
+**Free roam**, 3 minutes from the golden save's spawn (throttle with a brake and a turn every 25 s), 45-210 s, 8 cores:
+off 180.8 fps, 1% low 91.3, the command processor 4.18 ms a frame (1.412 us a draw); with the defaults (all three
+on, no overrides) 183.1 fps, 1% low 96.7, 3.97 ms (1.344 us a draw, 4.8 % less).
+
+**Correctness.**
+
+- Benchmark with all three on, `FORZA_VK_BINDING_VERIFY=1` and the Khronos validation layer (1.4.341): complete, no
+  sampler or texture-request mismatch, no validation error (only `ShaderOutputNotConsumed`, as without the change).
+  With the defaults and synchronization validation (`VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true`): no hazard, no error.
+- `tools/render_test.py`: baselines recorded with all three off (three runs), then a check with all three on on
+  the same build: 6/6 scenes pass within their noise (race start dssim 0.0030 of 0.008, photo mode 0.0110 of 0.016).
+- VR true stereo's right eye (which resets every fetch constant and texture binding), the native HUD's texture
+  cache, texture packs and the upscalers' own pipelines were checked in the code, not in a run.
+- Only RADV is measured. The Vulkan path is the same on NVIDIA, Intel and Windows (dynamic uniform buffers are core
+  Vulkan 1.0; the constants need 5 of the 8 every device has); Direct3D 12 does not change.
