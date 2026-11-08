@@ -84,7 +84,9 @@ Not yet:
 - **Races and events.** FH1's race flow loads on a circuit and puts the grid on it, but the AI
   cars do not drive yet: FH1's races need a road network the circuits do not have.
 - **AI cars and traffic** on the circuit.
-- **Shadows** on the circuit (off).
+- **Shadows of the circuit's own buildings and trees.** Your car's shadow is drawn on the
+  circuit with the Vulkan renderer (with ReGPU, the D3D12 renderer, circuits have no shadows
+  yet). A circuit imported with an earlier launcher has none: import it again.
 - **The map and GPS** (FH1's map is Colorado's).
 - **Online play** on a circuit.
 

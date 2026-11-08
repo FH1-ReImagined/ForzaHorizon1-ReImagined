@@ -971,12 +971,42 @@ What a player would need, beyond the spike (none of this is built yet):
    launcher, and a frame-time check on low-end PCs. The car import's rule holds: only from the
    player's own discs, nothing of either game in the repo or the release.
 
+## Reaching a circuit from inside the game (looked into, not built)
+
+Today a circuit replaces Colorado for a whole session (the launcher's Drive in). Travel inside
+one session, Colorado to a circuit and back (an airfield or pause-menu entry), was looked into
+and left for later. What it needs:
+
+- A world change in the session. FH1 reloads free roam with the state machine's
+  `load_into_free_roam` (state_definitions.xml, CLoadIntoFreeRoam: after races), which loads
+  Tracks row 317. Pointing 317 at the circuit for one load could use a TEMP shadow of Tracks, the
+  way Custom Race shadows Events and Races through the game's own database object
+  (hooks/custom_race.cpp); the way back drops it and reloads again. Not found yet: how to
+  request `load_into_free_roam` from free roam itself (the benchmark requests an activity's
+  states, platform/benchmark_session.cpp, but free roam's reload is not one of an activity's).
+- Per-world switches. The converted track's switches are process-wide today: FORZA_FM4_COL
+  makes every collision index load whole, FORZA_TRACK_SPAWN moves every teleport of the
+  player's car (and is read once), FORZA_TRACK_NO_TRAFFIC sends every other car below the
+  world. With Colorado and a circuit in one session they must follow the loaded world (the
+  track's own name at load, against the mounted circuit), in hooks/fm4_track.cpp and the lap
+  timer (which would show its HUD in Colorado now).
+- The mount from the session's start for every imported circuit (cheap: the mount already
+  adds folders; their archive lines to one zipmanifest.xml).
+- An entry point: the pause menu has native pages (platform/native_pause_*), the airfield none
+  of ours yet.
+- Free roam on a circuit runs Colorado's game modes (the converter copies them), so its
+  festival, events and map pins are Colorado's in the wrong place; a world change in a session
+  makes that more visible, and the save keeps the place you leave from.
+
+Each piece has a precedent in the codebase, but together they are several boxes of work: the
+state-machine request first (one experiment decides it), then the per-world switches.
+
 ## Open
 
 - (c) The road, terrain and buildings draw with FM4's own shaders, at 13:00, over a ground.
-  Car shadows: done behind `FM4_SHADERS_FH1_SHADOWS` (off) with ReIGlue 0439 and 0440 (local
-  branch fh1-648-fm4-shadows-pr), see "Car shadows made shippable" and the morning runs above;
-  left: the ReIGlue PR (the D3D12 fallback checked). Shadows from the track's own objects
+  Car shadows: `FM4_SHADERS_FH1_SHADOWS`, on by default since 0.2.9 shipped ReIGlue 0439 and
+  0440 (0 turns it off); see "Car shadows made shippable" and the morning runs above (the
+  D3D12 fallback checked). Shadows from the track's own objects
   are still open (FM4 models are not in FH1's cascade pass). The older notes below are kept.
 - Shadows, as far as looked into:
   - Shadows: FH1's colour-pass track shaders take shadows from a screen-space mask on s13

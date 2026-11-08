@@ -1,7 +1,7 @@
 """Import Forza Motorsport 4's circuits into FH1 from the player's own FM4 Disc 1 (#648).
 
 Experimental and off unless chosen: an imported circuit takes the place of Colorado for one
-start (free drive and timed laps on the circuit, no events, no shadows yet). Play with "FH1's Colorado"
+start (free drive and timed laps on the circuit, no events yet). Play with "FH1's Colorado"
 (the default) starts the game exactly as without any import.
 
 The import runs the converter (tools/fm4_track_mod.py, then tools/fm4_pvs.py, as
@@ -73,10 +73,10 @@ NOT_CIRCUITS = re.compile(r"(?i)^(homespace\d*|ui.*)$")  # FM4's garage sets and
 
 EXPERIMENTAL = ("Experimental. What works: free driving on the circuit, with its buildings, stands "
                 "and collision, and timed laps (lap, sectors and best lap on the game's HUD, kept "
-                "per circuit). Not yet: events and races, shadows (off), AI cars and traffic, the "
-                "map and GPS. Suzuka is the most tested circuit. A start on a circuit plays offline, and "
-                "your save is backed up first.")
-EXPERIMENTAL_SHORT = ("Experimental: free driving and timed laps on the circuit (no events, no shadows "
+                "per circuit), your car's shadow. Not yet: events and races, the circuit's own "
+                "shadows, AI cars and traffic, the map and GPS. Suzuka is the most tested circuit. "
+                "A start on a circuit plays offline, and your save is backed up first.")
+EXPERIMENTAL_SHORT = ("Experimental: free driving and timed laps on the circuit (no events "
                       "yet). It plays offline, and your save is backed up first.")
 
 # Disc 1's files the converter reads besides the circuits' folders.

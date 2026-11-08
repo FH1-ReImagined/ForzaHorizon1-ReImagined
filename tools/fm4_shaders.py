@@ -41,14 +41,15 @@ MUL, MAX = 1, 3
 # SpirvShaderTranslator::Fh1Fm4ShadowFetch) samples the mask at the pixel's position for a
 # marked fetch; elsewhere (D3D12, or an SDK without it) the fetch still reads 1, no shadows.
 # shad_color is then 0: the shadow takes the sun's light away, not the lightmap's.
-# Off by default (FM4_SHADERS_FH1_SHADOWS=1). The mask holds the car's shadow (FH1's own
+# On by default (FM4_SHADERS_FH1_SHADOWS=0 turns it off). The mask holds the car's shadow (FH1's own
 # cascades hold only FH1's track objects, see CSM_SHADOWS): with the sun behind the camera it
 # falls ahead of the car. The SDK branch maps the mask's 0 to a floor (FH1_FM4_SHADOW_FLOOR,
 # 0.45). It needs the SDK's fix for constant-only fetch results (see below): without it the
 # shadowed surfaces draw black under Vulkan; with it, and without the branch (the D3D12
 # translator, ReGPU), the marked fetch reads 1 as before and the surfaces draw as with the
-# switch off. To stay off until a release ships that SDK.
-FH1_SHADOWS = __import__("os").environ.get("FM4_SHADERS_FH1_SHADOWS", "0") == "1"
+# switch off. 0.2.9 ships that SDK (ReIGlue 0439, 0440), so the converter makes them by default;
+# a circuit converted before keeps its unmarked fetches (no shadows) and draws as it did.
+FH1_SHADOWS = __import__("os").environ.get("FM4_SHADERS_FH1_SHADOWS", "1") == "1"
 # FM4_SHADERS_FH1_SHADOW_COLOUR=1 (a test) keeps shad_color 1 with them (the shadow then takes
 # only the sun term away).
 FH1_SHADOW_COLOUR_ZERO = __import__("os").environ.get("FM4_SHADERS_FH1_SHADOW_COLOUR", "0") == "0"
