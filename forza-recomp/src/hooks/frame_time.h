@@ -29,6 +29,11 @@ int64_t PresentDelayNs();
 // The guest vblank rate frame_rate asks for (frame_rate * VblanksPerFrame()).
 int VblankHz();
 
+// The guest vblank rate the game starts with (src/main.cpp): VblankHz() away from 30, where a
+// video_mode_refresh_rate set in forza.toml no longer halves the frame rate (#756); at 30 the
+// configured video_mode_refresh_rate.
+double StartVblankHz();
+
 // The frame time the game aims for, in ms: VblanksPerFrame() guest vblanks at the
 // configured guest refresh rate.
 double TargetMs();

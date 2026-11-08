@@ -54,6 +54,23 @@ void TestDividers() {
   assert(VblanksPerFrame(240, 480, 3) == 2 && VblanksPerFrame(144, 480, 3) == 3);
 }
 
+// #756: frame_rate 60 started with video_mode_refresh_rate 60 left in forza.toml (an RTX 3080
+// at 30 fps until an MSAA change was saved in the Graphics menu, which sets the vblank from
+// frame_rate). The frame rate a start runs is its vblank rate over the divider.
+void TestStartVblank() {
+  auto fps = [](int rate, double configured, double max = 480) {
+    return StartVblankHz(rate, configured, max) / VblanksPerFrame(rate, max);
+  };
+  assert(fps(60, 60) == 60 && StartVblankHz(60, 60, 480) == 120);  // was 30 fps
+  assert(fps(60, 120) == 60 && fps(60, 144) == 60);
+  assert(fps(144, 60) == 144 && StartVblankHz(144, 60, 480) == 288);
+  assert(fps(144, 60, 240) == 144 && StartVblankHz(144, 60, 240) == 144);  // divider 1
+  assert(fps(20, 120) == 20 && StartVblankHz(20, 120, 480) == 60);
+  assert(fps(40, 60) == 40 && StartVblankHz(40, 60, 480) == 120);
+  assert(StartVblankHz(30, 60, 480) == 60 && StartVblankHz(30, 120, 480) == 120);  // 30 keeps it
+  assert(VblankHz(60, 480) == 120 && VblankHz(144, 480, 1) == 144 && VblankHz(30, 480) == 60);
+}
+
 void TestThirdVblank() {
   // Whatever the game's count and our phase at the start, the main loop is released every
   // third vblank once the first release happened.
@@ -160,6 +177,7 @@ void TestPacerLeavesOtherPresentsAlone() {
 
 int main() {
   TestDividers();
+  TestStartVblank();
   TestThirdVblank();
   TestPacer20();
   TestPacer40();

@@ -19,6 +19,20 @@ inline int VblanksPerFrame(int fps, double max_vblank_hz, int forced = 0) {
   return 2 * fps <= max_vblank_hz ? 2 : 1;
 }
 
+// The guest vblank rate (Hz) frame_rate asks for: VblanksPerFrame() vblanks a frame.
+inline int VblankHz(int fps, double max_vblank_hz, int forced = 0) {
+  return fps * VblanksPerFrame(fps, max_vblank_hz, forced);
+}
+
+// The guest vblank rate a start runs, from frame_rate and the video_mode_refresh_rate it was
+// started with (#756). Away from 30, frame_rate sets it, as the in-game Graphics menu does at
+// every Save: a refresh rate left in forza.toml from another frame rate (60 Hz with frame_rate
+// 60) ran the game at half its frame rate until a graphics setting was saved. At the console's
+// 30 a refresh rate set in forza.toml or on the command line stays.
+inline double StartVblankHz(int fps, double configured_hz, double max_vblank_hz, int forced = 0) {
+  return fps == 30 ? configured_hz : double(VblankHz(fps, max_vblank_hz, forced));
+}
+
 // A divider of three on top of the game's own counter, which (with mainthread30fps on)
 // releases the main loop at every second vblank it is shown. Shown two of every three, it
 // releases the main loop every third vblank, whatever its count was at the start.
