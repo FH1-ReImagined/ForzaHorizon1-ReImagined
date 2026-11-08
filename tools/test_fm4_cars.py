@@ -484,6 +484,35 @@ def car_members(name, car_id=None):
     return out
 
 
+def held_open(path):
+    """True when this process has the file open (Linux /proc; elsewhere the delete itself fails)."""
+    fds = "/proc/self/fd"
+    if not os.path.isdir(fds):
+        return False
+    want = os.path.realpath(path)
+    for fd in os.listdir(fds):
+        try:
+            if os.readlink(os.path.join(fds, fd)) == want:
+                return True
+        except OSError:
+            pass
+    return False
+
+
+def windows_unlink():
+    """os.unlink as Windows does it (#551, #707): a file this process still holds open is refused."""
+    real = os.unlink
+
+    def unlink(path, *a, **kw):
+        if held_open(path):
+            e = PermissionError(13, "The process cannot access the file because it is being used by "
+                                    "another process", str(path))
+            e.winerror = 32
+            raise e
+        return real(path, *a, **kw)
+    return mock.patch.object(os, "unlink", unlink)
+
+
 class DlcPackTests(unittest.TestCase):
     """FM4's DLC car packs: the cars' rows in each pack's database patch, merged over disc 1's
     database; their files, pictures and sound tuning in the pack's zips."""
@@ -534,8 +563,20 @@ class DlcPackTests(unittest.TestCase):
         self.assertIn("hyu_veloster_12_et.xml", audio["et"])
         self.assertIn("hyu_veloster_12_cmt.xml", audio["cmt"])
         merged = fm4.db_path
-        fm4.close()
+        self.assertTrue(held_open(merged) or not os.path.isdir("/proc/self/fd"))
+        with windows_unlink(), mock.patch.object(fm4_cars.time, "sleep"):
+            fm4.close()  # closes the connections it handed out (db above) before the delete
         self.assertFalse(os.path.exists(merged))  # the merged copy is deleted with the rest (#551)
+
+    def test_a_damaged_patch_leaves_no_temporary_file(self):
+        self.pack("A", {"27_pri_65.zip": {**car_members("HYU_Veloster_12"),
+                                          "media/db/patch/27000_merge.slt": b"not a database"}})
+        tmp = os.path.join(self.tmp, "temp")
+        os.makedirs(tmp)
+        with mock.patch.object(tempfile, "tempdir", tmp), windows_unlink():
+            with self.assertRaises(fm4_cars.ConvertError):
+                fm4_cars.FM4(self.disc1, None, self.dlc)
+        self.assertEqual(os.listdir(tmp), [])
 
     def test_without_dlc_disc_1s_database_is_read_as_it_is(self):
         fm4 = fm4_cars.FM4(self.disc1)

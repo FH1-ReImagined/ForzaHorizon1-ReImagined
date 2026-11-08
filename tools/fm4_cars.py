@@ -41,6 +41,7 @@ import sqlite3
 import struct
 import sys
 import tempfile
+import time
 import zipfile
 import zlib
 
@@ -312,7 +313,7 @@ def pack_cars(pack):
         except sqlite3.Error:
             pass
         finally:
-            os.unlink(tmp)
+            remove_file(tmp)
     return names, rows
 
 
@@ -349,6 +350,23 @@ def merge_patch(db, patch_path):
         db.execute("detach database p")
 
 
+
+def remove_file(path):
+    """Deletes a file of ours; on Windows retried for a few seconds while another program (an
+    antivirus scan, the search indexer) has it open. True when it is gone."""
+    for wait in (0.1, 0.2, 0.4, 0.8, 1.5, None):
+        try:
+            os.unlink(path)
+            return True
+        except FileNotFoundError:
+            return True
+        except OSError as e:
+            if wait is None or getattr(e, "winerror", None) not in (5, 32, 33):
+                return False
+            time.sleep(wait)
+    return False
+
+
 class FM4:
     """The player's FM4 files: disc 1, the disc 2 car packs (content) and the DLC packs (dlc);
     each a folder of unpacked packages, or a list of such folders. A DLC pack's cars have their rows in the
@@ -383,8 +401,13 @@ class FM4:
         self.packs.sort()
         self._roots = (disc1, *content_roots, *dlc_roots)
         self._cars = self._thumbs = self._audio = self._wheels = None
+        self._dbs = []  # every connection db() handed out: closed by close() before the delete
         if self.dlc_packs:
-            self._merge_dlc()
+            try:
+                self._merge_dlc()
+            except BaseException:
+                self.close()  # nobody else can: the caller never gets this object
+                raise
 
     def _merge_dlc(self):
         """disc 1's database with the DLC packs' patches (in their number's order) merged in."""
@@ -415,19 +438,20 @@ class FM4:
         self.db_path = merged
 
     def db(self):
-        return sqlite3.connect("file:%s?mode=ro" % self.db_path, uri=True)
+        db = sqlite3.connect("file:%s?mode=ro" % self.db_path, uri=True)
+        self._dbs.append(db)
+        return db
 
     def close(self):
-        """Close FM4's zips and delete the merged database: the launcher deletes the unpacked
-        discs next (#551)."""
+        """Close FM4's zips and every connection to its database, then delete the merged copy:
+        Windows deletes no file a connection still holds open, and the launcher deletes the
+        unpacked discs next (#551, #707)."""
         self._cars = self._thumbs = self._audio = self._wheels = None
+        for db in self._dbs:
+            db.close()  # a second close (the converter's own) does nothing
+        self._dbs = []
         ZIPS.close(*self._roots)
-        for p in self._tmp:
-            try:
-                os.unlink(p)
-            except OSError:
-                pass
-        self._tmp = []
+        self._tmp = [p for p in self._tmp if not remove_file(p)]
 
     def car_files(self):
         """MediaName (lower) -> (display MediaName, [(relative name, Member)])."""
