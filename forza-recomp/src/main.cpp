@@ -9,6 +9,7 @@
 #include "forza_app.h"
 #include "hooks/frame_time.h"
 #include "debug/performance_settings.h"
+#include "platform/cpu_cores.h"
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
@@ -127,6 +128,19 @@ void ApplyForzaGpuCvarDefaults() {
   // need and costs nothing in a race; "fast" copies every resolve every frame and cost
   // 16-21% of the frame rate at 144 (docs/perf.md).
   SetSdkCvarDefault("readback_resolve", "some");
+  // Vulkan: the GPU command processor on two threads (ReIGlue 0420, #474), "GPU Commands"
+  // decoding the PM4 stream and "GPU Recorder" running the draws. The thread a CPU-bound frame
+  // waits for gets shorter, but the two together use more CPU than the one did, so it pays only
+  // with cores to spare: on with 6 or more physical cores the game may run on (its affinity),
+  // where the benchmark ran faster uncapped (docs/perf.md); off below, where four cores without
+  // SMT ran free roam 11% slower. Not with a VR headset (true stereo's replay is off while split).
+  // forza.toml or the command line can still set it either way.
+  const unsigned cores = forza::cpu_cores::AvailablePhysicalCores();
+  if (rex::cvar::GetFlagByName("vr_mode") == "off" && cores >= 6) {
+    SetSdkCvarDefault("gpu_split_command_processor", "true");
+  }
+  REXLOG_INFO("Physical CPU cores available: {} (gpu_split_command_processor default {})", cores,
+              rex::cvar::GetFlagByName("gpu_split_command_processor"));
 }
 
 void LogForzaPerformanceSettings() {

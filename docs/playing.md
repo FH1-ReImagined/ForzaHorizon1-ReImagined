@@ -184,6 +184,15 @@ tools/run_forza.sh 120        # a two-minute test run; logs in ${XDG_RUNTIME_DIR
   cannot hold 30 can run 20 (`frame_rate = 20`): each frame then stays on a 60 Hz screen for
   exactly 3 refreshes, where 22 fps alternates 2 and 3 and judders; 40 does the same on a
   120 Hz screen (#263).
+- **The GPU command processor on two threads** (Vulkan, on by default with 6 or more physical
+  CPU cores and no VR headset, #474): "GPU Commands" decodes the game's GPU commands and "GPU
+  Recorder" runs the draws, so the thread a CPU-bound frame waits for is shorter (+6 % fps uncapped
+  in the benchmark on six cores, +13 % on eight). With fewer cores it stays off: the two threads
+  use more CPU in all, and four cores ran free roam 11 % slower. `gpu_split_command_processor =
+  false` in `forza.toml` (or `--gpu_split_command_processor=false`, the launcher's extra
+  arguments) turns it off, `true` turns it on; a restart applies it. The log's `Physical CPU
+  cores available` line says which default applied. Details:
+  [perf.md](perf.md#on-by-default-with-6-or-more-cores-2026-11-08).
 - **Title Update 4 (default):** `play.sh` runs `forza-recomp/out/build/linux-tu4` when it
   exists (how to build it: README, Building; `FORZA_BUILD=linux-tu4`) and mounts the
   update's files (`extracted/tu4/`, or `FORZA_UPDATE`) as `update:` with

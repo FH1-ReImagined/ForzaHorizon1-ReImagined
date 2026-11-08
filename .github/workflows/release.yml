@@ -199,6 +199,11 @@ jobs:
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/performance_settings_test.cpp -o "$RUNNER_TEMP/performance-settings-test"
           "$RUNNER_TEMP/performance-settings-test"
       - if: runner.os == 'Linux'
+        name: Physical CPU cores for the command processor split
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/cpu_cores_test.cpp -o "$RUNNER_TEMP/cpu-cores-test"
+          "$RUNNER_TEMP/cpu-cores-test"
+      - if: runner.os == 'Linux'
         name: Scene MSAA and tiling choice
         run: |
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/scene_tiling_test.cpp -o "$RUNNER_TEMP/scene-tiling-test"
