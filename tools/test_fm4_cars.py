@@ -445,7 +445,7 @@ DB_TABLES = {
     "Data_Car": "Id INTEGER, MediaName TEXT, MakeID INT, Year INT, StockWheelID INT",
     "List_CarMake": "ID INTEGER, DisplayName TEXT",
     "List_Wheels": "ID INTEGER, MediaName TEXT",
-    "List_UpgradeEngine": "Id INTEGER, Ordinal INT, EngineID INT",
+    "List_UpgradeEngine": "Id INTEGER, Ordinal INT, EngineID INT, IsStock INT",
     "Data_Engine": "EngineID INTEGER PRIMARY KEY, MediaName TEXT",
     "CarPartPositions": "Ordinal INT, Part TEXT",
 }
@@ -496,7 +496,7 @@ class DlcPackTests(unittest.TestCase):
         with open(os.path.join(self.disc1, "Media", "db", "gamedb.slt"), "wb") as f:
             f.write(sqlite_bytes({"Data_Car": [(100, "AUD_A1_10", 3, 2010, 1)], "List_CarMake": [(3, "_&1")],
                                   "List_Wheels": [(1, "AUD_A1_10")],
-                                  "List_UpgradeEngine": [(1, 100, 7)], "Data_Engine": [(7, "old")],
+                                  "List_UpgradeEngine": [(1, 100, 7, 1)], "Data_Engine": [(7, "old")],
                                   "CarPartPositions": [(100, "a")]}))
         self.dlc = os.path.join(self.tmp, "dlc")
 
@@ -513,7 +513,7 @@ class DlcPackTests(unittest.TestCase):
     def test_a_dlc_packs_rows_files_picture_and_sound(self):
         self.pack("A", {"5c00_pri_65.zip": {**car_members("HYU_Veloster_12", 1424), **self.patch({
             "Data_Car": [(1424, "HYU_Veloster_12", 17, 2012, 2)], "List_CarMake": [(17, "_&2")],
-            "List_Wheels": [(2, "HYU_Veloster_12")], "List_UpgradeEngine": [(2, 1424, 8), (3, 1424, 7)],
+            "List_Wheels": [(2, "HYU_Veloster_12")], "List_UpgradeEngine": [(2, 1424, 8, 1), (3, 1424, 7, 0)],
             "Data_Engine": [(8, "new"), (7, "patched")], "CarPartPositions": [(1424, "b"), (100, "a")]}),
             "media/audio/cars/Engines/EngineTuning/HYU_Veloster_12_ET.xml": b"et"},
             "CarModelTuning_pri_25028.zip": {"HYU_Veloster_12_CMT.xml": b"cmt"}})
@@ -575,7 +575,7 @@ class DlcPackTests(unittest.TestCase):
                          (1501, "NOW_Make_11", 99, 2011, 2), (1502, "NOW_Rim_11", 3, 2011, 5),
                          (1503, "NOW_Model_11", 3, 2011, 2)],
             "List_Wheels": [(2, "HYU_Veloster_12"), (5, "OTHER_Pack_Wheel")],
-            "List_UpgradeEngine": [(2, 1424, 8), (3, 1500, 77)], "Data_Engine": [(8, "new")]})}})
+            "List_UpgradeEngine": [(2, 1424, 8, 1), (3, 1500, 77, 1)], "Data_Engine": [(8, "new")]})}})
         reasons = {name: reason for _, name, reason in self.converter().candidates()}
         self.assertIsNone(reasons["HYU_Veloster_12"])
         self.assertIn("needs its engine (EngineID 77)", reasons["NOW_Heel_11"])
@@ -583,6 +583,32 @@ class DlcPackTests(unittest.TestCase):
         self.assertIn("needs its make (99)", reasons["NOW_Make_11"])
         self.assertIn("needs the files of its wheel OTHER_Pack_Wheel", reasons["NOW_Rim_11"])
         self.assertEqual(reasons["NOW_Model_11"], "no model in the FM4 files given")
+
+    def test_a_dlc_cars_wheel_row_comes_along_and_a_clashing_engine_does_not(self):
+        """FH1's database lacks the wheel rows of the Porsche Expansion's cars (they did not load
+        without one), and gives two of the DLC's engine ids to other engines (the GT2 RS engine,
+        a swap of four Porsches, is FH1's Camry engine): such a swap is left out, a car whose own
+        engine clashes is not converted."""
+        self.pack("A", {"34_pri_65.zip": {**car_members("POR_959_87"), **car_members("AH_Sprite_58"),
+                                          **self.patch({
+            "Data_Car": [(269, "POR_959_87", 3, 1987, 595), (1574, "AH_Sprite_58", 3, 1958, 2)],
+            "List_Wheels": [(595, "POR_959_87"), (2, "AH_Sprite_58")],
+            "List_UpgradeEngine": [(269000, 269, 23, 1), (269001, 269, 999, 0), (1574000, 1574, 1034, 1)],
+            "Data_Engine": [(23, "POR_959_87"), (999, "POR_911GT2_12"), (1034, "AH_Sprite_58")]})}})
+        conv = self.converter()
+        conv.fh1db.execute("insert into Data_Engine values (999, 'TOY_Camry_07')")
+        conv.fh1db.execute("insert into Data_Engine values (1034, 'FIA_ShowCase500AbarthSS_10')")
+        conv.fh1db.execute("insert into List_Wheels values (2, 'AH_Sprite_58')")
+        reasons = {name: reason for _, name, reason in conv.candidates()}
+        self.assertIsNone(reasons["POR_959_87"])
+        self.assertEqual(reasons["AH_Sprite_58"], "its engine's id (EngineID 1034) is another engine's in FH1")
+        with mock.patch.object(fm4_cars, "Retune", _NoRetune):
+            db = fm4_cars.Database(conv.fm4db, conv.fh1db)
+        db.collect([269])
+        rows = db.finish({})
+        self.assertEqual([(r["ID"], r["MediaName"]) for r in rows["List_Wheels"]], [(595, "POR_959_87")])
+        self.assertEqual([r["EngineID"] for r in rows["List_UpgradeEngine"]], [23])  # the swap left out
+        self.assertEqual([r["EngineID"] for r in rows["Data_Engine"]], [23])
 
 
 if __name__ == "__main__":

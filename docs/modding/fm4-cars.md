@@ -80,6 +80,14 @@ column takes the pack's row, as the game reads the patch; the others get the row
 converts the DLC's cars like the discs', with the same fixes (engine level, makes, logos), into
 the same **FM4 cars** mod and package. The Mods page says how many came from the DLC.
 
+Two things the disc cars never met: FH1's database has the stock wheel rows (`List_Wheels`) of
+every disc car but not of 33 DLC cars (the Porsche Expansion's and some later packs'), and a car
+without its wheel row did not load (the 959 in a grey void, the 997 GT3 RS standing still with its
+textures wrong), so the import adds those rows. And FH1 gives two of the DLC's engine ids to other
+engines (`999`, the Porsche GT2 RS engine, is FH1's Camry engine; `1034`, the Austin-Healey
+Sprite's, a Fiat 500's): the engine swap of four Porsches that names `999` is left out, and the
+Sprite, whose own engine is `1034`, is not converted ("its engine's id is another engine's in FH1").
+
 Left out, each named in the import's message: a pack with no cars (the Launch Track Pack: tracks,
 a soccer field and events), Disc 2's three car packs and its Autovista pack when they are among the
 DLC (the same content type, without a database patch: used as Disc 2 when Disc 2 was skipped, else
@@ -88,8 +96,9 @@ cars FH1 or its own DLC has already, and a car whose rows name something no file
 engine, body, drivetrain, make or wheel, as for a car that relies on another pack): such a car is
 skipped with that reason rather than added broken.
 
-Sixteen of FM4's packs, checked with the converter's list: 117 cars FH1 lacks, on top of the
-discs' 381; 5 more are FH1 DLC cars and the rest are in FH1 already.
+Sixteen of FM4's packs, checked with the converter's list: 116 cars FH1 lacks are converted, on
+top of the discs' 381; 5 more are FH1 DLC cars, the Sprite is left out (above) and the rest are in
+FH1 already.
 
 The result is in two parts: the **FM4 cars** mod in the mods folder (the database and the car
 names, a few MB) and a DLC-style package with the cars' files, `464D34434152530...4D` in the

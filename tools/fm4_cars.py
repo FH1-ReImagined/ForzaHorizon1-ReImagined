@@ -928,6 +928,16 @@ def make_merges(fm4db, fh1db, fm4_names, fh1_names):
     return out
 
 
+def engine_clash(fm4db, fh1db, engine_id):
+    """True when FH1's database has an engine of that id that is not FM4's (another MediaName)."""
+    try:
+        theirs = fh1db.execute("select MediaName from Data_Engine where EngineID=?", (engine_id,)).fetchone()
+        ours = fm4db.execute("select MediaName from Data_Engine where EngineID=?", (engine_id,)).fetchone()
+    except sqlite3.Error:
+        return False
+    return bool(theirs and ours and str(theirs[0]).lower() != str(ours[0]).lower())
+
+
 class Database:
     """Builds the DB patch: the selected cars' rows from FM4's database in FH1's tables.
     merges: {FM4 make id: FH1 make id} (make_merges), the cars of those makes join FH1's."""
@@ -978,6 +988,11 @@ class Database:
         first = {}
         for table, col in CAR_TABLES:
             rows = self._select(table, col, car_ids)
+            if table == "List_UpgradeEngine":
+                # an engine swap whose engine id FH1 gives another engine (the DLC's Porsche GT2 RS
+                # engine is FH1's Camry's): left out, the car would get FH1's engine instead.
+                # A car whose stock engine clashes is not converted at all (Converter.needs).
+                rows = [r for r in rows if r.get("IsStock") or not engine_clash(self.fm4, self.fh1, r.get("EngineID"))]
             first[table] = rows
             self._add(table, rows)
         level2 = []
@@ -1005,6 +1020,10 @@ class Database:
                 if name and "MakeName" in r:
                     r["MakeName"] = name[0]
                     self.fh1_refs.add(name[0])
+        # the stock wheels' rows: FH1's database has those of most FM4 cars, not of the DLC's
+        # Porsche Expansion and some later packs (a car without its wheel row did not load)
+        self._add("List_Wheels", self._select("List_Wheels", "ID", {
+            r["StockWheelID"] for r in first.get("Data_Car", []) if r.get("StockWheelID") is not None}))
         makes = {r["MakeID"] for r in first.get("Data_Car", []) if r.get("MakeID") is not None}
         makes -= set(self.merges.values())  # FH1's own rows
         self._add("List_CarMake", self._select("List_CarMake", "ID", makes))
@@ -1354,9 +1373,7 @@ class Converter:
             elif low not in files:
                 reason = "no model in the FM4 files given"
             else:
-                need = self.needs(cid)
-                if need:
-                    reason = "needs %s, which is not in the FM4 files given (is it in another DLC pack?)" % need
+                reason = self.needs(cid)
             out.append((cid, name, reason))
         return out
 
@@ -1371,9 +1388,11 @@ class Converter:
         return False
 
     def needs(self, cid):
-        """What a car's rows name that neither game's files have, in words, or None: its engine,
-        body or drivetrain rows, its make or its stock wheel (a DLC car that relies on another
-        pack's rows or files). Such a car is left out rather than added broken."""
+        """Why a car can't be converted whole, in words, or None: its rows name something neither
+        game's files have (its engine, body or drivetrain rows, its make or its stock wheel: a DLC
+        car that relies on another pack's rows or files), or its stock engine's id is another
+        engine's in FH1. Such a car is left out rather than added broken."""
+        miss = "needs %s, which is not in the FM4 files given (is it in another DLC pack?)"
         db = self.fm4db
         if not hasattr(self, "_fm4_tables"):
             self._fm4_tables = set(tables(db))
@@ -1386,20 +1405,25 @@ class Converter:
             q = "select distinct [%s] from [%s] where Ordinal=?" % (col, upgrade)
             for (v,) in db.execute(q, (cid,)).fetchall():
                 if v is not None and not self._have(table, key, v):
-                    return "%s (%s %s)" % (what, key, v)
+                    return miss % ("%s (%s %s)" % (what, key, v))
+        if "List_UpgradeEngine" in self._fm4_tables and "IsStock" in columns(db, "List_UpgradeEngine"):
+            for (v,) in db.execute("select EngineID from List_UpgradeEngine where Ordinal=? and IsStock",
+                                   (cid,)).fetchall():
+                if engine_clash(db, self.fh1db, v):
+                    return "its engine's id (EngineID %s) is another engine's in FH1" % v
         cols = columns(db, "Data_Car")
         row = dict(zip(cols, db.execute("select * from Data_Car where Id=?", (cid,)).fetchone()))
         if row.get("MakeID") is not None and "List_CarMake" in self._fm4_tables \
                 and not self._have("List_CarMake", "ID", row["MakeID"]):
-            return "its make (%s)" % row["MakeID"]
+            return miss % ("its make (%s)" % row["MakeID"])
         wid = row.get("StockWheelID")
         if wid is not None and "List_Wheels" in self._fm4_tables:
             wheel = db.execute("select MediaName from List_Wheels where ID=?", (wid,)).fetchone()
             if not wheel:
                 if not self._have("List_Wheels", "ID", wid):
-                    return "its wheel (%s)" % wid
+                    return miss % ("its wheel (%s)" % wid)
             elif not (self.fh1.has_wheel(wheel[0]) or self.fm4.has_wheel(wheel[0])):
-                return "the files of its wheel %s" % wheel[0]
+                return miss % ("the files of its wheel %s" % wheel[0])
         return None
 
     def convert_wheel(self, name):
