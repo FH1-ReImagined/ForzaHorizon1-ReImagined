@@ -7,7 +7,10 @@
 REXCVAR_DEFINE_INT32(frame_rate, 30, "Display", "Test frame cap");
 
 namespace { int restarts = 0; }
-namespace forza { void RestartForBenchmark() { ++restarts; } }
+namespace forza {
+void RestartForBenchmark() { ++restarts; }
+void LogGuestThreads(const char*) {}
+}
 namespace forza::benchmark {
 bool Enabled() { return automatic.load(); }
 void Cancel() {}

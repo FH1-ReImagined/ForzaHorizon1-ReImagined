@@ -28,6 +28,7 @@ REXCVAR_DEFINE_INT32(forza_unrelated_fixture, 0, "Test", "Not a graphics prefere
 
 namespace forza {
 void RestartForBenchmark() { Check(false && "No process restart in this fixture"); }
+void LogGuestThreads(const char*) {}
 }
 namespace forza::benchmark {
 bool Enabled() { return false; }
