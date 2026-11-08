@@ -12,10 +12,20 @@ differences). What changes, field by field:
 | VertexBuffer         | version 2, no flags         | version 3: flags (bit 0 key, bit 1 no data)|
 | vertex               | 32 bytes, SH0 4 x s16       | 28 bytes, SH0 4 x s8                       |
 | IndexBuffer          | version 3, no flags         | version 4: flags                           |
+| morph (damage) entry | a unit direction and a size | the offset itself (FMT_10_11_11, #747)     |
 
 Positions, UVs and the tangent frame are byte-identical between the games for a
 car both ship (the Alfa Romeo 8C); FH1's SH0 is FM4's rounded to 8 bits. Part
 models (root 1) and wheels (root 3) only need the buffer versions.
+
+The damage morphs (4-byte entries, one per vertex) are packed the same way in both games
+but mean different things. FH1's entry is the vertex's dent offset (x, y, z). FM4's holds a
+unit direction in x and z, with its y left out (sqrt(1 - x^2 - z^2), never negative), and
+the dent's signed size in the y field. Read as offsets, FM4's directions moved a vertex
+by up to 2 m as soon as that spot of the car took any damage (with Cosmetic Damage on):
+the long spikes of #747. They are converted to FH1's offsets (size x direction): for the
+cars both games ship, 95 % of the converted entries are within 2 steps of FH1's own (FH1
+re-baked the rest). Wheel models' 16-byte morphs are the same in both games.
 
 `convert(data, key_seed)` returns the FH1 file; `strip(data)` returns the
 `stripped_` companion of an FH1 file (every buffer without its data, as the
@@ -80,7 +90,7 @@ class _Converter:
 
     # ------------------------------------------------------------------ groups
 
-    def vertex_buffer(self, vertex=False):
+    def vertex_buffer(self, vertex=False, morph=False):
         version = self.r.u32()
         if version not in (2, 3):
             raise CarbinError("vertex buffer version %d at 0x%x" % (version, self.r.o - 4))
@@ -99,6 +109,8 @@ class _Converter:
                 data = repack_vertices(data, count)
         elif vertex and stride not in (0, 28):
             raise CarbinError("vertex stride %d at 0x%x" % (stride, self.r.o))
+        elif morph and version == 2 and stride == 4 and has_data:
+            data = fm4_morphs(data, count)  # FM4's (version 2): directions and sizes
         if count and key is None:
             key = self.key()
         out_flags = 1 if count else 0
@@ -169,8 +181,8 @@ class _Converter:
         self.vertex_buffer(vertex=True)  # LOD0
         self.u32()  # MorphTargets
         self.copy(1)
-        self.vertex_buffer()
-        self.vertex_buffer()
+        self.vertex_buffer(morph=True)
+        self.vertex_buffer(morph=True)  # LOD0
 
     def base(self):
         v = self.r.u32()
@@ -239,6 +251,39 @@ def repack_vertices(data, count):
             q = int(round(max(-1.0, v / 32767.0) * 127.0))
             out[dst + 24 + k] = q & 0xFF
     return bytes(out)
+
+
+def _morph_fields(v):
+    """The signed x (bits 0-10), y (11-21) and z (22-31) fields of a morph entry."""
+    x, y, z = v & 0x7FF, (v >> 11) & 0x7FF, (v >> 22) & 0x3FF
+    return x - (x >> 10 << 11), y - (y >> 10 << 11), z - (z >> 9 << 10)
+
+
+def fm4_morph_offset(v):
+    """An FM4 morph entry as the offset FH1's entries hold (x, y, z, each -1..1): FM4's x and
+    z fields are a unit direction (y = sqrt(1 - x^2 - z^2), never negative), its y field the
+    signed size of the dent."""
+    x, y, z = _morph_fields(v)
+    dx, size, dz = max(-1.0, x / 1023.0), max(-1.0, y / 1023.0), max(-1.0, z / 511.0)
+    flat = dx * dx + dz * dz
+    if flat > 1.0:
+        dx, dz, dy = dx / flat ** 0.5, dz / flat ** 0.5, 0.0
+    else:
+        dy = (1.0 - flat) ** 0.5
+    return size * dx, size * dy, size * dz
+
+
+def morph_entry(x, y, z):
+    """FH1's morph entry (FMT_10_11_11, signed normalized) of the offset x, y, z (-1..1)."""
+    def q(v, scale, mask):
+        return int(round(max(-1.0, min(1.0, v)) * scale)) & mask
+    return q(x, 1023, 0x7FF) | q(y, 1023, 0x7FF) << 11 | q(z, 511, 0x3FF) << 22
+
+
+def fm4_morphs(data, count):
+    """FM4's 4-byte morph entries as FH1's (see the module notes, #747)."""
+    vals = struct.unpack(">%dI" % count, data)
+    return struct.pack(">%dI" % count, *[morph_entry(*fm4_morph_offset(v)) for v in vals])
 
 
 def convert(data, key_seed, lights=b"\0\0\0\0"):

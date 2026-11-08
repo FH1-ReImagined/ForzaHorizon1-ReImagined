@@ -138,12 +138,35 @@ The two games' serializers are the same; FH1's files are a few versions newer.
 | `VertexBuffer` | version 2 | 3: a `flags` word (bit 0 a key follows, bit 1 the data is not in the file) |
 | vertex | 32 bytes: SH0 as 4 × `s16` | 28 bytes: SH0 as 4 × `s8` |
 | `IndexBuffer` | version 3 | 4: a `flags` word |
+| damage morph entry | a unit direction and the dent's size | the dent's offset ([below](#the-damage-morphs-747)) |
 
 For the Alfa Romeo 8C, which both games ship, positions, UVs and the tangent frame are byte
 for byte the same in 23,099 of 23,103 compared vertices, and FH1's SH0 is
 `round(s16 / 32767 × 127)` of FM4's wherever the lighting was not re-baked. The game keeps
 loaded buffers by key, so every converted buffer gets a key of its own (a CRC-32 of the car,
 file and buffer number). The light list is made from the model ([below](#the-light-list)).
+
+### The damage morphs (#747)
+
+Both games pack a section's damage morphs the same way: one `u32` a vertex, `FMT_10_11_11`
+(x bits 0-10, y 11-21, z 22-31, signed). FH1 reads the entry as the vertex's dent offset
+([the morph formula](carbin-format.md#the-morph-formula)). FM4's entries mean something
+else: x and z are a unit direction, its y is left out (`sqrt(1 - x² - z²)`, never
+negative), and the y field holds the dent's signed size. Copied as they were, almost every
+FM4 entry read as an offset of about 1.0, so any damage moved the vertex by up to 2 m: with
+**Cosmetic Damage** on (Options → Difficulty), an imported car that hit something drew its
+body torn into long spikes (the 1979 Camaro Z28 and the Versa in #745, and every other FM4
+car). The wheels, seats and interior have no morphs and stayed whole. `fm4_carbin.py` now
+writes size × direction, which is FH1's format:
+
+| Check | Copied as they were | Converted |
+|---|---|---|
+| the 77 cars of FM4's disc 1 that FH1 ships too (888,207 entries of vertices whose positions match in both): within 2 steps of FH1's own entry | 1.2 % | 94.8 % |
+| the 8C, per section: median cosine to FH1's offsets, median length ratio | −0.99 to 1.00, 0.006 to 0.026 | 0.94 to 1.00, 0.83 to 1.06 |
+| median entry length of a section, all 501 FM4 cars of disc 1 and the disc 2 packs (FH1's cars: 0.006) | 0.99 | 0.012 |
+
+The rest are entries FH1 re-baked (the 8C's front bumper, glass and body). Wheel models'
+16-byte morphs are the same in both games and are copied.
 
 ### The light list
 
