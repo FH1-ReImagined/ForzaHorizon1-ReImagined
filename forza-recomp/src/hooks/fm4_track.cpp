@@ -1828,3 +1828,71 @@ extern "C" REX_FUNC(sub_82AFFA70) {
   if (told.fetch_add(1) < 3)
     REXLOG_INFO("FM4TRACK: static pack texture copied whole: base {} + mips {} bytes", bsize, msize);
 }
+
+// FORZA_FM4_FIXDIAG (a dev test): D3D's precompiled command buffer fixups. sub_82D19210 (r3 a
+// handle whose first word is the command buffer object, r4 the fixup record, r5 the data)
+// dispatches on the record's type; type 3 (sub_824AAAC0) takes the record's second word as
+// an index into the object's patch table (+144 if bit 30, else +148) and writes the texture's
+// six fetch constant dwords at each entry's buffer offset ((e >> 4) & 0x3FFFFC), while bit 30
+// of the entry is set. Logs the first calls: record, object fields, entries and buffer words.
+// Also counts the set-fixup calls (sub_8248B570, sub_82D19758) by type.
+static std::atomic<int> fixdiag_calls{0};
+static bool FixDiag() {
+  static const bool on = std::getenv("FORZA_FM4_FIXDIAG") != nullptr;
+  return on;
+}
+extern "C" REX_FUNC(__imp__sub_82D19210);
+extern "C" REX_FUNC(sub_82D19210) {
+  if (FixDiag()) {
+    const int n = fixdiag_calls.fetch_add(1);
+    const uint32_t rec = ctx.r4.u32, w0 = Load32(base, rec), w1 = Load32(base, rec + 4);
+    // FORZA_FM4_FIXDIAG=7: only fetch constant 7's (an added one: tools/fm4_pvs.py
+    // insert_fetch_constant), the first 300.
+    static const bool only7 = std::string_view(std::getenv("FORZA_FM4_FIXDIAG")) == "7";
+    static std::atomic<int> shown{0};
+    if ((w0 & 0xF) == 3 && (only7 ? w0 == 0x00070003 && shown.fetch_add(1) < 300 : n < 600)) {
+      const uint32_t obj = Load32(base, ctx.r3.u32);
+      const uint32_t t144 = Load32(base, obj + 144), t148 = Load32(base, obj + 148);
+      const uint32_t buf = Load32(base, obj + 152);
+      std::string s = fmt::format("FM4FIX {} h {:08X} obj {:08X} rec {:08X} {:08X} t144 {:08X} t148 {:08X} buf {:08X} o108 {:08X} o112 {:08X} o96 {:08X} o100 {}:",
+                                  n, ctx.r3.u32, obj, w0, w1, t144, t148, buf, Load32(base, obj + 108),
+                                  Load32(base, obj + 112), Load32(base, obj + 96), Load32(base, obj + 100));
+      const uint32_t table = (w1 & 0x40000000) ? t144 : t148;
+      if (table && int32_t(w1) > 0) {
+        uint32_t e = table + 4 * (w1 & 0xFFFFFF);
+        for (int k = 0; k < 8; ++k, e += 4) {
+          const uint32_t v = Load32(base, e), off = (v >> 4) & 0x3FFFFC;
+          s += fmt::format(" [{:08X} +{:X} = {:08X} {:08X}]", v, off, Load32(base, buf + off - 4), Load32(base, buf + off));
+          if (!(v & 0x40000000)) break;
+        }
+        // The table's start, to find it in the file.
+        s += " table0:";
+        for (int k = 0; k < 6; ++k) s += fmt::format(" {:08X}", Load32(base, table + 4 * k));
+      }
+      REXLOG_INFO("{}", s);
+    }
+  }
+  __imp__sub_82D19210(ctx, base);
+}
+static void FixCount(const char* who, uint32_t type) {
+  static std::mutex mu;
+  static std::map<std::string, uint32_t> hist;
+  static uint32_t calls = 0;
+  std::lock_guard<std::mutex> lock(mu);
+  hist[fmt::format("{}:{}", who, type & 0xF)]++;
+  if (++calls == 200 || calls % 20000 == 0) {
+    std::string s;
+    for (auto& [k, v] : hist) s += fmt::format(" {}={}", k, v);
+    REXLOG_INFO("FM4FIXCOUNT {} (dispatches {}):{}", calls, fixdiag_calls.load(), s);
+  }
+}
+extern "C" REX_FUNC(__imp__sub_8248B570);
+extern "C" REX_FUNC(sub_8248B570) {
+  if (FixDiag()) FixCount("B570", ctx.r4.u32);
+  __imp__sub_8248B570(ctx, base);
+}
+extern "C" REX_FUNC(__imp__sub_82D19758);
+extern "C" REX_FUNC(sub_82D19758) {
+  if (FixDiag()) FixCount("9758", ctx.r4.u32);
+  __imp__sub_82D19758(ctx, base);
+}
