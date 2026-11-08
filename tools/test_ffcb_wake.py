@@ -19,6 +19,8 @@ struct PPCContext { Reg r1,r3,r4,r31; uint64_t lr=0; };
 #define REX_FUNC(name) void name(PPCContext& ctx, uint8_t* base)
 #define REXLOG_INFO(...) ((void)0)
 namespace forza { uint8_t* GuestPtr(uint8_t* b,uint32_t a) { return b+a; } }
+// frame_time.cpp's held-pass clock (#725): not part of this fixture.
+namespace forza::render_hold { void WorkerWaitBegin() {} void WorkerWaitEnd() {} }
 '''
 TESTS = r'''
 uint8_t memory[65536]{};
