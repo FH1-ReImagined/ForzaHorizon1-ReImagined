@@ -210,6 +210,36 @@ bool LocalCarPosition(uint8_t* base, float& x, float& z) {
   z = position[2];
   return true;
 }
+bool LocalCarPose(uint8_t* base, float position_out[3], float forward_out[3]) {
+  uint32_t car;
+  std::array<float, 3> position{}, forward{};
+  if (!LocalCar(base, car, position, forward)) return false;
+  for (int i = 0; i < 3; ++i) {
+    position_out[i] = position[i];
+    forward_out[i] = forward[i];
+  }
+  return true;
+}
+bool LocalCarPhysics(uint8_t* base, CarPhysicsView& out) {
+  uint32_t car;
+  std::array<float, 3> position{}, forward{};
+  if (!LocalCar(base, car, position, forward)) return false;
+  const CarPhysics p = ReadCarPhysics(
+      car, FORZA_TU4 != 0, [base](uint32_t a, void* d, size_t n) { return Read(base, a, d, n); });
+  if (!p.valid) return false;
+  out.rpm = p.rpm;
+  out.speed = p.speed;
+  out.gear = p.gear;
+  for (int i = 0; i < 5; ++i) out.controls[i] = p.controls[i];
+  for (int i = 0; i < 4; ++i) {
+    out.slip[i] = p.slip[i];
+    out.slip_angle[i] = p.slip_angle[i];
+    out.wheel_speed[i] = p.wheel_speed[i];
+    out.suspension[i] = p.suspension[i];
+    out.contact[i] = p.contact[i];
+  }
+  return true;
+}
 void Rumble(uint16_t left, uint16_t right) {
   Gate().Rumble(left, right, Now());  // always: the wheel reads it without the bridge
 }

@@ -83,8 +83,13 @@ void RefreshReportedVelocity(uint8_t* base, uint32_t vehicle) {
 
 }  // namespace
 
+namespace forza::fm4_track {
+void OnTeleport(PPCContext& ctx, uint8_t* base);  // fm4_track.cpp: the dev spawn on an FM4 circuit
+}
+
 extern "C" REX_FUNC(sub_824B87A8) {
   const uint32_t vehicle = ctx.r3.u32;
+  forza::fm4_track::OnTeleport(ctx, base);
   __imp__sub_824B87A8(ctx, base);
   RefreshReportedVelocity(base, vehicle);
 }
