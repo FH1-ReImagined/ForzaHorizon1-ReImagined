@@ -405,7 +405,7 @@ class EngineLevelTests(unittest.TestCase):
             with zipfile.ZipFile(os.path.join(media, "audio", "cars", *zname.split("/")), "w") as z:
                 for m, data in members.items():
                     z.writestr(m, data)
-        return mock.Mock(media=media, update=None)
+        return mock.Mock(media=media, update=None, pack_audio=lambda: {"cmt": {}, "et": {}, "ht": {}})
 
     def converter(self, fh1_ets, fm4_ets):
         conv = fm4_cars.Converter.__new__(fm4_cars.Converter)
@@ -437,6 +437,152 @@ class EngineLevelTests(unittest.TestCase):
         self.assertIsNone(self.et_out(conv, "HON_NSXRGT_05"))  # an FH1 car's engine (a swap)
         self.assertEqual(report["louder"], 2)
         self.assertEqual(report["audio"], [("CHE_CamaroSS_10", ["CHE_CamaroSS_10_ET.xml"])])
+
+
+# ---- FM4 DLC packs: stand-ins with the layout FM4's packs have (no game file) -------------------
+
+DB_TABLES = {
+    "Data_Car": "Id INTEGER, MediaName TEXT, MakeID INT, Year INT, StockWheelID INT",
+    "List_CarMake": "ID INTEGER, DisplayName TEXT",
+    "List_Wheels": "ID INTEGER, MediaName TEXT",
+    "List_UpgradeEngine": "Id INTEGER, Ordinal INT, EngineID INT",
+    "Data_Engine": "EngineID INTEGER PRIMARY KEY, MediaName TEXT",
+    "CarPartPositions": "Ordinal INT, Part TEXT",
+}
+
+
+def sqlite_bytes(rows, tables=DB_TABLES):
+    """A database file's bytes: tables (name -> columns) with rows (name -> [tuples])."""
+    with tempfile.TemporaryDirectory() as t:
+        path = os.path.join(t, "db.slt")
+        db = sqlite3.connect(path)
+        for name, cols in tables.items():
+            db.execute("create table [%s] (%s)" % (name, cols))
+        for name, rs in rows.items():
+            for r in rs:
+                db.execute("insert into [%s] values (%s)" % (name, ",".join("?" * len(r))), r)
+        db.commit()
+        db.close()
+        with open(path, "rb") as f:
+            return f.read()
+
+
+def write_zip(path, members):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with zipfile.ZipFile(path, "w") as z:
+        for name, data in members.items():
+            z.writestr(name, data)
+    return path
+
+
+def car_members(name, car_id=None):
+    out = {"media/cars/%s/%s.carbin" % (name, name.lower()): b"car",
+           "media/cars/%s/physics/maxdata.xml" % name: b"<MaxData/>",
+           "media/wheels/%s/%s.carbin" % (name, name.lower()): b"wheel"}
+    if car_id:
+        out["media/UI/Textures/Thumbnails/Thumbnail_%d.xds" % car_id] = b"thumb%d" % car_id
+    return out
+
+
+class DlcPackTests(unittest.TestCase):
+    """FM4's DLC car packs: the cars' rows in each pack's database patch, merged over disc 1's
+    database; their files, pictures and sound tuning in the pack's zips."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(lambda: fm4_cars.ZIPS.close(self.tmp))
+        self.disc1 = os.path.join(self.tmp, "disc1")
+        os.makedirs(os.path.join(self.disc1, "Media", "db"))
+        with open(os.path.join(self.disc1, "Media", "db", "gamedb.slt"), "wb") as f:
+            f.write(sqlite_bytes({"Data_Car": [(100, "AUD_A1_10", 3, 2010, 1)], "List_CarMake": [(3, "_&1")],
+                                  "List_Wheels": [(1, "AUD_A1_10")],
+                                  "List_UpgradeEngine": [(1, 100, 7)], "Data_Engine": [(7, "old")],
+                                  "CarPartPositions": [(100, "a")]}))
+        self.dlc = os.path.join(self.tmp, "dlc")
+
+    def pack(self, name, zips):
+        dz = os.path.join(self.dlc, name, "Media", "DLCZips")
+        for zname, members in zips.items():
+            write_zip(os.path.join(dz, zname), members)
+        with open(os.path.join(self.dlc, name, "Media", "27.puboffer"), "wb") as f:
+            f.write(b" \r\n")
+
+    def patch(self, rows):
+        return {"media/db/patch/27000_merge.slt": sqlite_bytes(rows)}
+
+    def test_a_dlc_packs_rows_files_picture_and_sound(self):
+        self.pack("A", {"5c00_pri_65.zip": {**car_members("HYU_Veloster_12", 1424), **self.patch({
+            "Data_Car": [(1424, "HYU_Veloster_12", 17, 2012, 2)], "List_CarMake": [(17, "_&2")],
+            "List_Wheels": [(2, "HYU_Veloster_12")], "List_UpgradeEngine": [(2, 1424, 8), (3, 1424, 7)],
+            "Data_Engine": [(8, "new"), (7, "patched")], "CarPartPositions": [(1424, "b"), (100, "a")]}),
+            "media/audio/cars/Engines/EngineTuning/HYU_Veloster_12_ET.xml": b"et"},
+            "CarModelTuning_pri_25028.zip": {"HYU_Veloster_12_CMT.xml": b"cmt"}})
+        fm4 = fm4_cars.FM4(self.disc1, None, self.dlc)
+        self.addCleanup(fm4.close)
+        self.assertEqual(fm4.dlc_car_ids, {1424})
+        db = fm4.db()
+        self.addCleanup(db.close)
+        self.assertEqual(db.execute("select Id from Data_Car order by Id").fetchall(), [(100,), (1424,)])
+        # a key table takes the patch's row; a table of several rows a car gets only those it lacks
+        self.assertEqual(db.execute("select * from Data_Engine order by EngineID").fetchall(),
+                         [(7, "patched"), (8, "new")])
+        self.assertEqual(sorted(db.execute("select * from CarPartPositions")), [(100, "a"), (1424, "b")])
+        self.assertIn("hyu_veloster_12", fm4.car_files())  # a hex-named car zip (5c00_pri_65.zip)
+        self.assertTrue(fm4.has_wheel("HYU_Veloster_12"))
+        self.assertEqual(fm4.thumbnail(1424), b"thumb1424")
+        audio = fm4.pack_audio()
+        self.assertIn("hyu_veloster_12_et.xml", audio["et"])
+        self.assertIn("hyu_veloster_12_cmt.xml", audio["cmt"])
+        merged = fm4.db_path
+        fm4.close()
+        self.assertFalse(os.path.exists(merged))  # the merged copy is deleted with the rest (#551)
+
+    def test_without_dlc_disc_1s_database_is_read_as_it_is(self):
+        fm4 = fm4_cars.FM4(self.disc1)
+        self.addCleanup(fm4.close)
+        self.assertEqual(fm4.db_path, os.path.join(self.disc1, "Media", "db", "gamedb.slt"))
+        self.assertEqual(fm4.dlc_car_ids, set())
+
+    def test_pack_cars_tells_a_car_pack_from_disc_2s_and_a_track_pack(self):
+        self.pack("cars", {"27_pri_65.zip": {**car_members("HYU_Veloster_12"), **self.patch(
+            {"Data_Car": [(1424, "HYU_Veloster_12", 17, 2012, 2)]})}})
+        self.pack("disc2", {"0001_pri_65.zip": car_members("BUG_Veyron_09")})
+        self.pack("track", {"0015_pri_65.zip": {"media/Tracks/x/bin.zip": b"t", **self.patch({})},
+                            "PhysicsTrack_pri_65.zip": {"a.bin": b"t"}})
+        found = {os.path.basename(p): fm4_cars.pack_cars(p) for p in fm4_cars.pack_folders(self.dlc)}
+        self.assertEqual(found["cars"], ({"HYU_Veloster_12"}, [(1424, "HYU_Veloster_12")]))
+        self.assertEqual(found["disc2"], ({"BUG_Veyron_09"}, []))
+        self.assertEqual(found["track"], (set(), []))
+
+    def converter(self):
+        fm4 = fm4_cars.FM4(self.disc1, None, self.dlc)
+        self.addCleanup(fm4.close)
+        conv = fm4_cars.Converter.__new__(fm4_cars.Converter)
+        conv.fm4, conv.fm4db = fm4, fm4.db()
+        conv.fh1db = sqlite3.connect(":memory:")
+        for name, cols in DB_TABLES.items():
+            conv.fh1db.execute("create table [%s] (%s)" % (name, cols))
+        conv.fh1 = mock.Mock(dlc_car_names=lambda: (set(), set()), has_wheel=lambda name: False)
+        self.addCleanup(conv.fm4db.close)
+        self.addCleanup(conv.fh1db.close)
+        return conv
+
+    def test_a_car_that_needs_another_packs_rows_or_files_is_left_out(self):
+        self.pack("A", {"27_pri_65.zip": {**car_members("HYU_Veloster_12"), **car_members("NOW_Heel_11"),
+                                          **car_members("NOW_Make_11"), **car_members("NOW_Rim_11"),
+                                          **self.patch({
+            "Data_Car": [(1424, "HYU_Veloster_12", 3, 2012, 2), (1500, "NOW_Heel_11", 3, 2011, 2),
+                         (1501, "NOW_Make_11", 99, 2011, 2), (1502, "NOW_Rim_11", 3, 2011, 5),
+                         (1503, "NOW_Model_11", 3, 2011, 2)],
+            "List_Wheels": [(2, "HYU_Veloster_12"), (5, "OTHER_Pack_Wheel")],
+            "List_UpgradeEngine": [(2, 1424, 8), (3, 1500, 77)], "Data_Engine": [(8, "new")]})}})
+        reasons = {name: reason for _, name, reason in self.converter().candidates()}
+        self.assertIsNone(reasons["HYU_Veloster_12"])
+        self.assertIn("needs its engine (EngineID 77)", reasons["NOW_Heel_11"])
+        self.assertIn("another DLC pack", reasons["NOW_Heel_11"])
+        self.assertIn("needs its make (99)", reasons["NOW_Make_11"])
+        self.assertIn("needs the files of its wheel OTHER_Pack_Wheel", reasons["NOW_Rim_11"])
+        self.assertEqual(reasons["NOW_Model_11"], "no model in the FM4 files given")
 
 
 if __name__ == "__main__":
