@@ -1,0 +1,53 @@
+{
+  "_comment": "ReImagined loading-screen tips (launcher/forza_launcher/loading_tips.py). One entry per tip: its title (at most 19 characters) and its text (plain, at most 194). Each of the game's tip slots gets one entry in turn; every language shows them in English for now.",
+  "tips": [
+    {
+      "title": "SHARE YOUR SHOTS",
+      "tip": "Got a shot worth framing? Snap it in Photo Mode and send it to forza.dyotson.dev. The whole Festival is watching, so make it count."
+    },
+    {
+      "title": "TUNE YOUR RIDE",
+      "tip": "That stock setup won't cut it forever. Get into the garage and tune your ride with the native tuning menu: gearing, grip, launch. Make it yours."
+    },
+    {
+      "title": "HD TEXTURE PACKS",
+      "tip": "Colorado has never looked this sharp. Drop in an HD texture pack (Mods > Texture packs) and see every mountain like it's the first time."
+    },
+    {
+      "title": "FM4 LEGENDS",
+      "tip": "Forza Motorsport 4 legends are crashing the Festival. Import FM4's cars from your own disc and send them flying down the Rockies."
+    },
+    {
+      "title": "YOUR SOUNDTRACK",
+      "tip": "Your road trip, your soundtrack. Load your own songs onto the radio, give your station its own logo, and drive to your own beat (Mods > Radio)."
+    },
+    {
+      "title": "FAST TRAVEL",
+      "tip": "Why drive across the map when you can just be there? Fast Travel Anywhere is unlocked for everyone. Pick a spot and go."
+    },
+    {
+      "title": "CAR SOUNDS",
+      "tip": "Want that turbo to scream? Turn it all the way up in Settings > Audio > Car sounds. Or mute the engine and just listen to the road."
+    },
+    {
+      "title": "FORZA LIVE",
+      "tip": "New challenges drop every day and every week on Forza Live. Beat them, climb the boards, and grab the weekly gift."
+    },
+    {
+      "title": "DRIVE TOGETHER",
+      "tip": "The Festival is better with friends. Start a co-op Festival from the map, talk in club chat, and share your best cars with the club."
+    },
+    {
+      "title": "BENCHMARK",
+      "tip": "Frames dropping? Hit BENCHMARK on the main menu, let it race for you, and see exactly what your machine can push."
+    },
+    {
+      "title": "JOIN THE FESTIVAL",
+      "tip": "Drivers from all over, one Festival. Find your crew on the Discord at forza.dyotson.dev."
+    },
+    {
+      "title": "REWIND",
+      "tip": "Rewind, retry, redeem. No one has to see that corner. Just make the next lap legendary."
+    }
+  ]
+}

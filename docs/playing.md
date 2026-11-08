@@ -77,6 +77,10 @@ tools/run_forza.sh 120        # a two-minute test run; logs in ${XDG_RUNTIME_DIR
   Tokens, the Token balance is not touched, and the other Token offer (RB, BUY TREASURE MAP)
   stays as it is. Nothing is written to the save, so `false` brings the offer back unless the
   profile bought it. Details in `src/hooks/fast_travel_anywhere.cpp`.
+- **Loading-screen tips:** the loading screens show tips about ReImagined in place of the
+  original game's (which point to the ForzaMotorsport.net forums, Token offers and other things that are
+  gone). Launcher: Gameplay, Loading screens, ReImagined loading tips (on by default); off shows
+  the original tips. English in every language for now. Details in [launcher.md](launcher.md).
 - **VR headset (experimental, #333):** launcher Display, VR (experimental), VR headset (experimental): Virtual
   screen or Cockpit (`vr_mode = "screen"` / `"cockpit"`). Start the OpenXR runtime (WiVRn,
   Monado, SteamVR) and connect the headset first; Home or both sticks held for a second

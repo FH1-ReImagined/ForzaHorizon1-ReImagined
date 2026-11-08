@@ -819,6 +819,16 @@ Gameplay > Map > **Fast Travel Anywhere** (`fast_travel_anywhere`, on by default
 Update 4): fast travel from the map to any road for free, as the unlock once bought with Tokens
 did. No Tokens are given and the other Token offers stay; off brings the game's offer back
 ([playing.md](playing.md#running-the-game)).
+Gameplay > Loading screens > **ReImagined loading tips** (`reimagined_loading_tips`, on by default):
+the loading screens' tips are about ReImagined (photos, tuning, texture packs, the radio, co-op)
+in place of the original game's, which point to services and offers that are gone. The text is
+one data file, `launcher/forza_launcher/data/loading_tips.json` (a list of tips, each a title of at
+most 19 characters and a text of at most 194, English in every language for now). A start builds
+the hidden mod `mods/.reimagined-tips`: each language's `stringtables/<lang>/tips.str` is the
+game's own table with each tip slot (a title entry and its tip entry, as the game's
+`ui/loadingdefs.xml` pairs them: 99 slots in Title Update 4) set to one of the tips in turn (the
+ids and order stay, so the game's own picking of a tip per loading screen is unchanged). It loads first, so a
+player's mod with its own `tips.str` wins; off: no mod, the original tips. Applies on the next launch.
 Gameplay > Startup > **Skip startup videos** (`skip_startup_movies`, off by default): the game
 starts straight at the title screen, without the Microsoft Studios, Dolby and Playground Games
 videos (about 45 s). The game boots as after a restart of itself; the festival and 1000 Club

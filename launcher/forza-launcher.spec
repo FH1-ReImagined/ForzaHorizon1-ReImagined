@@ -72,6 +72,8 @@ datas.append((str(root / "forza_launcher" / "RFC8032-LICENSE.txt"), "forza_launc
 datas.append((str(root / "forza_launcher" / "data" / "pipelines-4D5309C9.json"), "forza_launcher/data"))
 # The known-good DLC files (sizes and SHA-1 only, forza_launcher/dlccheck.py, #422).
 datas.append((str(root / "forza_launcher" / "data" / "dlc-4D5309C9.json"), "forza_launcher/data"))
+# The ReImagined loading-screen tips (forza_launcher/loading_tips.py).
+datas.append((str(root / "forza_launcher" / "data" / "loading_tips.json"), "forza_launcher/data"))
 
 a = Analysis(
     [str(root / "main.py")],

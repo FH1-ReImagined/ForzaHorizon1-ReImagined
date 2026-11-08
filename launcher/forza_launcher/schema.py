@@ -583,6 +583,12 @@ add("fast_travel_anywhere", "Fast Travel Anywhere", "Gameplay", "bool", True,
     "Works offline and online. Nothing is saved, so turning it off locks it again unless your "
     "profile bought it. Title Update 4 only.", "Map")
 
+add("reimagined_loading_tips", "ReImagined loading tips", "Gameplay", "bool", True,
+    "The loading screens show tips about ReImagined's features (photos, tuning, texture packs, "
+    "the radio, co-op and more) in place of the original game's, which point to services and "
+    "offers that are gone. Off: the original tips. Shown in English in every language for now. "
+    "Applies on the next game launch.", "Loading screens", restart=True)
+
 add("skip_startup_movies", "Skip startup videos", "Gameplay", "bool", False,
     "Skips the videos at the start (Microsoft Studios, Dolby, Playground Games, about 45 s) "
     "and goes to the title screen. The in-game videos (the festival intro, the 1000 Club "
