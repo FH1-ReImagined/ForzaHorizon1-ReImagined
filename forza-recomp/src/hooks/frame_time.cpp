@@ -367,6 +367,11 @@ bool FrameTime(uint8_t* base, uint32_t game_ms, double& dt_out) {
   return true;
 }
 
+int ForcedDivider() {
+  static const int forced = EnvInt("FORZA_VBLANK_DIVIDER", 0);  // for comparisons
+  return forced;
+}
+
 }  // namespace
 
 namespace forza::frame_time {
@@ -385,8 +390,7 @@ bool EvenRate() {
 }
 
 int VblanksPerFrame() {
-  static const int forced = EnvInt("FORZA_VBLANK_DIVIDER", 0);  // for comparisons
-  return frame_pacing::VblanksPerFrame(REXCVAR_GET(frame_rate), MaxVblankHz(), forced);
+  return frame_pacing::VblanksPerFrame(REXCVAR_GET(frame_rate), MaxVblankHz(), ForcedDivider());
 }
 
 int64_t PresentDelayNs() {
@@ -424,7 +428,14 @@ void OnGuestSwap() {
   render.swapped.notify_all();
 }
 
-int VblankHz() { return REXCVAR_GET(frame_rate) * VblanksPerFrame(); }
+int VblankHz() {
+  return frame_pacing::VblankHz(REXCVAR_GET(frame_rate), MaxVblankHz(), ForcedDivider());
+}
+
+double StartVblankHz() {
+  return frame_pacing::StartVblankHz(REXCVAR_GET(frame_rate), REXCVAR_GET(video_mode_refresh_rate),
+                                     MaxVblankHz(), ForcedDivider());
+}
 
 double TargetMs() { return 1000.0 * VblanksPerFrame() / GuestVblankHz(); }
 

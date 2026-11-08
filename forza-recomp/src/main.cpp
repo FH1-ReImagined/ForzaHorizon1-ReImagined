@@ -12,6 +12,7 @@
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
+#include <rex/ui/flags.h>
 
 #include <string>
 #include <string_view>
@@ -100,10 +101,20 @@ void ApplyForzaCvarDefaults() {
   SetSdkCvarDefault("d3d12_allow_variable_refresh_rate_and_tearing", "false");
 #endif
   // frame_rate other than 30: the guest vblank at three times 20 or 40, twice a higher frame
-  // rate, or the frame rate when twice is past the SDK's limit (src/hooks/frame_time.cpp). A
-  // video_mode_refresh_rate set in forza.toml or on the command line wins.
+  // rate, or the frame rate when twice is past the SDK's limit (src/hooks/frame_time.cpp).
+  // A video_mode_refresh_rate set in forza.toml or on the command line gives way to it, as it
+  // does when the in-game Graphics menu saves (#756: 60 Hz left in forza.toml ran frame_rate 60
+  // at 30 fps until a graphics setting was changed); at 30 it stays.
   if (REXCVAR_GET(frame_rate) != 30) {
-    SetSdkCvarDefault("video_mode_refresh_rate", std::to_string(forza::frame_time::VblankHz()));
+    const std::string hz = std::to_string(forza::frame_time::VblankHz());
+    SetSdkCvarDefault("video_mode_refresh_rate", hz);
+    const double configured = REXCVAR_GET(video_mode_refresh_rate);
+    if (configured != forza::frame_time::StartVblankHz()) {
+      const bool set = rex::cvar::SetFlagByName("video_mode_refresh_rate", hz);
+      REXLOG_WARN("video_mode_refresh_rate = {} from the settings {}: frame_rate {} runs a {} Hz "
+                  "guest vblank (#756)", configured, set ? "is not used" : "could not be replaced",
+                  REXCVAR_GET(frame_rate), hz);
+    }
   }
 }
 

@@ -87,7 +87,8 @@ add("battery_saver", "Battery saver", "Display", "choice", "off",
 add("vsync", "Vertical sync", "Display", "bool", True,
     "Wait for the display's refresh. Turn off only for testing.", "Frame rate")
 add("video_mode_refresh_rate", "Guest refresh rate (Hz)", "Display", "float", 0.0,
-    "0 picks it from the frame rate. Set it to override.", "Frame rate", lo=0, hi=480, step=1)
+    "0 picks it from the frame rate. Used only at 30 FPS: other frame rates set their own.",
+    "Frame rate", lo=0, hi=480, step=1)
 add("fullscreen", "Borderless fullscreen", "Display", "bool", True,
     "Start in borderless fullscreen (recommended).", "Window")
 add("fullscreen_exclusive", "Exclusive fullscreen", "Display", "bool", False,
