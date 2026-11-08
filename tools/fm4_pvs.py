@@ -637,9 +637,12 @@ LMUV_RECT = os.environ.get("FM4_PVS_LMUV_RECT", "0") == "1"
 # shader copies fetch the lightmap from there, and each instance's copy of the model has its own
 # lightmap record in that slot (Hockenheim 7 and 8: the flat red run-off; Tsukuba 9: the white
 # haze). Models whose command buffers write only fetch constants their shaders sample (the road
-# shaders with a normal map at Infineon, Indianapolis, Top Gear) are left.
-# FM4_PVS_LMUV_BIND=0 leaves them all.
+# shaders with a normal map at Infineon, Indianapolis, Top Gear) get a fetch constant of their
+# own added to every pass's command buffer instead (insert_fetch_constant; FM4_PVS_LMUV_INSERT=0
+# leaves them). FM4_PVS_LMUV_BIND=0 leaves them all.
 LMUV_BIND = os.environ.get("FM4_PVS_LMUV_BIND", "1") == "1"
+LMUV_INSERT = os.environ.get("FM4_PVS_LMUV_INSERT", "1") == "1"
+INSERTED = set()  # models given a fetch constant by insert_fetch_constant
 # A model whose instances name more lightmap records than this is left: each record takes a copy
 # of the model file, and the copies are streamed as files of their own (with every one bound,
 # Laguna Seca and Catalunya asked for 107000 and 104000 streaming blocks, over the game's cap
@@ -741,6 +744,25 @@ def lightmap_binding(F, m, data, srcs, shader_blobs, recs):
         out = bytearray(data)
         struct.pack_into(">i", out, i - 4 * (10 - fc), value)  # map[fc]: head[2 + fc]
         return fc, bytes(out)
+    if not LMUV_INSERT:
+        return None, data
+    # No spare one: add one. The lightmap's own fetch constant, or one no shader samples, that
+    # the sampler map leaves unmapped and no command buffer writes (the map covers 0 to 7).
+    lm = set()
+    for p in srcs:
+        for _, _, sm, _, _ in shader_blobs(p):
+            if "Light_MapSampler" in sm:
+                lm.add(sm["Light_MapSampler"])
+    for fc in range(7, -1, -1):
+        if (fc in sampled and fc not in lm) or head[2 + fc] != -1:
+            continue
+        out = insert_fetch_constant(data, fc)
+        if out is None:
+            return None, data
+        INSERTED.add(m)
+        out = bytearray(out)
+        struct.pack_into(">i", out, i - 4 * (10 - fc), value)  # the name is before the groups
+        return fc, bytes(out)
     return None, data
 
 
@@ -748,6 +770,7 @@ def lightmap_rect_copies(Fs, files, bin_dir):
     """Give the models described above their rectangles (in every ribbon's F, before the
     zones are made); the models done (their numbers and their copies')."""
     RECT_COPIES.clear()
+    INSERTED.clear()
     if not LMUV_RECT or not Fs or len({len(F["models"]) for F in Fs}) != 1:
         return set()
     F0 = Fs[0]
@@ -866,7 +889,7 @@ def lightmap_rect_copies(Fs, files, bin_dir):
             for j, key in enumerate(keys):
                 rect = rect_of_record(F0, key) if LMUV_BIND else key
                 out = bytearray(new_data)
-                for off, _ in writes:
+                for off, _ in _c120_writes(new_data):  # new_data's: an added fetch constant moves them
                     struct.pack_into(">4f", out, off + 16 * (reg - 120), *rect)
                 n = m if j == 0 else next_number
                 if j:
@@ -1371,6 +1394,160 @@ def pass_groups(d, p):
     return out if len(out) == 21 else None
 
 
+# A pass group's data, after the 21 groups (sizes: the group's three):
+#   area A, each populated group's sizes[0] bytes in turn: D3D's precompiled command buffer
+#     header (0xC8 bytes: state masks; +0x68 sizes[0] - 8; +0x70 the end of the patch table,
+#     0xC8 + 4 * its words; +0x78 sizes[1] - 8; +0x7C the patch table's words; +0x90 0xC8, the
+#     table's place; +0xC0 0x81000000 | (sizes[1] - 8) / 4), the patch table, zeros up to the
+#     8-aligned end of the table + 8, then 11223344 55667789;
+#   area B, each group's command buffer (sizes[1] bytes, PM4) at the next 32-byte boundary
+#     from the area's start (the .fx header's word 4: the area's size, word 3 area A's);
+#   area C, sizes[2] bytes each (word 5).
+# The .fx header's word 7 is 8 times the groups' records. A record's second word for a fixup
+# (type 3, a texture: 0x47000000 | index; kinds 0x41-0x47) indexes the patch table (TU4
+# sub_824AAA28, the table at +0x90): from that word on, each word (0x84.., 0xC4..: one; 0x88..,
+# 0xC8..: one and a value word after it) is a place in the command buffer (bits 6-25 the dword,
+# bit 30 another place follows), where sub_824AAAC0 writes the texture's six fetch constant
+# dwords for type 3, keeping the template's sampler bits. FH1 finds a record by its first word
+# (sub_8248B570: (register << 4) | type; a texture's (fc << 16) | 3) and does nothing for a
+# fetch constant without one.
+FC7_TEMPLATE = (0x80404802, 0xFFFFF086, 0x00000000, 0x00A80C14, 0x003E8003, 0x00000218)  # clamped, Hockenheim 257's
+
+
+def _pm4_packets(buf):
+    """(offset, header) of each PM4 packet of a command buffer, or None if it does not walk."""
+    out, o = [], 0
+    while o + 4 <= len(buf):
+        w = struct.unpack_from(">I", buf, o)[0]
+        t = w >> 30
+        if t == 0:
+            n = 1 + ((w >> 16) & 0x3FFF) + 1
+        elif t == 2:
+            n = 1
+        elif t == 3:
+            n = 1 + ((w >> 16) & 0x3FFF) + 1
+        else:
+            n = 2  # type 1: two registers
+        out.append((o, w))
+        o += 4 * n
+    return out if o == len(buf) else None
+
+
+def insert_fetch_constant(data, fc, template=FC7_TEMPLATE):
+    """The model file with fetch constant fc written by every pass that writes fetch constant 0
+    (a type-0 packet after that one, a type-3 fixup record (fc << 16) | 3 and its patch place),
+    or None if a pass's data is not laid out as above."""
+    k = data.rfind(b".fx")
+    if k < 0:
+        return None
+    hp = k + 3
+    head = list(struct.unpack_from(">8I", data, hp))
+    if head[0] != 1:
+        return None
+    g = pass_groups(data, hp + 32)
+    if not g:
+        return None
+    A = g[-1][1]
+    pop = [x for x in g if any(x[3])]
+    if sum(x[3][0] for x in pop) != head[3] or sum(x[3][2] for x in pop) != head[5]:
+        return None
+    B = A + head[3]
+    C = B + head[4]
+    offs, o = [], 0
+    for x in pop:
+        o = (o + 31) & ~31
+        offs.append(o)
+        o += x[3][1]
+    if o != head[4] or C + head[5] > len(data):
+        return None
+    reg = 0x4800 + 6 * fc
+    key = struct.pack(">I", (fc << 16) | 3)
+    blocks, bufs, recs_of, sizes_of = [], [], {}, {}
+    a = A
+    added = 0
+    for x, bo in zip(pop, offs):
+        s0, s1, s2 = x[3]
+        blk = bytearray(data[a:a + s0])
+        buf = bytearray(data[B + bo:B + bo + s1])
+        a += s0
+        n = x[2]
+        recs = [data[x[0] + 8 + 8 * r:x[0] + 16 + 8 * r] for r in range(n)]
+        has0 = struct.pack(">I", 3) in [r[:4] for r in recs]
+        if not has0 or key in [r[:4] for r in recs]:
+            blocks.append(bytes(blk)); bufs.append(bytes(buf))
+            continue
+        W = lambda o: struct.unpack_from(">I", blk, o)[0]
+        count, tend = W(0x7C), W(0x70)
+        mark = ((tend + 7) & ~7) + 8
+        if (W(0x90) != 0xC8 or tend != 0xC8 + 4 * count or mark + 8 != s0 or W(0x68) != s0 - 8
+                or W(0x78) != s1 - 8 or W(0xC0) != 0x81000000 | ((s1 - 8) // 4)
+                or blk[mark:] != bytes.fromhex("1122334455667789") or any(blk[tend:mark])):
+            return None
+        pk = _pm4_packets(bytes(buf))
+        if pk is None:
+            return None
+        # one write of fetch constants from 0 per draw (a buffer may hold several draws)
+        at = [o for o, w in pk if w >> 30 == 0 and (w & 0xFFFF) == 0x4800]
+        if not at:
+            return None
+        ins = []
+        for o in at:
+            cnt = ((struct.unpack_from(">I", buf, o)[0] >> 16) & 0x3FFF) + 1
+            if cnt % 6 or 0x4800 + cnt > reg:
+                return None
+            ins.append(o + 4 + 4 * cnt)
+        # the patch places after an insertion move with it
+        table = [W(0xC8 + 4 * t) for t in range(count)]
+        t = 0
+        while t < count:
+            e = table[t]
+            kind = (e >> 26) & 3
+            if not e >> 31 or kind not in (1, 2):
+                return None
+            table[t] = e + ((7 * sum(1 for o in ins if ((e >> 6) & 0xFFFFF) * 4 >= o)) << 6)
+            t += 2 if kind == 2 else 1
+        # the new places, one per draw: bit 30 on all but the last (another place follows)
+        for j, o in enumerate(ins):
+            more = 0x40000000 if j + 1 < len(ins) else 0
+            table.append(0x84000000 | more | (((o + 28 * j + 4) // 4) << 6))
+        packet = struct.pack(">7I", (5 << 16) | reg, *template)
+        for o in reversed(ins):
+            buf = buf[:o] + packet + buf[o:]
+        s1 += len(packet) * len(ins)
+        tend += 4 * len(ins)
+        mark = ((tend + 7) & ~7) + 8
+        new = bytearray(blk[:0xC8]) + b"".join(struct.pack(">I", e) for e in table)
+        new += bytes(mark - len(new)) + bytes.fromhex("1122334455667789")
+        s0 = len(new)
+        for off, v in ((0x68, s0 - 8), (0x70, tend), (0x78, s1 - 8), (0x7C, count + len(ins)),
+                       (0xC0, 0x81000000 | ((s1 - 8) // 4))):
+            struct.pack_into(">I", new, off, v)
+        last3 = max(r for r in range(n) if struct.unpack_from(">I", recs[r])[0] & 0xF == 3)
+        recs.insert(last3 + 1, key + struct.pack(">I", 0x47000000 | count))
+        recs_of[x[0]] = recs
+        sizes_of[x[0]] = (s0, s1, s2)
+        blocks.append(bytes(new)); bufs.append(bytes(buf))
+        added += 1
+    if not added:
+        return None
+    groups = b""
+    for x in g:
+        if x[0] not in recs_of:
+            groups += data[x[0]:x[1]]
+            continue
+        recs = recs_of[x[0]]
+        body = data[x[0] + 8 + 8 * x[2]:x[1] - 12]  # u32 m and its entries
+        groups += struct.pack(">II", 2, len(recs)) + b"".join(recs) + body + struct.pack(">3I", *sizes_of[x[0]])
+    area_b = bytearray()
+    for b in bufs:
+        area_b += bytes(((len(area_b) + 31) & ~31) - len(area_b)) + b
+    head[3] = sum(len(b) for b in blocks)
+    head[4] = len(area_b)
+    head[7] += 8 * added
+    return (data[:hp] + struct.pack(">8I", *head) + data[hp + 32:g[0][0]] + groups +
+            b"".join(blocks) + bytes(area_b) + data[C:])
+
+
 # FM4_PVS_FIXUP_DROP=4,5,6: those command-buffer fixup types become 0 (skipped) in every
 # pass group (a test; see PASS_GROUPS for the record layout).
 FIXUP_DROP = {int(x, 0) for x in os.environ.get("FM4_PVS_FIXUP_DROP", "").split(",") if x}
@@ -1491,7 +1668,8 @@ def convert_mod(mod, fh1_disc, loose):
     rect_done = lightmap_rect_copies(Fs, files, bin_dir)
     if rect_done:
         print(f"{track}: {len(rect_done)} models drawn with their instance lightmap's rectangle "
-              f"({len(Fs[0]['models']) - n_models} model copies, {len(RECT_COPIES)} shaders)")
+              f"({len(Fs[0]['models']) - n_models} model copies, {len(RECT_COPIES)} shaders; "
+              f"{len(INSERTED)} with a fetch constant added)")
     for (ribbon, path, data, _), F in zip(ribbons, Fs):
         P, cells, grid = convert(F, files)
         nn = ribbon[-2:]

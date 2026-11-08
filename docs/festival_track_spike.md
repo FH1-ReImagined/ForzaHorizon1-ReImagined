@@ -4,11 +4,12 @@ Work notes for putting a Forza Motorsport 4 circuit (Suzuka so far) into FH1 TU4
 roam. Everything here is dev tooling: it reads the player's own FM4 and FH1 files and writes
 converted files next to a copy of the game folder. Nothing from either game is in the repo.
 
-Status (converter at 577494a): the sections below are in the order the work was done, so the
-dark or black road patches the batch sections describe were fixed later ("The black roads",
-"Atlas tiles", the lightmap binding). Road-level shots at spots 1 and 5 of all 24 converted
-circuits (2026-11-07) show textured, lit roads; the known faults left are Infineon 5-6,
-Indianapolis 7-8 and Top Gear 3 (see "The five leftovers").
+Status (converter with insert_fetch_constant): the sections below are in the order the work
+was done, so the dark or black road patches the batch sections describe were fixed later ("The
+black roads", "Atlas tiles", the lightmap binding, the added fetch constant). Road-level shots
+at spots 1 and 5 of all 24 converted circuits show textured, lit roads; the known faults left
+are Infineon 5-6's grey road, Indianapolis 7's pale sand and Top Gear 3's orange ground (see
+"The last leftovers").
 
 ## Pipeline
 
@@ -869,11 +870,51 @@ maps the mask's 0 to 0.45 (`FH1_FM4_SHADOW_FLOOR`), close to FM4's TrackSettings
   of the buffer (sub_824AAA28) and writes the texture's fetch constant into each place listed.
   Infineon's road model 211 has, per pass, a buffer of 0x254 bytes (fetch constants 0-2 at
   +0x19c, fetch constant 31 after it) and the pass group's sizes 0x110, 0x254, 0x10; where the
-  patch lists live in the file is not found yet, so nothing is inserted.
+  patch lists live in the file is not found yet, so nothing is inserted (found the next morning: below).
 - Sweep: all 24 converted circuits (Suzuka with them), spots 1 and 5, against each one's latest
   pass: no crash but Catalunya 5 before the cap above; mean differences 1.3-7.7 except where a
   fix shows (Hockenheim 1 10.6, Mugello 1 10.6, Autopark 1 11.2: the barrier's lightmap) and
   Alps 1 (37: the car settled elsewhere).
+### The last leftovers: a fetch constant added to the command buffers (3-hour box)
+
+- The patch table's place and format (found with a dev-only hook on sub_82D19210, not shipped, that
+  logs each type-3 fixup with its object, table and places): a
+  pass group's data after the 21 groups is three areas. Area A holds each populated group's
+  first size: D3D's command buffer header (0xC8 bytes, the object sub_824AAA28 reads: +0x68
+  first size - 8, +0x70 the table's end, +0x78 second size - 8, +0x7C the table's words, +0x90
+  0xC8, +0xC0 0x81000000 | (second size - 8) / 4), the patch table, zeros to the table's 8-byte
+  aligned end + 8, and the 11223344 55667789 marker. Area B holds the PM4 buffers, each at the
+  next 32-byte boundary from the area's start (the .fx header's word 4 is the area's size, word 3
+  area A's, word 5 area C's, word 7 eight times the groups' records). A texture record's second
+  word is 0x47000000 | index into the table; from there each word (0x84/0xC4 one word, 0x88/0xC8
+  a word and a value) is a buffer place (bits 6-25 the dword, bit 30 another follows) where
+  sub_824AAAC0 writes the texture's six fetch constant dwords, keeping the template's sampler
+  bits. A buffer can hold several draws, each with its own write of fetch constants 0-2.
+- Converter (`fm4_pvs.insert_fetch_constant`, used by the lightmap binding when no spare fetch
+  constant is left; `FM4_PVS_LMUV_INSERT=0` leaves them): after every write of fetch constants
+  from 0, a type-0 packet for fetch constant 7 with a clamped template (Hockenheim 257's), a
+  record (7 << 16) | 3, one table word per draw, every later place moved by 7 dwords, the sizes,
+  the header words and the following buffers moved. Checked offline: every existing record of
+  every model it applies to (Infineon 204, Indianapolis 149, Top Gear 100, Hockenheim 1210)
+  still patches the same words, and the new places hold the new packets. The lightmap's
+  rectangle comes from a spare c12x register as before (the c120 writes are now found again
+  after the insertion). Models given one: Infineon 55, Indianapolis 40, Top Gear 11.
+- Results (trk-spike shots/spots-insB*): Indianapolis 8's black road is lit asphalt; Infineon
+  5's black band of distant ground is textured. Unchanged, so another cause: Infineon 5-6's grey
+  road (FH1's A4A965 passes, above), Indianapolis 7's pale sand, Top Gear 3's orange ground and
+  flat grey foreground. No crash.
+- Sweep: all 23 circuits with spot lists reconverted (Crown Jewel and Motegi get no insertion),
+  spots 1 and 5 against the previous night's sweep: no crash anywhere (Catalunya 5 included).
+  The mean differences are larger than that sweep's (9-27, Alps 1 44: the car settled
+  elsewhere) with the same scenes, roads paler at Hockenheim and Nürburgring GP. Not the
+  insertion: the same build with `FM4_PVS_LMUV_INSERT=0` differs from it by 0.6 and 1.0
+  (Hockenheim 1, 5) and 1.5 (Nürburgring GP 5). The shared SDK under the default run
+  (rexglue-sdk-patched-forza) was replaced after the previous sweep, the likely cause; not
+  looked into.
+- Note for runs: the converted circuits share one zipmanifest.xml (the last one reconverted
+  mounts only its own track); running another circuit needs its loose-<track>/media/zipmanifest.xml
+  copied back (reconvert_track.sh does it), or the load stops at its texture pack.
+
 ### Car shadows made shippable (3-hour box, stopped for the night): state
 
 - Root cause of the black fallback: the SDK's Vulkan translator stores nothing for a texture
