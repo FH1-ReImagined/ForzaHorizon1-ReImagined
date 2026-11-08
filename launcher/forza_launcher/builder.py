@@ -680,6 +680,45 @@ def llvm_member_wanted(name: str) -> bool:
     return parts[0] in ("lib",) and len(parts) > 1 and parts[1] == "clang" or parts[0].upper().startswith("LICENSE")
 
 
+def llvm_incomplete_message(folder: Path, lacking) -> str:
+    """The build cannot go on: a freshly unpacked LLVM still lacks files (#744)."""
+    first = folder.joinpath(*lacking[0].split("/"))
+    one = len(lacking) == 1
+    return (f"The downloaded LLVM compiler is incomplete after unpacking it: {', '.join(lacking)} "
+            f"{'is' if one else 'are'} missing in {folder} (for example {first}). An antivirus may have "
+            f"quarantined {'it' if one else 'them'}: look in its quarantine or protection history, restore "
+            f"or allow the {'file' if one else 'files'} (or the folder {folder.parent}), then press Build again.")
+
+
+def install_llvm(name: str, arc: Path, dest: Path, rep: Reporter, progress) -> None:
+    """Unpacks the LLVM archive into <dest>.part, checks that every file the build needs is there,
+    then puts it in place of dest, which may be an incomplete folder (an unpack that stopped
+    halfway, or a file an antivirus took away, #744). When something is still missing the archive
+    is kept, so the next try needs no download."""
+    stage = dest.with_name(dest.name + ".part")
+    if stage.exists():
+        _rmtree(stage)
+    fetch.unpack(name, arc, stage, strip=1, only=llvm_member_wanted, progress=progress,
+                 cancelled=rep.cancelled)
+    lacking = build_env.llvm_missing_files(stage)
+    if lacking:
+        raise BuildError(llvm_incomplete_message(stage, lacking))
+    for attempt in range(5):
+        try:
+            if dest.exists():
+                _rmtree(dest)
+            os.replace(stage, dest)
+            break
+        except OSError as e:  # an antivirus scanning the new files holds them open for a moment
+            if attempt == 4:
+                raise BuildError(f"Could not replace the LLVM folder {dest} with the new one ({e}). "
+                                 f"Close any program that uses it, or delete the folder, then press "
+                                 f"Build again.") from e
+            time.sleep(1)
+    rep.log(f"LLVM unpacked into {dest}")
+    arc.unlink(missing_ok=True)  # 2 GB: not needed any more
+
+
 def ensure_toolchain(opts: Options, rep: Reporter, lo, hi):
     tools = build_env.detect_tools(opts.root, opts.prefer_downloaded, max_age=0)
     for p in tools.problems:
@@ -703,10 +742,8 @@ def ensure_toolchain(opts: Options, rep: Reporter, lo, hi):
         arc = fetch.download(name, cache, _dl_progress(rep, a, a + (b - a) * 0.6, name), rep.cancelled)
         rep.status(f"Unpacking {name}")
         if name.startswith("llvm"):
-            dest = tdir / f"llvm-{pins.LLVM_VERSION}"
-            fetch.unpack(name, arc, dest, strip=1, only=llvm_member_wanted,
-                         progress=_dl_progress(rep, a + (b - a) * 0.6, b, "unpack"), cancelled=rep.cancelled)
-            arc.unlink(missing_ok=True)  # 2 GB: not needed any more
+            install_llvm(name, arc, tdir / f"llvm-{pins.LLVM_VERSION}", rep,
+                         _dl_progress(rep, a + (b - a) * 0.6, b, "unpack"))
         elif name.startswith("cmake"):
             fetch.unpack(name, arc, tdir / f"cmake-{pins.CMAKE_VERSION}", strip=1, cancelled=rep.cancelled)
         elif name.startswith("ninja"):
@@ -717,6 +754,9 @@ def ensure_toolchain(opts: Options, rep: Reporter, lo, hi):
     tools = build_env.detect_tools(opts.root, opts.prefer_downloaded, max_age=0)
     for p in tools.problems:
         raise BuildError(p)
+    if tools.llvm_incomplete:  # gone again after the check in install_llvm
+        raise BuildError(llvm_incomplete_message(build_env.downloaded_paths(opts.root)["llvm"].parent,
+                                                 tools.llvm_incomplete))
     if tools.missing:
         raise BuildError("The toolchain is incomplete after the download: " + ", ".join(tools.missing))
     for k, v in tools.source.items():
