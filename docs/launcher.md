@@ -715,7 +715,11 @@ Tests: `launcher/test_decal_pack.py`.
   way. The MSVC CRT and Windows SDK come from an installed Visual Studio 2022 (17.3+) / Build Tools
   (`vswhere`, `vcvars64.bat`; older ones are skipped, see "Round 5") if there is one, else **xwin** on the player's machine after the
   player ticks "I accept Microsoft's license" (the launcher links the license; nothing of
-  Microsoft's is redistributed). The toolchain file is `tools/cmake/windows-native-clang-cl.cmake`.
+  Microsoft's is redistributed). xwin splats with `--use-winsysroot-style --disable-symlinks`
+  (`VC/Tools/MSVC/<crt>`, `Windows Kits/10/Include/<sdk>`), which makes no link: the plain layout
+  always links `sdk/include/<sdk>` to its parent, which needs Developer Mode or an elevated launcher
+  (os error 1314, #739). A plain splat from 0.2.8 or older is still used when it has both versioned
+  links. The toolchain file is `tools/cmake/windows-native-clang-cl.cmake`.
   The Windows overlay is the whole SDK prefix (the SDK's prebuilt Windows plugin has no
   Vulkan backend), built by CI.
   **MSYS2 and Cygwin tools are never used (#100).** devkitPro and similar put an MSYS2 `usr\bin` on PATH; its
