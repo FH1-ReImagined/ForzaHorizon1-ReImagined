@@ -29,6 +29,7 @@ MODS_PAGE_ID = 8
 TEXTURE_PACKS_PAGE_ID = 9
 RADIO_PAGE_ID = 10
 SERVERS_PAGE_ID = 11
+FM4_LAPS_PAGE_ID = 13  # Mods > FM4 laps (#648): shown once an FM4 circuit is imported
 SAVES_PAGE_ID = 6
 ONLINE_PAGE_ID = 12   # Online > Online: the Online settings (built by the Settings page)
 SIDEBAR_WIDTH = 224
@@ -38,7 +39,8 @@ SIDEBAR_WIDTH = 224
 SECTIONS = [
     ("Play", [("Play", 0)], False),
     ("Library", [("Photos", 4), ("Designs && vinyls", CATALOG_PAGE_ID), ("Saves", SAVES_PAGE_ID)], False),
-    ("Mods", [("Mods", MODS_PAGE_ID), ("Texture packs", TEXTURE_PACKS_PAGE_ID), ("Radio", RADIO_PAGE_ID)], False),
+    ("Mods", [("Mods", MODS_PAGE_ID), ("Texture packs", TEXTURE_PACKS_PAGE_ID), ("Radio", RADIO_PAGE_ID),
+              ("FM4 laps", FM4_LAPS_PAGE_ID)], False),
     ("Online", [("Online", ONLINE_PAGE_ID), ("Servers", SERVERS_PAGE_ID)], False),
     ("Controls", [("Controls", 5)], False),
     ("Settings", [("Settings", 2)], False),
@@ -168,6 +170,8 @@ class MainWindow(QMainWindow):
         self.mods = ModsPage(cfg, self)
         self.texture_packs = TexturePacksPage(cfg, self)
         self.radio = RadioPage(cfg, self)
+        from .fm4_tracks import Fm4LapsPage
+        self.fm4_laps = Fm4LapsPage(cfg, self)
         self.servers = ServersPage(cfg, self)
         self.servers.changed.connect(self._server_chosen)
         self.settings.attach_servers(self.servers)
@@ -179,7 +183,8 @@ class MainWindow(QMainWindow):
                        4: self.gallery, 5: self.controls, 6: self.saves,
                        CATALOG_PAGE_ID: self.catalogs, MODS_PAGE_ID: self.mods,
                        TEXTURE_PACKS_PAGE_ID: self.texture_packs, RADIO_PAGE_ID: self.radio,
-                       SERVERS_PAGE_ID: self.servers, ONLINE_PAGE_ID: self.online}
+                       SERVERS_PAGE_ID: self.servers, ONLINE_PAGE_ID: self.online,
+                       FM4_LAPS_PAGE_ID: self.fm4_laps}
         # In id order, so a page's stack index is its id.
         for page in self._pages.values():
             self.stack.addWidget(page)
@@ -357,12 +362,15 @@ class MainWindow(QMainWindow):
         self.header.setVisible(page_id != 0)   # Play has its banner
         self.section_title.setText(name)
         self.subnav.blockSignals(True)
-        if self._subnav_section != section:
+        # a page may hide its tab (FM4 laps until a circuit is imported)
+        pages = [(t, p) for t, p in pages
+                 if p == page_id or getattr(self._pages[p], "tab_visible", lambda: True)()]
+        if self._subnav_section != (section, tuple(pages)):
             while self.subnav.count():
                 self.subnav.removeTab(0)
             for title, pid in pages:
                 self.subnav.setTabData(self.subnav.addTab(title), pid)
-            self._subnav_section = section
+            self._subnav_section = (section, tuple(pages))
         for i in range(self.subnav.count()):
             if self.subnav.tabData(i) == page_id:
                 self.subnav.setCurrentIndex(i)
@@ -399,6 +407,8 @@ class MainWindow(QMainWindow):
             self.saves.refresh()
         elif self._pages[i] is self.mods:
             self.mods.refresh()
+        elif self._pages[i] is self.fm4_laps:
+            self.fm4_laps.refresh()
         elif self._pages[i] is self.texture_packs:
             self.texture_packs.refresh()
         elif self._pages[i] is self.radio:
@@ -828,19 +838,23 @@ class MainWindow(QMainWindow):
         stopped = getattr(self.session, "stop_requested", False) is True
         self.session.cleanup()
         self.session = None
+        # a session on an imported FM4 circuit (#648) sends nothing: its shaders are FM4's
+        fm4_circuit = bool(getattr(self.session_plan, "fm4_track", ""))
         try:  # shader lists from play (#276): in the background, silent, never holds up Play
-            shader_share.share_in_background(self.cfg, self.session_plan)
+            if not fm4_circuit:
+                shader_share.share_in_background(self.cfg, self.session_plan)
         except Exception as e:
             paths.log_error("start the shader list upload", e)
         try:  # co-op campaign results (#309): the player's own festival event results to its save
-            profile = getattr(self.session_plan, "save_profile", None)
-            coop_grant.record_session(self.cfg, profile, getattr(self, "_session_started", 0),
-                                      time.time())
-            notes = self._coop_notes = []
-            self._coop_thread = coop_grant.after_session_in_background(
-                self.cfg, profile, lambda line: (print(line), notes.append(line)))
-            if self._coop_thread is not None:
-                self._coop_timer.start()
+            if not fm4_circuit:
+                profile = getattr(self.session_plan, "save_profile", None)
+                coop_grant.record_session(self.cfg, profile, getattr(self, "_session_started", 0),
+                                          time.time())
+                notes = self._coop_notes = []
+                self._coop_thread = coop_grant.after_session_in_background(
+                    self.cfg, profile, lambda line: (print(line), notes.append(line)))
+                if self._coop_thread is not None:
+                    self._coop_timer.start()
         except Exception as e:
             paths.log_error("start applying co-op results", e)
         self.play.challenges.refresh(force=True)  # the session's results are on the server now

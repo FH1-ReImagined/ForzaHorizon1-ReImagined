@@ -160,6 +160,7 @@ Your IP address and other players:
 - Controller haptics (DualSense adaptive triggers and Xbox trigger rumble, off by default) send car data from the game to the launcher over 127.0.0.1 only.
 - VR (off by default) talks only to your PC's OpenXR runtime. Streaming to a headset, for example with WiVRn over Wi-Fi, is that runtime's own traffic.
 - "This PC" mode runs the server on 127.0.0.1 only.
+- Forza Motorsport 4 circuits (experimental, docs/fm4-tracks.md): the import reads your own FM4 disc and converts it on your PC; nothing is downloaded, and nothing of FM4 is shipped or sent anywhere. A start on a circuit plays offline and turns off the Discord activity and the session's shader-list upload; your lap times stay in the data folder.
 - Hardware detection reads your graphics card, CPU and RAM with tools on your PC. It is used to recommend settings, and in crash reports that you choose to send.
 - The first time you play online on Windows, Windows Firewall may ask whether to allow the game on networks.
 
@@ -183,7 +184,8 @@ Your IP address and other players:
   - shader_share.json, which records the shader entries already sent;
   - live_identity.txt, which holds your XUID, gamertag, friends key and signing key;
   - with "This PC": the local server's data in live_server, including its server.log and its player and friends records;
-  - with "Continue a Xenia Canary save": a copy of that save in a xenia-<XUID> folder.
+  - with "Continue a Xenia Canary save": a copy of that save in a xenia-<XUID> folder;
+  - with Forza Motorsport 4 circuits imported: the converted circuits in fm4-tracks, their database in mods/.fm4-track-<circuit>, and your lap times and best-lap ghosts in fm4-tracks/laps.
 - In the Flatpak, both folders are inside ~/.var/app/io.github.dyotson.ForzaHorizon1ReImagined.
 - Uninstalling keeps all of these files. Delete the folders yourself to remove them.
 - forza.log (and its other copies) can record your LAN IP address, your public IP address (on a server you connect to directly), the server's address, your country and language settings, other players' LAN IP addresses, the first two numbers of their public IP addresses (from 0.2.4; older versions wrote them whole), their gamertags and XUIDs, and the chat messages you send and receive. Check it before you attach it to a public issue.

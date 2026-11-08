@@ -164,6 +164,17 @@ class LayoutTests(unittest.TestCase):
                     if len(pages) > 1:
                         self.assertEqual(self.win.subnav.tabData(self.win.subnav.currentIndex()), pid)
 
+    def test_fm4_laps_tab_shows_only_with_an_fm4_circuit(self):
+        from forza_launcher.ui.window import MODS_PAGE_ID
+        self.win.show_page(MODS_PAGE_ID)
+        tabs = lambda: [self.win.subnav.tabText(i) for i in range(self.win.subnav.count())]
+        self.assertEqual(tabs(), ["Mods", "Texture packs", "Radio"])
+        laps = Path(self.win.cfg.data_home()) / "fm4-tracks" / "laps" / "suzuka.jsonl"
+        laps.parent.mkdir(parents=True)
+        laps.write_text('{"time": 425.877, "sectors": [108.1, 220.7, 321.9], "lap": 1}\n', encoding="utf-8")
+        self.win.show_page(MODS_PAGE_ID)
+        self.assertEqual(tabs(), ["Mods", "Texture packs", "Radio", "FM4 laps"])
+
     def test_section_button_returns_to_the_page_shown_last(self):
         from forza_launcher.ui.window import RADIO_PAGE_ID
         self.win.show_page(RADIO_PAGE_ID)

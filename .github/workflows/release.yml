@@ -83,6 +83,8 @@ jobs:
         run: python -m unittest discover -s tools -p 'test_trigger_harness.py' -v
       - name: FM4 car converter tests (synthetic models, no game files, #648)
         run: python -m unittest discover -s tools -p 'test_fm4_cars.py' -v
+      - name: FM4 circuits' lap timing data (#648)
+        run: python -m unittest discover -s tools -p 'test_fm4_timing.py' -v
       - name: Resource hook audit tests (synthetic images)
         run: python -m unittest discover -s tools -p 'test_resource_data_hooks.py' -v
       - name: Thumbnail and photo sync renewal contracts (no game)
@@ -136,6 +138,11 @@ jobs:
         run: |
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src/kernel forza-recomp/tests/content_manifest_test.cpp -o "$RUNNER_TEMP/content-manifest-test"
           "$RUNNER_TEMP/content-manifest-test"
+      - if: runner.os == 'Linux'
+        name: FM4 circuit lap timing
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src/platform forza-recomp/tests/fm4_lap_test.cpp -o "$RUNNER_TEMP/fm4-lap-test"
+          "$RUNNER_TEMP/fm4-lap-test"
       - if: runner.os == 'Linux'
         name: On-screen keyboard
         run: |
@@ -445,6 +452,16 @@ jobs:
             -DCMAKE_PREFIX_PATH="$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64"
           "$HOME/cmake/bin/cmake" --build "$RUNNER_TEMP/custom-race-tests" --parallel 2
           "$HOME/cmake/bin/ctest" --test-dir "$RUNNER_TEMP/custom-race-tests" --output-on-failure
+      - name: FM4 circuits mounted into the game folder (#648)
+        run: |
+          # The mount against the SDK's own file system: the circuit's files listed and opened as
+          # the game opens them, the game's own kept, the converted track's switch defaults.
+          sdk="$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64"
+          "$HOME/llvm/bin/clang++" -std=gnu++23 -msse4.1 -pthread -DSPDLOG_COMPILED_LIB -DSPDLOG_FMT_EXTERNAL \
+            -isystem "$sdk/include" forza-recomp/tests/fm4_track_mount_test.cpp \
+            forza-recomp/src/hooks/fm4_track_mount.cpp -L"$sdk/lib" -lrexruntime -Wl,-rpath,"$sdk/lib" \
+            -fuse-ld=lld -o "$RUNNER_TEMP/fm4-track-mount-test"
+          "$RUNNER_TEMP/fm4-track-mount-test"
       - name: Benchmark and title-modal regression tests
         run: |
           "$HOME/cmake/bin/cmake" -S forza-recomp/tests/benchmark -B "$RUNNER_TEMP/benchmark-tests" \

@@ -114,6 +114,12 @@ def read_zip_member(zf, path, info):
         raw = f.read(info.compress_size)
     if info.compress_type == zipfile.ZIP_STORED:
         return raw
+    return decode_xmem(raw, info.file_size)
+
+
+def decode_xmem(raw, size):
+    """A method-21 (XMemCompress LZX) member's bytes from its raw data, in Python (what
+    tools/unxmem does with libmspack)."""
     import lzx_delta
     # Blocks: FF, u16 uncompressed size, u16 compressed size, data; or u16 compressed
     # size, data (a full 32 KB block). The data of all blocks is one LZX stream.
@@ -129,7 +135,7 @@ def read_zip_member(zf, path, info):
             break
         stream += raw[pos:pos + comp]
         pos += comp
-    return bytes(lzx_delta.decompress(bytes(stream), info.file_size, LZX_WINDOW))
+    return bytes(lzx_delta.decompress(bytes(stream), size, LZX_WINDOW))
 
 
 def iter_sources(sources):

@@ -56,9 +56,9 @@ datas += collect_data_files("sdl2dll")
 hidden += ["sdl2dll"]
 
 # The title update step (a Python tool the frozen app runs itself with --run-script), Import FM4 cars
-# (fm4_*, carbin_dump, #648), and the shader
+# (fm4_*, carbin_dump, #648), Import FM4 tracks (fm4_track_mod, fm4_pvs and what it imports, #648), and the shader
 # prebuild (#226), which imports pipeline_list, fxobj_shaders, xxh3, lzx_delta and apply_title_update.
-for _tool in ("apply_title_update.py", "fm4_cars.py", "fm4_carbin.py", "fm4_physdef.py", "carbin_dump.py", "lzx_delta.py", "xdc_decode.py", "extract_map_points.py", "livery_codec.py", "pipeline_list.py", "fxobj_shaders.py", "xxh3.py", "native_menu_scene.py", "offline_cars_flow.py", "native_tuning_assets.py"):
+for _tool in ("apply_title_update.py", "fm4_cars.py", "fm4_carbin.py", "fm4_physdef.py", "carbin_dump.py", "lzx_delta.py", "xdc_decode.py", "extract_map_points.py", "livery_codec.py", "pipeline_list.py", "fxobj_shaders.py", "xxh3.py", "native_menu_scene.py", "offline_cars_flow.py", "native_tuning_assets.py", "fm4_track_mod.py", "fm4_pvs.py", "fm4_col.py", "fm4_shaders.py", "fm4_spawn.py", "fm4_timing.py"):
     if (repo / "tools" / _tool).is_file():
         datas.append((str(repo / "tools" / _tool), "tools"))
 datas.append((str(repo / "tools" / "native_menu" / "fh1_donors.json"), "tools/native_menu"))
@@ -82,7 +82,8 @@ a = Analysis(
     binaries=collect_dynamic_libs("sdl2dll"),
     hiddenimports=hidden + ["install_dlc", "xcontent_extract", "xiso_extract", "xdc_decode", "livery_codec", "tomllib", "pipeline_list",
                             "fxobj_shaders", "xxh3", "lzx_delta", "apply_title_update", "offline_cars_flow", "extract_map_points",
-                            "fm4_cars", "fm4_carbin", "fm4_physdef", "carbin_dump"],
+                            "fm4_cars", "fm4_carbin", "fm4_physdef", "carbin_dump",
+                            "fm4_spawn", "fm4_timing", "fm4_track_mod", "fm4_pvs", "fm4_col", "fm4_shaders", "sqlite3", "argparse", "zlib"],
     excludes=["tkinter", "unittest", "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets",
               "PySide6.QtQml", "PySide6.QtQuick", "PySide6.Qt3DCore", "PySide6.QtMultimedia",
               "PySide6.QtNetwork", "PySide6.QtPdf", "PySide6.QtSql", "PySide6.QtTest"],

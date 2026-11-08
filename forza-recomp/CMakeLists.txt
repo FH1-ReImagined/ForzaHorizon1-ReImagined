@@ -118,6 +118,7 @@ endif()
 set(FORZA_SOURCES
     src/main.cpp
     src/debug/audio_level.cpp
+    src/debug/autopilot.cpp
     src/hooks/radio_station.cpp
     src/hooks/radio_events.cpp
     src/hooks/car_audio_volume.cpp
@@ -134,6 +135,9 @@ set(FORZA_SOURCES
     src/hooks/compressed_stream_stall.cpp
     src/hooks/ffcb_wake.cpp
     src/hooks/database_query.cpp
+    src/hooks/fm4_track.cpp
+    src/hooks/fm4_track_mount.cpp
+    src/hooks/fm4_lap_timer.cpp
     src/hooks/crowd_anim.cpp
     src/hooks/movie_texture.cpp
     src/hooks/movie_memory.cpp

@@ -342,7 +342,8 @@ class SavesPage(QWidget):
         if profile is None:
             launch()
             return
-        automatic = self.cfg.d['save_manager']['automatic']
+        # a start on an FM4 circuit (experimental, #648) always backs the save up first
+        automatic = self.cfg.d['save_manager']['automatic'] or bool(getattr(plan, 'fm4_track', ''))
         keep = self.cfg.d['save_manager']['keep_automatic']
         # New profiles need neither a directory scan nor a backup worker.
         if not profile.folder.exists() and not (profile.folder.parent / '.save-manager-restore.json').exists():
