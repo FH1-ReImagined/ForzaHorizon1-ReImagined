@@ -1,8 +1,9 @@
 // forza - Custom Race: replay a won festival or street event with your own settings
 // (docs/custom-race.md).
 //
-// On a career event's title card (CCareerEventDescription, TU4 only), once the event has
-// been won and while playing offline, SELECT opens a Custom Race page built on the game's
+// On a festival event's title card (CCareerEventDescription, TU4 only) or a street race
+// hub's selected race (CCareerStreetRaceSelect, the same event screen base), once the event
+// has been won and while playing offline, SELECT opens a Custom Race page built on the game's
 // own difficulty-style layout (like the in-game Graphics menu): car class, laps (circuit
 // races), opponents (1-7) and time of day. A confirms: the event's database rows are
 // shadowed for the race by TEMP tables (Events, Races, EventParticipants, EventRestrictions,
