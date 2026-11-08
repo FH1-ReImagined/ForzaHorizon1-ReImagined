@@ -346,9 +346,16 @@ class Ui(Base):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
+    def own(self, widget):
+        """Delete the widget when the test ends: left to Python's exit, PySide 6.12 deletes it
+        after the application and the process aborts (CI's launcher-tests)."""
+        import shiboken6
+        self.addCleanup(lambda: shiboken6.isValid(widget) and shiboken6.delete(widget))
+        return widget
+
     def test_the_picker_shows_only_with_an_import(self):
         from forza_launcher.ui.fm4_tracks import TrackPicker
-        picker = TrackPicker(self.cfg)
+        picker = self.own(TrackPicker(self.cfg))
         self.assertFalse(picker.isVisibleTo(None) and picker.isVisible())
         self.assertEqual(picker.combo.count(), 1)
         self.assertTrue(picker.isHidden())
@@ -367,7 +374,7 @@ class Ui(Base):
 
     def test_the_laps_page(self):
         from forza_launcher.ui.fm4_tracks import Fm4LapsPage
-        page = Fm4LapsPage(self.cfg, None)
+        page = self.own(Fm4LapsPage(self.cfg, None))
         self.assertFalse(page.tab_visible())
         self.assertFalse(page.empty.isHidden())
         self.build()
@@ -391,7 +398,7 @@ class Ui(Base):
         from forza_launcher.ui.fm4_tracks import ChooseCircuits, Fm4TracksCard
         page = mock.Mock()
         page._game_running.return_value = False
-        card = Fm4TracksCard(self.cfg, page)
+        card = self.own(Fm4TracksCard(self.cfg, page))
         self.assertTrue(card.table.isHidden())
         self.build()
         card.refresh()
@@ -399,7 +406,7 @@ class Ui(Base):
         self.assertEqual(card.table.item(0, 0).text(), "Suzuka")
         self.assertIn("1 circuit(s) imported", card.message.text())
         disc = fm4tracks.open_disc(str(self.disc), self.t / "work")
-        dialog = ChooseCircuits(None, disc, {"suzuka"}, 10 << 30)
+        dialog = self.own(ChooseCircuits(None, disc, {"suzuka"}, 10 << 30))
         self.assertEqual(dialog.chosen(), [])  # Suzuka is imported already: nothing ticked
         self.assertIn("imported", dialog.list.item(1).text())
         self.assertFalse(dialog.go.isEnabled())
@@ -407,7 +414,7 @@ class Ui(Base):
         dialog._all(Qt.Checked)
         self.assertEqual(dialog.chosen(), ["LeMans", "Suzuka"])
         self.assertTrue(dialog.go.isEnabled())
-        small = ChooseCircuits(None, disc, set(), 1000)
+        small = self.own(ChooseCircuits(None, disc, set(), 1000))
         self.assertFalse(small.go.isEnabled())  # not enough room
 
 
