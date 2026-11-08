@@ -219,7 +219,7 @@ def ensure_mod(cfg, log=print):
                 shutil.rmtree(target)
             staged.rename(target)
         return MOD
-    except (OSError, TipsError) as e:
+    except Exception as e:  # noqa: BLE001 - a tips failure must never stop the game from starting (#758)
         log(f"ReImagined loading tips: {e}; the game's own tips are shown")
         return None
 

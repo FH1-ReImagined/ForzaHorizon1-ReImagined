@@ -193,5 +193,32 @@ class ModAndLaunch(unittest.TestCase):
         self.assertIn("--forza_mods=|", self.args())
 
 
+
+
+class ToolsMissingTest(unittest.TestCase):
+    """#758: the Flatpak shipped without tools/extract_map_points.py, so building the launch plan
+    raised ModuleNotFoundError and Play and the shader prebuild stopped. A tips failure of any kind
+    must leave the game's own tips instead."""
+
+    def test_import_error_leaves_the_games_tips(self):
+        from unittest import mock
+        from forza_launcher import loading_tips
+        logged = []
+        cfg = mock.Mock()
+        with mock.patch.object(loading_tips, "enabled", return_value=True), \
+             mock.patch.object(loading_tips.mods, "mods_dir", return_value=Path("/nonexistent")), \
+             mock.patch.object(loading_tips, "sources", side_effect=ModuleNotFoundError("No module named 'extract_map_points'")):
+            self.assertIsNone(loading_tips.ensure_mod(cfg, logged.append))
+        self.assertTrue(any("extract_map_points" in m for m in logged))
+
+    def test_flatpak_stages_every_tool_the_frozen_build_bundles(self):
+        import ast, re
+        repo = Path(__file__).resolve().parent.parent
+        stage = (repo / "flatpak" / "stage.py").read_text(encoding="utf-8")
+        tools = ast.literal_eval(re.search(r"^TOOLS = (\(.*?\))", stage, re.S | re.M).group(1))
+        spec = (repo / "launcher" / "forza-launcher.spec").read_text(encoding="utf-8")
+        frozen = ast.literal_eval(re.search(r"for _tool in (\(.*?\)):", spec, re.S).group(1))
+        self.assertEqual(sorted(set(frozen) - set(tools)), [])
+
 if __name__ == "__main__":
     unittest.main()
