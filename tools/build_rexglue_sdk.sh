@@ -60,11 +60,13 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # instruction on every draw for the outdated-texture flag, no division per packet (#607), and
 # 0436: a texture pack's pack.toml can ask for its files to be read at start (the decal pack, #659),
 # and 0437: texture pack replacements freed with their textures, within a graphics memory limit (#677),
-# and 0438: a lost device names the draw the GPU was on (Vulkan breadcrumbs, D3D12 DRED, #551).
+# and 0438: a lost device names the draw the GPU was on (Vulkan breadcrumbs, D3D12 DRED, #551),
+# and 0442-0445: descriptor reuse on by default, dynamic guest constants, samplers and texture
+# requests kept within a submission, texture descriptor sets of the frame used again (#192, #179).
 # A reviewed full commit can be pinned before a maintainer publishes a tag.
 # When a tag is supplied, its target must still match this immutable commit.
 REIGLUE_TAG=
-REIGLUE_COMMIT=18dc3993f28ffae2019727a1f9f3aaca22033adb  # ReIGlue main a5fd408 (0439-0441) with 0420 (ReIGlue PR #26: the command processor on two threads, gpu_split_command_processor, off by default)
+REIGLUE_COMMIT=c6cfafc5b12e5079e01d9118a270443ead80ca1e  # ReIGlue perf/desc-and-split: main a5fd408 with 0420 (#474, the command processor on two threads) and 0442-0445 (#192, #179)
 REIGLUE_URL="${REIGLUE_URL:-https://github.com/FH1-ReImagined/ReIGlue}"
 NIGHTLY="${REXSDK_NIGHTLY:-$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64}"
 SRC="${REXSDK_SRC:-$HOME/rexglue-sdk-src-forza/sdk}"
