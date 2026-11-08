@@ -903,6 +903,14 @@ maps the mask's 0 to 0.45 (`FH1_FM4_SHADOW_FLOOR`), close to FM4's TrackSettings
   5's black band of distant ground is textured. Unchanged, so another cause: Infineon 5-6's grey
   road (FH1's A4A965 passes, above), Indianapolis 7's pale sand, Top Gear 3's orange ground and
   flat grey foreground. No crash.
+- Sweep: all 23 circuits with spot lists reconverted (Crown Jewel and Motegi get no insertion),
+  spots 1 and 5 against the previous night's sweep: no crash anywhere (Catalunya 5 included).
+  The mean differences are larger than that sweep's (9-27, Alps 1 44: the car settled
+  elsewhere) with the same scenes, roads paler at Hockenheim and Nürburgring GP. Not the
+  insertion: the same build with `FM4_PVS_LMUV_INSERT=0` differs from it by 0.6 and 1.0
+  (Hockenheim 1, 5) and 1.5 (Nürburgring GP 5). The shared SDK under the default run
+  (rexglue-sdk-patched-forza) was replaced after the previous sweep, the likely cause; not
+  looked into.
 - Note for runs: the converted circuits share one zipmanifest.xml (the last one reconverted
   mounts only its own track); running another circuit needs its loose-<track>/media/zipmanifest.xml
   copied back (reconvert_track.sh does it), or the load stops at its texture pack.
