@@ -129,6 +129,7 @@ class Tools:
     problems: list = field(default_factory=list)    # things only the user can fix
     hints: list = field(default_factory=list)       # optional improvements (shown as warnings)
     notes: list = field(default_factory=list)       # log lines: which tool was skipped and why
+    llvm_incomplete: list = field(default_factory=list)  # files the downloaded LLVM folder lacks (#744)
 
 
 def _version_of(cmd, pattern):
@@ -238,6 +239,42 @@ def _plat():
 
 def toolchain_dir(root: Path) -> Path:
     return root / "toolchain"
+
+
+# The LLVM programs the build runs (#744). windows-native-clang-cl.cmake needs clang-cl, lld-link
+# and llvm-lib (find_program REQUIRED: first in FORZA_LLVM_BIN, which is clang-cl's folder, then
+# on PATH) and takes llvm-rc when there is one (the icon). It uses no llvm-mt: lld-link embeds the
+# manifest. The Linux build runs clang and clang++ with the system's linker.
+LLVM_TOOLS = {"windows": ("clang-cl", "lld-link", "llvm-lib"), "linux": ("clang", "clang++")}
+# The downloaded LLVM always has these: one missing means the folder is incomplete (an unpack
+# that stopped halfway, or an antivirus that quarantined a file).
+LLVM_TOOLS_DOWNLOADED = {"windows": LLVM_TOOLS["windows"] + ("llvm-rc",), "linux": LLVM_TOOLS["linux"]}
+LLVM_HEADERS = "lib/clang/<version>/include"
+
+
+def llvm_missing_files(llvm_root: Path, plat=None) -> list:
+    """What the build needs that an unpacked LLVM folder (llvm-<version>) lacks: bin/<program>
+    names and LLVM_HEADERS (the compiler's own headers). Empty when nothing is missing."""
+    p = plat or _plat()
+    exe = ".exe" if p == "windows" else ""
+    out = [f"bin/{n}{exe}" for n in LLVM_TOOLS_DOWNLOADED[p] if not (llvm_root / "bin" / (n + exe)).is_file()]
+    res = llvm_root / "lib" / "clang"
+    try:
+        headers = any((d / "include").is_dir() for d in res.iterdir())
+    except OSError:
+        headers = False
+    if not headers:
+        out.append(LLVM_HEADERS)
+    return out
+
+
+def llvm_tools_not_found(clang: str, plat=None, path=None) -> list:
+    """The LLVM programs the build needs that are neither next to this (system) compiler nor on
+    PATH, where the toolchain file looks for them. Empty when all are there."""
+    p = plat or _plat()
+    here = str(Path(clang).parent)
+    return [n for n in LLVM_TOOLS[p][1:]
+            if not shutil.which(n, path=here) and not find_tool(n, path=path, windows=p == "windows")]
 
 
 def downloaded_paths(root: Path):
@@ -368,17 +405,33 @@ def _detect_tools(root: Path, prefer_downloaded=False) -> Tools:
     sys_clang = None if prefer_downloaded else find_tool("clang-cl" if p == "windows" else "clang", t.notes,
                                                          version_probe=_probe_text)
     ver = _version_of([sys_clang, "--version"], r"clang version (\d+\.\d+)") if sys_clang else None
-    if sys_clang and ver and ver[0] >= pins.MIN_SYSTEM_CLANG:
+    sys_ok = bool(sys_clang and ver and ver[0] >= pins.MIN_SYSTEM_CLANG)
+    if sys_ok and p == "windows":
+        # A clang-cl without lld-link or llvm-lib beside it (or on PATH) stops CMake at the
+        # toolchain file (#744): the downloaded LLVM has them all.
+        lacks = llvm_tools_not_found(sys_clang, p)
+        if lacks:
+            sys_ok = False
+            t.notes.append(f"clang-cl: not using {sys_clang} (clang {ver[0]}.{ver[1]}): "
+                           f"no {', '.join(lacks)} next to it or on PATH; using the downloaded LLVM")
+    llvm_root = dp["llvm"].parent
+    if sys_ok:
         t.cc = sys_clang
         t.cxx = (shutil.which("clang++") or sys_clang) if p != "windows" else sys_clang
         t.source["clang"] = f"system (clang {ver[0]}.{ver[1]})"
-    elif dp["clang"].is_file():
+    elif dp["clang"].is_file() and not llvm_missing_files(llvm_root, p):
         t.cc = str(dp["clang"])
         t.cxx = str(dp["llvm"] / ("clang-cl" + exe if p == "windows" else "clang++"))
         t.path_dirs.append(str(dp["llvm"]))
         t.source["clang"] = f"downloaded (LLVM {pins.LLVM_VERSION})"
     else:
         t.missing.append(f"llvm-{p}")
+        if llvm_root.is_dir():
+            # An unpack that stopped halfway, or a file an antivirus took away (#744): the
+            # LLVM download is unpacked again into a fresh folder.
+            t.llvm_incomplete = llvm_missing_files(llvm_root, p)
+            t.notes.append(f"The downloaded LLVM in {llvm_root} is incomplete (missing "
+                           f"{', '.join(t.llvm_incomplete)}): it is downloaded and unpacked again")
         if paths.IN_FLATPAK:
             t.hints.append(FLATPAK_LLVM_HINT)
     # cmake
