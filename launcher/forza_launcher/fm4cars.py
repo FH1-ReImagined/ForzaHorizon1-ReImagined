@@ -477,7 +477,7 @@ def _scan(folder: Path, found=None):
             found.discs.append(("folder", d))
             # a disc's own folder: only its content folder (Disc 2's car packs) is searched further
             children = [c for c in children if c.name.lower() == "content"]
-        if d.name.lower() == "dlczips" and any(re.fullmatch(r"\d+_pri_65\.zip", n) for n in names):
+        if d.name.lower() == "dlczips" and any(re.fullmatch(r"[0-9a-f]+_pri_65\.zip", n) for n in names):
             found.unpacked.append(d.parent.parent)  # <pack>/Media/DLCZips
             continue
         for c in children:
@@ -813,6 +813,158 @@ def prepare(disc1, disc2, work: Path, progress, cancelled):
     return disc1, out
 
 
+# ---- FM4's DLC packs ----------------------------------------------------------------------------
+# After the discs the player may add their FM4 DLC: the packages (STFS LIVE/PIRS, any name, as the
+# console's Content/0000000000000000/4D530910/00000002 holds them), a folder of them, unpacked ones
+# (each with Media/DLCZips) or an archive of any of these. A car pack has its cars' database rows
+# in a patch (media/db/patch/<n>_merge.slt); Disc 2's car packs, also of content type 2, have none
+# (their rows are on Disc 1) and are taken as Disc 2's when Disc 2 was skipped. Anything else
+# (the track pack, an offer, another game's package) is named and left out.
+
+CHOOSE_DLC = ("Choose your Forza Motorsport 4 DLC: its packages (any name, as in the console's "
+              "Content/0000000000000000/4D530910/00000002 folder), a folder holding them, or an archive "
+              "(.zip, .7z, .rar) of them.")
+
+
+def _quoted(path, hdr=None):
+    hdr = hdr or package_header(path)
+    return f'{path.name} ("{hdr[3]}")' if hdr and hdr[3] else path.name
+
+
+def _dlc_other(p: Path):
+    """Why a file found among the DLC is left out, in a few words."""
+    hdr = package_header(p)
+    if not hdr:
+        return f"{p.name} is not an Xbox 360 content package"
+    content_type, title, _, _ = hdr
+    if title == FM4_TITLE and content_type == 0x2:
+        return f"{_quoted(p, hdr)} is too small to hold a car (an offer or a token)"
+    if title == FM4_TITLE and content_type == 0xB0000:
+        return f"{_quoted(p, hdr)} is a Forza Motorsport 4 title update, which the import does not need"
+    thing = CONTENT_TYPES.get(content_type, f"content package (type {content_type:X})")
+    return f"{_quoted(p, hdr)} is {_game_thing(title, thing)}, not Forza Motorsport 4 DLC"
+
+
+def dlc_choice(chosen, work: Path, archives, progress, cancelled):
+    """(FM4 DLC packages, unpacked package folders, notes) in what was chosen for the DLC: files,
+    folders or archives (an archive is unpacked into work once). Raises Fm4Error when it holds
+    no FM4 content package at all."""
+    packs, unpacked, notes, seen = [], [], [], set()
+    for path in chosen:
+        p = Path(path)
+        if p.is_dir():
+            found = _scan(p)
+        elif not p.is_file():
+            raise Fm4Error(f"{p} does not exist.")
+        else:
+            first, split = _first_volume(p)
+            if split and not first.is_file():
+                raise Fm4Error(f"{p.name} is one part of a split archive, but its first part ({first.name}) "
+                               "is not next to it: put all the parts in one folder.")
+            kind = archive_kind(first)
+            if kind:
+                key = first.resolve()
+                if key not in archives:
+                    archives[key] = unpack_archive(first, kind, split, work / f"archive{len(archives) + 1}",
+                                                   progress, cancelled)
+                found = _scan(archives[key], Found(archives[key], p.name))
+            else:
+                found = Found(p.parent)
+                hdr = package_header(p)
+                if hdr and hdr[1] == FM4_TITLE and hdr[0] == 0x2 and hdr[2] != 1 and p.stat().st_size > PACK_MIN:
+                    found.packs.append(p)
+                else:
+                    found.others.append(p)
+        for c in found.packs:
+            key = (c.name.lower(), c.stat().st_size)  # the same package chosen twice
+            if key not in seen:
+                seen.add(key)
+                packs.append(c)
+        unpacked += [u for u in found.unpacked if u not in unpacked]
+        notes += [_dlc_other(o) for o in found.others]
+        notes += [f"{a.name} is an archive inside what was chosen: choose it itself, or extract it"
+                  for a in found.archives]
+    if not (packs or unpacked):
+        if notes:
+            raise Fm4Error(f"No Forza Motorsport 4 DLC was found: {notes[0]}. " + CHOOSE_DLC)
+        raise Fm4Error("No Forza Motorsport 4 DLC package was found in what was chosen. " + CHOOSE_DLC)
+    return packs, unpacked, notes
+
+
+def _unpack_package(pkg: Path, out: Path):
+    import xcontent_extract
+    p = xcontent_extract.open_package(str(pkg))
+    try:
+        for e in p.entries():
+            if not e.is_dir:
+                xcontent_extract.extract(p, e, str(out))
+    except SystemExit as e:  # the extractor's way of refusing a damaged or unsafe package
+        raise Fm4Error(f"{_quoted(pkg)} could not be read: {e}. Is the copy complete?") from None
+    finally:
+        _close(p)
+
+
+def prepare_dlc(found, work: Path, have_disc2, progress, cancelled):
+    """Unpacks the chosen DLC packages into work and sorts them. Returns (car pack folders [(folder,
+    name)], the folders of Disc 2 car packs found among them when Disc 2 was skipped, notes)."""
+    tools = _tools()
+    packs, unpacked, notes = found
+    try:
+        total = sum(p.stat().st_size for p in packs)
+    except OSError:
+        total = 0
+    if packs:
+        work.mkdir(parents=True, exist_ok=True)
+        _need_space(work, total, "your FM4 DLC")
+    folders = []
+    for k, pkg in enumerate(packs):
+        if cancelled():
+            raise Cancelled()
+        progress(k, len(packs), f"Unpacking your FM4 DLC: {package_header(pkg)[3] or pkg.name}")
+        out = work / "packages" / pkg.name
+        shutil.rmtree(out, ignore_errors=True)
+        _unpack_package(pkg, out)
+        folders.append((out, package_header(pkg)[3] or pkg.name))
+    folders += [(u, u.name) for u in unpacked]
+    cars, disc2, other, offers = [], [], [], set()
+    for folder, name in folders:
+        for pack in tools.pack_folders(str(folder)) or [str(folder)]:
+            pack = Path(pack)
+            try:
+                offer = next((f.name.lower() for f in (_find_ci(pack, "Media") or pack).iterdir()
+                              if f.name.lower().endswith(".puboffer")), None)
+            except OSError:
+                offer = None
+            if offer and offer in offers:
+                continue  # the same pack twice (a copy on another drive)
+            if offer:
+                offers.add(offer)
+            try:
+                models, rows = tools.pack_cars(str(pack))
+            except (OSError, ValueError, tools.ConvertError) as e:
+                notes.append(f"{name} could not be read ({e})")
+                continue
+            finally:
+                tools.ZIPS.close(str(pack))  # Windows: the folder is moved or deleted later (#707)
+            if rows:
+                cars.append((pack, name))
+            elif models:
+                disc2.append((pack, name))
+            else:
+                other.append(name)
+    if other:
+        notes.append(f"{', '.join(other)}: no cars (tracks or other content)")
+    content = []
+    if disc2 and have_disc2:
+        notes.append(f"{', '.join(n for _, n in disc2)}: Disc 2's car packs, read from Disc 2 already")
+    else:
+        content = [pack for pack, _ in disc2]  # Disc 2 was skipped: its packs are here
+    if not cars and not content:
+        raise Fm4Error("None of the chosen Forza Motorsport 4 packages has cars"
+                       + (f" ({'; '.join(notes)})" if notes else "") + ". " + CHOOSE_DLC)
+    return cars, content, notes
+
+
 def _update_root(cfg):
     from . import game as game_module
     from .config import render_toml
@@ -886,9 +1038,10 @@ def _in_use(e):
 
 
 def build(cfg, disc1, disc2=None, progress=lambda n, total, text: None, cancelled=lambda: False,
-          converter=None):
-    """Convert every FM4 car FH1 lacks and publish them as the FM4 cars mod. The previous
-    import stays until the new one is complete. Returns a message for the player."""
+          converter=None, dlc=None):
+    """Convert every FM4 car FH1 lacks and publish them as the FM4 cars mod: those of the discs
+    and, with dlc (a list of files and folders the player chose), those of their FM4 DLC packs.
+    The previous import stays until the new one is complete. Returns a message for the player."""
     tools = _tools()
     target = mods.mods_dir(cfg) / MOD
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -902,7 +1055,7 @@ def build(cfg, disc1, disc2=None, progress=lambda n, total, text: None, cancelle
             _remove(old)
     work = Path(tempfile.mkdtemp(prefix=".fm4-import-", dir=target.parent))
     try:
-        message = _build(cfg, tools, target, backup, work, disc1, disc2, progress, cancelled, converter)
+        message = _build(cfg, tools, target, backup, work, disc1, disc2, progress, cancelled, converter, dlc)
     except BaseException:
         _remove(work)
         raise
@@ -913,18 +1066,32 @@ def build(cfg, disc1, disc2=None, progress=lambda n, total, text: None, cancelle
     return message
 
 
-def _build(cfg, tools, target, backup, work, disc1, disc2, progress, cancelled, converter):
+def _build(cfg, tools, target, backup, work, disc1, disc2, progress, cancelled, converter, dlc=None):
     dlc_root = Path(cfg.data_home()) / datafolder.DLC_DIR / "00000002"
+    archives = {}  # the DLC's: the discs' are prepare()'s
+    # what was chosen for the DLC is looked at first: a wrong choice is named before the discs' copy
+    found = dlc_choice(dlc, work / "dlc", archives, progress, cancelled) if dlc else None
     src1, src2 = prepare(disc1, disc2, work / "src", progress, cancelled)
+    dlc_packs, dlc_content, notes = (prepare_dlc(found, work / "dlc", bool(src2), progress, cancelled)
+                                     if found else ([], [], []))
     staged = work / MOD
     staged_pack = work / "package" / tools.PACK_NAME
     fm4 = fh1 = conv = None
     try:
-        fm4 = tools.FM4(str(src1), str(src2) if src2 else None)
+        content = ([str(src2)] if src2 else []) + [str(p) for p in dlc_content]
+        fm4 = tools.FM4(str(src1), content or None, [str(p) for p, _ in dlc_packs] or None)
         update = _update_root(cfg)
         fh1 = tools.FH1(str(cfg.game_files()), str(update) if update else None, str(dlc_root))
         conv = (converter or tools.Converter)(fm4, fh1, str(staged), str(staged_pack))
-        ids = [cid for cid, _, reason in conv.candidates() if not reason]
+        candidates = conv.candidates()
+        ids = [cid for cid, _, reason in candidates if not reason]
+        dlc_ids = getattr(fm4, "dlc_car_ids", set())
+        if dlc_packs:
+            have = len(dlc_ids - {cid for cid, _, reason in candidates if reason != "an FH1 DLC car"})
+            if have:
+                notes.append(f"{have} of the DLC's cars are in FH1 or its DLC already")
+            notes += [f"{name}: {reason}" for cid, name, reason in candidates
+                      if reason and cid in dlc_ids and reason != "an FH1 DLC car"]
         if not ids:
             raise Fm4Error("Your FM4 files have no car that FH1 lacks.")
         report = conv.run(ids, progress, cancelled)
@@ -944,6 +1111,9 @@ def _build(cfg, tools, target, backup, work, disc1, disc2, progress, cancelled, 
     info = {"format": 1, "cars": [c[1] for c in report["cars"]],
             "skipped": [s[1] for s in report["skipped"]],
             "dlc": _dlc(cfg)}
+    if dlc_packs or dlc:
+        info["fm4_dlc"] = {"packs": [name for _, name in dlc_packs],
+                           "cars": [c[1] for c in report.get("dlc_cars", [])], "notes": notes}
     (staged / MARKER).write_text(json.dumps(info, ensure_ascii=False, indent=1), encoding="utf-8")
     if cancelled():
         raise Cancelled()
@@ -998,7 +1168,13 @@ def _build(cfg, tools, target, backup, work, disc1, disc2, progress, cancelled, 
     _remove(old_package)
     n, skipped = len(info["cars"]), len(info["skipped"])
     more = f" {skipped} could not be converted (see the mod's {MARKER})." if skipped else ""
-    return f"Added {n} Forza Motorsport 4 car(s). They are in the Autoshow the next time the game starts.{more}"
+    from_dlc = ""
+    if "fm4_dlc" in info:
+        from_dlc = f", {len(info['fm4_dlc']['cars'])} of them from your FM4 DLC"
+        if notes:
+            more += " Not added from the DLC: " + "; ".join(notes) + "."
+    return (f"Added {n} Forza Motorsport 4 car(s){from_dlc}. They are in the Autoshow the next time the "
+            f"game starts.{more}")
 
 
 def remove(cfg):
