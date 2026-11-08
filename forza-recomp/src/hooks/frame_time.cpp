@@ -455,11 +455,86 @@ extern "C" REX_FUNC(sub_8247C678) {
 // and draws it, or skips it, or finds none and sleeps 0 ms. A pass that began while a main
 // frame waits (render sync) and took no frame ends that wait.
 extern "C" REX_FUNC(__imp__sub_8259F3E8);
+namespace {
+// #725: the main loop must not run far ahead of a render thread held inside one pass for seconds
+// (an integrated GPU compiling shaders with an empty driver cache: frames of 7-12 s; the test knob
+// FORZA_TEST_SWAP_STALLS). It ran on (1,300 frames in one hold), the HUD's command buffer worker
+// went round its 12-slot ring with it, and the render thread then applied a slot that was being
+// rewritten (`read of guest 0x00000004`, lr 824469B8: #66, #457, #540, #582) or waited for one
+// that was never signalled again. So while the render thread has been in one pass for over 1 s,
+// the main loop waits at its frame start until that pass ends (at most 10 s, then it goes on).
+// Holds of 1-4 s do not break the ring (13 of them in a benchmark, 2 of 2 without a crash); a
+// lower limit only cost WARP more (250 ms: 6.1 fps and frames of over 1 s, against 7.4 without).
+// A render thread that is idle between passes (loads) is not waited for, nor one that waits for
+// the HUD worker: that worker sets the pass's event at render object +0x1A10 once per main frame,
+// so a pass that waits for it waits for the main loop (on WARP, waiting there cost a third of the
+// frame rate and left frames of over 1 s). Only the pass's own work counts.
+// FORZA_MAIN_WAITS_RENDER=0: no wait; FORZA_MAIN_WAITS_RENDER_MS (testing): the limit (1000).
+struct HeldPass {
+  std::mutex mutex;
+  std::condition_variable ended;
+  std::atomic<int64_t> since_ns{0};
+} held_pass;
+thread_local bool in_pass = false;
+int64_t NowNs() {
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+             std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+void EndHeld() {
+  {
+    std::lock_guard lock(held_pass.mutex);
+    held_pass.since_ns.store(0, std::memory_order_release);
+  }
+  held_pass.ended.notify_all();
+}
+bool MainWaitsRender() {
+  static const bool on = EnvInt("FORZA_MAIN_WAITS_RENDER", 1) != 0;
+  return on;
+}
+// How long a pass may work before the main loop waits (FORZA_MAIN_WAITS_RENDER_MS, testing).
+int64_t HeldAfterNs() {
+  static const int64_t ns = int64_t(std::max(1, EnvInt("FORZA_MAIN_WAITS_RENDER_MS", 1000))) * 1000000;
+  return ns;
+}
+void WaitForHeldPass() {
+  if (!MainWaitsRender()) return;
+  const int64_t since = held_pass.since_ns.load(std::memory_order_acquire);
+  if (!since || NowNs() - since < HeldAfterNs()) return;
+  const auto start = std::chrono::steady_clock::now();
+  {
+    std::unique_lock lock(held_pass.mutex);
+    held_pass.ended.wait_for(lock, std::chrono::seconds(10), [&] {
+      return held_pass.since_ns.load(std::memory_order_acquire) != since;
+    });
+  }
+  static std::atomic<uint32_t> logged{0};
+  if (logged.fetch_add(1, std::memory_order_relaxed) < 20)
+    REXLOG_INFO("Frame pacing: the main loop waited {} ms for a render pass held for seconds (#725)",
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - start).count());
+}
+}  // namespace
+
+// ffcb_wake.cpp: the render thread starts and ends a wait for the HUD worker (a slot, or the
+// pass's +0x1A10 event). Inside a pass, the held time stops there and starts again after it.
+namespace forza::render_hold {
+void WorkerWaitBegin() {
+  if (in_pass) EndHeld();
+}
+void WorkerWaitEnd() {
+  if (in_pass) held_pass.since_ns.store(NowNs(), std::memory_order_release);
+}
+}  // namespace forza::render_hold
+
 extern "C" REX_FUNC(sub_8259F3E8) {
   const uint64_t wait = render.waiting.load(std::memory_order_acquire);
   const uint32_t frames = ctx.r3.u32 + kRenderFrameCount;
   const uint32_t before = wait ? Load32(forza::GuestPtr(base, frames)) : 0;
+  held_pass.since_ns.store(NowNs(), std::memory_order_release);
+  in_pass = true;
   __imp__sub_8259F3E8(ctx, base);
+  in_pass = false;
+  EndHeld();
   if (!wait || Load32(forza::GuestPtr(base, frames)) != before) return;
   {
     std::lock_guard<std::mutex> lock(render.mutex);
@@ -477,6 +552,7 @@ extern "C" REX_FUNC(sub_8247C168) {
   __imp__sub_8247C168(ctx, base);
   if (lr != kFrameTimeCallReturn) return;
   forza::stall::OnMainFrame();
+  WaitForHeldPass();
   forza::graphics_menu::Tick(ctx, base);
   forza::benchmark::Tick(ctx, base);
   if (forza::frame_time::ConsoleRate()) return;
