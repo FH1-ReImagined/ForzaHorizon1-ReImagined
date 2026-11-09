@@ -3401,7 +3401,7 @@ draws a frame from run to run). The upscaler, the most promising, alternated 3 r
 bilinear 56.4 [55.7-56.8], CAS 55.9 [54.9-56.6], so FSR 1 costs under 1 fps and stays. #613 (the presenter's step on
 the submission thread), 3 runs each alternating on its rebased branch: benchmark 54.5 against 54.7 fps off, free roam
 p99 16.7-21.6 ms against 20.3-21.5 ms and 1% low 46.8 against 42.7 (scratchpad note for #613). Nothing cheap is left on
-the GPU here; what remains is the GPU's own work at 540p, which the SDK cannot split per pass yet (no GPU timestamps).
+the GPU here; what remains is the GPU's own work at 540p, which the SDK cannot split per pass yet (no GPU timestamps; now `fh1_gpu_profile`, below).
 
 `render_target_path_vulkan=fsi` (experimental) stops at once on this NVIDIA card: `Unhandled read fault at host 0x15
 (pc rexgpu-xenos.dll+0x30E00)` on the command processor thread (guest thread F8000018), the host chain
@@ -3685,3 +3685,67 @@ the verification's extra work on), about the same hit rates as on RADV (92 % of 
 sets), no mismatch; screenshots at the same point of the race look the same. One run with the reuses off lost the
 device 57 s into the measured minute (`VK_ERROR_DEVICE_LOST`, draw 431 of 2,381, #551), as players see without the
 change.
+
+## Where the GPU frame goes on a GTX 1650 Ti, and the stencil of render target transfers (#640, 2026-11-08)
+
+**Tool.** `--fh1_gpu_profile=5` (ReIGlue 0460) logs every 5 s the GPU time of a frame's command
+processor submissions, by kind and by render pass, from Vulkan timestamps written where the kind
+of work changes; `--fh1_gpu_profile_csv=FILE` also appends the reports to a CSV,
+`--fh1_gpu_profile_shaders=true` splits render passes by pixel shader. The presenter's own work
+(FSR 1 to the window) is outside those submissions. On, it costs the benchmark about 3% (53.2-53.9
+fps against 55.3-55.8 without it).
+
+**The laptop of the sections above** (GTX 1650 Ti 4 GB, driver 555.97, i5-10300H, Windows 11) at
+the launcher's settings for it (the 540p scene, AMD FSR 1, 60 fps, Vulkan), main 6e891d4 built by
+the launcher, the built-in benchmark, warm caches. The measured minute, ms of GPU time a frame:
+
+| Work | ms a frame | Notes |
+| --- | --- | --- |
+| Guest draws | 7.8 | the scene (960x540, 2x MSAA) 3.9; the reflection cube 0.7; shadow cascades, post-processing, bloom 0.3-0.6 each |
+| Render target ownership transfers | 5.3 | 41 a frame; 4.5 of them depth: the shadow maps and scene depth reinterpreted between 4x MSAA and 1x at the same EDRAM tiles |
+| Texture loads | 2.3 | resolved screen and shadow textures: the 1024x1024 shadow depth (k_24_8, 4 a frame) 0.6 |
+| Resolves | 1.7 | the render target dumped to the EDRAM buffer 0.9, the copy to guest memory 0.8 |
+| Uploads, swap | 0.5 | |
+| **All** | **17.7** | of a 18.8 ms frame (53 fps): the GPU is the limit, as `nvidia-smi` says (97%) |
+
+The transfers were the surprise. Without `VK_EXT_shader_stencil_export`, which NVIDIA's driver
+lacks (AMD's and Intel's have it), the SDK copies a depth render target's stencil in eight
+full-size draws, one per bit, each reading the source and discarding where its bit is clear: 9
+passes over every transferred pixel. The game draws each shadow map as a 4x MSAA depth target and
+reads it as a 1x one twice the size (and the reverse at the next frame), so every frame moves
+about 4 such surfaces each way. Skipping the bit draws altogether (a test, wrong in general) took
+the transfers from 5.3 to 1.9 ms and the frame from 17.4 to 14.5 ms. At a render scale of 2 those
+surfaces have 4 times the pixels, which fits the NVIDIA reports of a 1440p scene costing far more
+than its pixel count (#700, #500) and of ultrawide (#546).
+
+**Fix 1 (ReIGlue 0461, `vulkan_transfer_stencil_bit_mask`, on).** Before such a transfer a compute
+pass ORs the stencil of the rows each depth source is read from into eight words, and each bit's
+draws are conditional on its word (`VK_EXT_conditional_rendering`, which every desktop driver
+has). The stencil is still cleared to 0 before the bit draws, so the result is the same as
+before; a source whose stencil is 0 (FH1's shadow maps) costs the compute pass and no draws.
+Devices with stencil export and transfers from color are unchanged. In the benchmark, 85% of the
+depth transfers had their bit draws made conditional; transfers 5.3 -> 3.5 ms, the frame 17.4 ->
+16.0 ms.
+
+**Fix 2 (ReIGlue 0462, `vulkan_direct_unscaled_texture_upload`, on).** NVIDIA's direct texture
+upload (0071, 0406: the texture written straight into a storage image, without the scratch buffer
+and its buffer-to-image copy) applied only to scaled resolves, so at render scale 1 FH1's resolved
+screen and shadow textures took the copy path. The same shader reads the shared memory at scale 1:
+texture loads 2.2 -> 1.9 ms.
+
+**Measured** (the laptop above, 3 runs each way alternating, warm caches, the benchmark's minute):
+
+| Benchmark | Before | After |
+| --- | --- | --- |
+| 540p scene, 60 fps cap (the launcher's settings), fix 1 alone | 55.5 fps [55.3-55.8], GPU 97% busy | 58.1 fps [57.8-58.6], GPU 94% |
+| 540p scene, uncapped (`frame_rate=120`, vsync off), fix 1 alone | 55.8 fps [54.4-56.5] | 59.7 fps [59.0-60.9] |
+| 540p scene, 60 fps cap, fixes 1 and 2 | 55.1 fps [52.7-57.0], GPU 97% | 58.5 fps [56.3-59.9], GPU 92% |
+| Render scale 2 (the 1440p scene), 60 fps cap, fixes 1 and 2 | 19.0 fps [18.9-19.1], 1% low 16.6 | 23.7 fps [23.4-23.8], 1% low 20.8 |
+
+At render scale 2 the profile shows what the reports describe: of 52.1 ms of GPU time a frame,
+transfers took 19.4 ms (37%), more than the guest's draws (15.7 ms); with the fixes 9.6 ms, the
+frame 41.8 ms. What is left of the transfers there is mostly depth made from color (the stencil
+bits of a color source are not masked) and the depth copies themselves. Pictures (free roam at
+noon, two spots, both settings) show the same shadows and scene; the result is the same by
+construction. AMD and Intel drivers have stencil export, so fix 1 changes nothing there; fix 2 is
+NVIDIA only, like 0071.

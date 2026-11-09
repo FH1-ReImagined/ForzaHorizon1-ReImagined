@@ -62,11 +62,14 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # and 0437: texture pack replacements freed with their textures, within a graphics memory limit (#677),
 # and 0438: a lost device names the draw the GPU was on (Vulkan breadcrumbs, D3D12 DRED, #551),
 # and 0442-0445: descriptor reuse on by default, dynamic guest constants, samplers and texture
-# requests kept within a submission, texture descriptor sets of the frame used again (#192, #179).
+# requests kept within a submission, texture descriptor sets of the frame used again (#192, #179),
+# and 0460-0462: GPU time per kind of work (fh1_gpu_profile), render target transfers without
+# stencil export drawing only the stencil bits set in their source, NVIDIA's direct texture upload
+# at render scale 1 (#640).
 # A reviewed full commit can be pinned before a maintainer publishes a tag.
 # When a tag is supplied, its target must still match this immutable commit.
 REIGLUE_TAG=
-REIGLUE_COMMIT=a4aff835c797066b86080923750270b275476d0d  # ReIGlue main: 0420 (#474, the command processor on two threads) and 0442-0445 (#192, #179), ReIGlue #43
+REIGLUE_COMMIT=5408d204c111ff9ccf1f5e3da37292b170f2645e  # ReIGlue main: 0420, 0442-0445 (ReIGlue #43) and 0460-0462 (#640, ReIGlue #45)
 REIGLUE_URL="${REIGLUE_URL:-https://github.com/FH1-ReImagined/ReIGlue}"
 NIGHTLY="${REXSDK_NIGHTLY:-$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64}"
 SRC="${REXSDK_SRC:-$HOME/rexglue-sdk-src-forza/sdk}"
