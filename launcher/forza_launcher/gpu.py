@@ -396,8 +396,8 @@ PRESETS = {
          Known("store_shaders", lambda v: not v,
                "Without the shader cache every start stutters again (worse on NVIDIA, Vulkan).", 49),
          Known("vulkan_store_pipeline_cache", lambda v: bool(v),
-               "NVIDIA's driver never reuses the pipelines kept here (it has its own cache): the file grows to "
-               "512 MB, takes that much RAM while playing and slows every start.", 640)],
+               "Saved pipelines can be reused at startup. On NVIDIA, the file and its in-memory data can "
+               "each reach about 512 MiB, and pipelines that did not fit still compile again.", 640)],
         [("Vulkan can still stutter with a warm shader cache; play a session so the cache fills.", 49)]),
     AMD: Preset(
         "AMD",
