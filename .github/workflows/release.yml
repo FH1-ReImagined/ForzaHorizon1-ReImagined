@@ -35,7 +35,10 @@ permissions:
 # A tag uses the release-signing policy (a maintainer approves each request in SignPath, while the job waits);
 # a run by hand uses test-signing (SignPath's untrusted test certificate, no approval) to try the pipeline.
 env:
-  SIGN: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' && github.event_name != 'pull_request' }}
+  # Tags sign with release-signing only once SignPath has the production certificate
+  # (repository variable SIGNPATH_RELEASE_SIGNING=true); until then tags build unsigned and a run by
+  # hand signs with test-signing.
+  SIGN: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' && github.event_name != 'pull_request' && (github.ref_type != 'tag' || vars.SIGNPATH_RELEASE_SIGNING == 'true') }}
   SIGN_MODE: ${{ github.ref_type == 'tag' && 'release' || 'test' }}
 
 jobs:

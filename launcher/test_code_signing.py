@@ -89,6 +89,8 @@ class Switch(unittest.TestCase):
         env = workflow_env()
         self.assertIn("vars.SIGNPATH_ORGANIZATION_ID != ''", env["SIGN"])
         self.assertIn("github.event_name != 'pull_request'", env["SIGN"])
+        # a tag signs only once the production certificate is in SignPath
+        self.assertIn("github.ref_type != 'tag' || vars.SIGNPATH_RELEASE_SIGNING == 'true'", env["SIGN"])
         self.assertEqual(env["SIGN_MODE"], "${{ github.ref_type == 'tag' && 'release' || 'test' }}")
 
     def test_every_signing_step_is_behind_the_switch(self):

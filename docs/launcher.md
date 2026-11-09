@@ -1110,7 +1110,9 @@ valid for the schema, warnings, the first-run / existing-settings / player-choic
      the installer.
   The artifact configurations are `binaries` and `installer` in SignPath; reviewed copies are in
   `launcher/packaging/signpath/`. Tags use the `release-signing` policy (a maintainer approves each
-  request in SignPath while the job waits, up to two hours); a run by hand uses `test-signing`.
+  request in SignPath while the job waits, up to two hours) once the repository variable
+  `SIGNPATH_RELEASE_SIGNING` is `true`, which is set when SignPath has imported the production
+  certificate; until then tags build unsigned. A run by hand uses `test-signing`.
   `launcher/packaging/verify_signature.ps1` checks every signed file (valid, signed by SignPath
   Foundation and timestamped; for test signing: signed, unchanged and timestamped), the signed launcher
   must still print its version, and `installer-test` checks the installer, the installed launcher and
