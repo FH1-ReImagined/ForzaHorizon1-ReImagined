@@ -15,10 +15,10 @@
   </parameters>
   <zip-file>
     <pe-file path="forza-launcher.exe" product-name="Forza Horizon 1: ReImagined" product-version="${version}">
-      <authenticode-sign hash-algorithm="sha256" description="Forza Horizon 1: ReImagined launcher" description-url="https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined" />
+      <authenticode-sign hash-algorithm="sha256" />
     </pe-file>
     <pe-file path="uninst-*.e32" max-matches="1" product-name="Forza Horizon 1: ReImagined" product-version="${version}">
-      <authenticode-sign hash-algorithm="sha256" description="Forza Horizon 1: ReImagined Setup" description-url="https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined" />
+      <authenticode-sign hash-algorithm="sha256" />
     </pe-file>
   </zip-file>
 </artifact-configuration>
