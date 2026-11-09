@@ -627,3 +627,26 @@ off: benchmark 54.5 against 54.7 fps (GPU-bound at 97 %), 1% low 38.4 against 37
 each) 36.3 fps, p99 33.8 ms against 35.0 fps, p99 36.2 ms, and it looked right.
 
 Not checked: DLSS (no RTX card; it keeps the setting off, above), a Steam Deck, the real headset.
+
+## ReIGlue 0420: the command processor on two threads (#474)
+
+[ReIGlue PR #43](https://github.com/FH1-ReImagined/ReIGlue/pull/43) (pinned here while it is reviewed; it also carries 0442-0445, below) adds
+`--gpu_split_command_processor` (restart, default off, Vulkan only): the "GPU Commands" thread decodes the PM4 stream
+against a shadow register file and a "GPU Recorder" thread applies the register writes and runs the draws, copies,
+swaps and fence writes in order (after Pinyon Shift's ShiftGlue `9362a07`, `7440c33` and `9bf779f`; credited in
+ReIGlue's NOTICE). `--gpu_split_elide_unchanged_registers` (default on) only matters with the split. With the split
+off nothing changes but the draw's code moving into `ExecuteDraw`. What waits for what, the measurements and the
+picture checks are in [perf.md](perf.md#decoding-and-recording-on-two-threads-474-reiglue-0420): +5 % uncapped on
+eight cores, -11 % in free roam on four cores without SMT. The game turns it on by default with 6 or more physical
+cores and no VR headset (+5.8 % in the benchmark on six cores, +13.1 % on eight, with #607's present default), and
+leaves it off below, the Steam Deck included.
+
+## ReIGlue 0442-0445: descriptor reuse in the command processor (#192, #179)
+
+The same PR carries Sean O'Connor's 0442 (dynamic guest constant descriptors, `vulkan_dynamic_constants`) and 0443
+(unchanged sampler acquisition and texture requests reused, `vulkan_binding_request_reuse`), 0444 (a frame's texture
+descriptor sets reused by their exact contents, `vulkan_texture_descriptor_reuse`) and 0445 (the three on by default;
+each cvar turns its part off, or `FORZA_VK_DYNAMIC_CONSTANTS=0`, `FORZA_VK_BINDING_REUSE=0`,
+`FORZA_VK_TEXTURE_SET_REUSE=0`). With the split every memo is used on the recorder thread only. Measurements: -7.4 % of
+the command processor's time a draw; with the split, 123.6 to 153.5 fps uncapped in the benchmark on eight cores and
+131.5 to 153.0 on six ([perf.md](perf.md)).
