@@ -1246,7 +1246,10 @@ void Tick(PPCContext& ctx, uint8_t* base) {
       applying_settings = settings;
       applying_request = std::to_string(++request_id) + " " + width + " " + height +
           " " + settings[2].value + " " + BackendMode();
+      // A switch to DLSS takes the swap's old wait for the frame's replay first (src/main.cpp).
+      forza::ApplyPresentOnSubmissionDefault(BackendMode());
       if (!rex::cvar::SetFlagByName("fh1_graphics_request", applying_request)) {
+        forza::ApplyPresentOnSubmissionDefault(rex::cvar::GetFlagByName("fh1_upscaler"));
         applying_request.clear();
         completed = true;
         message = "Could not apply graphics settings.";
@@ -1262,6 +1265,8 @@ void Tick(PPCContext& ctx, uint8_t* base) {
     const auto status = result.substr(prefix.size());
     applying_request.clear();
     completed = true;
+    // The upscaler now in use: the new one, or the old one again after a failure.
+    forza::ApplyPresentOnSubmissionDefault(rex::cvar::GetFlagByName("fh1_upscaler"));
     if (status == "ok") {
       settings = applying_settings;
       success = CommitSettings();

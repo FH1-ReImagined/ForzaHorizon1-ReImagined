@@ -127,7 +127,30 @@ void ApplyForzaGpuCvarDefaults() {
   // need and costs nothing in a race; "fast" copies every resolve every frame and cost
   // 16-21% of the frame rate at 144 (docs/perf.md).
   SetSdkCvarDefault("readback_resolve", "some");
+  forza::ApplyPresentOnSubmissionDefault(rex::cvar::GetFlagByName("fh1_upscaler"));
 }
+
+namespace forza {
+void ApplyPresentOnSubmissionDefault(std::string_view upscaler) {
+#if !defined(__APPLE__)
+  // Vulkan: the swap no longer waits for the submission thread to replay the frame; the
+  // presenter's step after the swap runs on that thread behind the frame (ReIGlue 0414, #476).
+  // The command processor, the thread the frame waits for, sat idle about 1 ms a frame there
+  // (docs/perf.md, #607). Not with a VR headset: in the emulated headset the game's part of the
+  // latency grew by about 5 ms at the same frame rate. Not tested on macOS (MoltenVK). Not with
+  // NVIDIA DLSS either, untested there: its evaluation is recorded on the submission thread with
+  // a copy of the frame's inputs, so nothing in it should need the wait, but it keeps the old
+  // one until an RTX card has run it. forza.toml or the command line can still set it either
+  // way; the graphics menu calls this again when it switches the upscaler.
+  const bool dlss = upscaler == "quality" || upscaler == "balanced" ||
+                    upscaler == "performance" || upscaler == "dlss" || upscaler == "dlaa";
+  const bool on = rex::cvar::GetFlagByName("vr_mode") == "off" && !dlss;
+  SetSdkCvarDefault("vulkan_present_on_submission_thread", on ? "true" : "false");
+#else
+  (void)upscaler;
+#endif
+}
+}  // namespace forza
 
 void LogForzaPerformanceSettings() {
   forza::performance_settings::Snapshot([](std::string_view name)
