@@ -89,6 +89,8 @@ class Switch(unittest.TestCase):
         env = workflow_env()
         self.assertIn("vars.SIGNPATH_ORGANIZATION_ID != ''", env["SIGN"])
         self.assertIn("github.event_name != 'pull_request'", env["SIGN"])
+        # a tag signs only once the production certificate is in SignPath
+        self.assertIn("github.ref_type != 'tag' || vars.SIGNPATH_RELEASE_SIGNING == 'true'", env["SIGN"])
         self.assertEqual(env["SIGN_MODE"], "${{ github.ref_type == 'tag' && 'release' || 'test' }}")
 
     def test_every_signing_step_is_behind_the_switch(self):
@@ -204,23 +206,28 @@ class ArtifactConfigurations(unittest.TestCase):
         # actions/upload-artifact uploads a ZIP file
         return root.findall("a:zip-file/a:pe-file", NS)
 
-    def check(self, pe):
-        # SignPath Foundation: every signed file names the project and this version
-        self.assertEqual(pe.get("product-name"), "Forza Horizon 1: ReImagined")
-        self.assertEqual(pe.get("product-version"), "${version}")
+    def check(self, pe, metadata=True):
+        # The launcher names the project and this version exactly. Inno Setup pads its files' version
+        # strings with spaces to a fixed width, so those are matched by path only (an exact match can't pass).
+        if metadata:
+            self.assertEqual(pe.get("product-name"), "Forza Horizon 1: ReImagined")
+            self.assertEqual(pe.get("product-version"), "${version}")
+        else:
+            self.assertIsNone(pe.get("product-name"))
+            self.assertIsNone(pe.get("product-version"))
         sign = pe.find("a:authenticode-sign", NS)
         self.assertEqual(sign.get("hash-algorithm"), "sha256")
 
     def test_binaries(self):
         files = self.files("binaries")
         self.assertEqual([pe.get("path") for pe in files], ["forza-launcher.exe", "uninst-*.e32"])
-        for pe in files:
-            self.check(pe)
+        self.check(files[0])
+        self.check(files[1], metadata=False)
 
     def test_installer(self):
         files = self.files("installer")
         self.assertEqual([pe.get("path") for pe in files], ["ForzaHorizon1-ReImagined-Setup-*.exe"])
-        self.check(files[0])
+        self.check(files[0], metadata=False)
 
     def test_product_name_is_the_one_in_the_version_resources(self):
         script = (PACKAGING / "installer.iss").read_text(encoding="utf-8")

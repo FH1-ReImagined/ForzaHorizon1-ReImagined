@@ -280,7 +280,7 @@ The launcher and the game have no analytics or telemetry. With the default setti
 
 ## Code signing policy
 
-Windows builds will be signed through [SignPath Foundation](https://signpath.org); until then they are unsigned.
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
 
 What we sign: the Windows launcher `forza-launcher.exe`, the installer `ForzaHorizon1-ReImagined-Setup-<version>.exe` and its uninstaller `unins000.exe`. They are built by GitHub Actions from this repository ([release workflow](.github/workflows/release.yml)), and a maintainer approves each release by hand before it is signed.
 

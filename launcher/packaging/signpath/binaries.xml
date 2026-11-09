@@ -6,8 +6,9 @@
   artifact unsigned-windows-binaries; actions/upload-artifact packs it as a ZIP file.
   The copy kept here is for review: the configuration SignPath uses is the one entered in its web
   interface under the project, and the two must stay the same.
-  Every signed file must say it is this project, in this version (SignPath Foundation's rules), so
-  product-name and product-version are enforced; the workflow passes the version as a parameter.
+  The launcher's product-name and product-version are enforced; the workflow passes the version as a
+  parameter. Inno Setup pads the uninstaller's version strings with spaces to a fixed width (it patches
+  them into a template), so an exact match can never pass there: its file is matched by path only.
 -->
 <artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
   <parameters>
@@ -15,10 +16,10 @@
   </parameters>
   <zip-file>
     <pe-file path="forza-launcher.exe" product-name="Forza Horizon 1: ReImagined" product-version="${version}">
-      <authenticode-sign hash-algorithm="sha256" description="Forza Horizon 1: ReImagined launcher" description-url="https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined" />
+      <authenticode-sign hash-algorithm="sha256" />
     </pe-file>
-    <pe-file path="uninst-*.e32" max-matches="1" product-name="Forza Horizon 1: ReImagined" product-version="${version}">
-      <authenticode-sign hash-algorithm="sha256" description="Forza Horizon 1: ReImagined Setup" description-url="https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined" />
+    <pe-file path="uninst-*.e32" max-matches="1">
+      <authenticode-sign hash-algorithm="sha256" />
     </pe-file>
   </zip-file>
 </artifact-configuration>

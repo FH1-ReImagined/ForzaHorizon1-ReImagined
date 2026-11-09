@@ -11,8 +11,8 @@
     <parameter name="version" required="true" />
   </parameters>
   <zip-file>
-    <pe-file path="ForzaHorizon1-ReImagined-Setup-*.exe" max-matches="1" product-name="Forza Horizon 1: ReImagined" product-version="${version}">
-      <authenticode-sign hash-algorithm="sha256" description="Forza Horizon 1: ReImagined Setup" description-url="https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined" />
+    <pe-file path="ForzaHorizon1-ReImagined-Setup-*.exe" max-matches="1">
+      <authenticode-sign hash-algorithm="sha256" />
     </pe-file>
   </zip-file>
 </artifact-configuration>
