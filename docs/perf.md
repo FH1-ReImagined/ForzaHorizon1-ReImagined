@@ -3656,3 +3656,32 @@ on, no overrides) 183.1 fps, 1% low 96.7, 3.97 ms (1.344 us a draw, 4.8 % less).
   cache, texture packs and the upscalers' own pipelines were checked in the code, not in a run.
 - Only RADV is measured. The Vulkan path is the same on NVIDIA, Intel and Windows (dynamic uniform buffers are core
   Vulkan 1.0; the constants need 5 of the 8 every device has); Direct3D 12 does not change.
+
+**With the command processor on two threads (0420, #474).** The ReIGlue branch with 0420 and 0442-0445, the game of
+#762 (the split on by default with 6 or more cores), the same PC and method; all off (`--gpu_split_command_processor=false`,
+the three reuses off) against all on (the split and the three reuses), three interleaved pairs on each core count:
+
+| | fps | 1% low | p99 ms | Draw thread, us a draw | Draws a frame |
+| --- | --- | --- | --- | --- | --- |
+| 8 cores, off | 123.6 (133.2, 117.5, 120.0) | 83.0 | 11.09 | 1.333 | 4,924 |
+| 8 cores, on | 153.5 (155.4, 161.0, 144.1) | 97.6 | 9.08 | 1.046 | 4,558 |
+| 6 cores, off | 131.5 (127.3, 136.1, 131.0) | 87.6 | 10.44 | 1.339 | 4,579 |
+| 6 cores, on | 153.0 (152.4, 157.5, 149.2) | 96.3 | 9.35 | 1.034 | 4,539 |
+
+- With the same draws: 120.0 to 144.1 fps on 8 cores (about 5,030 draws a frame), 136.1 to 157.5 on 6 cores
+  (about 4,400). The draw thread is the recorder when split (the decoder's CPU is on another core); its time per
+  draw drops 22-23 %, the reuses' 7 % and the PM4 decoding that moves to the decoder.
+- The memos are only used on the thread that runs the draws (the recorder when split): the decoder writes only its
+  shadow register file and records the writes, which the recorder applies (and with them the fetch constant
+  writes that the sampler and texture-request reuse follow).
+- Render tests with all on against the all-off baselines above: 6/6 within their noise (race start dssim 0.0027 of
+  0.008, photo mode 0.0087 of 0.016). No crash, no binding mismatch.
+
+**Windows, NVIDIA** (the GTX 1650 Ti laptop: i5-10300H, 4 cores, Windows 11, Vulkan; the split stays off with 4
+cores): the branch built by the launcher from a source checkout, the built-in benchmark uncapped at 1280x720, all three
+reuses off against on with `FORZA_VK_BINDING_VERIFY=1`: 47.8 fps (one off run; the other lost the device, below)
+against 46.7 and 47.2: the GPU is the limit there. The command processor 3.83 against 3.57 us a draw (7 % less, with
+the verification's extra work on), about the same hit rates as on RADV (92 % of the constants sets, 73-83 % of the texture
+sets), no mismatch; screenshots at the same point of the race look the same. One run with the reuses off lost the
+device 57 s into the measured minute (`VK_ERROR_DEVICE_LOST`, draw 431 of 2,381, #551), as players see without the
+change.
