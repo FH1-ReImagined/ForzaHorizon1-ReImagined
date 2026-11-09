@@ -630,7 +630,7 @@ Not checked: DLSS (no RTX card; it keeps the setting off, above), a Steam Deck, 
 
 ## ReIGlue 0420: the command processor on two threads (#474)
 
-[ReIGlue PR #43](https://github.com/FH1-ReImagined/ReIGlue/pull/43) (pinned here while it is reviewed; it also carries 0442-0445, below) adds
+[ReIGlue PR #43](https://github.com/FH1-ReImagined/ReIGlue/pull/43) (merged, pin `a4aff83`; it also carries 0442-0445, below) adds
 `--gpu_split_command_processor` (restart, default off, Vulkan only): the "GPU Commands" thread decodes the PM4 stream
 against a shadow register file and a "GPU Recorder" thread applies the register writes and runs the draws, copies,
 swaps and fence writes in order (after Pinyon Shift's ShiftGlue `9362a07`, `7440c33` and `9bf779f`; credited in
