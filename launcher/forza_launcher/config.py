@@ -49,8 +49,9 @@ def _default():
         # The graphics card the player has (#52): '' until detected; the player can change it.
         # vulkan: its Vulkan devices and their driver's API version (gpu.vulkan_devices, #672); None: unknown.
         "gpu": {"vendor": "", "detected": "", "name": "", "checked": False, "vulkan": None},
-        # The PC's CPU, RAM and card (#206): the detected specs plus what the player already answered.
-        "specs": {"checked": False, "fingerprint": "", "dismissed": "", "values": None},
+        # The PC's CPU, RAM and card (#206): the detected specs plus what the player already answered
+        # (dismissed: the warnings, world_detail: the offer of higher World detail; each a hardware signature).
+        "specs": {"checked": False, "fingerprint": "", "dismissed": "", "world_detail": "", "values": None},
         # Battery saver (#140): the settings it forced at the last start (power.py); None: none.
         "power": {"applied": None},
         # Play in VR (vr.py): the first-time checklist was answered with "Don't show again".
@@ -245,6 +246,7 @@ class Config:
         cache.update(checked=True, fingerprint=specs.fingerprint(), values=asdict(found))
         if first and not self.loaded:
             self.settings.update(specs.recommended(found, display.effective(self.settings, found), self.gpu_vendor()))
+            cache["world_detail"] = self.pc_specs().signature()   # it has them now: a later Console is the choice
         elif self.loaded:
             self._migrate_scene_540()   # a launcher.json from before the specs were detected (#206)
         return True
@@ -274,27 +276,50 @@ class Config:
     def specs_warnings(self) -> list:
         return specs.warnings(self.pc_specs(), self.effective_settings())
 
-    def specs_banner_due(self) -> bool:
-        """Some settings are heavy for this PC (or a Steam Deck's differ from its preset) and the player has
-        not answered for this hardware."""
-        s = self.pc_specs()
-        return (s.known() and self.d["specs"].get("dismissed") != s.signature()
+    def _warnings_due(self, s) -> bool:
+        return (self.d["specs"].get("dismissed") != s.signature()
                 and bool(any(w.fix for w in self.specs_warnings()) or specs.deck_offer(s, self.effective_settings())))
 
+    def world_detail_offer(self) -> dict:
+        """High-end graphics whose launcher.json still has the console's World detail: the higher values for
+        the settings still at their default, until the player answers for this hardware ({} then)."""
+        s = self.pc_specs()
+        if not s.known() or self.d["specs"].get("world_detail") == s.signature():
+            return {}
+        return specs.world_detail_offer(s, self.effective_settings(), self.gpu_vendor())
+
+    def specs_banner_due(self) -> bool:
+        """Some settings are heavy for this PC (or a Steam Deck's differ from its preset), or high-end graphics
+        could run higher World detail, and the player has not answered for this hardware."""
+        s = self.pc_specs()
+        return s.known() and (self._warnings_due(s) or bool(self.world_detail_offer()))
+
     def specs_banner_text(self) -> str:
-        return specs.banner_text(self.pc_specs())
+        s = self.pc_specs()
+        offer = self.world_detail_offer()
+        if not self._warnings_due(s):
+            return specs.world_detail_text(s, offer) if offer else specs.banner_text(s)
+        if not offer:
+            return specs.banner_text(s)
+        return specs.banner_text(s) + " " + specs.world_detail_text(s, offer, also=True)
 
     def dismiss_specs_banner(self):
-        self.d["specs"]["dismissed"] = self.pc_specs().signature()
+        sig = self.pc_specs().signature()
+        self.d["specs"]["dismissed"] = sig
+        self.d["specs"]["world_detail"] = sig
 
     def use_recommended(self) -> list:
-        """Apply the fixes of the warnings only, and on a Steam Deck its preset (never another setting);
-        returns the keys changed."""
+        """Apply the fixes of the warnings only, on a Steam Deck its preset, and on high-end graphics the World
+        detail offer (never another setting); returns the keys changed. What the player answered before (Keep
+        mine) is not applied."""
+        s = self.pc_specs()
         fixes = {}
-        for w in self.specs_warnings():
-            for key, value in w.fix.items():   # the CPU and the card may both limit the frame rate: the lower wins
-                fixes[key] = min(fixes[key], value) if key == "frame_rate" and key in fixes else value
-        fixes.update(specs.deck_offer(self.pc_specs(), {**self.effective_settings(), **fixes}))
+        if self._warnings_due(s):
+            for w in self.specs_warnings():
+                for key, value in w.fix.items():   # the CPU and the card may both limit the frame rate: the lower wins
+                    fixes[key] = min(fixes[key], value) if key == "frame_rate" and key in fixes else value
+            fixes.update(specs.deck_offer(s, {**self.effective_settings(), **fixes}))
+        fixes.update(self.world_detail_offer())
         changed = [k for k, v in fixes.items() if self.settings.get(k) != v]
         self.settings.update(fixes)
         self.dismiss_specs_banner()
