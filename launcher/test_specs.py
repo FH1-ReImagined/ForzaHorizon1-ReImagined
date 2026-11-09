@@ -9,7 +9,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from forza_launcher import gpu, specs  # noqa: E402
+from forza_launcher import gpu, schema, specs  # noqa: E402
 from forza_launcher.config import Config  # noqa: E402
 from forza_launcher.specs import HIGH, LOW, MID, UNKNOWN, Specs  # noqa: E402
 
@@ -45,6 +45,7 @@ GTX1660 = S(6, True, 32, 6, False, "NVIDIA GeForce GTX 1660 SUPER", "AMD Ryzen 5
 GTX1650TI = S(4, True, 7.8, 4, False, "NVIDIA GeForce GTX 1650 Ti", "Intel(R) Core(TM) i5-10300H CPU @ 2.50GHz")
 IRIS = S(4, True, 16, 0, True, "Intel(R) Iris(R) Xe Graphics", "11th Gen Intel(R) Core(TM) i5-1135G7")
 DECK = S(4, True, 16, 1, True, "Steam Deck", "AMD Custom APU 0405")
+RX9060XT = S(8, True, 32.0, 16.0, False, "AMD Radeon RX 9060 XT", "AMD Ryzen 7 7800X3D 8-Core Processor")
 
 
 class Parsers(unittest.TestCase):
@@ -197,6 +198,64 @@ class Recommendations(unittest.TestCase):
         self.assertEqual(self.rec(S(8), gpu.INTEL)["frame_rate"], 30)          # never above the preset's
         self.assertEqual(self.rec(S(8), gpu.DECK)["frame_rate"], 30)
 
+    def test_high_end_graphics_get_high_world_detail(self):
+        for vendor in (gpu.NVIDIA, gpu.AMD):
+            r = self.rec(RX9060XT, vendor)
+            for key, value in specs.HIGH_WORLD_DETAIL.items():
+                self.assertEqual(r[key], value, (vendor, key))
+        self.assertEqual(specs.HIGH_WORLD_DETAIL, {
+            "world_shadow_detail": "ultra", "world_texture_detail": "high", "world_car_detail": "ultra",
+            "world_shadow_filter": "soft", "world_ambient_occlusion": "low", "livery_bake_scale": 2,
+            "anisotropic_override": 5})
+        for key, value in specs.HIGH_WORLD_DETAIL.items():       # every value is one of the setting's choices
+            self.assertIn(value, [v for v, _ in schema.BY_KEY[key].choices], key)
+        self.assertEqual(self.rec(S(8))["world_shadow_detail"], "ultra")    # an 8 GB RTX 3080
+
+    def test_no_high_world_detail_below_high_end_graphics(self):
+        for s, vendor in ((GTX1660, gpu.NVIDIA), (GTX1650TI, gpu.NVIDIA), (IRIS, gpu.INTEL), (DECK, gpu.DECK),
+                          (S(8, vram=12, gpu_name="AMD Radeon RX 580"), gpu.AMD),          # old card: mid
+                          (S(8, vram=0, gpu_name="NVIDIA GeForce RTX 4070"), gpu.NVIDIA),  # memory unknown
+                          (Specs(), gpu.NVIDIA)):
+            r = self.rec(s, vendor)
+            for key in specs.HIGH_WORLD_DETAIL:
+                self.assertEqual(r.get(key, schema.BY_KEY[key].default), schema.BY_KEY[key].default,
+                                 (s.gpu_name, key))
+            self.assertEqual(specs.world_detail_offer(s, {}, vendor), {}, s.gpu_name)
+        # a Steam Deck whatever its tier says
+        with mock.patch.object(specs, "gpu_tier", return_value=HIGH):
+            self.assertEqual(specs.high_world_detail(DECK, {}), {})
+
+    def test_vendor_known_problems_win_over_world_detail(self):
+        bad = gpu.Known("world_ambient_occlusion", lambda v: v != "off", "test", 0)
+        preset = gpu.Preset("AMD", gpu.PRESETS[gpu.AMD].settings, "", [bad])
+        with mock.patch.dict(gpu.PRESETS, {gpu.AMD: preset}):
+            r = self.rec(RX9060XT, gpu.AMD)
+            self.assertNotIn("world_ambient_occlusion", specs.recommended(RX9060XT, gpu.settings_for(gpu.AMD),
+                                                                          gpu.AMD))
+            self.assertEqual(r["world_shadow_detail"], "ultra")
+            self.assertNotIn("world_ambient_occlusion", specs.world_detail_offer(RX9060XT, {}, gpu.AMD))
+
+    def test_ambient_occlusion_only_with_vulkan(self):
+        for backend in ("d3d12", "regpu"):
+            r = specs.recommended(RX9060XT, {"gpu_backend": backend, "frame_rate": 60}, gpu.NVIDIA)
+            self.assertNotIn("world_ambient_occlusion", r, backend)
+            self.assertEqual(r["world_shadow_filter"], "soft")       # the others are the game's own hooks
+            self.assertNotIn("world_ambient_occlusion", specs.world_detail_offer(RX9060XT, {"gpu_backend": backend}))
+        self.assertEqual(specs.recommended(RX9060XT, {"gpu_backend": "vulkan"}, gpu.NVIDIA)
+                         ["world_ambient_occlusion"], "low")
+
+    def test_offer_keeps_the_players_values(self):
+        offer = specs.world_detail_offer(RX9060XT, {"world_shadow_detail": "high", "anisotropic_override": 4,
+                                                    "world_ambient_occlusion": "off"}, gpu.AMD)
+        self.assertNotIn("world_shadow_detail", offer)
+        self.assertNotIn("anisotropic_override", offer)              # 8x: theirs
+        self.assertEqual(offer["world_ambient_occlusion"], "low")    # Off is the default
+        self.assertEqual(offer["livery_bake_scale"], 2)
+        text = specs.world_detail_text(RX9060XT, offer)
+        self.assertTrue(text.startswith("This PC can run higher world detail: use it? Distant texture detail High, "))
+        self.assertIn("Paint job detail 2x", text)
+        self.assertNotIn("Shadow detail", text)
+
     def test_no_fsr3_or_smaa_default_on_a_low_card(self):
         r = specs.recommended(IRIS, {"present_effect": "fsr3", "frame_rate": 60, "resolution_scale": 1}, "")
         self.assertEqual(r["present_effect"], "fsr")
@@ -305,6 +364,72 @@ class Flow(unittest.TestCase):
             self.assertEqual(c.settings["anisotropic_override"], 5)           # only the keys that warn
             self.assertFalse(c.specs_banner_due())
 
+    def test_new_launcher_on_high_end_graphics_gets_the_world_detail(self):
+        with tempfile.TemporaryDirectory() as t:
+            c = self.cfg(t)
+            c.detect_gpu(gpu.Detected(gpu.AMD, "x"))
+            c.detect_specs(RX9060XT)
+            for key, value in specs.HIGH_WORLD_DETAIL.items():
+                self.assertEqual(c.settings[key], value, key)
+            self.assertFalse(c.specs_banner_due())
+            c.settings["world_shadow_detail"] = "console"        # the player goes back: no offer about it
+            c.save()
+            self.assertFalse(Config(c.path).specs_banner_due())
+        with tempfile.TemporaryDirectory() as t:
+            c = self.cfg(t)
+            c.detect_gpu(gpu.Detected(gpu.NVIDIA, "x"))
+            c.detect_specs(GTX1660)
+            self.assertEqual((c.settings["world_shadow_detail"], c.settings["anisotropic_override"]), ("console", 3))
+
+    def test_existing_launcher_on_high_end_graphics_gets_one_offer(self):
+        old = {"gpu": {"vendor": "amd", "checked": True},
+               "specs": {"checked": True, "fingerprint": "x", "dismissed": RX9060XT.signature(),
+                         "values": RX9060XT.__dict__},   # it answered the warnings banner before
+               "settings": {"frame_rate": 60, "resolution_scale": 2, "present_effect": "fsr",
+                            "world_car_detail": "high"}}
+        for answer in ("use", "keep"):
+            with tempfile.TemporaryDirectory() as t:
+                c = self.cfg(t, old)
+                self.assertEqual(c.settings["world_shadow_detail"], "console")      # nothing changes by itself
+                self.assertTrue(c.specs_banner_due())
+                self.assertIn("This PC can run higher world detail: use it?", c.specs_banner_text())
+                self.assertNotIn("Car detail", c.specs_banner_text())                # theirs
+                if answer == "use":
+                    changed = c.use_recommended()
+                    self.assertEqual(sorted(changed), sorted(set(specs.HIGH_WORLD_DETAIL) - {"world_car_detail"}))
+                    self.assertEqual(c.settings["world_car_detail"], "high")
+                    self.assertEqual((c.settings["world_shadow_detail"], c.settings["livery_bake_scale"]), ("ultra", 2))
+                else:
+                    c.dismiss_specs_banner()
+                    self.assertEqual(c.settings["world_shadow_detail"], "console")
+                self.assertFalse(c.specs_banner_due())
+                c.save()
+                c = Config(c.path)
+                self.assertFalse(c.specs_banner_due(), answer)                       # once
+                c.settings["world_texture_detail"] = "console"
+                self.assertFalse(c.specs_banner_due(), answer)
+                with mock.patch.object(specs, "fingerprint", return_value="another card"):
+                    c.detect_specs(S(8, vram=12, gpu_name="NVIDIA GeForce RTX 4070"))   # new hardware: asked again
+                self.assertTrue(c.specs_banner_due(), answer)
+
+    def test_world_detail_offer_after_heavy_settings(self):
+        with tempfile.TemporaryDirectory() as t:
+            c = self.cfg(t, {"gpu": {"vendor": "amd", "checked": True}, "settings": {"resolution_scale": 4}})
+            c.detect_specs(RX9060XT)
+            text = c.specs_banner_text()
+            self.assertTrue(text.startswith("Some settings are heavy for this PC. It can also run higher world detail"))
+            changed = c.use_recommended()
+            self.assertIn("resolution_scale", changed)
+            self.assertEqual((c.settings["resolution_scale"], c.settings["world_shadow_detail"]), (2, "ultra"))
+            self.assertFalse(c.specs_banner_due())
+        with tempfile.TemporaryDirectory() as t:     # "Keep mine" for the warnings earlier: the offer applies only itself
+            c = self.cfg(t, {"gpu": {"vendor": "amd", "checked": True}, "settings": {"resolution_scale": 4}})
+            c.detect_specs(RX9060XT)
+            c.d["specs"]["dismissed"] = c.pc_specs().signature()
+            self.assertTrue(c.specs_banner_text().startswith("This PC can run higher world detail"))
+            c.use_recommended()
+            self.assertEqual((c.settings["resolution_scale"], c.settings["world_shadow_detail"]), (4, "ultra"))
+
     def test_entry_card_gets_the_540p_scene_once(self):
         old = {"gpu": {"vendor": "nvidia", "checked": True},
                "specs": {"checked": True, "fingerprint": "x", "values": GTX1650TI.__dict__},
@@ -359,8 +484,11 @@ class Flow(unittest.TestCase):
             c = self.cfg(t, {"settings": {"frame_rate": 60}})
             c.detect_specs(Specs())
             self.assertFalse(c.specs_banner_due())
-            c.detect_specs(S(8), force=True)
+            c.detect_specs(GTX1660, force=True)
             self.assertFalse(c.specs_banner_due())
+            c.detect_specs(S(8), force=True)       # high-end graphics: only the World detail offer
+            self.assertTrue(c.specs_banner_due())
+            self.assertTrue(c.specs_banner_text().startswith("This PC can run higher world detail: use it?"))
 
 
 class SettingsPageTests(unittest.TestCase):
@@ -392,6 +520,34 @@ class SettingsPageTests(unittest.TestCase):
             self.assertFalse(page.banner.isVisibleTo(page))
             self.assertEqual(page.rows["resolution_scale"].warning.text(), "")
             page.close()
+
+    def test_world_detail_offer_in_the_banner(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        try:
+            from PySide6.QtWidgets import QApplication
+        except ImportError:
+            self.skipTest("PySide6 is not installed")
+        from forza_launcher.ui.settings_page import SettingsPage
+        app = QApplication.instance() or QApplication([])
+        for button in ("_use_recommended", "_keep_mine"):
+            with tempfile.TemporaryDirectory() as t:
+                (Path(t) / "launcher.json").write_text(json.dumps({"settings": {"frame_rate": 60}}))
+                c = Config(Path(t) / "launcher.json")
+                c.advanced["data_root"] = t
+                c.gpu.update(checked=True, vendor="amd")
+                c.detect_specs(RX9060XT)
+                window = mock.Mock()
+                window.preview_text.return_value = "game.exe"
+                page = SettingsPage(c, window)
+                page.show()
+                app.processEvents()
+                self.assertTrue(page.banner.isVisibleTo(page))
+                self.assertIn("higher world detail", page.banner_text.text())
+                getattr(page, button)()
+                page._save_timer.stop()
+                self.assertEqual(c.settings["world_shadow_detail"], "ultra" if button == "_use_recommended" else "console")
+                self.assertFalse(page.banner.isVisibleTo(page))
+                page.close()
 
 
 if __name__ == "__main__":
