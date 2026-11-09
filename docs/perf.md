@@ -2651,75 +2651,117 @@ in these runs) and the command processor alone on a CPU (`GPU_Commands=3;*=0-2`)
   not sharing with it) is exactly what this PC cannot show. The mechanism and the layout need one run on a Deck:
   Settings, Advanced, extra arguments `--linux_thread_cores=auto`, then the benchmark, with and without; the log
   lists each pinned thread (`linux_thread_cores:` lines).
-### Decoding and recording on two threads (#474): plan, not built
+### Decoding and recording on two threads (#474, ReIGlue 0420)
 
-Not built: the two changes above and their measurements took the window. What a build needs, from reading ReIGlue `origin/main`
-(`src/graphics/command_processor.cpp`, `src/graphics/vulkan/command_processor.cpp`) and Pinyon Shift's
-`gpu_record_thread` (ShiftGlue `9362a07`, 419 changed lines in the same Xenia-derived processor).
+`--gpu_split_command_processor=true` (restart, default off; Vulkan) splits the GPU command processor in two, after
+Pinyon Shift's `gpu_record_thread` (ShiftGlue `9362a07`, draws as plain records `7440c33`, unchanged register writes
+dropped `9bf779f`). "GPU Commands" (the decoder) parses the PM4 stream against a shadow of the register file and
+records, in order, the register writes (copied from the ring or the game's constant memory) and the backend work;
+"GPU Recorder" applies the writes to the register file and runs the draws, copies, shader loads (memo 0140), swaps
+(with the frame's tag), fence writes (`EVENT_WRITE_SHD`, with SDK 0115's futex wake, so `gpu_wait` and `render_idle`
+wake when the recorder stores the word), interrupts, `EVENT_WRITE_EXT` and the end-of-buffer submission. Everything
+that reads the register file, the caches or the Vulkan state runs on the recorder, so the memos 0140, 0340 and
+0360-0362 stay as they are. The rules for what the CPU sees:
 
-**Shape.** Keep PM4 parsing (`ExecutePrimaryBuffer`, `ExecutePacket*`) on the "GPU Commands" thread, the decoder. It
-reads a *shadow* register file (`decode_regs()` in Pinyon) and appends, in order, to a batch: register runs (copied:
-the ring and the game's constant memory are reused after the packet), and closures or small records for the backend
-work (draw, copy/resolve, shader load, swap, event/fence writes, interrupts). A second thread, the recorder, takes
-batches and applies them to the real `register_file_` and the backend (`VulkanCommandProcessor::WriteRegister`
-bookkeeping, `IssueDraw`, `IssueCopy`, `IssueSwap`...). The decoder publishes a batch when it is full, at a swap,
-and before it waits.
+- `MEM_WRITE`, `COND_WRITE`, `REG_TO_MEM` and the occlusion queries (`EVENT_WRITE_ZPD`) wait for the recorder to run
+  everything before them, then run on the decoder with the register file (the recorder is idle meanwhile).
+- `WAIT_REG_MEM` for memory: while the recorder has work, the decoder polls again each time it finishes a batch (at
+  most 100 us apart) instead of sleeping until a vblank, because the word may be a fence the recorder is still to
+  write; this was the first build's problem (half the frame rate, the decoder sleeping ~8 times a frame).
+- `WAIT_REG_MEM` for `COHER_STATUS_HOST` (Direct3D's coherency wait, about a hundred a frame) is answered on the
+  shadow, as Pinyon Shift does; a wait for another register, and `REG_RMW` of a register below 0x2000 (the CPU and the
+  backend write some of those directly), wait for the recorder and read the register file.
+- Fences are recorded, not waited for. The read pointer is written by the decoder at once (it has copied what it
+  needs from the ring); the work before it is published first. The decoder never asks the Vulkan backend about
+  submissions, so Pinyon's `b3b3cbb` (awaiting a fence before the worker submitted it) cannot happen: the recorder alone
+  ends and awaits submissions, and the threaded submission already waits for a fence only once it is submitted.
+- Off while split: the pipeline lookahead (#378, it walks the decoder's ring position from inside a draw), the
+  stereo replay of VR true stereo (0396) and `FORZA_GPU_FRAME_TRACE`.
+- `--gpu_split_elide_unchanged_registers` (default on, only with the split): the decoder records only the context
+  and constant registers (0x2000 on) whose value changes, except the two initiators: about 30 % of the 360,000-530,000
+  register writes a frame are recorded.
+- A log line once per 1,800 frames: batches a frame, register writes recorded, and how often the decoder waited for
+  the recorder, by reason (`wait_memory` about 8 a frame, `register_read` 1, the rest 0 in free roam).
 
-**What stays on the decoder and what moves.** Today's cost sits in `WriteRegistersFromMem` (per-register
-`WriteRegister` dispatch and the Vulkan constant-block invalidation), `ExecutePacket`, `IM_LOAD`
-(`fh1_shader_load_memo.h`, patch 0140) and the draw's front half. After the split the decoder only compares and copies
-words (Pinyon: drop unchanged register writes `9bf779f`, merge float-constant runs `99f52ca`, compare four registers
-at a time `e00387b`), the recorder owns everything that reads the register file, the caches and the Vulkan state.
-The memos 0140/0340/0360-0362 run on the recorder side (they read the register file and caches); the `IM_LOAD`
-address-to-shader memo needs the recorded dwords, so `IM_LOAD` is recorded whole and memoized on the recorder.
+**Results.** Same machine and Deck preset as above, uncapped (`--frame_rate=240`), the TU4 build of main b9011fa with
+ReIGlue 0420 ([ReIGlue #26](https://github.com/FH1-ReImagined/ReIGlue/pull/26)), one build, the cvar on the command line, runs started alternately (on first, then off first),
+benchmark: its measured minute; free roam: 90 s of full throttle from the spawn. "4 cores" is `taskset -c 0-3`,
+"8 cores" the whole CPU. GPU Commands / GPU Recorder ms/frame: each thread's CPU time per guest frame, sampled from
+`/proc` (unsplit, GPU Commands is the whole command processor). Runs during which another game ran on the machine
+were left out.
 
-**Ordering rules (what the guest can observe).**
-- `MEM_WRITE`, `COND_WRITE`, `REG_TO_MEM`, `EVENT_WRITE_SHD/EXT` that the CPU reads, and occlusion queries
-  (`EVENT_WRITE_ZPD`, `VIZ_QUERY`): the decoder `RecordSync()`s first (the recorder has run everything before),
-  then performs them itself. Rare packets.
-- `WAIT_REG_MEM` (about a frame boundary and the "GPU idle" waits): publish the recorded work, then poll. The register it
-  polls is the *real* file for registers the recorder writes (`COHER_STATUS_HOST`, scratch) and memory otherwise;
-  `MakeCoherent` runs on the recorder.
-- Fence writes (`EVENT_WRITE_SHD`) are recorded, not waited for: the game must see a fence only after the recorder
-  has consumed the draws before it, because it reuses their memory after the fence. Avoid Pinyon's `b3b3cbb`
-  (awaiting a fence before the worker has submitted it): `AwaitSubmissionThread`/`CheckSubmissionFenceAndDeviceLoss`
-  must be asked about submissions the recorder has made, not the decoder's count.
-- `XE_SWAP` is recorded; the swap's `IssueSwap` runs on the recorder (with #476 the presenter step is queued on the
-  submission thread behind it). `rexui_SetNextGuestOutputTag`, `fh1_frame_trace::OnSwap` and `Fh1StereoOnSwap` must
-  be recorded with it (they bracket the swap on the decoder today).
-- SDK 0115's futex wake (`WakeWordWaiters` after scratch/MEM_WRITE stores) and the `gpu_wait` / `render_idle` hooks
-  must fire when the *recorder* publishes the store, not when the decoder parses the packet.
-- The stereo/VR recording (`Fh1StereoOnDraw/Replay`, patch 0396) replays whole draw segments: record the segment
-  markers and keep that state on the recorder, or leave the split off while `vr_mode` is on.
+| Scene | Split | Runs | fps | 1% low fps | p99 ms | GPU Commands ms/frame | GPU Recorder ms/frame | GPU Commands busy % | GPU Recorder busy % | Process CPU ms/frame |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Benchmark, 4 cores | off | 3 | 151.6 [147.7-158.3] | 95.0 [92.5-99.6] | 9.4 [9.0-9.7] | 4.56 [4.20-4.82] | - | 69 [66-71] | - | 14.9 [14.2-15.4] |
+| Benchmark, 4 cores | on | 3 | 154.9 [143.3-163.7] | 87.8 [77.3-94.0] | 9.8 [9.1-11.1] | 2.59 [2.49-2.76] | 4.00 [3.78-4.12] | 40 [36-43] | 62 [59-65] | 16.7 [16.1-17.1] |
+| Benchmark, 4 cores | change | | **+2.2 %** | | | | | | | |
+| Free roam, 4 cores | off | 3 | 221.8 [220.0-223.3] | 117.9 [109.4-124.4] | 6.9 [6.5-7.4] | 2.57 [2.39-2.72] | - | 57 [53-60] | - | 10.5 [10.3-10.7] |
+| Free roam, 4 cores | on | 3 | 196.6 [189.8-203.1] | 100.2 [90.8-108.5] | 8.1 [7.4-8.9] | 1.80 [1.77-1.82] | 2.56 [2.50-2.63] | 35 [35-36] | 50 [50-51] | 12.6 [12.3-12.9] |
+| Free roam, 4 cores | change | | **-11.4 %** | | | | | | | |
+| Benchmark, 8 cores | off | 3 | 155.2 [151.5-158.9] | 98.8 [97.2-102.0] | 9.0 [8.9-9.1] | 4.39 [4.23-4.60] | - | 68 [67-70] | - | 15.2 [14.8-15.6] |
+| Benchmark, 8 cores | on | 3 | 162.8 [157.6-168.2] | 107.9 [105.5-111.2] | 8.1 [7.7-8.4] | 3.05 [2.93-3.21] | 4.14 [3.94-4.38] | 50 [49-50] | 67 [66-69] | 18.0 [17.5-18.6] |
+| Benchmark, 8 cores | change | | **+4.9 %** | | | | | | | |
+| Free roam, 8 cores | off | 3 | 204.5 [202.6-206.9] | 106.7 [103.4-109.0] | 7.4 [7.1-7.7] | 3.06 [2.89-3.15] | - | 63 [60-64] | - | 11.8 [11.3-12.1] |
+| Free roam, 8 cores | on | 3 | 215.4 [209.1-220.6] | 121.5 [113.4-137.5] | 6.5 [6.1-6.8] | 1.92 [1.83-2.00] | 2.58 [2.49-2.67] | 41 [40-42] | 56 [54-58] | 13.3 [13.0-13.5] |
+| Free roam, 8 cores | change | | **+5.3 %** | | | | | | | |
 
-**Register file readers on the decoder** (these need the shadow file or a recorder round trip): the packet loop reads
-`PA_SC_VIZ_QUERY` (draw skip), `VGT_*` (it writes them), `COHER_*`, `SCRATCH_*`, `RB_*` only through `IssueDraw`
-(recorder). `ReadRegisterValue` callers in `WAIT_REG_MEM`, `REG_RMW` (read-modify-write: the decoder can do it on the
-shadow and record the result), `REG_TO_MEM`. The shadow is written by every packet write (cheap) and never by the
-backend; the few registers the backend itself writes (`WriteRegister` from `OnPrimaryBufferEnd`, gamma ramp
-sequence, scratch) need the same write recorded on both files.
+- On four cores without SMT the split is slower in free roam (-11.4 %, every run) and level in the benchmark (+2.2 %,
+  inside the race's run-to-run spread of 143-164 fps; the 1% lows are 7 fps lower). The recorder alone
+  costs about what the whole unsplit command processor did (the recorded writes are applied through the generic
+  `WriteRegistersFromMem` instead of 0360's direct copy from the ring, and elided writes save little on the recorder),
+  and the decoder adds 1.8-3.1 ms of CPU a frame on top: the process uses 2-3 ms more CPU per frame on four cores the
+  game already shares with its own threads. Neither GPU thread is saturated (35-66 % busy) at these frame rates:
+  the frame waits on CPU-GPU round trips (`wait_memory`, about 8 a frame), which the split cannot shorten.
+- With eight cores the decoder has a core of its own: +4.9 % in the benchmark and +5.3 % in free roam, 1% lows 9-14 %
+  higher, p99 about 1 ms shorter; the process uses 1.5-2.8 ms more CPU a frame.
+- A Deck (4 Zen 2 cores, 8 threads) is in between: the decoder could take an SMT sibling, but the recorder is the
+  same length as today's thread, so expect little. One busy loop per core (CPUs 0-3, the slow-CPU stand-in above)
+  gave on/off 81.6/91.2 fps in free roam and 63.6/71.6 in the benchmark (one pair each): slower.
+- Correctness (split on): `tools/render_test.py` (festival session: title, free roam midday and dawn, cockpit, photo
+  mode, race start) against baselines recorded with the split off, 6 of 6 scenes pass, each within the off-against-off
+  noise of the baselines; the paint shop (Montano Plains outpost: Paint Shop, Design Creator, Add Decals) and fast
+  travel work; a 10-minute free-roam session at 60 fps (paint shop, then 10 minutes of driving): 59.98 fps, longest
+  frame 47 ms, no hang; one 760 ms frame entering the paint shop's editor (a loading screen, not compared with off).
 
-**Cvar and rollout.** `gpu_record_thread` (restart), default off, the Vulkan backend opts in
-(`SupportsRecordThread()`); D3D12 and the VR stereo path stay on one thread. Same thread-naming rule as #475
-(`GPU Recorder` next to `GPU Commands`) so `linux_thread_cores` can give each a core.
+#### On by default with 6 or more cores (2026-11-08)
 
-**Measure** with the harness used for #476/#475: Deck-like limits (`taskset -c 0-3`, 30 fps and uncapped, the
-busy-loop slow-CPU variant), benchmark and free roam, in-run toggling is not possible (restart cvar), so ABBA pairs;
-metrics: fps and 1% lows, `fh1_frame_cost_csv` CP ms (now two numbers: decoder and recorder) and the sum, process CPU
-per frame (the split adds copying: expect +3-6 % total CPU, which the Deck pays for on the SMT sibling), hitches
-(`GPU slow frames`, `FORZA_STALL`). Correctness: paused-scene screenshots at the same spots, the `render_tests`
-captures (`tools/render_tests`), a race with 7 AI cars, a photo-mode Big Shot (readback resolve), and a cvar-off run
-that is bit-identical to today's.
+Measured again on main 2e28667 with ReIGlue main a5fd408 and 0420 rebased on it, and with
+`vulkan_present_on_submission_thread=true` in both arms (on by default since #607's #613; the swap's wait for the
+replay was a fixed part of the command processor's frame in the runs above). The PC's default preset (AMD FSR 1, the
+game's 4x MSAA, 1280x720, render scale 1) instead of the Deck preset, uncapped (`--frame_rate=240`), on the hidden
+display (headless gamescope), one build with the cvar on the command line. Benchmark: 3 runs per state, interleaved
+(off first, then on first); free roam: 3 minutes of driving from the spawn, one run per state. "6 cores" is
+`taskset -c 0-5` on this 8-core CPU without SMT, standing in for a Ryzen 5 5600X (6 cores, 12 threads: more than
+this). Command processor ms/frame: unsplit, the frame cost CSV's `cpu_ms` (`fh1_frame_cost_csv`); split, each
+thread's CPU time per guest frame from `/proc` (the CSV then times the recorder only).
 
-**Cost estimate.** Pinyon's first step was 419 changed lines; ours also has per-register Vulkan invalidation, the
-stereo path, readback-resolve `RecordSync` points (`readback_resolve_wait_range`, #552, 0411) and the pipeline
-look-ahead (`fh1_pipeline_lookahead`, run at the frame end), so budget 2-3 days of work plus the measurements, in
-steps that each leave the cvar-off path unchanged: (1) the batch/recorder thread running closures for draws and
-copies only, registers still written by the decoder under a sync at every draw (correct but slow, tests the ordering);
-(2) shadow register file and recorded runs; (3) the sync rules for the CPU-visible packets; (4) the follow-ups
-(unchanged-write drop, constant-run merge). Expected gain: the 25-30 % decode share of the thread's 7-8 ms on this PC
-(2-2.5 times that on a Deck) comes off the thread the frame waits for, minus the batch hand-off; Pinyon measured
-18.1 to 17.0 ms (6 %) from the split alone.
+| Scene | Split | Runs | fps | 1% low fps | p99 ms | Command processor ms/frame | Decoder ms/frame | Recorder ms/frame | Process CPU ms/frame |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Benchmark, 8 cores | off | 3 | 147.0 [146.4-147.9] | 96.0 [93.9-98.5] | 9.37 [9.22-9.48] | 6.00 [5.96-6.07] | - | - | 17.8 |
+| Benchmark, 8 cores | on | 3 | **166.3** [164.5-168.3] | 109.0 [107.1-110.3] | 8.00 [7.76-8.24] | - | 3.83 | 4.84 | 19.7 |
+| Benchmark, 6 cores | off | 3 | 148.9 [146.7-151.4] | 95.6 [93.1-97.8] | 9.36 [9.28-9.47] | 5.86 [5.73-6.09] | - | - | 17.3 |
+| Benchmark, 6 cores | on | 3 | **157.5** [155.2-162.0] | 100.2 [93.6-104.1] | 8.76 [8.58-9.02] | - | 4.12 | 5.26 | 20.5 |
+| Free roam, 8 cores | off | 1 | 174.1 | 109.8 | 7.61 | 4.70 | - | - | 14.6 |
+| Free roam, 8 cores | on | 1 | **232.7** | 131.2 | 6.15 | - | 2.56 | 3.32 | 14.8 |
+| Free roam, 6 cores | off | 1 | 198.4 | 111.3 | 7.27 | 4.14 | - | - | 13.3 |
+| Free roam, 6 cores | on | 1 | **227.5** | 128.3 | 6.41 | - | 2.29 | 3.05 | 14.1 |
+
+- The benchmark: +13.1 % on eight cores, +5.8 % on six; every run with the split was faster than every run without,
+  at both core counts, and the 1% lows and p99 are better. No frame over 50 ms in any of the 12 runs.
+- Free roam: +14.7 % on six cores; on eight the run without the split was the slowest of the four (8 % other load on
+  the machine), so its +34 % overstates it. Frames over 50 ms in the 3 minutes: 0 and 1 (six cores), 0 and 2 (eight).
+- The gain is larger than in the runs above (+5 % on eight cores) because the swap no longer waits for the replay:
+  then the unsplit thread's frame held an idle wait the split could not shorten.
+- Two benchmark runs from empty game and driver shader caches (8 cores, one per state) ran at 30 fps (the fresh
+  cache folder had no frame-rate setting), so they show only the hitches: 1 frame over 50 ms without the split, 0 with
+  it. The split turns off the pipeline lookahead (#378); with the prebuilt pipelines (#276) that did not show.
+- Correctness: `tools/render_test.py` (festival session, 6 scenes) against the stored baselines: with the split, 6 of 6 in the last run; in two earlier runs on the same build each state failed one scene by a little (without the split `freeroam_dawn`, with it `freeroam_midday` at 0.68 % changed against 0.50 %), and a first run with it (the #613 build) failed four, among them `photo_mode` with the camera turned the other way (yaw 100 against 280), the scripted input's timing rather than the picture.
+
+The game turns it on by default (`ApplyForzaGpuCvarDefaults`, `src/main.cpp`) when the process may run on 6 or more
+physical cores (its affinity; SMT siblings count once, `src/platform/cpu_cores.h`) and no VR headset is used: a
+Steam Deck (4 cores, 8 threads) and the four-core runs above stay off. `gpu_split_command_processor` in `forza.toml`
+or on the command line still sets it either way. The log says which: `Physical CPU cores available: N
+(gpu_split_command_processor default true|false)`, and the performance settings line lists it.
 
 ### Where this leaves #559
 
@@ -2729,8 +2771,10 @@ preset, with identical pictures and no extra hitches; it should be tried on a De
 and, before it becomes the default, on the paths that use the deferred step differently: the VR export (frame tag and
 pose pairing), native upscaling with DLSS (the replay's split submission), and a Windows run. `--linux_thread_cores=auto`
 is the Deck layout of Pinyon Shift; it does nothing on a CPU without SMT because on four cores with one thread each it
-measured slower, so only a Deck can say whether it helps. The command processor split (#474) is the large item and is
-not started.
+measured slower, so only a Deck can say whether it helps. `--gpu_split_command_processor=true` (#474) is built and
+correct here but only pays with a spare core (+5 % on eight cores, -11 % in free roam on four without SMT); a Deck run
+with and without it would say whether its second thread on an SMT sibling helps there (`--linux_thread_cores=auto`
+does not place "GPU Recorder" yet: it falls under `*`).
 
 ## Where a frame's CPU time goes (#607, 2026-11-03)
 
@@ -3533,3 +3577,111 @@ with `FORZA_MAIN_WAITS_RENDER=0`; no crash, no device lost. That stall is not th
 pass is held and nothing spins (the busiest guest thread, F80012FC, at 15% of a core); it stays open in #725. On
 Vulkan its old driver (1.2.131) shows no frame at all, 4 of 4 in both arms (#672). The GeForce, warm caches, the
 benchmark with the fix: 52.7 and 54.8 fps (52.8-56.0 before), the main loop waiting 0 times.
+
+## Descriptor reuse in the command processor (#192, #179, 2026-11-08)
+
+The biggest cost of the GPU command processor was descriptor setup (20-23 % of its CPU time, #607 above): every
+draw wrote a new constants set and a new texture set for each stage, and acquired its samplers and requested its
+textures again. ReIGlue 0442-0445 reuse what has not changed, on by default; each part has an off switch:
+
+- `vulkan_dynamic_constants` (0442, Sean O'Connor's #179; at startup): the guest constants are bound as dynamic
+  uniform buffers, the draw's slices selected by offsets at bind time, and the frame's sets with the same buffers
+  and ranges are used again.
+- `vulkan_binding_request_reuse` (0443, Sean's #192): within a submission, unchanged samplers are kept and a texture
+  request whose bindings are all in sync is skipped. 0443 also clears the bound flags of the descriptor sets a
+  pipeline layout change makes incompatible (missing upstream).
+- `vulkan_texture_descriptor_reuse` (0444): the texture sets written in a frame are remembered by their exact
+  contents (layout, then every view and sampler handle) and used again, still bound if it is the bound one;
+  forgotten at each frame, when the pools are reset and when any view or sampler is destroyed (a later handle may
+  have the same value). Sean's first version of #192 reused texture sets by comparing a draw with the previous
+  one only, and drew wrong textures; it was removed.
+
+`FORZA_VK_DYNAMIC_CONSTANTS`, `FORZA_VK_BINDING_REUSE` and `FORZA_VK_TEXTURE_SET_REUSE` (0/1) override the cvars
+for A/B runs; `FORZA_VK_BINDING_VERIFY=1` runs the full sampler and texture path on predicted hits and logs a
+mismatch; `FORZA_VK_BINDING_STATS=1` logs the hits every 300 frames.
+
+**Method.** TU4 game of main 2e28667 with the ReIGlue branch's plugin and runtime, Ryzen 7 7800X3D, RX 9060 XT
+(RADV), the built-in benchmark (Recaro Rush, 60 s measured) uncapped (`--frame_rate=240`), 1280x720, the golden
+TU4 save in a scratch `--user_data_root`, scratch XDG dirs and caches (warmed by a run first), audio muted,
+`nice -n 10 ionice -c3`, BENCH lock held, each run started with a 1-minute load under 2 and no compiler running.
+Six cores: `taskset -c 0-5` from the start (a Ryzen 5 5600X stand-in; only Mesa's disk cache threads escaped it).
+The command processor's CPU time from `--fh1_frame_cost_csv` over the measured minute. Each race's AI draws a
+different amount (4,070-5,170 draws a frame), and the frame rate follows that; the command processor's time per
+draw is the steady figure.
+
+**All three off and on**, three interleaved pairs each:
+
+| | fps | 1% low | p99 ms | Command processor, ms a frame | us a draw |
+| --- | --- | --- | --- | --- | --- |
+| 8 cores, off | 133.4 (126.8, 146.2, 127.2) | 89.4 | 10.22 | 6.04 | 1.319 |
+| 8 cores, on | 147.3 (145.0, 150.7, 146.1) | 94.7 | 9.44 | 5.31 | 1.221 |
+| 6 cores, off | 136.8 (135.1, 145.7, 129.8) | 90.7 | 10.15 | 5.88 | 1.317 |
+| 6 cores, on | 142.2 (151.6, 149.4, 125.6) | 95.0 | 9.51 | 5.45 | 1.221 |
+
+- Time per draw: 1.311-1.330 us off and 1.194-1.243 us on in all 12 runs (7.4 % less on both core counts). With
+  the same draws (about 4,130 a frame): 146.2 to 150.7 fps on 8 cores, 145.7 to 149.4 on 6.
+- Hits in the race: about 95 % of the constants sets, 75-82 % of the texture sets (30-40 % still bound), 54 % of
+  the sampler acquisitions and 57 % of the texture requests; the texture set memo was never cleared within a frame.
+
+**Each part**, 8 cores (one off run and two of each, then two pairs of the other two parts without the texture set
+memo against all three, the same session):
+
+| | fps | 1% low | Command processor, us a draw |
+| --- | --- | --- | --- |
+| Off | 138.1 | 90.6 | 1.320 |
+| Dynamic constants only | 132.9, 134.1 | 87.9, 91.3 | 1.264, 1.265 |
+| Sampler and texture-request reuse only | 147.0, 147.8 | 94.0, 96.5 | 1.294, 1.301 |
+| Texture set memo only | 135.6, 133.2 | 89.6, 86.3 | 1.336, 1.314 |
+| Dynamic constants and request reuse | 139.8, 139.8 | 89.5, 90.1 | 1.273, 1.229 |
+| All three | 146.1, 141.1 | 94.4, 91.9 | 1.227, 1.243 |
+
+The dynamic constants save the most (4 % of the time per draw), the request reuse 2 %. The texture set memo alone
+saves nothing measurable (hashing the set costs about what writing it did); with the other two it is about 1 % more,
+within the runs' spread, and it also leaves 30-40 % of the texture sets bound, which the submission thread then does
+not bind again (not measured separately). The frame rates of the single parts follow their races' draws (4,140-4,680
+a frame).
+
+**Free roam**, 3 minutes from the golden save's spawn (throttle with a brake and a turn every 25 s), 45-210 s, 8 cores:
+off 180.8 fps, 1% low 91.3, the command processor 4.18 ms a frame (1.412 us a draw); with the defaults (all three
+on, no overrides) 183.1 fps, 1% low 96.7, 3.97 ms (1.344 us a draw, 4.8 % less).
+
+**Correctness.**
+
+- Benchmark with all three on, `FORZA_VK_BINDING_VERIFY=1` and the Khronos validation layer (1.4.341): complete, no
+  sampler or texture-request mismatch, no validation error (only `ShaderOutputNotConsumed`, as without the change).
+  With the defaults and synchronization validation (`VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true`): no hazard, no error.
+- `tools/render_test.py`: baselines recorded with all three off (three runs), then a check with all three on on
+  the same build: 6/6 scenes pass within their noise (race start dssim 0.0030 of 0.008, photo mode 0.0110 of 0.016).
+- VR true stereo's right eye (which resets every fetch constant and texture binding), the native HUD's texture
+  cache, texture packs and the upscalers' own pipelines were checked in the code, not in a run.
+- Only RADV is measured. The Vulkan path is the same on NVIDIA, Intel and Windows (dynamic uniform buffers are core
+  Vulkan 1.0; the constants need 5 of the 8 every device has); Direct3D 12 does not change.
+
+**With the command processor on two threads (0420, #474).** The ReIGlue branch with 0420 and 0442-0445, the game of
+#762 (the split on by default with 6 or more cores), the same PC and method; all off (`--gpu_split_command_processor=false`,
+the three reuses off) against all on (the split and the three reuses), three interleaved pairs on each core count:
+
+| | fps | 1% low | p99 ms | Draw thread, us a draw | Draws a frame |
+| --- | --- | --- | --- | --- | --- |
+| 8 cores, off | 123.6 (133.2, 117.5, 120.0) | 83.0 | 11.09 | 1.333 | 4,924 |
+| 8 cores, on | 153.5 (155.4, 161.0, 144.1) | 97.6 | 9.08 | 1.046 | 4,558 |
+| 6 cores, off | 131.5 (127.3, 136.1, 131.0) | 87.6 | 10.44 | 1.339 | 4,579 |
+| 6 cores, on | 153.0 (152.4, 157.5, 149.2) | 96.3 | 9.35 | 1.034 | 4,539 |
+
+- With the same draws: 120.0 to 144.1 fps on 8 cores (about 5,030 draws a frame), 136.1 to 157.5 on 6 cores
+  (about 4,400). The draw thread is the recorder when split (the decoder's CPU is on another core); its time per
+  draw drops 22-23 %, the reuses' 7 % and the PM4 decoding that moves to the decoder.
+- The memos are only used on the thread that runs the draws (the recorder when split): the decoder writes only its
+  shadow register file and records the writes, which the recorder applies (and with them the fetch constant
+  writes that the sampler and texture-request reuse follow).
+- Render tests with all on against the all-off baselines above: 6/6 within their noise (race start dssim 0.0027 of
+  0.008, photo mode 0.0087 of 0.016). No crash, no binding mismatch.
+
+**Windows, NVIDIA** (the GTX 1650 Ti laptop: i5-10300H, 4 cores, Windows 11, Vulkan; the split stays off with 4
+cores): the branch built by the launcher from a source checkout, the built-in benchmark uncapped at 1280x720, all three
+reuses off against on with `FORZA_VK_BINDING_VERIFY=1`: 47.8 fps (one off run; the other lost the device, below)
+against 46.7 and 47.2: the GPU is the limit there. The command processor 3.83 against 3.57 us a draw (7 % less, with
+the verification's extra work on), about the same hit rates as on RADV (92 % of the constants sets, 73-83 % of the texture
+sets), no mismatch; screenshots at the same point of the race look the same. One run with the reuses off lost the
+device 57 s into the measured minute (`VK_ERROR_DEVICE_LOST`, draw 431 of 2,381, #551), as players see without the
+change.

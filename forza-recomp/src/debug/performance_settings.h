@@ -31,7 +31,8 @@ void Snapshot(Read read, Emit emit) {
       "fh1_native_scene_scale fh1_upscaler fh1_output_width fh1_output_height",
       "present_effect swap_post_effect vulkan_allow_present_mode_mailbox forza_ultrawide "
       "readback_resolve vulkan_readback_skip_render_targets vulkan_max_frames_in_flight "
-      "vulkan_submission_draw_limit vulkan_present_on_submission_thread",
+      "vulkan_submission_draw_limit vulkan_present_on_submission_thread "
+      "gpu_split_command_processor",
       "async_shader_compilation vulkan_allow_present_mode_fifo_latest_ready "
       "vulkan_allow_present_mode_immediate world_shadow_detail world_texture_detail "
       "world_shadow_filter log_level log_verbose"};
