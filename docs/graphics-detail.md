@@ -1,7 +1,10 @@
 # World detail beyond the console (#361)
 
 **Settings > Graphics > World detail** has two options; both default to the console's values
-and apply from the next start (the game reads them when it loads the track):
+and apply from the next start (the game reads them when it loads the track). On high-end
+graphics (8 GB or more on an RTX, RX 6000+ or Arc card) the launcher starts every World detail
+option above the console's, or offers it once to an existing launcher; see
+[launcher.md](launcher.md) (PC specs) for the values.
 
 | Launcher | cvar | Console | High | Ultra |
 | --- | --- | --- | --- | --- |
