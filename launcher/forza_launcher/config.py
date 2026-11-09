@@ -136,8 +136,8 @@ class Config:
         if not migrated.get("gpu_wait_blocking"):
             self.d["settings"]["gpu_wait_blocking"] = True
             migrated["gpu_wait_blocking"] = True
-        # NVIDIA's driver never reused the stored driver pipelines (#640); up to 0.2.6 the NVIDIA preset kept
-        # them, so every NVIDIA launcher.json holds that on.
+        # The NVIDIA preset stopped keeping the driver pipeline file to limit startup time and memory
+        # use (#640). Older launcher configs still have the previous preset value.
         if not migrated.get("nvidia_pipeline_cache"):
             if self.d["gpu"].get("vendor") == gpu.NVIDIA:
                 self.d["settings"]["vulkan_store_pipeline_cache"] = False

@@ -714,7 +714,8 @@ add("store_shaders", "Keep a shader cache", "Advanced", "bool", True,
 add("vulkan_store_pipeline_cache", "Keep compiled Vulkan pipelines", "Advanced", "bool", True,
     "Reuse local GPU driver data when preparing cached shaders at startup. Requires the shader "
     "cache and Vulkan. New scenes may still compile shaders; driver changes rebuild the cache. "
-    "Off on NVIDIA, whose driver keeps its own cache and never reused this one.", "GPU", restart=True)
+    "The NVIDIA preset leaves this off to limit memory use. If enabled, pipelines that do not fit in "
+    "the file may still compile again.", "GPU", restart=True)
 add("async_shader_compilation", "Compile shaders in the background", "Advanced", "bool", True,
     "", "GPU")
 add("gpu_wait_blocking", "Sleep while waiting for the GPU", "Advanced", "bool", True,
