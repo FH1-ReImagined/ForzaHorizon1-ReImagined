@@ -33,7 +33,7 @@ class OnlineFeaturesDialog(QDialog):
         self.online.setChecked(True)
         lay.addWidget(self.online)
         lay.addWidget(label("Untick to turn them all off: the game plays offline and the launcher sends "
-                            "nothing on its own. You can turn each one on or off later in Settings > Online "
+                            "nothing on its own. You can turn each one on or off later in Online > Online "
                             "and on the About page.", "help"))
         policy = QPushButton("Read the privacy policy")
         policy.setObjectName("link")

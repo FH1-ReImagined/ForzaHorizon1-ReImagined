@@ -1,8 +1,9 @@
 // forza - Custom Race: replay a won festival or street event with your own settings
 // (docs/custom-race.md).
 //
-// On a career event's title card (CCareerEventDescription, TU4 only), once the event has
-// been won and while playing offline, SELECT opens a Custom Race page built on the game's
+// On a festival event's title card (CCareerEventDescription, TU4 only) or a street race
+// hub's selected race (CCareerStreetRaceSelect, the same event screen base), once the event
+// has been won and while playing offline, SELECT opens a Custom Race page built on the game's
 // own difficulty-style layout (like the in-game Graphics menu): car class, laps (circuit
 // races), opponents (1-7) and time of day. A confirms: the event's database rows are
 // shadowed for the race by TEMP tables (Events, Races, EventParticipants, EventRestrictions,
@@ -194,4 +195,13 @@ namespace forza {
 // a confirmed Custom Race waits for the career title card, and only while that card is the
 // active screen, it adds the A press that enters the event.
 uint16_t CustomRacePad(uint16_t buttons);
+
+// The career title card for other features (the Co-op Festival's start from an event's map
+// card, hooks/coop_map_event.cpp); Title Update 4 only, no-ops on the disc build.
+// Shows `text` with the SELECT icon in the card's footer (slot 13) unless it shows something.
+void CardSelectPrompt(PPCContext& ctx, uint8_t* base, uint32_t card, const std::string& text);
+// A SELECT press (CustomRacePad) within the last 400 ms that nobody took yet; takes it.
+bool CardSelectPressed();
+// Whether the card's input event `input` is `code` (0x5D A, 0x60 B, 0x99 X, 0x9C Y).
+bool CardInputIs(PPCContext& ctx, uint8_t* base, uint32_t card, uint32_t input, uint32_t code);
 }  // namespace forza

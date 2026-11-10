@@ -5,6 +5,7 @@
 // STATUS_TIMEOUT. After 2 s use the original infinite wait. Success consumes the
 // event once; errors retain the native boolean result. No host submission totals
 // survive ring wrap, device reset, or address reuse. FORZA_FFCB_WAKE=0: original wait.
+// Every wait of the render thread for the worker also pauses frame_time.cpp's held-pass clock (#725).
 #include "../platform/guest_addr.h"
 #include "../platform/guest_memory.h"
 #include <rex/logging.h>
@@ -38,6 +39,16 @@ namespace {
 uint32_t Load32(uint8_t* base, uint32_t address) {
   const uint8_t* p = forza::GuestPtr(base, address);
   return uint32_t(p[0]) << 24 | p[1] << 16 | p[2] << 8 | p[3];
+}
+// FORZA_FFCB_WAKE_AFTER_MS: how long the slot may stay not ready before the worker is woken
+// (default 2 ms, the #512 fix). Testing slow GPUs (Intel UHD, #640), where a slot takes 40-80 ms.
+int64_t WakeAfterMs() {
+  static const int64_t ms = [] {
+    const char* v = std::getenv("FORZA_FFCB_WAKE_AFTER_MS");
+    const long n = v && *v ? std::strtol(v, nullptr, 10) : 0;
+    return int64_t(n > 0 ? n : 0);
+  }();
+  return ms;
 }
 bool Enabled() {
   static const bool on = [] {
@@ -87,7 +98,8 @@ extern "C" REX_FUNC(FfcbConsume) {
 extern "C" REX_FUNC(OriginalSlotWait);
 extern "C" REX_FUNC(RawWait);
 extern "C" REX_FUNC(SetEventHandle);
-extern "C" REX_FUNC(SlotWait) {
+namespace {
+void SlotWaitBody(PPCContext& ctx, uint8_t* base) {
   if (!consuming || ctx.lr != kSlotWaitReturn || ctx.r3.u32 != consuming->event ||
       ctx.r4.u32 != 0xFFFFFFFF) {
     OriginalSlotWait(ctx, base);
@@ -115,6 +127,8 @@ extern "C" REX_FUNC(SlotWait) {
           std::chrono::steady_clock::now() - start).count());
       return;
     }
+    if (std::chrono::steady_clock::now() - start < std::chrono::milliseconds(WakeAfterMs()))
+      continue;
     call = ctx;
     call.r1.u64 = ctx.r1.u32 - 0x400;
     call.r3.u64 = Load32(base, wake);
@@ -124,4 +138,25 @@ extern "C" REX_FUNC(SlotWait) {
   if (woke) LogWake(false, std::chrono::duration_cast<std::chrono::microseconds>(
       std::chrono::steady_clock::now() - start).count());
   OriginalSlotWait(ctx, base);
+}
+}  // namespace
+
+namespace forza::render_hold {  // frame_time.cpp (#725)
+void WorkerWaitBegin();
+void WorkerWaitEnd();
+}  // namespace forza::render_hold
+
+// The render thread's waits for the HUD worker: the slot wait above and (TU4) the render pass's
+// wait for the event at render object +0x1A10, which the worker sets once per main frame. The
+// main loop must not wait for a render pass that is itself waiting for the main loop.
+extern "C" REX_FUNC(SlotWait) {
+  const uint32_t lr = uint32_t(ctx.lr);
+#if FORZA_TU4
+  const bool worker = lr == kSlotWaitReturn || lr == 0x82616B9C || lr == 0x82616C28;
+#else
+  const bool worker = lr == kSlotWaitReturn;
+#endif
+  if (worker) forza::render_hold::WorkerWaitBegin();
+  SlotWaitBody(ctx, base);
+  if (worker) forza::render_hold::WorkerWaitEnd();
 }

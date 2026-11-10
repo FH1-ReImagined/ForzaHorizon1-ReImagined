@@ -42,10 +42,30 @@
 //    back from the car registration, the next visit), when the page is cancelled, and when the
 //    player is back in free roam after the race.
 //
+// Street races have no title card of their own: they are chosen at a street race hub
+// (street_race_hubs.xml, UIShowScreens.ShowCareerStreetRaceSelect), a list of the hub's
+// races on ForzaUI::CCareerStreetRaceSelect (vtable 0x820527AC). It derives from the same
+// event screen base as CCareerEventDescription (both constructors call sub_82720C78), so the
+// base's fields and paths are shared: +396 is the selected event (sub_82715E08, called when
+// the list's cursor moves), the base bind (sub_82728480) looks up +376 okCareer and +392
+// selectCar in the hub's state, the footer is the base's (sub_82728138, rebuilt on every
+// cursor move), and A runs the same dispatcher (sub_82736150). The hub's own functions:
+// bind slot 5 sub_82755D60, input slot 9 sub_827472D0 (the dispatcher, then the list), notify
+// slot 0 sub_8275FEF8 (the list's cursor), destructor slot 1 sub_8274DF78, and okCareer slot
+// 57 sub_8275FFA8, which sets the car check (+374) from the list row's flags before the
+// base's entry (sub_82734200). The steps above apply to the hub with these differences:
+// - The event is the hub's selected row (+396), not the race settings', and it is checked
+//   again whenever the cursor moves, so SELECT is offered only on the won rows.
+// - The hand-over's A sets the car check to 1 (sub_8275FFA8, below), so the hub's selectCar
+//   transition opens car registration for the chosen class; the row's flags were computed
+//   for the event's own class. Registration's B or BUY NEW CAR return to the hub, which binds
+//   again and cancels the custom race, as the card does.
+//
 // FORZA_CUSTOM_RACE_TRACE=1 logs each step. Off by default: cvar custom_race (the launcher's
 // Gameplay > Custom Race). docs/custom-race.md describes it for players.
 
 #include "../platform/custom_race.h"
+#include "coop_map_event.h"
 #include "../platform/guest_addr.h"
 
 #include <rex/cvar.h>
@@ -57,7 +77,8 @@
 #include <string>
 
 REXCVAR_DEFINE_BOOL(custom_race, false, "Game",
-                    "Custom Race: SELECT on a won festival/street event's title card opens a "
+                    "Custom Race: SELECT on a won festival event's title card or street race "
+                    "hub row opens a "
                     "page to replay it with your own class, laps, opponents and time of day "
                     "(offline only)");
 
@@ -81,6 +102,11 @@ extern "C" REX_FUNC(__imp__sub_82733A68);  // CCareerEventDescription bind (slot
 extern "C" REX_FUNC(__imp__sub_82738948);  // its input handler (slot 9)
 extern "C" REX_FUNC(__imp__sub_82727530);  // its destructor (slot 1)
 extern "C" REX_FUNC(__imp__sub_82735FD0);  // its message handler (car selection, car check)
+extern "C" REX_FUNC(__imp__sub_82755D60);  // CCareerStreetRaceSelect bind (slot 5)
+extern "C" REX_FUNC(__imp__sub_827472D0);  // its input handler (slot 9)
+extern "C" REX_FUNC(__imp__sub_8275FEF8);  // its notify (slot 0): the list's cursor
+extern "C" REX_FUNC(__imp__sub_8274DF78);  // its destructor (slot 1)
+extern "C" REX_FUNC(__imp__sub_8275FFA8);  // its okCareer (slot 57): car check, then entry
 
 namespace forza::custom_race {
 namespace {
@@ -88,6 +114,10 @@ namespace {
 using Clock = std::chrono::steady_clock;
 
 constexpr uint32_t kDescriptionVtable = 0x8204B7FC;  // ForzaUI::CCareerEventDescription
+constexpr uint32_t kStreetHubVtable = 0x820527AC;    // ForzaUI::CCareerStreetRaceSelect
+constexpr uint32_t kSelectedEvent = 396;             // event screen base: the shown event
+constexpr uint32_t kCarCheck = 374;                  // event screen base: a car may enter
+constexpr uint32_t kCareerEntry = 0x82734200;        // event screen base: okCareer's entry
 constexpr uint32_t kCareerGlobals = 0x833CAACC;      // +0x388: current career event id
 constexpr uint32_t kDatabaseHolder = 0x833CAAE4;     // game database (sub_82F1E918)
 constexpr uint32_t kFooterSlotSelect = 13;           // Back_Button.tga
@@ -272,6 +302,7 @@ Clock::time_point armed_at{};
 bool page_closed = false;      // the page's destroy ran since A
 Clock::time_point inject_from{}, inject_until{};
 bool launched = false;         // the custom race was handed to native career entry
+bool force_registration = false;  // the hand-over's A is in the street hub's input handler
 bool left_free_roam = false;
 Clock::time_point free_roam_since{};
 
@@ -305,13 +336,32 @@ bool IsCard(uint8_t* base, uint32_t screen) {
   return screen && Read(base, screen) == kDescriptionVtable;
 }
 
+// A street race hub's list (CCareerStreetRaceSelect).
+bool IsStreetHub(uint8_t* base, uint32_t screen) {
+  return screen && Read(base, screen) == kStreetHubVtable;
+}
+
+// Either screen Custom Race is offered on.
+bool IsEventScreen(uint8_t* base, uint32_t screen) {
+  return IsCard(base, screen) || IsStreetHub(base, screen);
+}
+
 bool HasCareerEntry(uint8_t* base, uint32_t screen) {
   // TU4's native A dispatcher (sub_82736150) uses +376, the bound okCareer
   // transition, before taking its career entry path. With no transition it
   // delegates acceptance to the owner: map details uses that to set a route.
   // Neither the car-check result (+374) nor event eligibility (+408) identifies
-  // this context. Leave all native fields and entry checks untouched.
-  return IsCard(base, screen) && Read(base, screen + 376) != 0;
+  // this context. Leave all native fields and entry checks untouched. The street
+  // hub's base bind looks up the same transition (sub_82728480).
+  return IsEventScreen(base, screen) && Read(base, screen + 376) != 0;
+}
+
+// The event the screen shows: the card's is the race settings' current event, the street
+// hub's is its list's selected row (+396, set by sub_82715E08 as the cursor moves).
+uint32_t ScreenEvent(uint8_t* base, uint32_t screen) {
+  if (IsStreetHub(base, screen)) return Read(base, screen + kSelectedEvent);
+  const uint32_t globals = Read(base, kCareerGlobals);
+  return globals ? Read(base, globals + 0x388) : 0;
 }
 
 void Disarm(Ui& ui, const char* why) {
@@ -320,6 +370,7 @@ void Disarm(Ui& ui, const char* why) {
   armed = false;
   launched = false;
   launch_pending = false;
+  force_registration = false;
   left_free_roam = false;
   StopInjecting();
   REXLOG_INFO("CUSTOM RACE: cancelled ({})", why);
@@ -395,17 +446,54 @@ bool Eligible(Ui& ui, uint32_t id) {
   return found && place == 1;
 }
 
-void CardFooter(Ui& ui) {
-  if (!card || !card_eligible) return;
-  const uint32_t footer = ui.Call(0x82746638, {card});
+// `text` with the SELECT icon in a title card's footer.
+void SelectPrompt(Ui& ui, uint32_t screen, const std::string& text) {
+  const uint32_t footer = ui.Call(0x82746638, {screen});
   if (!footer) return;
   // Already shown (sub_8289A960: the slot is visible). Setting it again adds another prompt.
   if (ui.Call(0x8289A960, {footer, kFooterSlotSelect}) & 0xFF) return;
-  if (const uint32_t text = ui.Text("CUSTOM RACE")) {
-    ui.Call(0x8289E2B0, {footer, kFooterSlotSelect, text});
-    ui.Release(text);
+  if (const uint32_t label = ui.Text(text)) {
+    ui.Call(0x8289E2B0, {footer, kFooterSlotSelect, label});
+    ui.Release(label);
   }
   ui.Virtual(footer + 0x6C, 0x28, {footer + 0x6C});
+}
+
+void CardFooter(Ui& ui) {
+  if (card && card_eligible) SelectPrompt(ui, card, "CUSTOM RACE");
+}
+
+// Read the screen's event and whether Custom Race is offered for it (on bind, and on the
+// street hub whenever its selected row changes).
+void Evaluate(Ui& ui, uint32_t screen) {
+  uint8_t* base = ui.base();
+  card = screen;
+  const uint32_t id = ScreenEvent(base, screen);
+  if (id || IsCard(base, screen)) {
+    ReadEvent(ui, id);
+  } else {
+    event_info = EventInfo{};  // the hub's list has no row yet
+  }
+  card_eligible = id && HasCareerEntry(base, screen) && Eligible(ui, id);
+  if (!card_eligible && launch_pending) {
+    std::lock_guard<std::mutex> lock(mutex);
+    Disarm(ui, "the rebound card has no eligible career entry");
+  }
+  if (card_eligible && settings.event != id) settings = Defaults(event_info);
+  if (Trace() || card_eligible) {
+    REXLOG_INFO("CUSTOM RACE: {} for event {} (type {}, class {}, {} laps, {} drivers): {}",
+                IsStreetHub(base, screen) ? "street race hub" : "title card", id,
+                event_info.career_type, event_info.target_class, event_info.laps,
+                event_info.drivers, card_eligible ? "SELECT offers Custom Race" : "not offered");
+  }
+}
+
+// The street hub's cursor moved to another row since the last evaluation: check that one.
+// Not while the page or a hand-over has the input (the cursor cannot move then).
+void FollowCursor(Ui& ui, uint32_t screen) {
+  if (screen != card || !IsStreetHub(ui.base(), screen)) return;
+  if (launch_pending || opening || page) return;
+  if (ScreenEvent(ui.base(), screen) != event_info.id) Evaluate(ui, screen);
 }
 
 // ---- The Custom Race page ---------------------------------------------------------------
@@ -693,45 +781,31 @@ void Tick(PPCContext& ctx, uint8_t* base) {
 using namespace forza::custom_race;
 using forza::GuestPtr;
 
-// CCareerEventDescription bind: drop a stale custom race first (unless one is being handed
-// to this card), then check the event and offer SELECT.
-extern "C" REX_FUNC(sub_82733A68) {
-  const uint32_t screen = ctx.r3.u32;
-  const bool ours = REXCVAR_GET(custom_race) && IsCard(base, screen);
-  if (ours) {
-    std::lock_guard<std::mutex> lock(mutex);
-    if (armed && !launch_pending) {
-      Ui ui(ctx, base);
-      if (ui) Disarm(ui, "title card shown again");
-    }
+namespace {
+using Native = void (*)(PPCContext&, uint8_t*);
+
+// Before an event screen's native bind: drop a stale custom race first (unless one is being
+// handed to this screen).
+void BeforeBind(PPCContext& ctx, uint8_t* base) {
+  std::lock_guard<std::mutex> lock(mutex);
+  if (armed && !launch_pending) {
+    Ui ui(ctx, base);
+    if (ui) Disarm(ui, "title card shown again");
   }
-  __imp__sub_82733A68(ctx, base);
-  if (!ours) return;
+}
+
+// After it: check the event and offer SELECT.
+void AfterBind(PPCContext& ctx, uint8_t* base, uint32_t screen) {
   Ui ui(ctx, base);
   if (!ui) return;
-  card = screen;
-  const uint32_t globals = Read(base, kCareerGlobals);
-  const uint32_t id = globals ? Read(base, globals + 0x388) : 0;
-  ReadEvent(ui, id);
-  card_eligible = HasCareerEntry(base, screen) && Eligible(ui, id);
-  if (!card_eligible && launch_pending) {
-    std::lock_guard<std::mutex> lock(mutex);
-    Disarm(ui, "the rebound card has no eligible career entry");
-  }
-  if (card_eligible && settings.event != id) settings = Defaults(event_info);
-  if (Trace() || card_eligible) {
-    REXLOG_INFO("CUSTOM RACE: title card for event {} (type {}, class {}, {} laps, {} drivers): {}",
-                id, event_info.career_type, event_info.target_class, event_info.laps,
-                event_info.drivers, card_eligible ? "SELECT offers Custom Race" : "not offered");
-  }
+  Evaluate(ui, screen);
   CardFooter(ui);
 }
 
-// CCareerEventDescription input (also the Nemesis/Showcase cards' slot; only the career
-// card is ours).
-extern "C" REX_FUNC(sub_82738948) {
-  const uint32_t screen = ctx.r3.u32;
-  if (screen == card && IsCard(base, screen) && !HasCareerEntry(base, screen)) {
+// An event screen's input: the card's handler and the street hub's, which both start with
+// the base's dispatcher (sub_82736150: A 0x5D, B 0x60, X 0x99, Y 0x9C and two more).
+void Input(PPCContext& ctx, uint8_t* base, uint32_t screen, Native native) {
+  if (screen == card && IsEventScreen(base, screen) && !HasCareerEntry(base, screen)) {
     card_eligible = false;
     StopInjecting();
     if (armed) {
@@ -740,15 +814,25 @@ extern "C" REX_FUNC(sub_82738948) {
       if (ui) Disarm(ui, "the card no longer has a career entry");
     }
   }
-  if (!REXCVAR_GET(custom_race) || !IsCard(base, screen) || screen != card || !card_eligible) {
-    __imp__sub_82738948(ctx, base);
+  if (!REXCVAR_GET(custom_race) || !IsEventScreen(base, screen) || screen != card) {
+    native(ctx, base);
+    return;
+  }
+  const bool street = IsStreetHub(base, screen);
+  if (street) {  // a row the list's notify did not report (it is checked there first)
+    Ui ui(ctx, base);
+    if (ui) FollowCursor(ui, screen);
+  }
+  if (!card_eligible) {
+    native(ctx, base);
     return;
   }
   Ui ui(ctx, base);
-  // The hand-over: the A press CustomRacePad added after the page closed. The card's own A
-  // (event 0x5D) then runs as for a normal entry: its car check result (+374) sends it to the
-  // event's car registration (the list with BUY NEW CAR, filtered by the shadowed class),
-  // whose A starts the race, and whose B returns here (the card binds again: cancelled).
+  // The hand-over: the A press CustomRacePad added after the page closed. The screen's own A
+  // (event 0x5D) then runs as for a normal entry: the card's car check result (+374) sends it
+  // to the event's car registration (the list with BUY NEW CAR, filtered by the shadowed
+  // class), whose A starts the race, and whose B returns here (the card binds again:
+  // cancelled). On the street hub the car check is set for it (sub_8275FFA8, below).
   if (ui && launch_pending && armed &&
       ui.Event(screen, ctx.r4.u32, {kEventAccept}) == kEventAccept) {
     {
@@ -757,6 +841,7 @@ extern "C" REX_FUNC(sub_82738948) {
       StopInjecting();
       launched = true;
       left_free_roam = false;
+      force_registration = street;
       if (Trace()) {
         REXLOG_INFO("CUSTOM RACE: card +374 {} +376 {:08X} +392 {:08X} +408 {}",
                     GuestPtr(base, screen + 374)[0], Read(base, screen + 376),
@@ -765,7 +850,13 @@ extern "C" REX_FUNC(sub_82738948) {
       REXLOG_INFO("CUSTOM RACE: event {}: handing class {} to native career entry", settings.event,
                   settings.class_id);
     }
-    __imp__sub_82738948(ctx, base);
+    native(ctx, base);
+    if (force_registration) {  // the hub's okCareer never ran: nothing was entered
+      const uint32_t handled = ctx.r3.u32;
+      std::lock_guard<std::mutex> lock(mutex);
+      Disarm(ui, "the street race hub did not enter the event");
+      ctx.r3.u64 = handled;
+    }
     return;
   }
   if (ui && TakeSelectPress()) {
@@ -778,9 +869,46 @@ extern "C" REX_FUNC(sub_82738948) {
     std::lock_guard<std::mutex> lock(mutex);
     if (!launch_pending) Disarm(ui, "left the title card");
   }
-  const uint32_t handled = (__imp__sub_82738948(ctx, base), ctx.r3.u32);
-  if (ui && card == screen) CardFooter(ui);  // only if a stock action removed the prompt
+  const uint32_t handled = (native(ctx, base), ctx.r3.u32);
+  if (ui && card == screen) {
+    if (street) FollowCursor(ui, screen);
+    CardFooter(ui);  // only if a stock action removed the prompt
+  }
   ctx.r3.u64 = handled;
+}
+
+void Destroyed(uint32_t screen) {
+  if (screen && screen == card) {
+    card = 0;
+    card_eligible = false;
+    StopInjecting();
+  }
+}
+}  // namespace
+
+// CCareerEventDescription bind: drop a stale custom race first (unless one is being handed
+// to this card), then check the event and offer SELECT.
+extern "C" REX_FUNC(sub_82733A68) {
+  const uint32_t screen = ctx.r3.u32;
+  const bool ours = REXCVAR_GET(custom_race) && IsCard(base, screen);
+  if (ours) BeforeBind(ctx, base);
+  __imp__sub_82733A68(ctx, base);
+  if (IsCard(base, screen)) {  // the Co-op Festival's start (coop_map_event.cpp)
+    forza::coop_map_event::CardBound(ctx, base, screen, ScreenEvent(base, screen),
+                                     HasCareerEntry(base, screen));
+  }
+  if (ours) AfterBind(ctx, base, screen);
+}
+
+// CCareerEventDescription input (also the Nemesis/Showcase cards' slot; only the career
+// card is ours).
+extern "C" REX_FUNC(sub_82738948) {
+  const uint32_t screen = ctx.r3.u32;
+  if (IsCard(base, screen) && forza::coop_map_event::CardInput(ctx, base, screen, ctx.r4.u32)) {
+    ctx.r3.u64 = 1;
+    return;
+  }
+  Input(ctx, base, screen, __imp__sub_82738948);
 }
 
 // The card's message handler (sub_82735FD0, shared with other screens; only the career card
@@ -788,7 +916,7 @@ extern "C" REX_FUNC(sub_82738948) {
 // +12 result).
 extern "C" REX_FUNC(sub_82735FD0) {
   const uint32_t screen = ctx.r3.u32, data = ctx.r6.u32;
-  if (Trace() && screen && screen == card && IsCard(base, screen)) {
+  if (Trace() && screen && screen == card && IsEventScreen(base, screen)) {
     REXLOG_INFO("CUSTOM RACE: card message {} kind {} result {} (+374 {} +400 {} +408 {})",
                 ctx.r4.u32, data ? Read(base, data + 4) : 0, data ? Read(base, data + 12) : 0,
                 GuestPtr(base, screen + 374)[0], GuestPtr(base, screen + 400)[0],
@@ -799,12 +927,62 @@ extern "C" REX_FUNC(sub_82735FD0) {
 
 // CCareerEventDescription destructor.
 extern "C" REX_FUNC(sub_82727530) {
-  if (ctx.r3.u32 && ctx.r3.u32 == card) {
-    card = 0;
-    card_eligible = false;
-    StopInjecting();
-  }
+  forza::coop_map_event::CardDestroyed(ctx.r3.u32);
+  Destroyed(ctx.r3.u32);
   __imp__sub_82727530(ctx, base);
+}
+
+// CCareerStreetRaceSelect bind (the street race hub's list of races): as the card's.
+extern "C" REX_FUNC(sub_82755D60) {
+  const uint32_t screen = ctx.r3.u32;
+  const bool ours = REXCVAR_GET(custom_race) && IsStreetHub(base, screen);
+  if (ours) BeforeBind(ctx, base);
+  __imp__sub_82755D60(ctx, base);
+  if (ours) AfterBind(ctx, base, screen);
+}
+
+// Its input: as the card's.
+extern "C" REX_FUNC(sub_827472D0) { Input(ctx, base, ctx.r3.u32, __imp__sub_827472D0); }
+
+// Its notify. When the list's cursor moves (r4 1, r5 the list, r6 the row) the native
+// handler stores the row's event (+396) and rebuilds the footer: check the new row and put
+// SELECT back when it is offered.
+extern "C" REX_FUNC(sub_8275FEF8) {
+  const uint32_t screen = ctx.r3.u32;
+  __imp__sub_8275FEF8(ctx, base);
+  if (!REXCVAR_GET(custom_race) || !screen || screen != card || !IsStreetHub(base, screen))
+    return;
+  Ui ui(ctx, base);
+  if (!ui) return;
+  FollowCursor(ui, screen);
+  CardFooter(ui);
+}
+
+// Its okCareer (vtable slot 57): the native sets the car check (+374) from the selected
+// row's flags, computed by the hub's list for the event's own class, then runs the base's
+// entry (sub_82734200), which opens car registration (selectCar) when the check passed and a
+// "no suitable car" message otherwise. For the custom race's hand-over the check is set, so
+// car registration opens with the chosen class (and BUY NEW CAR).
+extern "C" REX_FUNC(sub_8275FFA8) {
+  const uint32_t screen = ctx.r3.u32;
+  PPCFunc* entry = nullptr;
+  if (force_registration && screen && screen == card && IsStreetHub(base, screen))
+    entry = rex::runtime::ResolveIndirectFunction(kCareerEntry);
+  if (!entry) {
+    __imp__sub_8275FFA8(ctx, base);
+    return;
+  }
+  force_registration = false;
+  GuestPtr(base, screen + kCarCheck)[0] = 1;
+  if (Trace()) REXLOG_INFO("CUSTOM RACE: street race hub: car registration for event {}", settings.event);
+  ctx.r3.u64 = screen;
+  entry(ctx, base);
+}
+
+// Its destructor.
+extern "C" REX_FUNC(sub_8274DF78) {
+  Destroyed(ctx.r3.u32);
+  __imp__sub_8274DF78(ctx, base);
 }
 
 uint16_t forza::CustomRacePad(uint16_t buttons) {
@@ -817,6 +995,21 @@ uint16_t forza::CustomRacePad(uint16_t buttons) {
   return buttons;
 }
 
+void forza::CardSelectPrompt(PPCContext& ctx, uint8_t* base, uint32_t screen,
+                             const std::string& text) {
+  if (!IsCard(base, screen)) return;
+  Ui ui(ctx, base);
+  if (ui) SelectPrompt(ui, screen, text);
+}
+
+bool forza::CardSelectPressed() { return TakeSelectPress(); }
+
+bool forza::CardInputIs(PPCContext& ctx, uint8_t* base, uint32_t screen, uint32_t input,
+                        uint32_t code) {
+  Ui ui(ctx, base);
+  return ui && ui.Event(screen, input, {code}) == code;
+}
+
 #else  // the disc build has no Custom Race (its screens' addresses differ)
 
 namespace forza::custom_race {
@@ -827,5 +1020,8 @@ bool TryInput(PPCContext&, uint8_t*) { return false; }
 void Tick(PPCContext&, uint8_t*) {}
 }  // namespace forza::custom_race
 uint16_t forza::CustomRacePad(uint16_t buttons) { return buttons; }
+void forza::CardSelectPrompt(PPCContext&, uint8_t*, uint32_t, const std::string&) {}
+bool forza::CardSelectPressed() { return false; }
+bool forza::CardInputIs(PPCContext&, uint8_t*, uint32_t, uint32_t, uint32_t) { return false; }
 
 #endif  // FORZA_TU4

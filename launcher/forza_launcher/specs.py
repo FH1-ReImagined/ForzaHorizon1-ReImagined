@@ -4,10 +4,12 @@ Players with mid-range PCs ended up on settings meant for high-end ones (a GTX 1
 2560x1440 at 99% GPU). The launcher detects the specs once (cached in launcher.json under `specs`), sorts the PC
 into two tiers and
 
-* gives a NEW launcher.json the recommended frame rate and render scale (on top of the vendor preset, which
-  keeps the last word: a value the vendor's known problems reject is not applied),
+* gives a NEW launcher.json the recommended frame rate and render scale, and on high-end graphics the World
+  detail above the console's (on top of the vendor preset, which keeps the last word: a value the vendor's
+  known problems reject is not applied),
 * warns next to settings that are heavy for the PC, with the numbers filled in,
-* offers a player with existing settings a one-time "use recommended / keep mine" choice; nothing changes silently.
+* offers a player with existing settings a one-time "use recommended / keep mine" choice (on high-end graphics
+  also the World detail settings still at the console's); nothing changes silently.
 
 No Qt in here. Every parser is a pure function over text, tested with fixtures (test_specs.py).
 FORZA_SPECS="cpu_cores=4,avx2=0,ram=8,vram=4,integrated=0" overrides single values (testing, odd setups).
@@ -20,7 +22,7 @@ import shlex
 import subprocess
 from dataclasses import dataclass, field, fields
 
-from . import gpu
+from . import gpu, schema
 from .paths import IS_WINDOWS
 
 LOW, MID, HIGH, UNKNOWN = "low", "mid", "high", "unknown"
@@ -153,6 +155,30 @@ def gpu_tier(s: Specs) -> str:
     if _OLD_CARD.search(name) or _NEW_CARD.search(name):
         return MID
     return UNKNOWN
+
+
+def entry_card(s: Specs) -> bool:
+    """Graphics that set the frame rate at the game's 720p scene (#640): integrated, under 4 GB, or a
+    GTX / RX 400-500-era card with 4 GB (a GTX 1650 Ti laptop: 47 fps in the benchmark at 720p, 54 at
+    540p). Not a Steam Deck, whose CPU is its limit (its preset keeps 720p)."""
+    if is_deck(s):
+        return False
+    g = gpu_tier(s)
+    return g == LOW or (g == MID and 0 < s.vram_gb <= 4.5 and bool(_OLD_CARD.search(s.gpu_name or "")))
+
+
+def scene_540_applies(settings: dict) -> bool:
+    """The 540p scene is drawn only without FSR 3, DLSS, a separate anti-aliasing method and Ultrawide
+    gameplay (schema: scene_resolution)."""
+    return (settings.get("present_effect") != "fsr3" and settings.get("fh1_upscaler", "off") == "off"
+            and settings.get("forza_antialiasing", "game") == "game" and not settings.get("forza_ultrawide"))
+
+
+def scene_540_notice(s: Specs) -> str:
+    """The one-time notice of the launcher.json migration to the 540p scene (config.Config)."""
+    return (f"3D scene resolution is now 540p on {_gpu_label(s)}: a GTX 1650 Ti laptop got 16% more fps in the "
+            "benchmark (47 to 54). The HUD and menus stay sharp. To go back to 720p: Settings > Graphics > "
+            "3D scene resolution.")
 
 
 def describe(s: Specs) -> str:
@@ -649,9 +675,52 @@ def warnings(s: Specs, settings: dict) -> list:
     return out
 
 
+# High-end graphics start with the World detail above the console's (docs/graphics-detail.md, measured on an
+# RX 9060 XT): shadow, texture and car detail cost within the noise, Soft shadows nothing measurable, ambient
+# occlusion about 0.5 ms a frame at 2560x1440 (nothing under a 60 fps cap), paint job 2x about 50 MB of memory per
+# car with a paint job. Distant texture detail stays at High: Ultra can shimmer on fine patterns. 16x anisotropic
+# filtering suits the sharper distant textures (the in-game High preset's filtering too).
+HIGH_WORLD_DETAIL = {"world_shadow_detail": "ultra", "world_texture_detail": "high", "world_car_detail": "ultra",
+                     "world_shadow_filter": "soft", "world_ambient_occlusion": "low", "livery_bake_scale": 2,
+                     "anisotropic_override": 5}
+
+
+def high_world_detail(s: Specs, settings: dict, vendor: str = "") -> dict:
+    """HIGH_WORLD_DETAIL on high-end graphics (not a Steam Deck), {} anywhere else. Ambient occlusion only with
+    Vulkan (Direct3D 12 and ReGPU do not draw it); a value the vendor's known problems reject is left out."""
+    if gpu_tier(s) != HIGH or is_deck(s):
+        return {}
+    out = {}
+    for key, value in HIGH_WORLD_DETAIL.items():
+        if key not in schema.BY_KEY or gpu.warnings(vendor, {key: value}):
+            continue
+        if key == "world_ambient_occlusion" and settings.get("gpu_backend", "vulkan") != "vulkan":
+            continue
+        out[key] = value
+    return out
+
+
+def world_detail_offer(s: Specs, settings: dict, vendor: str = "") -> dict:
+    """For a launcher.json that already holds settings: the high_world_detail values of the settings still at
+    their default (a value the player chose stays theirs)."""
+    return {key: value for key, value in high_world_detail(s, settings, vendor).items()
+            if settings.get(key, schema.BY_KEY[key].default) == schema.BY_KEY[key].default}
+
+
+def _choice_label(key: str, value) -> str:
+    return next((text for v, text in schema.BY_KEY[key].choices if v == value), str(value))
+
+
+def world_detail_text(s: Specs, offer: dict, also: bool = False) -> str:
+    """'This PC can run higher world detail: use it? Shadow detail Ultra, ...' (also: after the warnings)"""
+    names = ", ".join(f"{schema.BY_KEY[k].label} {_choice_label(k, v)}" for k, v in offer.items())
+    return (f"{'It can also' if also else 'This PC can'} run higher world detail: use it? {names}. "
+            f"On {_gpu_label(s)} they cost little.")
+
+
 def recommended(s: Specs, settings: dict, vendor: str = "") -> dict:
     """The settings a new launcher.json should have for this PC, applied on top of the vendor's preset:
-    only the values that differ from `settings`. The frame rate may only go below the vendor's; a value the
+    only the values that differ from `settings`. High-end graphics also get HIGH_WORLD_DETAIL. The frame rate may only go below the vendor's; a value the
     vendor's known problems reject is left out."""
     g, c = gpu_tier(s), cpu_tier(s)
     want = {}
@@ -661,6 +730,9 @@ def recommended(s: Specs, settings: dict, vendor: str = "") -> dict:
         want["resolution_scale"] = SCALE_BY_GPU[g]
         if g == LOW and settings.get("present_effect") == "fsr3":
             want["present_effect"] = "fsr"
+    if entry_card(s) and scene_540_applies({**settings, **want}):
+        want["scene_resolution"] = "540"
+    want.update(high_world_detail(s, {**settings, **want}, vendor))
     want.update(deck_offer(s, {**settings, **want}))
     out = {}
     for key, value in want.items():

@@ -11,8 +11,8 @@ Status and ping: GET /status of each server's HTTP port (the UDP port + 1, shade
 its "players" and the time from the request to the answer on an open connection. A server that does
 not answer is shown as down; nothing is taken off the page for it.
 
-Picking a server saves it like Settings > Online: the main server is "Public server", This PC is
-"This PC", any other is "My own server" with its address, so Play passes it to the game
+Picking a server saves cfg.online: the main server is mode "public", This PC "local", any other
+"custom" with its address (the Offline row of the page is "offline"), so Play passes it to the game
 (FORZA_SERVER, forza.toml's live_server).
 
 Community servers keep their own leaderboards: only the main server's are the official ones."""
@@ -220,7 +220,7 @@ def added(cfg) -> list:
 
 def page_addresses(cfg) -> list:
     """The addresses the page lists besides the main server's list: those added by hand, and the
-    "My own server" address of Settings > Online when it is not one of them."""
+    custom server address in use (cfg.online custom_server) when it is not one of them."""
     have = added(cfg)
     own = normalize(cfg.online.get("custom_server", ""))
     return have + [own] if own and own not in have and not is_main(own) else have
@@ -259,7 +259,7 @@ def chosen(cfg) -> str:
 
 
 def choose(cfg, address: str):
-    """Saves `address` as the server Play uses, as Settings > Online does."""
+    """Saves `address` as the server Play uses (cfg.online)."""
     if address == LOCAL:
         cfg.online["mode"] = "local"
     elif is_main(address):

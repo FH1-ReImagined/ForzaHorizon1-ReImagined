@@ -27,7 +27,7 @@ again on entry and Apply. Missing donor aliases keep the stock pause screen
 available. Discard/Back and teardown restore its native list and focus through
 the existing FH1 refresh callback.
 
-Set **Settings > Online > Sign in to Xbox LIVE: off** before launching. The current gate also
+Set **Online > Online > Sign in to Xbox LIVE: off** before launching. The current gate also
 excludes solo free roam while signed in to Forza Live: network-enabled mode is
 broader than active multiplayer participation. This conservative restriction
 remains in place because current presence and session records do not reliably

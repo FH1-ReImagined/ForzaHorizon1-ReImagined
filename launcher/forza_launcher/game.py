@@ -42,15 +42,24 @@ def _sdk_lib_dirs():
     return []
 
 
+SET_IN_ADVANCED = "set in Advanced settings"
+CHECKOUT_BUILD = "the build in this checkout"
+
+
+def checkout_build_name() -> str:
+    """The checkout's build folder under forza-recomp/out/build: FORZA_BUILD, as in play.sh; set
+    but empty counts as unset (it named out/build itself)."""
+    return os.environ.get("FORZA_BUILD", "").strip() or "linux"
+
+
 def candidate_dirs(cfg: Config):
     override = cfg.advanced.get("game_dir", "").strip() or os.environ.get("FORZA_GAME_DIR", "")
     if override:
-        yield Path(override), "set in Advanced settings", False
+        yield Path(override), SET_IN_ADVANCED, False
     from . import builder
     yield builder.runtime_dir(cfg.data_home()), "built by the launcher", False
     if paths.in_checkout() and not paths.IS_WINDOWS:  # development: this checkout's own build
-        build = os.environ.get("FORZA_BUILD", "linux")
-        yield paths.REPO_ROOT / "forza-recomp/out/build" / build, "the build in this checkout", True
+        yield paths.REPO_ROOT / "forza-recomp/out/build" / checkout_build_name(), CHECKOUT_BUILD, True
 
 
 def find_game(cfg: Config):
@@ -62,6 +71,25 @@ def find_game(cfg: Config):
         if exe.is_file():
             return GameInstall(d, exe, _sdk_lib_dirs() if needs_sdk else [], why), looked
     return None, looked
+
+
+def outside_build(cfg: Config) -> GameInstall | None:
+    """The game Play starts when it is not the launcher's own build: the Advanced game_dir (or
+    FORZA_GAME_DIR) override, or this source checkout's build (never seen by a frozen or installed
+    launcher). The launcher's build state (builder.build_status) does not describe it."""
+    install, _looked = find_game(cfg)
+    if install is not None and getattr(install, "source", "") in (SET_IN_ADVANCED, CHECKOUT_BUILD):
+        return install
+    return None
+
+
+def outside_build_text(install: GameInstall) -> str:
+    """The Setup page's Build step for outside_build()."""
+    if install.source == CHECKOUT_BUILD:
+        return (f"Using the build in this checkout ({install.dir}). Build makes the launcher's own build "
+                "in the data folder, which Play uses instead from then on.")
+    return (f"Using the game set in Advanced settings ({install.dir}). Play starts it, not the "
+            "launcher's own build, while that is set.")
 
 
 def missing_message(looked):
@@ -292,6 +320,7 @@ class LaunchPlan:
     save_profile: object = None
     log_before_start: tuple | None = None  # identify a leftover log if this process never writes one
     roll_before_start: tuple | None = None  # the same for its roll (forza.1.log, session_roll)
+    fm4_track: str = ""  # the FM4 circuit this start drives on (#648), "" for Colorado
 
     def command_line(self) -> str:
         return " ".join(shlex.quote(a) for a in self.argv)
@@ -325,6 +354,7 @@ def content_warnings(cfg: Config, game: GameInstall, home: Path, root: Path, ext
     error, #79), or a known DLC package there that is damaged or incomplete (dlccheck: the Rally pack's
     bad copy crashes Kettle Hills stage 1, #422)."""
     from . import datafolder, dlccheck
+    from .fm4cars import PACKAGE as FM4_CARS  # Import FM4 cars' own package is not DLC (#648)
     out = []
     if cfg["tu_package"].strip() and not extra_update and not (game.dir / "update").is_dir():
         out.append(f"Title Update 4 is chosen in Setup, but this build has none ({game.dir / 'update'} is "
@@ -332,8 +362,8 @@ def content_warnings(cfg: Config, game: GameInstall, home: Path, root: Path, ext
                    "Rebuild.")
     if not check_dlc:
         return out
-    seen = datafolder.dlc_packages(root)
-    installed = datafolder.dlc_packages(home)
+    seen = datafolder.dlc_packages(root) - {FM4_CARS}
+    installed = datafolder.dlc_packages(home) - {FM4_CARS}
     if not seen and (installed or cfg["dlc_dir"].strip()):
         where = f"{root / datafolder.DLC_DIR / '00000002'}"
         out.append(f"No DLC in the game's folder ({where})" +
@@ -407,7 +437,7 @@ def build_plan(cfg: Config, game: GameInstall, write=True, refresh_xenia=False, 
 
 def texture_pack_folder(cfg: Config) -> Path:
     """Texture packs and dumps (#384): <data folder>/textures, also with a Xenia save (whose user
-    data root is a copy elsewhere); Settings > Display > Open textures folder opens it."""
+    data root is a copy elsewhere); Settings > Graphics > Open textures folder opens it."""
     return cfg.data_home() / "textures"
 
 
@@ -530,10 +560,13 @@ def _build_plan(cfg: Config, game: GameInstall, write, refresh_xenia, log, saver
     home = cfg.data_home()
     data = cfg.game_files()
     toml_path = game.dir / "forza.toml"
+    # (cfg.d["settings"] is this start's copy, build_plan: launcher.json keeps the player's choice)
+    from . import regpu
+    regpu_note = regpu.fall_back(cfg.d["settings"], game.dir)
     toml_text = write_toml(cfg, toml_path) if write else render_toml(cfg)
 
     args = [f"--game_data_root={data}"]
-    notes = []
+    notes = [regpu_note] if regpu_note else []
     env, unset = {}, []
     env["FORZA_GRAPHICS_SETTINGS"] = str(home / ingame.FILENAME)
 
@@ -633,7 +666,15 @@ def _build_plan(cfg: Config, game: GameInstall, write, refresh_xenia, log, saver
     from . import mods, texture_packs
     named = {a[2:].split("=", 1)[0] for a in extra if a.startswith("--")}
     args += mods.launch_args(cfg, named)
+    from . import loading_tips  # ReImagined loading-screen tips (Settings > Gameplay), first in the order
+    loading_tips.launch_args(cfg, args, write, log)
     args += texture_packs.launch_args(cfg, named)  # the packs turned on, in order (#384)
+    # An imported FM4 circuit chosen on the Play page (#648, experimental): its game folder, mods
+    # and switches, offline. Colorado (the default) changes nothing here.
+    from . import fm4tracks
+    track = fm4tracks.configure(cfg, env, args, unset, notes, write)
+    if track is not None:
+        server_argv = None
     args += extra
     env.update(parse_env(cfg.advanced.get("extra_env", "")))
 
@@ -654,7 +695,7 @@ def _build_plan(cfg: Config, game: GameInstall, write, refresh_xenia, log, saver
         save_profile = saves.profile_for(cfg, root=root)
     return LaunchPlan(game, game.dir, [str(game.exe)] + args, env, unset, toml_path,
                       toml_text, server_argv, notes, home, dlss_status_file, dict(cfg.d['haptics']),
-                      save_profile=save_profile)
+                      save_profile=save_profile, fm4_track=track["key"] if track else "")
 
 
 def log_path_of(plan: "LaunchPlan"):

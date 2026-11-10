@@ -21,6 +21,7 @@ struct DrivingGate {
     const uint64_t last = rumble_ms.load(std::memory_order_relaxed);
     return last && now - last < kDrivingHoldMs;
   }
+  bool Seen() const { return rumble_ms.load(std::memory_order_relaxed) != 0; }
 };
 inline uint64_t DrivingNowMs() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -131,4 +132,18 @@ class PlayerGate {
   uint64_t last_frame_ms_ = 0;
 };
 inline PlayerGate& Player() { static PlayerGate gate; return gate; }
+
+// The DualSense and Xbox trigger effects' gate with the physics bridge (#692). PlayerGate alone
+// misses the pause menu online: an online world does not pause (no pause flag, the car's physics
+// keep stepping), so in online free roam the triggers stayed on in the pause menu and its pages
+// (#224 again from 0.2.5, when the launcher turned the physics bridge on and this gate replaced
+// the rumble gate). The game stops its rumble in every menu, online too, so a game that rumbles
+// must also have rumbled within kDrivingHoldMs. A game that never rumbled (vibration off in its
+// options, a racing wheel) is judged by PlayerGate alone.
+enum class Triggers : uint8_t { kOn, kNotDriving, kNoRumble };
+inline Triggers TriggerGate(Drive state, const DrivingGate& rumble, uint64_t now) {
+  if (state != Drive::kDriving) return Triggers::kNotDriving;
+  if (rumble.Seen() && !rumble.Driving(now)) return Triggers::kNoRumble;
+  return Triggers::kOn;
+}
 }

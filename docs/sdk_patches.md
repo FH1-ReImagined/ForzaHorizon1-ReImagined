@@ -569,3 +569,84 @@ speedometer). Not tested with a real pad yet.
 ## ReIGlue dependency for auto-pause
 
 Change 0399 was merged in [ReIGlue PR #3](https://github.com/FH1-ReImagined/ReIGlue/pull/3) and is included in the current pin `ff1db6f6ff64f237ec2dbd28f06680205a6b8b1a`. Its optional `ForzaInputDisconnectSequence(user_mask)` bridge counts loss of the last active physical device. Synthetic keyboard/NOP devices, idle spares and reconnecting alone do not count. It replaces the obsolete local 0148 patch. Client tests require the current export and separately inject its absence to preserve older-runtime focus support. No immutable tag is changed; physical disconnect and headset acceptance remain outstanding.
+
+## vulkan_present_on_submission_thread on by default (#607)
+
+ReIGlue 0414 (#476) lets the swap go on without waiting for the submission thread to replay the frame:
+the presenter's step after the swap (making the image the next to present and painting it, the VR
+export, the fence that tracks the refresher's use of the image) is queued on the submission thread
+behind the frame's submission, and the next swap waits for it only if it has not run yet. 0419 keeps
+`ui::Presenter`'s layout as the nightly's (the publish deferrer lives outside the object), which the
+presenter reconnect test needs. The setting was off by default; step 1 of #607
+([perf.md](perf.md#where-a-frames-cpu-time-goes-607-2026-11-03)) found the command processor off the
+CPU at the swap for 0.7-1.1 ms a frame, the replay it waits for.
+
+The game now gives it the default `true` (`ApplyPresentOnSubmissionDefault`, `src/main.cpp`) on Linux
+and Windows when `vr_mode` is `off` and the upscaler is not NVIDIA DLSS (`fh1_upscaler` `quality`,
+`balanced`, `performance`, `dlss` or `dlaa`), which keeps the old wait until an RTX card has run it.
+The graphics menu sets the default again when it switches the upscaler, before a switch to DLSS and
+after the switch has finished. Reading the code, DLSS needs nothing from the wait: its evaluation
+(`Fh1Dlss::Execute`) is recorded on the submission thread in either state, from a copy of the frame's
+inputs in the deferred command (`ArgsFh1Dlss::input`); the presenter's step queues behind that
+submission; the command processor's side of the next frame (`BeginFrame`, `Observe`) touches only its
+own copy and the atomic `Evaluating()`; and the live switch and shutdown wait for the submission
+thread before they free the feature (`AwaitAllQueueOperationsCompletion`). Only MetalFX splits the
+submission in the replay (`native_upscale`), and macOS keeps the setting off. The code of 0414 and 0419 has nothing platform-specific; macOS
+(MoltenVK) was not tested and keeps `false`. With a VR headset it stays `false`: in the emulated
+Quest 3 the game's part of the latency grew by about 5 ms at the same frame rate (below).
+`vulkan_present_on_submission_thread` in `forza.toml` or on the command line still sets it either
+way, and it can be switched while the game runs. The performance settings line of `forza.log` now
+lists it.
+
+Checked on main 8ee253e (TU4, Linux, Ryzen 7 7800X3D, RX 9060 XT, RADV), the setting on against off:
+
+| Check | Off | On |
+| --- | --- | --- |
+| Built-in benchmark, 1280x720, FSR 1, `frame_rate=240`, 3 runs each, interleaved (fps, 1% low, p99) | 136.4 [128.9-147.0], 92.5, 9.90 ms | **149.3** [145.5-155.8], 98.8, 9.15 ms (+9.5 %; each run above its off neighbour) |
+| The same at `frame_rate=60` | 60.0, 53.5, 17.98 ms | 60.0, 53.1, 17.98 ms |
+| Benchmark frames over 50 ms (6 runs each) | 0 | 0 |
+| Render tests (`tools/render_test.py`, baselines recorded off) | 6 of 6 pass (control) | 6 of 6 pass, scores within the control's |
+| VR, emulated Quest 3, true stereo, the comfort tests 1, 2 and 4 | 1 and 4 pass, 2 as before | the same, values within 1 point |
+| VR game frames a second (headset at 70-72 Hz) | 68.2 | 67.8 |
+| VR latency, the game's part (two runs each) | 37.9, 39.4 ms | 43.1, 42.8 ms |
+
+With the setting on, on this PC: a session of 31 minutes (the GoPro Millennia Masters race from
+the start to the finish with `tools/autodrive.py`, photo mode and saving a photo with the on-screen
+keyboard, the map and a fast travel to the Paint Shop, the Design Creator's paint menus, 10 minutes
+of free roam) ran without a hang or an error; signed in to a local Forza Live server a Big Shot was
+the photographed scene and uploaded. Resizing the window, fullscreen and back, minimising and
+restoring (KWin, Wayland) made new swapchains each time and the game went on; the debug, settings,
+achievements and console overlays drew over the game. The longest frames were loads: 0.9 s entering
+the Design Creator, and a 2 s freeze in free roam in which `vkAcquireNextImageKHR` and the GPU both
+waited 2 s. Runs with the setting off had the same 2 s freezes (twice in 2.5 minutes, and in the VR
+runs in both states), so they come from this machine, not from the setting.
+
+On Windows (a GTX 1650 Ti laptop, Vulkan, 540p scene, FSR 1, 3 alternating runs each), on against
+off: benchmark 54.5 against 54.7 fps (GPU-bound at 97 %), 1% low 38.4 against 37.4; free roam at
+60 fps p99 16.7-21.6 ms against 20.3-21.5 ms, 1% low 46.8 against 42.7; FSR 3 at 1080p (one run
+each) 36.3 fps, p99 33.8 ms against 35.0 fps, p99 36.2 ms, and it looked right.
+
+Not checked: DLSS (no RTX card; it keeps the setting off, above), a Steam Deck, the real headset.
+
+## ReIGlue 0420: the command processor on two threads (#474)
+
+[ReIGlue PR #43](https://github.com/FH1-ReImagined/ReIGlue/pull/43) (merged, pin `a4aff83`; it also carries 0442-0445, below) adds
+`--gpu_split_command_processor` (restart, default off, Vulkan only): the "GPU Commands" thread decodes the PM4 stream
+against a shadow register file and a "GPU Recorder" thread applies the register writes and runs the draws, copies,
+swaps and fence writes in order (after Pinyon Shift's ShiftGlue `9362a07`, `7440c33` and `9bf779f`; credited in
+ReIGlue's NOTICE). `--gpu_split_elide_unchanged_registers` (default on) only matters with the split. With the split
+off nothing changes but the draw's code moving into `ExecuteDraw`. What waits for what, the measurements and the
+picture checks are in [perf.md](perf.md#decoding-and-recording-on-two-threads-474-reiglue-0420): +5 % uncapped on
+eight cores, -11 % in free roam on four cores without SMT. The game turns it on by default with 6 or more physical
+cores and no VR headset (+5.8 % in the benchmark on six cores, +13.1 % on eight, with #607's present default), and
+leaves it off below, the Steam Deck included.
+
+## ReIGlue 0442-0445: descriptor reuse in the command processor (#192, #179)
+
+The same PR carries Sean O'Connor's 0442 (dynamic guest constant descriptors, `vulkan_dynamic_constants`) and 0443
+(unchanged sampler acquisition and texture requests reused, `vulkan_binding_request_reuse`), 0444 (a frame's texture
+descriptor sets reused by their exact contents, `vulkan_texture_descriptor_reuse`) and 0445 (the three on by default;
+each cvar turns its part off, or `FORZA_VK_DYNAMIC_CONSTANTS=0`, `FORZA_VK_BINDING_REUSE=0`,
+`FORZA_VK_TEXTURE_SET_REUSE=0`). With the split every memo is used on the recorder thread only. Measurements: -7.4 % of
+the command processor's time a draw; with the split, 123.6 to 153.5 fps uncapped in the benchmark on eight cores and
+131.5 to 153.0 on six ([perf.md](perf.md)).

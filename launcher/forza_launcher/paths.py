@@ -6,8 +6,17 @@ from pathlib import Path
 IS_WINDOWS = sys.platform == "win32"
 # Running inside the Flatpak sandbox (flatpak/): the runtime is org.freedesktop.Sdk, so the C++
 # headers, cmake, ninja and python are in /usr, and the LLVM extension is mounted below.
+FLATPAK_APP_ID = "io.github.dyotson.ForzaHorizon1ReImagined"   # flatpak/'s manifest
+
+
+def in_flatpak(environ=None, info: Path = Path("/.flatpak-info")) -> bool:
+    """Inside a Flatpak sandbox: flatpak sets FLATPAK_ID and puts /.flatpak-info in every sandbox."""
+    environ = os.environ if environ is None else environ
+    return bool(environ.get("FLATPAK_ID")) or info.exists()
+
+
 FLATPAK_ID = os.environ.get("FLATPAK_ID", "")
-IN_FLATPAK = bool(FLATPAK_ID) or Path("/.flatpak-info").exists()
+IN_FLATPAK = in_flatpak()
 FROZEN = bool(getattr(sys, "frozen", False))
 PKG_DIR = Path(__file__).resolve().parent
 # launcher/ in a source checkout; the PyInstaller bundle directory when frozen.

@@ -7,11 +7,15 @@
 REXCVAR_DEFINE_INT32(frame_rate, 30, "Display", "Test frame cap");
 
 namespace { int restarts = 0; }
-namespace forza { void RestartForBenchmark() { ++restarts; } }
+namespace forza {
+void RestartForBenchmark() { ++restarts; }
+void LogGuestThreads(const char*) {}
+}
 namespace forza::benchmark {
 bool Enabled() { return automatic.load(); }
 void Cancel() {}
 void Fail(const char*) {}
+double SecondsSinceSwap() { return 0; }
 }
 #if FORZA_TITLE_UPDATE == 4
 extern "C" REX_FUNC(__imp__sub_8281CF68) {}

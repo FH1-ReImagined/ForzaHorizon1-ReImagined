@@ -281,6 +281,33 @@ extern "C" REX_FUNC(__imp__VdSwap) {
 
   const double elapsed =
       std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+  // Testing (#725): FORZA_TEST_SWAP_STALLS="s:ms,s:ms" holds the render thread in its swap for ms
+  // once each, s seconds after the first swap, as a slow GPU compiling shaders does.
+  {
+    struct Stall { double at; int ms; bool done; };
+    static std::vector<Stall> stalls = [] {
+      std::vector<Stall> out;
+      if (const char* v = std::getenv("FORZA_TEST_SWAP_STALLS")) {
+        std::string spec(v);
+        for (size_t p = 0; p < spec.size();) {
+          const size_t c = spec.find(',', p);
+          const std::string item = spec.substr(p, c == std::string::npos ? std::string::npos : c - p);
+          const size_t colon = item.find(':');
+          if (colon != std::string::npos)
+            out.push_back({std::atof(item.c_str()), std::atoi(item.c_str() + colon + 1), false});
+          if (c == std::string::npos) break;
+          p = c + 1;
+        }
+      }
+      return out;
+    }();
+    for (auto& st : stalls)
+      if (!st.done && elapsed >= st.at) {
+        st.done = true;
+        REXLOG_WARN("FORZA_TEST_SWAP_STALLS: holding the swap {} ms at t={:.1f}s", st.ms, elapsed);
+        std::this_thread::sleep_for(std::chrono::milliseconds(st.ms));
+      }
+  }
   forza::perf::OnGuestFrame();
   forza::ultrawide::Frame();
   forza::frame_time::OnGuestSwap();

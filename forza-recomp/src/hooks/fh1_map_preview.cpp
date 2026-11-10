@@ -889,6 +889,15 @@ void Update(const PPCContext& context, uint8_t* base, uint32_t screen, bool visi
     Visibility(ui, false);
     return;
   }
+  // Back from Photo Mode the game releases the compressed UI heap, and only once that is done
+  // does the pause get its callbacks again (+0x1DC, done: Resume). Taking the heap for the
+  // preview in between kept them away: B and START did nothing until another page released
+  // the heap (#646). Hold nothing while the pause has no done callback.
+  if (!Read(base, screen + 0x1DC)) {
+    ReleaseMapResources(ui);
+    Visibility(ui, false);
+    return;
+  }
   if(!MapHeap(ui)){Visibility(ui,false);return;}
   const auto record = PreviewRecord(ui);
   if (!record) { ReleaseMapResources(ui); preview.mirrored = false; Visibility(ui, false); return; }

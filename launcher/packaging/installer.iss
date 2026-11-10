@@ -66,6 +66,15 @@ DisableDirPage=no
 ; local time (UTC on CI) and sets it as the player's local time: hours in the future west of UTC, which
 ; keeps ninja re-running CMake (issue #35).
 TimeStampsInUTC=yes
+#ifdef SignedUninstallerDir
+; Code signing (#354; build_installer.ps1 -SignedUninstallerDir). With no SignTool, Inno Setup writes the
+; uninstaller (which is also the program Setup's temporary self-copies run) to this folder as
+; uninst-<Inno Setup version>-<hash>.e32 and stops, until a signed copy of that file is there. The release workflow signs it
+; together with forza-launcher.exe, puts it back and compiles again: then unins000.exe and the temporary copies
+; carry the signature, which Inno's own Setup program cannot get when Setup is signed after compiling.
+SignedUninstaller=yes
+SignedUninstallerDir={#SignedUninstallerDir}
+#endif
 
 [Messages]
 WizardInfoBefore=Privacy policy

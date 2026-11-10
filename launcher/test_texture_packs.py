@@ -64,7 +64,7 @@ def make_zip(path: Path, members: dict) -> Path:
 
 
 class TexturePackTests(unittest.TestCase):
-    """Settings > Display > Texture packs (#384, docs/texture_packs.md)."""
+    """Settings > Graphics > Texture packs (#384, docs/texture_packs.md)."""
 
     def setUp(self):
         platform = patch.object(power, "IS_WINDOWS", False)

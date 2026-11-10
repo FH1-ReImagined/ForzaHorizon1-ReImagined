@@ -1,5 +1,7 @@
 #include "benchmark.h"
+#include "benchmark_label.h"
 #include "benchmark_profile.h"
+#include "benchmark_start.h"
 #include "guest_memory.h"
 #include <atomic>
 #include <chrono>
@@ -17,6 +19,7 @@
 
 namespace forza {
 void RestartForBenchmark();
+void LogGuestThreads(const char *why);  // src/debug/fault_guard.cpp
 }
 namespace forza::benchmark {
 namespace {
@@ -33,6 +36,20 @@ uint32_t title_menu = 0, single_player_id = 10;
 bool title_started = false, event_started = false;
 [[maybe_unused]] bool title_listed = false;
 Clock::time_point started = Clock::now(), world_ready{};
+// #725: after the event's request, where every guest thread waits if its race does not start
+// (an Intel UHD with an empty driver shader cache: the request is taken, the world stays paused
+// and the load never begins). Logged 2 and 10 minutes after the request, and when it gives up.
+Clock::time_point requested_at{};
+std::atomic<bool> race_progress{false};
+int stall_dumps = 0;
+void LogThreadsIfStuck(const char *why) {
+  if (!event_started || race_progress.load())
+    return;
+  REXLOG_WARN("BENCHMARK: the race has not started {:.0f} s after the event's request ({}); "
+              "guest threads below (#725)",
+              std::chrono::duration<double>(Clock::now() - requested_at).count(), why);
+  LogGuestThreads("while the benchmark waits for its race");
+}
 
 void Environment(const char *name, const std::string &value) {
 #ifdef _WIN32
@@ -45,10 +62,12 @@ void Environment(const char *name, const std::string &value) {
 #endif
 }
 std::string Settings() {
-  return rex::cvar::GetFlagByName("fh1_output_width") + " x " +
-         rex::cvar::GetFlagByName("fh1_output_height") + "  /  " +
-         rex::cvar::GetFlagByName("fh1_upscaler") + "  /  " +
-         rex::cvar::GetFlagByName("frame_rate") + " FPS cap";
+  const auto get = [](const char *name) { return rex::cvar::GetFlagByName(name); };
+  const std::string upscaler = get("fh1_upscaler"), width = get("fh1_output_width"),
+                    height = get("fh1_output_height"), scale = get("resolution_scale"),
+                    scene = get("scene_resolution"), effect = get("present_effect"),
+                    rate = get("frame_rate");
+  return SettingsLabel({upscaler, width, height, scale, scene, effect, rate});
 }
 void Status(const std::string &status, Screen next) {
   std::lock_guard lock(view_mutex);
@@ -105,7 +124,7 @@ bool GraphicsFlag(const std::string &key) {
          key == "forza_chase_far_fov" || key == "forza_hood_fov" ||
          key == "forza_bumper_fov" ||
          key == "world_shadow_filter" || key == "world_ambient_occlusion" ||
-         key == "frame_rate" || key == "video_mode_refresh_rate" ||
+         key == "world_car_detail" || key == "frame_rate" || key == "video_mode_refresh_rate" ||
          key == "resolution" || key == "resolution_scale" || key == "vsync" ||
          key == "anisotropic_override" || key == "swap_post_effect";
 }
@@ -283,6 +302,7 @@ void PreRaceReady(uint32_t) {
 void Progress(const char *text, double elapsed, double duration) {
   if (!automatic.load())
     return;
+  race_progress.store(true);
   boot_input.store(false);
   confirm_input.store(false);
   std::lock_guard lock(view_mutex);
@@ -370,13 +390,18 @@ void FlowTick(PPCContext &ctx, uint8_t *base) {
   }
   if (!automatic.load() || screen.load() == Screen::results)
     return;
-  if (Clock::now() - started > std::chrono::minutes(4) && !event_started) {
-    Fail("event_load_timeout");
+  // The race has to start while the game keeps drawing (src/platform/benchmark_start.h, #725).
+  if (const char *reason = StartTimeout(
+          std::chrono::duration<double>(Clock::now() - started).count(), SecondsSinceSwap(),
+          event_started)) {
+    LogThreadsIfStuck(reason);
+    Fail(reason);
     return;
   }
-  if (Clock::now() - started > std::chrono::minutes(5)) {
-    Fail("benchmark_start_timeout");
-    return;
+  if (event_started && stall_dumps < 2 &&
+      Clock::now() - requested_at > std::chrono::minutes(stall_dumps ? 10 : 2)) {
+    ++stall_dumps;
+    LogThreadsIfStuck("still waiting");
   }
 #if defined(FORZA_TITLE_UPDATE) && FORZA_TITLE_UPDATE == 4
   // The title list ignores presses until its scene has loaded, which takes seconds on a
@@ -434,6 +459,7 @@ void FlowTick(PPCContext &ctx, uint8_t *base) {
                                {found + 0x164, scratch, scratch + 64}) != 0;
     REX_KERNEL_MEMORY()->SystemHeapFree(scratch);
     event_started = accepted;
+    requested_at = Clock::now();
     REXLOG_INFO("BENCHMARK: fixed event FR02 {}",
                 accepted ? "requested" : "rejected");
   }

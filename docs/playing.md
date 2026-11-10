@@ -69,6 +69,18 @@ tools/run_forza.sh 120        # a two-minute test run; logs in ${XDG_RUNTIME_DIR
   driver in the torque cut (down to 0.19 of their torque) and the first reached the finish,
   about 5 km on, after 182 s; Off had no cut, and six of seven finished after 150-159 s.
   Details in `src/hooks/ai_catchup.cpp`.
+- **Fast Travel Anywhere (#424, Title Update 4):** the map's Y offered it for Tokens, which were
+  bought on Xbox LIVE and can no longer be bought (offline the offer ends at "You must have an
+  Xbox LIVE enabled profile"). `fast_travel_anywhere = true` (the default; launcher: Gameplay,
+  Map, Fast Travel Anywhere) makes the game read the unlock as bought: Y on any road asks "Are
+  you sure you want to Fast Travel here?" and travels for free, offline and online. It gives no
+  Tokens, the Token balance is not touched, and the other Token offer (RB, BUY TREASURE MAP)
+  stays as it is. Nothing is written to the save, so `false` brings the offer back unless the
+  profile bought it. Details in `src/hooks/fast_travel_anywhere.cpp`.
+- **Loading-screen tips:** the loading screens show tips about ReImagined in place of the
+  original game's (which point to the ForzaMotorsport.net forums, Token offers and other things that are
+  gone). Launcher: Gameplay, Loading screens, ReImagined loading tips (on by default); off shows
+  the original tips. English in every language for now. Details in [launcher.md](launcher.md).
 - **VR headset (experimental, #333):** launcher Display, VR (experimental), VR headset (experimental): Virtual
   screen or Cockpit (`vr_mode = "screen"` / `"cockpit"`). Start the OpenXR runtime (WiVRn,
   Monado, SteamVR) and connect the headset first; Home or both sticks held for a second
@@ -116,7 +128,7 @@ tools/run_forza.sh 120        # a two-minute test run; logs in ${XDG_RUNTIME_DIR
   **Friends (#92):** the server keeps your friends list; the game's friends list (who is
   online, what they are doing, joining a friend's game) shows only your friends. Press `F8`
   (`live_friends_key` in `forza.toml`) or hold the left stick press (`F` with `mnk_mode`)
-  to open the friends screen over the game (Settings → Online → Controller friends shortcut
+  to open the friends screen over the game (Online → Online → Controller friends shortcut
   turns the left stick hold off for players who hold it while driving, #194); B or Escape closes it. Its tabs (LB/RB or
   Left/Right): **Friends**, **Requests** (asks you, or waiting for an answer), **Add
   friend** and **Blocked**. On Add friend, type part of a gamertag (keyboard) or press Y
@@ -172,6 +184,23 @@ tools/run_forza.sh 120        # a two-minute test run; logs in ${XDG_RUNTIME_DIR
   cannot hold 30 can run 20 (`frame_rate = 20`): each frame then stays on a 60 Hz screen for
   exactly 3 refreshes, where 22 fps alternates 2 and 3 and judders; 40 does the same on a
   120 Hz screen (#263).
+- **Present without waiting for the replay** (Vulkan, on by default on Linux and Windows
+  without a VR headset or NVIDIA DLSS, #607): the swap no longer waits for the submission thread to replay the
+  frame before the game goes on, which gives a CPU-bound frame about 1 ms back (more fps
+  uncapped and on slow CPUs, nothing at a frame cap the PC already holds).
+  `vulkan_present_on_submission_thread = false` in `forza.toml` (or
+  `--vulkan_present_on_submission_thread=false`, the launcher's extra arguments) turns it off,
+  `true` turns it on in VR too; it can be switched while the game runs. Details:
+  [sdk_patches.md](sdk_patches.md#vulkan_present_on_submission_thread-on-by-default-607).
+- **The GPU command processor on two threads** (Vulkan, on by default with 6 or more physical
+  CPU cores and no VR headset, #474): "GPU Commands" decodes the game's GPU commands and "GPU
+  Recorder" runs the draws, so the thread a CPU-bound frame waits for is shorter (+6 % fps uncapped
+  in the benchmark on six cores, +13 % on eight). With fewer cores it stays off: the two threads
+  use more CPU in all, and four cores ran free roam 11 % slower. `gpu_split_command_processor =
+  false` in `forza.toml` (or `--gpu_split_command_processor=false`, the launcher's extra
+  arguments) turns it off, `true` turns it on; a restart applies it. The log's `Physical CPU
+  cores available` line says which default applied. Details:
+  [perf.md](perf.md#on-by-default-with-6-or-more-cores-2026-11-08).
 - **Title Update 4 (default):** `play.sh` runs `forza-recomp/out/build/linux-tu4` when it
   exists (how to build it: README, Building; `FORZA_BUILD=linux-tu4`) and mounts the
   update's files (`extracted/tu4/`, or `FORZA_UPDATE`) as `update:` with
@@ -225,7 +254,7 @@ tools/run_forza.sh 120        # a two-minute test run; logs in ${XDG_RUNTIME_DIR
   The launcher's **Photo gallery** browses local saved pictures and exports PNG/JPEG
   copies. Press Refresh after saving a new picture ([gallery details](launcher.md#photo-gallery)).
 - **Online photo (#576):** the game leaves Photo Mode out of the pause menu online, because it
-  cannot pause a shared session. With **Online photo** on (launcher: Online > Horizon World;
+  cannot pause a shared session. With **Online photo** on (launcher: Online > Online > Horizon World;
   `forza_online_photo = true` in `forza.toml`; off by default), the pause menu of Horizon World
   free roam and online lobbies has **ONLINE PHOTO**: the game's photo camera, without the HUD,
   while the session keeps running. Other cars keep moving; your car rolls to a stop and takes
@@ -246,6 +275,35 @@ tools/run_forza.sh 120        # a two-minute test run; logs in ${XDG_RUNTIME_DIR
   5 s (unless SDL found no audio driver at all), so the sound comes back once the device is free.
   Builds before SDK patch 0103 stopped there (#244). On Windows, try another default output, or
   untick "Allow applications to take exclusive control" in the device's Properties > Advanced.
+
+## Car sound levels (#730)
+
+Audio > Car sounds > **Engine** (`car_engine_volume`) and **Turbo and supercharger**
+(`car_turbo_volume`), 0 to 200 % in `forza.toml`, 100 by default (the game's mix). The game
+has one level per car sound bus (`media/audio/AudioEngineConfig.xml`: `gamePlayerEngine`
+0.45, `gameOpponentEngine` 0.25, `gameSuperCharger` 0.5, `gameTurbo` 0.3, ...), which the mixer
+snapshots (`AudioMixerSnapshots.xml`: free roam, race, pause, menus) fade. Every car sound
+reads its bus level when it sets the volume of its FMOD events, and the settings scale that
+read (`forza-recomp/src/hooks/car_audio_volume.cpp`):
+
+- Engine: the engine voices of every car (player and opponent levels both).
+- Turbo and supercharger: the turbo spool and whistle, the blow-off valve (`Cars/Turbos`, its
+  Hi and Lo layers) and the supercharger whine (`Cars/SuperChargers`) of every car.
+
+Tyres, wind, transmission, backfires, collisions, the radio and the rest keep the game's
+level, and the mixer's fades work as before (it reads the unscaled levels). Measured in the
+game (TU4, a copied save, free roam, output muted, the mix the game submits dumped inside
+the game and folded to stereo, a stock 2011 WRX STI, one run each, EBU R128 loudness):
+
+| | idle | limiter (brake-stand) | full throttle |
+|---|---|---|---|
+| Engine 0 % against 100 % | −12.3 LU | −15.6 LU | −8.4 LU |
+| Engine 200 % against 100 % | +3.7 LU | +2.4 LU | +3.0 LU |
+
+With the engine at 0 %, the 0.3 s after letting go of the throttle (the blow-off, the rpm
+falling from about 3,500) were 1.7 to 8.9 dB louder at Turbo 200 % than at 100 %. 200 % on
+the engine adds less than 6 dB because the tyres and wind stay in the mix. The settings
+apply when the game starts.
 
 ## Recommended picture settings
 

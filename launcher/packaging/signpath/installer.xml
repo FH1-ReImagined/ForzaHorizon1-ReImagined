@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SignPath artifact configuration "installer" (#354): the second signing request of a Windows release,
+  the Inno Setup installer compiled with the signed launcher and uninstaller from "binaries". The
+  release workflow uploads it as the GitHub artifact unsigned-windows-installer (a ZIP file).
+  The copy kept here is for review: the configuration SignPath uses is the one entered in its web
+  interface under the project, and the two must stay the same.
+-->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" required="true" />
+  </parameters>
+  <zip-file>
+    <pe-file path="ForzaHorizon1-ReImagined-Setup-*.exe" max-matches="1">
+      <authenticode-sign hash-algorithm="sha256" />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>

@@ -31,12 +31,17 @@
 // stored SQL again: our view's statement is recognized too and gets the indexes again
 // (src/platform/car_view.h). FORZA_GAME_CAR_VIEW=1 keeps the game's view.
 //
+// The club garage's insert of a shared car gets a second statement that names the car from
+// Data_Car, DLC included: the server knows no names and not every car (#697,
+// src/platform/club_garage.h).
+//
 // A query that takes 50 ms or more logs (at most 100 lines a session)
 //   FORZA_SQL: 131 ms (lock 0 ms) on thread F800007C: SELECT * FROM Restrictions_Data_Car ...
 // (lock: the time outside the statements, waiting for the database's lock; the copy routines
 // call each other, only the outermost is timed) and FORZA_SQL_LOG=1 logs every query.
 
 #include "../platform/car_view.h"
+#include "../platform/club_garage.h"
 #include "../platform/guest_addr.h"
 #include "../platform/guest_memory.h"
 
@@ -110,6 +115,20 @@ uint32_t IndexedViewSql() {
   return address;
 }
 
+// A guest copy of the club garage's insert with the statement that names its car (0 when
+// there was no memory); the caller frees it after the query.
+uint32_t SharedCarInsertSql(const char* insert) {
+  const std::string sql = forza::club_garage::WithGameCarNames(insert);
+  const uint32_t a = REX_KERNEL_MEMORY()->SystemHeapAlloc(uint32_t(sql.size() + 1));
+  if (!a) return 0;
+  std::memcpy(REX_KERNEL_MEMORY()->TranslateVirtual(a), sql.c_str(), sql.size() + 1);
+  static std::atomic<bool> logged{false};
+  if (!logged.exchange(true)) {
+    REXLOG_INFO("Club garage: shared cars named from the game's car list (#697)");
+  }
+  return a;
+}
+
 template <void (*Run)(PPCContext&, uint8_t*)>
 void Timed(PPCContext& ctx, uint8_t* base) {
   run_time.Enter(NowUs());
@@ -126,11 +145,18 @@ extern "C" REX_FUNC(sub_82C19130) {
                         base, ctx.r5.u32))) != forza::car_view::Statement::kOther) {
     if (const uint32_t view = IndexedViewSql()) ctx.r5.u64 = view;
   }
-  const uint32_t sql = ctx.r5.u32;
+  const uint32_t sql = ctx.r5.u32;  // logged: the game's string, not the copy below
+  uint32_t shared_car = 0;
+  if (sql && forza::club_garage::IsSharedCarInsert(
+                 reinterpret_cast<const char*>(forza::GuestPtr(base, sql)))) {
+    shared_car = SharedCarInsertSql(reinterpret_cast<const char*>(forza::GuestPtr(base, sql)));
+    if (shared_car) ctx.r5.u64 = shared_car;
+  }
   const int64_t run0 = run_time.total();
   const int64_t t0 = NowUs();
   __imp__sub_82C19130(ctx, base);
   const int64_t us = NowUs() - t0;
+  if (shared_car) REX_KERNEL_MEMORY()->SystemHeapFree(shared_car);
   const int64_t run_us = run_time.total() - run0;
   const bool all = LogAll();
   if (us < kSlowUs && !all) return;

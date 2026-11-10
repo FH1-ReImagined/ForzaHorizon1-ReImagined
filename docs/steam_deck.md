@@ -36,6 +36,18 @@ C++ headers, and the launcher says so (#135). The Flatpak brings its own compile
 The launcher updates itself (**About**, **Launcher updates**). Its data lives in
 `~/.var/app/io.github.dyotson.ForzaHorizon1ReImagined/`.
 
+**The game on the SD card.** The game files and the build need about 15 GB of free space. To keep them on the
+SD card, choose **Setup > Game and save folder > Change folder** and pick a folder on the card (under
+`/run/media`). The Flatpak may write there. Launchers up to 0.2.8 could only read the card. If the launcher
+says the Flatpak may only read a folder, allow it with the command it shows, for example:
+
+```sh
+flatpak override --user --filesystem=/run/media io.github.dyotson.ForzaHorizon1ReImagined
+```
+
+Or use Flatseal: choose **Forza Horizon 1: ReImagined** and add the folder under **Filesystem >
+Other files**. Then close and reopen the launcher (#717).
+
 ## Add to Steam
 
 The native Linux packaged launcher offers **About > Add to Steam** (#508). It adds one shortcut
@@ -111,7 +123,7 @@ The preset (Settings, Display):
 | Render scale | 1 | the game's own 1280x720 |
 | Upscaling filter | AMD FSR 1 | costs nothing on the Deck's screen (1:1, below); sharp when docked |
 | Scene anti-aliasing (MSAA) | Off | the scene in one pass instead of three: about a fifth less CPU work in the GPU emulation, the Deck's limit ([perf.md](perf.md#one-pass-scene-scene_msaa-45-2026-10-23)) |
-| Shadow detail, Distant texture detail | Console | the game's own |
+| Shadow detail, Distant texture detail, Car detail | Console | the game's own |
 | 3D scene resolution | 720p | 540p saves GPU time only, and the Deck is limited by its CPU |
 | Letterbox other aspect ratios | on | see Screen |
 
@@ -148,10 +160,14 @@ and 60 fps only make it slower. Cutscene audio that does not match the picture c
 `GPU minute` line a minute and a `GPU slow frames` line for each slow stretch, with the cause; Steam's
 performance overlay at level 4 shows the CPU and GPU load.
 
-**Experimental switches (off by default, not yet tried on a Deck).** Two options of the GPU emulation aim at the thread the
-frame waits for: `--vulkan_present_on_submission_thread=true` (the swap no longer waits for the frame's replay; +15 %
-fps uncapped on four desktop cores with the Deck preset, nothing at the 30 fps cap) and `--linux_thread_cores=auto`
-(Pinyon Shift's thread placement for a Deck's four cores with SMT; it did not help on four cores without SMT). To try
+**Experimental switches (not yet tried on a Deck).** Three options of the GPU emulation aim at the thread the
+frame waits for: `vulkan_present_on_submission_thread` (the swap no longer waits for the frame's replay; +15 %
+fps uncapped on four desktop cores with the Deck preset, nothing at the 30 fps cap; on by default since #607,
+`--vulkan_present_on_submission_thread=false` turns it off for the comparison), `--linux_thread_cores=auto` (off by default)
+(Pinyon Shift's thread placement for a Deck's four cores with SMT; it did not help on four cores without SMT) and
+`--gpu_split_command_processor=true` (the GPU commands decoded on one thread and applied on a second, "GPU Recorder";
+on by default only with 6 or more physical cores, so off on a Deck: +6-13 % uncapped on six and eight desktop cores,
+but 11 % slower in free roam on four cores without SMT, so try it on the Deck before keeping it). To try
 them, add them under Settings, Advanced, extra arguments, run the built-in benchmark with and without and report the
 numbers in [#559](https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/issues/559); the measurements and what is
 still untested are in [perf.md](perf.md#steam-deck-ideas-from-pinyon-shift-559-476-475-474).

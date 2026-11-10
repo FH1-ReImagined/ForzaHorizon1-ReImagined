@@ -1,0 +1,389 @@
+"""Forza Motorsport 4 circuits (#648, experimental): the import on Mods > Mods, next to the FM4
+cars, and the choice of where Play starts (TrackPicker, on the Play page once a circuit is
+imported). fm4tracks.py does the work."""
+import shutil
+import tempfile
+from pathlib import Path
+
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QDialogButtonBox, QHBoxLayout,
+                               QHeaderView, QLabel, QListWidget, QListWidgetItem, QProgressBar, QPushButton,
+                               QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+
+from .. import fm4tracks
+from .widgets import card, label
+
+EXPERIMENTAL_TAG = "Experimental"
+
+
+class ChooseCircuits(QDialog):
+    """Which of Disc 1's circuits to import, with the space they take."""
+
+    def __init__(self, parent, disc, have, free):
+        super().__init__(parent)
+        self.disc, self.free = disc, free
+        self.setWindowTitle("Import FM4 tracks")
+        lay = QVBoxLayout(self)
+        lay.addWidget(label(f"Your Forza Motorsport 4 Disc 1 has {len(disc.circuits)} circuits. Each is "
+                            "converted on this PC (under a minute for most) and takes about 3 times its "
+                            "size on the disc. Imported ones are replaced.", "muted"))
+        self.list = QListWidget()
+        for folder in disc.circuits:
+            kept, _ = fm4tracks.estimate(disc, [folder])
+            name = fm4tracks.display_name(folder)
+            text = f"{name}   (about {fm4tracks.size_text(kept)})"
+            if fm4tracks.key_of(folder) in have:
+                text += "   imported: import again to replace it"
+            item = QListWidgetItem(text)
+            item.setData(Qt.UserRole, folder)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Checked if folder == "Suzuka" and "suzuka" not in have else Qt.Unchecked)
+            self.list.addItem(item)
+        self.list.itemChanged.connect(self._changed)
+        lay.addWidget(self.list, 1)
+        row = QHBoxLayout()
+        for text, state in (("All", Qt.Checked), ("None", Qt.Unchecked)):
+            b = QPushButton(text)
+            b.clicked.connect(lambda _=False, s=state: self._all(s))
+            row.addWidget(b)
+        row.addStretch(1)
+        lay.addLayout(row)
+        self.total = label("", "muted")
+        lay.addWidget(self.total)
+        self.buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
+        self.go = self.buttons.addButton("Import", QDialogButtonBox.AcceptRole)
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        lay.addWidget(self.buttons)
+        self.resize(520, 560)
+        self._changed()
+
+    def _all(self, state):
+        self.list.blockSignals(True)
+        for i in range(self.list.count()):
+            self.list.item(i).setCheckState(state)
+        self.list.blockSignals(False)
+        self._changed()
+
+    def chosen(self) -> list:
+        return [self.list.item(i).data(Qt.UserRole) for i in range(self.list.count())
+                if self.list.item(i).checkState() == Qt.Checked]
+
+    def _changed(self, *_):
+        names = self.chosen()
+        kept, need = fm4tracks.estimate(self.disc, names)
+        free = f", {fm4tracks.size_text(self.free)} free" if self.free is not None else ""
+        self.total.setText(f"{len(names)} circuit(s): about {fm4tracks.size_text(kept)} once imported, "
+                           f"{fm4tracks.size_text(need)} while converting{free}." if names else
+                           "Tick the circuits to import.")
+        self.go.setEnabled(bool(names) and (self.free is None or need < self.free))
+
+
+class Fm4TracksCard(QWidget):
+    """Mods > Mods: Import FM4 tracks, the imported circuits with their sizes, Remove."""
+    changed = Signal()
+
+    def __init__(self, cfg, page):
+        super().__init__()
+        self.cfg, self.page = cfg, page
+        self.task = None
+        self.disc = None
+        self.work = None
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        c, cl = card(spacing=10)
+        cl.addWidget(label(f"Forza Motorsport 4 tracks ({EXPERIMENTAL_TAG.lower()})", "cardTitle"))
+        cl.addWidget(label("Drive the circuits of your own Forza Motorsport 4 Disc 1 (a disc image, a Games "
+                           "on Demand package, an archive or a folder with its files) in FH1. Choose all of "
+                           "them or a few; they are converted on this PC. Then pick one on the Play page "
+                           "before you press Play: FH1's Colorado stays the default.", "muted"))
+        cl.addWidget(label(fm4tracks.EXPERIMENTAL, "warn"))
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["Circuit", "Size", "Imported", "Best lap"])
+        self.table.verticalHeader().hide()
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.table.itemSelectionChanged.connect(self._buttons)
+        self.table.setMaximumHeight(220)
+        self.table.setSizeAdjustPolicy(QTableWidget.AdjustToContents)
+        cl.addWidget(self.table)
+        row = QHBoxLayout()
+        row.setSpacing(12)
+        self.import_button = QPushButton("Import FM4 tracks…")
+        self.import_button.clicked.connect(self._import)
+        row.addWidget(self.import_button)
+        self.remove_button = QPushButton("Remove circuit")
+        self.remove_button.clicked.connect(self._remove)
+        row.addWidget(self.remove_button)
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.clicked.connect(lambda: self.task and self.task.cancel())
+        self.cancel_button.hide()
+        row.addWidget(self.cancel_button)
+        row.addStretch()
+        cl.addLayout(row)
+        self.progress = QProgressBar()
+        self.progress.hide()
+        cl.addWidget(self.progress)
+        self.message = label("", "muted")
+        cl.addWidget(self.message)
+        outer.addWidget(c)
+        self.refresh()
+
+    def refresh(self):
+        tracks = fm4tracks.installed(self.cfg)
+        self.table.setRowCount(len(tracks))
+        for r, info in enumerate(tracks):
+            name = QTableWidgetItem(info.get("name", info["key"]))
+            name.setData(Qt.UserRole, info["key"])
+            self.table.setItem(r, 0, name)
+            self.table.setItem(r, 1, QTableWidgetItem(fm4tracks.size_text(int(info.get("size", 0)))))
+            self.table.setItem(r, 2, QTableWidgetItem(info.get("imported", "")))
+            self.table.setItem(r, 3, QTableWidgetItem(fm4tracks.lap_text(fm4tracks.best_lap(self.cfg, info["key"]))))
+        self.table.setVisible(bool(tracks))
+        if self.task is None:
+            self.message.setText(f"{len(tracks)} circuit(s) imported, {fm4tracks.size_text(fm4tracks.total_size(self.cfg))} "
+                                 "in all." if tracks else "")
+        self._buttons()
+
+    def _buttons(self):
+        idle = self.task is None
+        self.import_button.setEnabled(idle)
+        self.remove_button.setEnabled(idle and bool(self.table.selectedItems()))
+        self.remove_button.setVisible(self.table.rowCount() > 0)
+
+    def _selected_key(self):
+        rows = self.table.selectionModel().selectedRows()
+        return self.table.item(rows[0].row(), 0).data(Qt.UserRole) if rows else None
+
+    def _remove(self):
+        key = self._selected_key()
+        if not key:
+            return
+        if self.page._game_running():
+            self.message.setText("Close the game before removing a circuit.")
+            return
+        info = fm4tracks.find(self.cfg, key) or {"name": key, "size": 0}
+        if not self.page._confirm("Remove circuit", f"Remove {info['name']} "
+                                  f"({fm4tracks.size_text(int(info.get('size', 0)))})? You can import it "
+                                  "again from your disc."):
+            return
+        try:
+            fm4tracks.remove(self.cfg, key)
+        except (fm4tracks.Fm4Error, OSError) as e:
+            self.message.setText(str(e))
+            return
+        self.refresh()
+        self.changed.emit()
+        self.message.setText(f"Removed {info['name']}.")
+
+    def _start(self, job, name, text, done):
+        from .workers import Task
+        self.task = Task(job, name)
+        self.task.progress.connect(self._progress)
+        self.task.done.connect(done)
+        self.cancel_button.show()
+        self.progress.setValue(0)
+        self.progress.show()
+        self.message.setText(text)
+        self._buttons()
+        self.task.start()
+
+    def _progress(self, fraction, text):
+        self.progress.setValue(int(fraction * 100))
+        self.message.setText(text)
+
+    def _end(self):
+        self.task.wait()
+        self.task.deleteLater()
+        self.task = None
+        self.cancel_button.hide()
+        self.progress.hide()
+
+    def _drop_work(self):
+        if self.work is not None:
+            shutil.rmtree(self.work, ignore_errors=True)
+        self.work, self.disc = None, None
+
+    def _import(self):
+        if self.page._game_running():
+            self.message.setText("Close the game before importing circuits.")
+            return
+        disc1 = self.page._fm4_pick("Forza Motorsport 4 Disc 1")
+        if not disc1:
+            return
+        root = fm4tracks.store(self.cfg)
+        root.mkdir(parents=True, exist_ok=True)
+        self._drop_work()
+        self.work = Path(tempfile.mkdtemp(prefix=".disc-", dir=root))
+
+        def job(task):
+            try:
+                self.disc = fm4tracks.open_disc(disc1, self.work, lambda n, total, text: task.progress.emit(
+                    n / total if total else 0, text), task.cancelled)
+            except (OSError, ValueError) as exc:
+                from ..installer import InstallError
+                raise InstallError(f"Import FM4 tracks stopped: {exc}") from exc
+            return ""
+        self._start(job, "read FM4 Disc 1", "Reading Disc 1…", self._read_done)
+
+    def _read_done(self, ok, message):
+        self._end()
+        if not ok or self.disc is None:
+            self._drop_work()
+            self.refresh()
+            self.message.setText(message)
+            return
+        if not self.disc.circuits:
+            self._drop_work()
+            self.refresh()
+            self.message.setText("This Disc 1 holds no circuit the import knows.")
+            return
+        try:
+            free = shutil.disk_usage(fm4tracks.store(self.cfg)).free
+        except OSError:
+            free = None
+        have = {i["key"] for i in fm4tracks.installed(self.cfg)}
+        dialog = ChooseCircuits(self, self.disc, have, free)
+        if dialog.exec() != QDialog.Accepted or not dialog.chosen():
+            self._drop_work()
+            self.refresh()
+            return
+        names, disc = dialog.chosen(), self.disc
+
+        def job(task):
+            try:
+                return fm4tracks.build(self.cfg, disc, names, lambda f, text: task.progress.emit(f, text),
+                                       task.cancelled)
+            except (OSError, ValueError) as exc:
+                from ..installer import InstallError
+                raise InstallError(f"Import FM4 tracks stopped: {exc}") from exc
+        self._start(job, "import FM4 tracks", f"Converting {len(names)} circuit(s)… Circuits imported "
+                    "before stay until each new one is complete.", self._build_done)
+
+    def _build_done(self, ok, message):
+        self._end()
+        self._drop_work()
+        self.refresh()
+        self.changed.emit()
+        self.message.setText(message)
+
+
+class TrackPicker(QWidget):
+    """Play page: where Play starts. Shown only once an FM4 circuit is imported."""
+
+    def __init__(self, cfg):
+        super().__init__()
+        self.cfg = cfg
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        row.addWidget(QLabel("Drive in"))
+        self.combo = QComboBox()
+        self.combo.setAccessibleName("Where Play starts")
+        self.combo.setToolTip("FH1's own Colorado, or a Forza Motorsport 4 circuit you imported "
+                              "(Mods > Mods > Forza Motorsport 4 tracks).")
+        self.combo.currentIndexChanged.connect(self._chosen)
+        row.addWidget(self.combo, 1)
+        lay.addLayout(row)
+        self.note = label(fm4tracks.EXPERIMENTAL_SHORT, "warn")
+        self.note.setWordWrap(True)
+        lay.addWidget(self.note)
+        self._filling = False
+        self.refresh()
+
+    def refresh(self):
+        items = fm4tracks.choices(self.cfg)
+        current = fm4tracks.selected(self.cfg)
+        shown = [(self.combo.itemData(i), self.combo.itemText(i)) for i in range(self.combo.count())]
+        self._filling = True
+        if shown != items:  # the Play page refreshes often: an open list is left alone
+            self.combo.clear()
+            for key, text in items:
+                self.combo.addItem(text, key)
+        if self.combo.currentData() != current:
+            self.combo.setCurrentIndex(max(0, self.combo.findData(current)))
+        self._filling = False
+        self.setVisible(len(items) > 1)
+        self.note.setVisible(bool(current))
+
+    def _chosen(self, _index):
+        if self._filling:
+            return
+        key = self.combo.currentData() or ""
+        try:
+            fm4tracks.select(self.cfg, key)
+        except fm4tracks.Fm4Error:
+            key = ""
+        self.note.setVisible(bool(key))
+
+
+class Fm4LapsPage(QWidget):
+    """Mods > FM4 laps: the laps the game timed on each FM4 circuit (fm4tracks.laps), best first
+    then newest. The tab shows only once a circuit is imported or has laps."""
+
+    def __init__(self, cfg, window):
+        super().__init__()
+        self.cfg, self.window = cfg, window
+        from .pages import scroll_page
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        sc, self.page_layout = scroll_page("FM4 laps", "Your timed laps on the Forza Motorsport 4 circuits "
+                                                       "(experimental): a lap counts when it passes every "
+                                                       "sector in order, without a rewind or a shortcut.")
+        outer.addWidget(sc)
+        self.cards = QVBoxLayout()
+        self.cards.setSpacing(14)
+        self.page_layout.addLayout(self.cards)
+        self.empty = label("No laps yet. Import a circuit under Mods > Mods > Forza Motorsport 4 tracks, "
+                           "choose it on the Play page and cross its start line.", "muted")
+        self.page_layout.addWidget(self.empty)
+        self.page_layout.addStretch(1)
+        self.refresh()
+
+    def tab_visible(self) -> bool:
+        return bool(fm4tracks.lap_circuits(self.cfg))
+
+    def refresh(self):
+        while self.cards.count():
+            w = self.cards.takeAt(0).widget()
+            if w is not None:
+                w.deleteLater()
+        any_laps = False
+        for key, name in fm4tracks.lap_circuits(self.cfg):
+            laps = fm4tracks.laps(self.cfg, key)
+            c, cl = card(spacing=8)
+            best = min(laps, key=lambda lap: lap["time"]) if laps else None
+            title = name + (f"   best {fm4tracks.lap_text(best['time'])}" if best else "")
+            cl.addWidget(label(title, "cardTitle"))
+            if not laps:
+                cl.addWidget(label("No timed lap here yet.", "muted"))
+                self.cards.addWidget(c)
+                continue
+            any_laps = True
+            table = QTableWidget(0, 4)
+            table.setHorizontalHeaderLabels(["Lap time", "Sectors", "Date", ""])
+            table.verticalHeader().hide()
+            table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+            table.setSelectionMode(QAbstractItemView.NoSelection)
+            table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+            table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+            rows = [best] + [lap for lap in reversed(laps) if lap is not best][:49]
+            table.setRowCount(len(rows))
+            for r, lap in enumerate(rows):
+                sectors = lap.get("sectors") or []
+                # the sector times as each sector's own time (the file keeps the lap time at each end)
+                ends = [x for x in sectors if isinstance(x, (int, float))] + [lap["time"]]
+                own = [b - a for a, b in zip([0.0] + ends[:-1], ends)]
+                cells = [fm4tracks.lap_text(lap["time"]), "   ".join(fm4tracks.lap_text(x) for x in own),
+                         str(lap.get("date", "")), "best" if lap is best else ""]
+                for col, text in enumerate(cells):
+                    table.setItem(r, col, QTableWidgetItem(text))
+            table.setMaximumHeight(320)
+            table.setSizeAdjustPolicy(QTableWidget.AdjustToContents)
+            cl.addWidget(table)
+            self.cards.addWidget(c)
+        self.empty.setVisible(not any_laps)

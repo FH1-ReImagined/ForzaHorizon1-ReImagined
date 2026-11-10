@@ -560,6 +560,13 @@ the `GPU slow frames` lines). Checked with 0426 on the golden save at render sca
 cache): the vinyl group thumbnail (MY VINYL GROUPS and the storefront preview), the paint job preview,
 the storefront livery texture, two saved photos with their thumbnails, and the car's thumbnail after
 an Auto Upgrade at a Horizon Outpost (`Thumbnail_N.xdc`, 768x288, the 3/4 and side views) are correct.
+
+**The reporter's A/B (#536, RX 6600, Linux).** The pairs came from a non-default kernel parameter,
+`amdgpu.vm_update_mode=3` (CPU page-table updates), set to work around another game. With it, each
+readback buffer free took about 25 ms; with the default (`-1`) 0.02-0.03 ms. With the parameter, 0426
+lifted the 1% low from 26.4 to 31.5-32.6 fps (12 of 20 frames over 33 ms held a free without it);
+without the parameter reuse makes no measurable difference. Players with that parameter set should
+keep `vulkan_readback_reuse_buffers` on, or remove the parameter.
 In the first check run, with an empty pipeline cache, the paint job preview came out black; that run
 logged resolves copied back while draws' pipelines were still being built (as in #74). The same flow
 with the cache warm is correct with and without 0426.
@@ -1125,9 +1132,10 @@ its registers, so a write between its check and the block is not missed. With `F
 limit while the command processor waits for a vblank. The other six D3D wait loops (their conditions can depend
 on other words) keep the 50 us sleeps; on Windows those now sleep on a high-resolution waitable timer instead of
 yielding on every poll, which kept the waiting thread on a core for the whole wait (#268: it is the race's render
-thread, most of each frame). None of this has run on Windows yet, so there it is off unless the setting
-`gpu_wait_blocking` is on (Advanced > GPU, "Sleep while waiting for the GPU (testing)"); it is on by default on Linux
-and macOS (`launcher/test_gpu_wait_blocking.py` checks both defaults). Off, the waits are the ones before it.
+thread, most of each frame). The setting `gpu_wait_blocking` (Advanced > GPU on Windows, "Sleep while waiting for
+the GPU") turns it on; it was off on Windows until it ran there and is on everywhere since #640 (measured on a
+4-core Windows laptop, [below](#a-4-core-laptop-with-a-gtx-1650-ti-and-8-gb-640-2026-11-04);
+`launcher/test_gpu_wait_blocking.py` checks the default). Off, the waits are the ones before it.
 `FORZA_GPU_WAIT=block|sleep|spin` overrides the setting (sleep: the old waits; spin: the game's loop).
 
 **Measured** (four cores, 3 runs each, B and C alternating; A = neither fix: the main-branch game, runtime and
@@ -1893,6 +1901,19 @@ ultrawide path, `docs/ultrawide.md`, gave up on fractional heights for that reas
    (`sub_82C3E310`, from `sub_82586170`) copies the last 720p front buffer this way into the
    `Shared` 2:10:10:10 texture in `WorldDepth`.
 7. The D3D device keeps a 1280x720 back buffer (it is made with the first scenario's size).
+8. The sun's shadow mask (`sub_824532F0`, TU4 `sub_824829D8`; docs/graphics-detail.md "Shadow
+   softness") is drawn at the scene size. Its code sets a 1280x720 viewport
+   (`D3DDevice_SetViewport`, `sub_82410C30`, TU4 `sub_82440BE0`) and passes 1280x720 to the
+   cascades' volume quad (`sub_82DDDEE0`, TU4 `sub_82EA04E8`) and the blur's taps (`sub_823E2C48`,
+   TU4 `sub_82412BD8`). While the mask is drawn, those three get the scene size. Before this
+   (#682, from 0.2.7, when entry GPUs got 540p by default) the mask passes covered 1280x720 of a
+   surface whose depth and stencil came from the 960x540 pre-pass. The mask was then resolved
+   cropped to 960x540, so the car's shadow became a streak running up and to the left of the car,
+   and its real shadow was missing (RenderDoc: the pre-pass at 960x540, the 11 mask passes and the
+   blur at 1280x720). It is the same on Vulkan and ReGPU, on AMD and NVIDIA, because it is in the
+   guest's draws. The same spot in free roam at 540p and 720p: the shadow pixels' centre was
+   (-71, -56) px off at 1280x720 and the shadow overlapped 720p's by 44%. With the fix it is
+   (+1, +2) px off and overlaps by 91%; the remaining difference is the lower resolution.
 
 It stays at 720p with the SDK's scene reconstruction (`fh1_upscaler`: FSR 3, DLSS, SMAA), separate
 scene anti-aliasing or ultrawide gameplay, which find the scene by its 720p targets (logged).
@@ -2630,75 +2651,117 @@ in these runs) and the command processor alone on a CPU (`GPU_Commands=3;*=0-2`)
   not sharing with it) is exactly what this PC cannot show. The mechanism and the layout need one run on a Deck:
   Settings, Advanced, extra arguments `--linux_thread_cores=auto`, then the benchmark, with and without; the log
   lists each pinned thread (`linux_thread_cores:` lines).
-### Decoding and recording on two threads (#474): plan, not built
+### Decoding and recording on two threads (#474, ReIGlue 0420)
 
-Not built: the two changes above and their measurements took the window. What a build needs, from reading ReIGlue `origin/main`
-(`src/graphics/command_processor.cpp`, `src/graphics/vulkan/command_processor.cpp`) and Pinyon Shift's
-`gpu_record_thread` (ShiftGlue `9362a07`, 419 changed lines in the same Xenia-derived processor).
+`--gpu_split_command_processor=true` (restart, default off; Vulkan) splits the GPU command processor in two, after
+Pinyon Shift's `gpu_record_thread` (ShiftGlue `9362a07`, draws as plain records `7440c33`, unchanged register writes
+dropped `9bf779f`). "GPU Commands" (the decoder) parses the PM4 stream against a shadow of the register file and
+records, in order, the register writes (copied from the ring or the game's constant memory) and the backend work;
+"GPU Recorder" applies the writes to the register file and runs the draws, copies, shader loads (memo 0140), swaps
+(with the frame's tag), fence writes (`EVENT_WRITE_SHD`, with SDK 0115's futex wake, so `gpu_wait` and `render_idle`
+wake when the recorder stores the word), interrupts, `EVENT_WRITE_EXT` and the end-of-buffer submission. Everything
+that reads the register file, the caches or the Vulkan state runs on the recorder, so the memos 0140, 0340 and
+0360-0362 stay as they are. The rules for what the CPU sees:
 
-**Shape.** Keep PM4 parsing (`ExecutePrimaryBuffer`, `ExecutePacket*`) on the "GPU Commands" thread, the decoder. It
-reads a *shadow* register file (`decode_regs()` in Pinyon) and appends, in order, to a batch: register runs (copied:
-the ring and the game's constant memory are reused after the packet), and closures or small records for the backend
-work (draw, copy/resolve, shader load, swap, event/fence writes, interrupts). A second thread, the recorder, takes
-batches and applies them to the real `register_file_` and the backend (`VulkanCommandProcessor::WriteRegister`
-bookkeeping, `IssueDraw`, `IssueCopy`, `IssueSwap`...). The decoder publishes a batch when it is full, at a swap,
-and before it waits.
+- `MEM_WRITE`, `COND_WRITE`, `REG_TO_MEM` and the occlusion queries (`EVENT_WRITE_ZPD`) wait for the recorder to run
+  everything before them, then run on the decoder with the register file (the recorder is idle meanwhile).
+- `WAIT_REG_MEM` for memory: while the recorder has work, the decoder polls again each time it finishes a batch (at
+  most 100 us apart) instead of sleeping until a vblank, because the word may be a fence the recorder is still to
+  write; this was the first build's problem (half the frame rate, the decoder sleeping ~8 times a frame).
+- `WAIT_REG_MEM` for `COHER_STATUS_HOST` (Direct3D's coherency wait, about a hundred a frame) is answered on the
+  shadow, as Pinyon Shift does; a wait for another register, and `REG_RMW` of a register below 0x2000 (the CPU and the
+  backend write some of those directly), wait for the recorder and read the register file.
+- Fences are recorded, not waited for. The read pointer is written by the decoder at once (it has copied what it
+  needs from the ring); the work before it is published first. The decoder never asks the Vulkan backend about
+  submissions, so Pinyon's `b3b3cbb` (awaiting a fence before the worker submitted it) cannot happen: the recorder alone
+  ends and awaits submissions, and the threaded submission already waits for a fence only once it is submitted.
+- Off while split: the pipeline lookahead (#378, it walks the decoder's ring position from inside a draw), the
+  stereo replay of VR true stereo (0396) and `FORZA_GPU_FRAME_TRACE`.
+- `--gpu_split_elide_unchanged_registers` (default on, only with the split): the decoder records only the context
+  and constant registers (0x2000 on) whose value changes, except the two initiators: about 30 % of the 360,000-530,000
+  register writes a frame are recorded.
+- A log line once per 1,800 frames: batches a frame, register writes recorded, and how often the decoder waited for
+  the recorder, by reason (`wait_memory` about 8 a frame, `register_read` 1, the rest 0 in free roam).
 
-**What stays on the decoder and what moves.** Today's cost sits in `WriteRegistersFromMem` (per-register
-`WriteRegister` dispatch and the Vulkan constant-block invalidation), `ExecutePacket`, `IM_LOAD`
-(`fh1_shader_load_memo.h`, patch 0140) and the draw's front half. After the split the decoder only compares and copies
-words (Pinyon: drop unchanged register writes `9bf779f`, merge float-constant runs `99f52ca`, compare four registers
-at a time `e00387b`), the recorder owns everything that reads the register file, the caches and the Vulkan state.
-The memos 0140/0340/0360-0362 run on the recorder side (they read the register file and caches); the `IM_LOAD`
-address-to-shader memo needs the recorded dwords, so `IM_LOAD` is recorded whole and memoized on the recorder.
+**Results.** Same machine and Deck preset as above, uncapped (`--frame_rate=240`), the TU4 build of main b9011fa with
+ReIGlue 0420 ([ReIGlue #26](https://github.com/FH1-ReImagined/ReIGlue/pull/26)), one build, the cvar on the command line, runs started alternately (on first, then off first),
+benchmark: its measured minute; free roam: 90 s of full throttle from the spawn. "4 cores" is `taskset -c 0-3`,
+"8 cores" the whole CPU. GPU Commands / GPU Recorder ms/frame: each thread's CPU time per guest frame, sampled from
+`/proc` (unsplit, GPU Commands is the whole command processor). Runs during which another game ran on the machine
+were left out.
 
-**Ordering rules (what the guest can observe).**
-- `MEM_WRITE`, `COND_WRITE`, `REG_TO_MEM`, `EVENT_WRITE_SHD/EXT` that the CPU reads, and occlusion queries
-  (`EVENT_WRITE_ZPD`, `VIZ_QUERY`): the decoder `RecordSync()`s first (the recorder has run everything before),
-  then performs them itself. Rare packets.
-- `WAIT_REG_MEM` (about a frame boundary and the "GPU idle" waits): publish the recorded work, then poll. The register it
-  polls is the *real* file for registers the recorder writes (`COHER_STATUS_HOST`, scratch) and memory otherwise;
-  `MakeCoherent` runs on the recorder.
-- Fence writes (`EVENT_WRITE_SHD`) are recorded, not waited for: the game must see a fence only after the recorder
-  has consumed the draws before it, because it reuses their memory after the fence. Avoid Pinyon's `b3b3cbb`
-  (awaiting a fence before the worker has submitted it): `AwaitSubmissionThread`/`CheckSubmissionFenceAndDeviceLoss`
-  must be asked about submissions the recorder has made, not the decoder's count.
-- `XE_SWAP` is recorded; the swap's `IssueSwap` runs on the recorder (with #476 the presenter step is queued on the
-  submission thread behind it). `rexui_SetNextGuestOutputTag`, `fh1_frame_trace::OnSwap` and `Fh1StereoOnSwap` must
-  be recorded with it (they bracket the swap on the decoder today).
-- SDK 0115's futex wake (`WakeWordWaiters` after scratch/MEM_WRITE stores) and the `gpu_wait` / `render_idle` hooks
-  must fire when the *recorder* publishes the store, not when the decoder parses the packet.
-- The stereo/VR recording (`Fh1StereoOnDraw/Replay`, patch 0396) replays whole draw segments: record the segment
-  markers and keep that state on the recorder, or leave the split off while `vr_mode` is on.
+| Scene | Split | Runs | fps | 1% low fps | p99 ms | GPU Commands ms/frame | GPU Recorder ms/frame | GPU Commands busy % | GPU Recorder busy % | Process CPU ms/frame |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Benchmark, 4 cores | off | 3 | 151.6 [147.7-158.3] | 95.0 [92.5-99.6] | 9.4 [9.0-9.7] | 4.56 [4.20-4.82] | - | 69 [66-71] | - | 14.9 [14.2-15.4] |
+| Benchmark, 4 cores | on | 3 | 154.9 [143.3-163.7] | 87.8 [77.3-94.0] | 9.8 [9.1-11.1] | 2.59 [2.49-2.76] | 4.00 [3.78-4.12] | 40 [36-43] | 62 [59-65] | 16.7 [16.1-17.1] |
+| Benchmark, 4 cores | change | | **+2.2 %** | | | | | | | |
+| Free roam, 4 cores | off | 3 | 221.8 [220.0-223.3] | 117.9 [109.4-124.4] | 6.9 [6.5-7.4] | 2.57 [2.39-2.72] | - | 57 [53-60] | - | 10.5 [10.3-10.7] |
+| Free roam, 4 cores | on | 3 | 196.6 [189.8-203.1] | 100.2 [90.8-108.5] | 8.1 [7.4-8.9] | 1.80 [1.77-1.82] | 2.56 [2.50-2.63] | 35 [35-36] | 50 [50-51] | 12.6 [12.3-12.9] |
+| Free roam, 4 cores | change | | **-11.4 %** | | | | | | | |
+| Benchmark, 8 cores | off | 3 | 155.2 [151.5-158.9] | 98.8 [97.2-102.0] | 9.0 [8.9-9.1] | 4.39 [4.23-4.60] | - | 68 [67-70] | - | 15.2 [14.8-15.6] |
+| Benchmark, 8 cores | on | 3 | 162.8 [157.6-168.2] | 107.9 [105.5-111.2] | 8.1 [7.7-8.4] | 3.05 [2.93-3.21] | 4.14 [3.94-4.38] | 50 [49-50] | 67 [66-69] | 18.0 [17.5-18.6] |
+| Benchmark, 8 cores | change | | **+4.9 %** | | | | | | | |
+| Free roam, 8 cores | off | 3 | 204.5 [202.6-206.9] | 106.7 [103.4-109.0] | 7.4 [7.1-7.7] | 3.06 [2.89-3.15] | - | 63 [60-64] | - | 11.8 [11.3-12.1] |
+| Free roam, 8 cores | on | 3 | 215.4 [209.1-220.6] | 121.5 [113.4-137.5] | 6.5 [6.1-6.8] | 1.92 [1.83-2.00] | 2.58 [2.49-2.67] | 41 [40-42] | 56 [54-58] | 13.3 [13.0-13.5] |
+| Free roam, 8 cores | change | | **+5.3 %** | | | | | | | |
 
-**Register file readers on the decoder** (these need the shadow file or a recorder round trip): the packet loop reads
-`PA_SC_VIZ_QUERY` (draw skip), `VGT_*` (it writes them), `COHER_*`, `SCRATCH_*`, `RB_*` only through `IssueDraw`
-(recorder). `ReadRegisterValue` callers in `WAIT_REG_MEM`, `REG_RMW` (read-modify-write: the decoder can do it on the
-shadow and record the result), `REG_TO_MEM`. The shadow is written by every packet write (cheap) and never by the
-backend; the few registers the backend itself writes (`WriteRegister` from `OnPrimaryBufferEnd`, gamma ramp
-sequence, scratch) need the same write recorded on both files.
+- On four cores without SMT the split is slower in free roam (-11.4 %, every run) and level in the benchmark (+2.2 %,
+  inside the race's run-to-run spread of 143-164 fps; the 1% lows are 7 fps lower). The recorder alone
+  costs about what the whole unsplit command processor did (the recorded writes are applied through the generic
+  `WriteRegistersFromMem` instead of 0360's direct copy from the ring, and elided writes save little on the recorder),
+  and the decoder adds 1.8-3.1 ms of CPU a frame on top: the process uses 2-3 ms more CPU per frame on four cores the
+  game already shares with its own threads. Neither GPU thread is saturated (35-66 % busy) at these frame rates:
+  the frame waits on CPU-GPU round trips (`wait_memory`, about 8 a frame), which the split cannot shorten.
+- With eight cores the decoder has a core of its own: +4.9 % in the benchmark and +5.3 % in free roam, 1% lows 9-14 %
+  higher, p99 about 1 ms shorter; the process uses 1.5-2.8 ms more CPU a frame.
+- A Deck (4 Zen 2 cores, 8 threads) is in between: the decoder could take an SMT sibling, but the recorder is the
+  same length as today's thread, so expect little. One busy loop per core (CPUs 0-3, the slow-CPU stand-in above)
+  gave on/off 81.6/91.2 fps in free roam and 63.6/71.6 in the benchmark (one pair each): slower.
+- Correctness (split on): `tools/render_test.py` (festival session: title, free roam midday and dawn, cockpit, photo
+  mode, race start) against baselines recorded with the split off, 6 of 6 scenes pass, each within the off-against-off
+  noise of the baselines; the paint shop (Montano Plains outpost: Paint Shop, Design Creator, Add Decals) and fast
+  travel work; a 10-minute free-roam session at 60 fps (paint shop, then 10 minutes of driving): 59.98 fps, longest
+  frame 47 ms, no hang; one 760 ms frame entering the paint shop's editor (a loading screen, not compared with off).
 
-**Cvar and rollout.** `gpu_record_thread` (restart), default off, the Vulkan backend opts in
-(`SupportsRecordThread()`); D3D12 and the VR stereo path stay on one thread. Same thread-naming rule as #475
-(`GPU Recorder` next to `GPU Commands`) so `linux_thread_cores` can give each a core.
+#### On by default with 6 or more cores (2026-11-08)
 
-**Measure** with the harness used for #476/#475: Deck-like limits (`taskset -c 0-3`, 30 fps and uncapped, the
-busy-loop slow-CPU variant), benchmark and free roam, in-run toggling is not possible (restart cvar), so ABBA pairs;
-metrics: fps and 1% lows, `fh1_frame_cost_csv` CP ms (now two numbers: decoder and recorder) and the sum, process CPU
-per frame (the split adds copying: expect +3-6 % total CPU, which the Deck pays for on the SMT sibling), hitches
-(`GPU slow frames`, `FORZA_STALL`). Correctness: paused-scene screenshots at the same spots, the `render_tests`
-captures (`tools/render_tests`), a race with 7 AI cars, a photo-mode Big Shot (readback resolve), and a cvar-off run
-that is bit-identical to today's.
+Measured again on main 2e28667 with ReIGlue main a5fd408 and 0420 rebased on it, and with
+`vulkan_present_on_submission_thread=true` in both arms (on by default since #607's #613; the swap's wait for the
+replay was a fixed part of the command processor's frame in the runs above). The PC's default preset (AMD FSR 1, the
+game's 4x MSAA, 1280x720, render scale 1) instead of the Deck preset, uncapped (`--frame_rate=240`), on the hidden
+display (headless gamescope), one build with the cvar on the command line. Benchmark: 3 runs per state, interleaved
+(off first, then on first); free roam: 3 minutes of driving from the spawn, one run per state. "6 cores" is
+`taskset -c 0-5` on this 8-core CPU without SMT, standing in for a Ryzen 5 5600X (6 cores, 12 threads: more than
+this). Command processor ms/frame: unsplit, the frame cost CSV's `cpu_ms` (`fh1_frame_cost_csv`); split, each
+thread's CPU time per guest frame from `/proc` (the CSV then times the recorder only).
 
-**Cost estimate.** Pinyon's first step was 419 changed lines; ours also has per-register Vulkan invalidation, the
-stereo path, readback-resolve `RecordSync` points (`readback_resolve_wait_range`, #552, 0411) and the pipeline
-look-ahead (`fh1_pipeline_lookahead`, run at the frame end), so budget 2-3 days of work plus the measurements, in
-steps that each leave the cvar-off path unchanged: (1) the batch/recorder thread running closures for draws and
-copies only, registers still written by the decoder under a sync at every draw (correct but slow, tests the ordering);
-(2) shadow register file and recorded runs; (3) the sync rules for the CPU-visible packets; (4) the follow-ups
-(unchanged-write drop, constant-run merge). Expected gain: the 25-30 % decode share of the thread's 7-8 ms on this PC
-(2-2.5 times that on a Deck) comes off the thread the frame waits for, minus the batch hand-off; Pinyon measured
-18.1 to 17.0 ms (6 %) from the split alone.
+| Scene | Split | Runs | fps | 1% low fps | p99 ms | Command processor ms/frame | Decoder ms/frame | Recorder ms/frame | Process CPU ms/frame |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Benchmark, 8 cores | off | 3 | 147.0 [146.4-147.9] | 96.0 [93.9-98.5] | 9.37 [9.22-9.48] | 6.00 [5.96-6.07] | - | - | 17.8 |
+| Benchmark, 8 cores | on | 3 | **166.3** [164.5-168.3] | 109.0 [107.1-110.3] | 8.00 [7.76-8.24] | - | 3.83 | 4.84 | 19.7 |
+| Benchmark, 6 cores | off | 3 | 148.9 [146.7-151.4] | 95.6 [93.1-97.8] | 9.36 [9.28-9.47] | 5.86 [5.73-6.09] | - | - | 17.3 |
+| Benchmark, 6 cores | on | 3 | **157.5** [155.2-162.0] | 100.2 [93.6-104.1] | 8.76 [8.58-9.02] | - | 4.12 | 5.26 | 20.5 |
+| Free roam, 8 cores | off | 1 | 174.1 | 109.8 | 7.61 | 4.70 | - | - | 14.6 |
+| Free roam, 8 cores | on | 1 | **232.7** | 131.2 | 6.15 | - | 2.56 | 3.32 | 14.8 |
+| Free roam, 6 cores | off | 1 | 198.4 | 111.3 | 7.27 | 4.14 | - | - | 13.3 |
+| Free roam, 6 cores | on | 1 | **227.5** | 128.3 | 6.41 | - | 2.29 | 3.05 | 14.1 |
+
+- The benchmark: +13.1 % on eight cores, +5.8 % on six; every run with the split was faster than every run without,
+  at both core counts, and the 1% lows and p99 are better. No frame over 50 ms in any of the 12 runs.
+- Free roam: +14.7 % on six cores; on eight the run without the split was the slowest of the four (8 % other load on
+  the machine), so its +34 % overstates it. Frames over 50 ms in the 3 minutes: 0 and 1 (six cores), 0 and 2 (eight).
+- The gain is larger than in the runs above (+5 % on eight cores) because the swap no longer waits for the replay:
+  then the unsplit thread's frame held an idle wait the split could not shorten.
+- Two benchmark runs from empty game and driver shader caches (8 cores, one per state) ran at 30 fps (the fresh
+  cache folder had no frame-rate setting), so they show only the hitches: 1 frame over 50 ms without the split, 0 with
+  it. The split turns off the pipeline lookahead (#378); with the prebuilt pipelines (#276) that did not show.
+- Correctness: `tools/render_test.py` (festival session, 6 scenes) against the stored baselines: with the split, 6 of 6 in the last run; in two earlier runs on the same build each state failed one scene by a little (without the split `freeroam_dawn`, with it `freeroam_midday` at 0.68 % changed against 0.50 %), and a first run with it (the #613 build) failed four, among them `photo_mode` with the camera turned the other way (yaw 100 against 280), the scripted input's timing rather than the picture.
+
+The game turns it on by default (`ApplyForzaGpuCvarDefaults`, `src/main.cpp`) when the process may run on 6 or more
+physical cores (its affinity; SMT siblings count once, `src/platform/cpu_cores.h`) and no VR headset is used: a
+Steam Deck (4 cores, 8 threads) and the four-core runs above stay off. `gpu_split_command_processor` in `forza.toml`
+or on the command line still sets it either way. The log says which: `Physical CPU cores available: N
+(gpu_split_command_processor default true|false)`, and the performance settings line lists it.
 
 ### Where this leaves #559
 
@@ -2708,8 +2771,10 @@ preset, with identical pictures and no extra hitches; it should be tried on a De
 and, before it becomes the default, on the paths that use the deferred step differently: the VR export (frame tag and
 pose pairing), native upscaling with DLSS (the replay's split submission), and a Windows run. `--linux_thread_cores=auto`
 is the Deck layout of Pinyon Shift; it does nothing on a CPU without SMT because on four cores with one thread each it
-measured slower, so only a Deck can say whether it helps. The command processor split (#474) is the large item and is
-not started.
+measured slower, so only a Deck can say whether it helps. `--gpu_split_command_processor=true` (#474) is built and
+correct here but only pays with a spare core (+5 % on eight cores, -11 % in free roam on four without SMT); a Deck run
+with and without it would say whether its second thread on an SMT sibling helps there (`--linux_thread_cores=auto`
+does not place "GPU Recorder" yet: it falls under `*`).
 
 ## Where a frame's CPU time goes (#607, 2026-11-03)
 
@@ -2906,6 +2971,85 @@ yields (0.2-0.35 ms a frame, not on the chain), the GPU and readback waits (zero
 a setting, render scale or MSAA). The audio mixer is a fixed 11-13% of a core here, 2-2.5 times that on a Deck, where it
 competes for the four cores; worth a look after the three above.
 
+### Step 2: the hottest instruction of the command processor (#607, ReIGlue 0435, 2026-11-04)
+
+After the cuts above (present without the replay wait #613, binding reuse #179/#192, the split #474) and the
+dropped register elision (ReIGlue #32), what is left on the command processor that none of them covers?
+
+**Method.** TU4 game of main f95b52c (`-DFORZA_CPU_TARGET=x86-64-v3`), ReIGlue 641a19c (the pin) built with
+`-gline-tables-only` (same code; samples resolve to inlined functions), the golden TU4 save in a scratch
+`--user_data_root`, scratch XDG dirs, offline, audio muted, the launcher's Steam Deck preset with
+`--frame_rate=240` (uncapped: the frame waits on the command processor), BENCH lock held, no other game running
+(checked every 10 s). Free roam (60 s of `tools/autodrive.py` on the County Route loop) and the race (GoPro
+Millennia Masters, 60 s from the start); 8 cores, or CPUs 0-3 with `taskset`. `PERF_CPUPROF` samples (1 ms of CPU
+time, self time) symbolized with their inline chains (`llvm-symbolizer --inlining`) and attributed to the physical
+function; `eu-stack` call stacks of the command processor (264 in a race) for the waits. perf is still not
+installed.
+
+**Where the command processor's time goes** (free roam, ms of CPU a frame; 4 cores: 3.50 ms, 2,755 draws,
+188 fps; 8 cores: 3.70 ms, 2,808 draws, 181 fps):
+
+| Area | 4 cores | 8 cores | Covered by |
+| --- | --- | --- | --- |
+| Bindings, textures, samplers, `vkUpdateDescriptorSets` | 0.99 (28 %) | 1.04 (28 %) | #179, #192 (Sean's drafts) |
+| PM4 decode, register writes and their copies | 0.86 (25 %) | 0.90 (24 %) | #474 (ReIGlue #26), ReIGlue #32 dropped |
+| Guest memory: `RequestRanges`, `mprotect`, `EnableAccessCallbacks`, watches, lock wakes | 0.34 (10 %) | 0.32 (9 %) | |
+| Shaders and pipelines (`IM_LOAD` memo, translation and pipeline lookups) | 0.21 (6 %) | 0.23 (6 %) | |
+| System constants, viewport, dynamic state | 0.21 (6 %) | 0.22 (6 %) | |
+| `memcmp` | 0.08 (2 %) | 0.07 (2 %) | |
+| Yields in `WAIT_REG_MEM` (waiting for the game) | 0.05 (1 %) | 0.10 (3 %) | |
+| `IssueDraw`, primitives, render targets, uploads, the rest | 0.77 (22 %) | 0.81 (22 %) | |
+
+Wall clock (call stacks, race, 8 cores): 47 % in `IssueDraw`, 16 % waiting for the submission thread at the swap
+(#613), 13 % waiting for the game (`WAIT_REG_MEM`). Off the chain: the render thread 2.8 ms a frame (83 % guest
+code, 7 % `sched_yield`), the main loop 2.2 ms (93 % guest code), the submission thread 1.0 ms (78 % RADV).
+
+Outside the covered areas the profile is flat: no function above 2 % of the thread. But one instruction stands
+out: **3.6-3.9 % of all the command processor's samples land right after the `xchg` in
+`TextureCache::RequestTextures`**, `texture_became_outdated_.exchange(false)` on every draw. A locked instruction
+waits for the store buffer to drain, and at that point it holds the draw's register, constant and command
+stores. The flag is only set by memory watch callbacks. The next was `ExecutePacket`'s division of the packet's
+start offset (for the VR stereo log, 0396), 1.2 % of the thread, about 24 times a draw.
+
+**Change: ReIGlue 0435.** The flag is loaded first and exchanged only when set (a callback that sets it after the
+load is seen by the next draw, as before after the exchange); `ExecutePacket` keeps the read offset and divides
+only when it logs the packet. No setting: the behaviour is the same. In the profiles `RequestTextures` falls from
+4.7 % to 0.9 % of the thread and `ExecutePacket` from 6.3 % to 5.4 %.
+
+**Measured.** One game build, the two plugins (A = the pin, B = 0435; the same runtime), 3 runs each, A and B
+alternating which ran first, 24 runs, no other game. Mean [min-max]; fps, 1 % low and p99 from the command
+processor's frame intervals over the 60 s:
+
+| Scene | Build | fps | 1 % low fps | p99 ms | CP CPU ms a frame | CP us a draw | Draws |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Race, 8 cores | A | 186.5 [185.2-187.7] | 115.2 [114.0-116.9] | 8.45 [8.45-8.45] | 3.70 [3.67-3.73] | 1.258 [1.255-1.263] | 2,942 |
+| Race, 8 cores | B | 191.5 [190.5-192.3] | 116.0 [114.5-116.8] | 8.42 [8.40-8.44] | 3.54 [3.53-3.56] | 1.204 [1.202-1.204] | 2,943 |
+| Race, 8 cores | change | **+2.7 %** | +0.7 % | -0.4 % | -4.3 % | -4.3 % | |
+| Race, 4 cores | A | 183.7 [181.1-185.4] | 108.6 [106.6-110.2] | 8.51 [8.47-8.54] | 3.67 [3.62-3.72] | 1.237 [1.236-1.238] | 2,964 |
+| Race, 4 cores | B | 186.1 [184.1-187.6] | 111.9 [111.2-112.4] | 8.45 [8.44-8.45] | 3.57 [3.53-3.58] | 1.186 [1.176-1.195] | 3,005 |
+| Race, 4 cores | change | **+1.3 %** | +3.0 % | -0.8 % | -2.8 % | -4.1 % | |
+| Free roam, 8 cores | A | 186.5 [181.7-189.6] | 113.6 [107.8-123.6] | 7.35 [6.64-8.02] | 3.60 [3.54-3.67] | 1.311 [1.310-1.312] | 2,742 |
+| Free roam, 8 cores | B | 193.0 [181.7-202.1] | 118.6 [117.6-119.6] | 6.92 [6.50-7.21] | 3.42 [3.28-3.60] | 1.251 [1.236-1.264] | 2,735 |
+| Free roam, 8 cores | change | **+3.5 %** | +4.3 % | -5.8 % | -4.8 % | -4.6 % | |
+| Free roam, 4 cores | A | 190.7 [183.2-195.6] | 103.5 [103.1-104.4] | 8.22 [7.94-8.46] | 3.47 [3.38-3.54] | 1.277 [1.267-1.289] | 2,716 |
+| Free roam, 4 cores | B | 186.0 [182.1-191.9] | 98.7 [87.6-106.4] | 8.40 [7.75-9.11] | 3.46 [3.35-3.61] | 1.235 [1.214-1.256] | 2,804 |
+| Free roam, 4 cores | change | **-2.4 %** | -4.7 % | +2.2 % | -0.2 % | -3.3 % | |
+
+- The command processor's CPU per draw falls 4.3-4.6 % on 8 cores and 3.3-4.1 % on 4, every run of one build
+  outside the other's range: about 0.05-0.06 us a draw, 0.15-0.2 ms of a 3,000-draw frame.
+- The frame rate follows on 8 cores (race +2.7 %, the runs apart; free roam +3.5 %, inside its spread). On 4 cores
+  the race gains 1.3 % (the ranges overlap) and free roam shows no gain: its runs differ by 3 % in draws a frame and
+  by 7 % in fps within a build. With four cores the command processor is not the only thing the frame waits for
+  (run-queue waits, the render thread), so part of the saving becomes waiting.
+- Same output: the change keeps the behaviour. `ExecutePacketType3 overflow` / `INDIRECT RINGBUFFER` errors came
+  in 1 of 12 A runs and 2 of 12 B runs (once with draws failing in the same burst); they are not new, and neither
+  change touches the packet parsing.
+
+**Left** (this round, not built): the guest memory area (9-10 %: three `mprotect` calls per protected range, one
+for each of the physical memory's views, under the global lock the game's write faults take; 88 texture loads
+a frame in free roam), the `IM_LOAD` memo's `memcmp`, `Fh1DirtSeamInterpolator`'s per-draw binary search
+(0.6-0.9 %).
+
 ## Stutter in the first part of a drive (#614, 2026-11-03)
 
 **The report.** A side-by-side video of the same replayed drive on one Windows PC: our Vulkan path showed tall
@@ -2968,3 +3112,640 @@ be built, 1148 of 1190 before), the game's part of the prebuild takes 3.0-3.4 s 
 instead of 26-27; the race minute and the free-roam drive have no spike from pipelines left. What remains on this PC
 is the game's own frames while it loads. Not changed: on NVIDIA every start still compiles what its driver cache does
 not keep (#406), at the warm-up, before the title screen, not in play.
+
+## Memory: what the game takes in RAM and VRAM, for 8 GB PCs (#640, 2026-11-04)
+
+**Measured** on the RX 9060 XT PC (Linux, RADV, 30 GB): TU4, the golden save, offline, audio muted (the XMA decoder
+still decodes), the launcher's defaults (60 fps, AMD FSR 1, the game's 4x scene MSAA), render scale 1, a 1280x720
+window, a warm shader cache. Two scenes: free roam after a 4-minute drive (throttle and steering on the roads
+around the festival) and the GoPro Millennia Masters race after 2 minutes (`tools/autodrive.py`). Each number is
+the process's own (`tools/memory_snapshot.py`: `/proc/PID/smaps`, the guest memory file's pages, the DRM client's
+VRAM and GTT), so other games on the PC do not change it.
+
+| MB | Free roam, after the drive | Race, 2 minutes in |
+| --- | --- | --- |
+| RSS (PSS) | 1,186 (933) | 1,204 (942) |
+| Guest memory: pages written (of the 4.5 GB file) | 488 | 491 |
+| Guest memory: host commit (Windows: commit charge), in use now | 704, 528 | 704, 529 |
+| Heaps and other private memory (anon) | 343 | 350 |
+| The game's code (forza, file-backed, evictable) | 64 | 63 |
+| SDK, driver and system libraries: RSS (PSS) | 77 (36) | 77 (36) |
+| GTT (system RAM the GPU driver holds for us, not in RSS) | 59 | 79 |
+| VRAM (device-local) | 1,094 | 1,106 |
+
+The guest's pages are mapped twice (virtual and physical views), so RSS counts them twice and PSS once. Over a
+60-minute soak (#45, above) RSS grows another 90 MB, flat after 20-30 minutes, as the texture cache fills.
+
+**The heaps**, by allocation site (an `LD_PRELOAD` heap tracker, allocations of 4 KB and more, free roam after the
+drive; 297 MB tracked):
+
+| MB | What |
+| --- | --- |
+| 143 | XMA decoder: an FFmpeg codec context for each of the 320 contexts, 450 KB each, set up at start (the game uses 48 in free roam, 70 after the drive) |
+| 40 | XMA decoder: a 128 KB packet buffer for each of the 320 contexts, never used |
+| 11 | XMA decoder: the decoders in use (MDCT tables) |
+| 18.6 + 18 | shader translations: our SPIR-V (473 translations) and the driver's copy in the shader modules |
+| 20 | glslang's built-in symbol tables, kept after the startup compiles |
+| 12 | three descriptor set allocators |
+| 9.5 | the guest heaps' page tables |
+| 4.5 | the audio system |
+| 3.4 | the driver pipeline cache's entries (RADV: 10 KB a pipeline) |
+
+**On Windows** the guest memory is a page-file-backed section (`CreateFileMappingW` with `SEC_RESERVE`, 4.5 GB
+reserved, nothing committed). `Memory::Initialize` then commits the whole physical memory (512 MB) at start, and
+every guest allocation commits its pages; guest releases never give them back (a mapped view cannot be decommitted),
+so the guest's commit charge is the high-water mark: 576 MB at the title screen, 642 MB in free roam, 704 MB after a
+drive (ReIGlue 0427 logs it: `Guest memory: N MB committed on the host`). Committed pages the game never wrote cost
+no RAM; the ones it wrote stay in RAM or the page file. On top come the heaps (all committed, also what Linux never
+touched, like the 128 KB packet buffers), the driver's own memory (not measured here) and the driver pipeline cache
+below. An estimate for NVIDIA, from the code and #406's sizes: guest 0.7 GB, heaps 0.35 GB, the driver pipeline
+cache 1-1.6 GB in a long session: 2-2.7 GB of commit plus the driver's; after the fixes here 0.7 + 0.2 + at most 0.5:
+1.4 GB plus the driver's. An 8 GB PC's commit limit is its RAM plus the page file (system-managed: a few GB that
+grows on demand), so the limit is not the risk; the working set is: what the game wrote stays in RAM or goes to the
+page file, next to Windows' own 3-4 GB, and VRAM that overflows a 4 GB card goes to system RAM too.
+
+**What fits in 4 GB of VRAM** (the race, device-local, the GPU minute lines' split):
+
+| | VRAM MB | Render targets | Textures |
+| --- | --- | --- | --- |
+| Render scale 1, scene MSAA 4x (default) | 1,106 | 38, 540 MB | 211 MB |
+| Render scale 1, `scene_msaa = off` | 1,044 | 35, 494 MB | 186 MB |
+| Render scale 2, scene MSAA 4x | 3,129 | 38, 2,020 MB | 372 MB |
+| Render scale 2, `scene_msaa = off` | 2,942 | 35, 1,839 MB | 369 MB |
+
+Every host render target covers the whole EDRAM's worth of rows for its pitch, whatever the MSAA, so MSAA off saves
+little; render scale 2 multiplies them by four. The texture cache then grows to its 384 MB limit in 20 minutes
+(`texture_cache_memory_limit_soft`), and the guest memory's GPU copy holds the 360 MB of physical memory in use.
+At render scale 1 a 4 GB card has room (1.1 GB, 1.4 GB after an hour); at render scale 2 the game alone takes 3.1 GB
+two minutes into the race and more as the texture cache grows toward its hard limit (768 MB), so with the desktop
+on the same card there is little or no room left, and the driver moves memory to system RAM (Windows: "shared GPU
+memory"), which an 8 GB PC does not have to spare either.
+
+**Fixed** (ReIGlue 0428-0430; before and after, the same runs):
+
+| MB | Free roam after the drive | Race |
+| --- | --- | --- |
+| RSS | 1,186 -> 1,035 (0428 only) | 1,204 -> 1,037 (0428-0430) |
+| PSS | 933 -> 785 | 942 -> 781 |
+| Heaps (anon) | 343 -> 205 | 350 -> 194 |
+| Private writable mappings (the closest Linux has to commit) | 1,339 -> 1,163 | 1,378 -> 1,184 |
+
+- 0428, the XMA decoder: FFmpeg's state is made on a context's first decode and freed when the game releases it,
+  and the packet's buffer reference wraps the frame array the data was already in. Decoding is the same: with a hash
+  of every decoded frame (the input frame and the PCM it gave) over a 150 s drive, 39 of the 31,006 input frames
+  both builds decoded gave no output in common, and 30 of 30,662 between two runs of the unchanged build (frames
+  whose output depends on the frame before).
+- 0429, the driver pipeline cache: every pipeline's driver data stayed in memory until exit, to be saved, though a
+  save keeps 512 MB. NVIDIA's data is about 2 MB a pipeline (#406): a session of 800 pipelines held about 1.6 GB.
+  Now new data is kept only while the total fits what a save keeps. Nothing changes on RADV (10 KB a pipeline);
+  with the bound lowered to 2 MB for the test (`vulkan_store_pipeline_cache_memory_mb`), the save stays within it and
+  the next start creates the pipelines it holds from it. Not measured on NVIDIA here (the laptop was offline): on
+  the 8 GB GTX 1650 Ti it should be the largest of the three, up to about 1 GB less in a long session.
+- 0430: a shader translation's SPIR-V is freed once its shader module exists (18.6 MB after the drive, twice that in
+  a long session).
+- The render tests: baselines recorded from the unchanged build (`tools/render_test.py record`, 3 runs; the stored
+  October baselines no longer match main in 4 scenes, fixes or not), then `check` with 0427-0430: 6 of 6 scenes
+  pass, each within its run-to-run noise (dssim title 0.0000, free roam 0.0016 and 0.0007, cockpit 0.0006, photo
+  mode 0.0084, race 0.0035).
+
+**Not done, with estimates:**
+
+- Render targets sized to the rows the game draws instead of the whole EDRAM: each of the 38 is a full EDRAM's rows
+  for its pitch (`GetRenderTargetHeight`), 540 MB at render scale 1 and 2 GB at render scale 2. If a 720p scene
+  uses about half of those rows (not measured), half of that: 250 MB and 1 GB. A change to the EDRAM emulation's
+  aliasing, so a careful one; the biggest VRAM saving for 4 GB cards.
+- A smaller texture cache on 4 GB cards (`texture_cache_memory_limit_soft = 192`): 190 MB of VRAM late in a session,
+  at the cost of reloading textures unused for 30 s. A launcher setting for a Low preset.
+- The driver pipeline cache on NVIDIA still holds up to 512 MB: reading entries from the file when a pipeline needs
+  them (or a smaller bound on 8 GB PCs) would keep it to the entries in use. Windows cannot replace a mapped file,
+  so mapping it needs the save to write elsewhere first.
+- Texture packs: up to 256 MB of decoded textures wait for upload (`kMaxPendingDecodedBytes`), at 32 MB a frame;
+  64 MB would keep two frames' worth queued: up to 190 MB less RAM while a pack streams. Not measured (no pack here).
+- The physical memory committed whole at start (Windows): 512 MB of commit for about 360 MB used, 150 MB of commit
+  but no RAM. Committing it on demand changes what the GPU may read of released memory; little to gain.
+- glslang's built-in tables (20 MB) after the startup compiles; the guest heaps' page tables and descriptor pools
+  (22 MB): small.
+
+**To repeat on Windows** (the 8 GB laptop): start the game from the launcher at its defaults, then in a PowerShell
+window `powershell -ExecutionPolicy Bypass -File tools\memory_snapshot.ps1` (a CSV row every 30 s on the desktop:
+working set, private bytes, the GPU process memory's dedicated and shared usage, the system's commit and its limit,
+free RAM, pages read from the disk a second). Play to free roam, drive 4 minutes, note the time, start the GoPro
+Millennia Masters race and drive 2 minutes, note the time, quit. The `forza.log` adds the guest's commit (`Guest
+memory:`) and a line a minute with the textures, render targets, GPU memory and resident memory (`GPU minute`).
+Then the same at render scale 2. Paging shows as `hard_faults_s` above a few hundred while driving, and as private
+bytes close to the commit limit.
+
+## A 4-core laptop with a GTX 1650 Ti and 8 GB (#640, 2026-11-04)
+
+**The PC.** Core i5-10300H (4 cores, 8 threads, 45 W), GeForce GTX 1650 Ti (4 GB, 50 W, driver 555.97) plus Intel UHD
+Graphics (Optimus, driver 26.20.100.7985 from 2020, Vulkan 1.2.131), 8 GB of RAM (7.8 GB visible, 2.3 GB page file
+that Windows grows), the internal 1920x1080 144 Hz screen, Windows 11 (build 26300), on mains power, Balanced plan.
+Windows and the apps a player has open (here a desktop app of about 1 GB) leave 4 GB of RAM free before the game
+starts.
+
+**Method.** The game of main f21286d built by the launcher (TU4) on that PC; the golden TU4 save in a fresh user
+folder for each run, offline, audio muted, the startup movies skipped; the launcher's settings for this PC (60 fps,
+AMD FSR 1, the 720p scene with the game's 4x MSAA, render scale 1, fullscreen, vsync), each run a fresh start from
+a scheduled task in the signed-in session. **Benchmark**: the built-in one (Recaro Rush, 15 s settling, 60 s
+measured; its fps, 1% low and p99). **Free roam**: from the spawn on County Route 203, full throttle for 150 s with a
+2.5 s brake and turn every 25 s (`FORZA_AUTOPRESS`), measured over the frames while the car moves
+(`FORZA_FRAMETIME_CSV`, 2-5 km a run). Process memory every 10 s (`tools/memory_snapshot.ps1`), thread CPU times
+every 15 s (the game log's thread ids name the command processor, main loop and render thread), `nvidia-smi` every
+5 s. Runs of a comparison alternate, 3 each, at the laptop's steady temperature; mean of the runs, the range in
+brackets where it matters.
+
+**What it does at the launcher's settings** (GTX 1650 Ti, before fixes 1 and 2; the driver pipeline store off, as
+in fix 1's runs: fix 3 has what it adds):
+
+| | Benchmark | Free roam |
+| --- | --- | --- |
+| fps, 1% low, p99 | 42.7 [38.7-46.6], 28.7, 33.2 ms | 54.9 [53.7-55.6], 30.7, 30.1 ms |
+| GPU (`nvidia-smi`), power | 74-92% busy, 49 W of 50 | 95-97%, 49 W |
+| Command processor | 77% of a thread, 17.9 ms CPU a frame, 4.2 us a draw, 4,000-4,500 draws | 70%, 14.6 ms, 4.4 us, 3,100-3,500 draws |
+| Render thread | 86-88% of a thread | 88-90% |
+| Main loop, the busiest other thread (an SDK one) | 30%, 42-49% | 42%, 39-40% |
+| Game process CPU | 3.4 threads (of 8) | 3.7 |
+| Working set, private bytes (commit) | 1.36-1.39 GB, 2.65-2.69 GB | 1.27-1.34 GB, 2.64-2.68 GB |
+| VRAM: dedicated, shared | 1.22-1.24 GB, 0.23 GB | 1.22-1.24 GB, 0.21-0.23 GB |
+| System: commit of its limit, RAM free (least) | 9.5 of 10.3 GB, 2.27-2.28 GB | 9.5 of 10.3 GB, 2.28-2.32 GB |
+
+The lowest settings the launcher has (3D scene 540p, Scene anti-aliasing Off, anisotropic filtering off, motion blur
+off, 60 fps), first start of those settings: benchmark 53.8 fps, 1% low 25.9 (the pipelines of the new settings were
+built in it), p99 29.5 ms.
+
+**Where the frame goes.**
+- **The GPU first.** The GTX 1650 Ti is 91-98% busy at its 50 W limit in free roam and most of the race, at the
+  720p scene: the game's 4x MSAA scene in three passes and the EDRAM emulation's render targets cost far more GPU
+  time than 720p suggests. Lighter scene settings are what helps (fix 2).
+- **Then the four cores.** On Windows the render thread's waits for the GPU yielded on every poll
+  (`gpu_wait_blocking` was off there, untested): `SwitchToThread` returns at once when no other thread waits for
+  that CPU, so the thread spun for its whole wait, 86-90% of a CPU, next to a command processor at 70-77%. With
+  eight threads on four cores that takes a core's share of execution and power from the command processor (fix 1).
+  Once the GPU has room (540p), the benchmark stops at 54-55 fps with the command processor at 12-14 ms CPU a frame
+  and 2-3 ms of game waits: that chain is #607's.
+- **Not RAM.** The game's working set is 1.3-1.4 GB with 2.2 GB of RAM free and few pages read back from the disk;
+  of the 2.7 GB of private bytes, 1.29 GB are write-combined or uncached (GPU-visible) mappings, the same with or
+  without the pipeline file below, and much of the rest is committed but never touched (Windows trims the working set to
+  0.75 GB late in a run without hard faults). The exception is the driver pipeline file (fix 3).
+- **Not VRAM.** 1.2-1.35 GB of the 4 GB at render scale 1, whatever the scene settings (540p adds render targets:
+  677 MB instead of 562 MB).
+
+**Fix 1: the render thread sleeps on Windows too** (`gpu_wait_blocking` on by default everywhere,
+`src/hooks/gpu_wait.cpp`; launchers that saved the old off turn it on once). Both arms with the driver pipeline
+store off (fix 3) so the starts are the same:
+
+| | Benchmark, off | Benchmark, on | Free roam, off | Free roam, on |
+| --- | --- | --- | --- | --- |
+| fps | 42.7 [38.7-46.6] | 46.8 [45.9-47.9] | 54.9 [53.7-55.6] | 54.7 [54.0-55.1] |
+| 1% low, p99 | 28.7, 33.2 ms | 30.3, 30.9 ms | 30.7, 30.1 ms | 29.1, 29.9 ms |
+| Render thread, command processor | 86%, 77% | 45%, 77% | 89%, 70% | 40%, 66% |
+| Command processor a frame, a draw | 17.9 ms, 4.18 us | 16.0 ms, 3.83 us | 14.6 ms, 4.42 us | 13.4 ms, 4.26 us |
+| Game process CPU, CPU clock (of 2.5 GHz) | 3.4 threads, 126-128% | 3.0 threads, 130% | 3.7, 122-125% | 3.05, 129-130% |
+
+The benchmark gains 10% and holds it from run to run; free roam, where the GPU is the limit, keeps its frame rate
+with 0.65 threads less CPU and a higher CPU clock. No freeze in the 24 runs with it on.
+
+**Fix 2: the 540p scene on entry cards** (`launcher/forza_launcher/specs.py`: a new launcher on integrated graphics,
+under 4 GB, or a GTX / RX 400-500-era card with 4 GB gets `scene_resolution = 540`, and an existing launcher.json
+there once, with a notice (`config.py`, `migrated.scene_540`), where 540p is drawn; not on a Steam Deck, whose CPU is
+its limit). Benchmark, render thread
+sleeping, 3 runs each, rotated:
+
+| Scene | fps | 1% low | p99 | Draws | Command processor a frame |
+| --- | --- | --- | --- | --- | --- |
+| 720p, 4x MSAA (the game's) | 46.8 [45.7-48.1] | 30.6 | 30.4 ms | 4,000-4,350 | 15.9 ms |
+| 720p, Scene anti-aliasing Off | 52.5 [51.8-53.3] | 35.0 | 26.7 ms | 3,200-3,600 | 12.2 ms |
+| 540p (one pass, 2x MSAA) | 54.3 [52.7-55.2] | 34.3 | 27.0 ms | 3,400-3,800 | 13.8 ms |
+| 540p, Off, anisotropic off, no motion blur | 54.9 [53.3-56.8] | 35.2 | 26.2 ms | 3,000-3,650 | 11.8 ms |
+
+540p alone gives 16%; the lowest settings add little to it (the CPU chain is next). 540p keeps 2x MSAA and the
+sharp HUD, so it is the one the launcher picks. In free roam (3 drives each, alternating; these drives got farther
+along the road than fix 1's, 4.0-4.5 km against 3.0-3.6 km, so the 720p arm is faster than there) it reaches the
+60 fps cap: 57.7 [56.6-58.3] -> 59.9 [59.7-60.0] fps, 1% low 33.4 -> 48.6, p99 27.0 -> 18.0 ms, the GPU 98% ->
+91-94% busy.
+
+**Fix 3: no driver pipeline file on NVIDIA** (the NVIDIA preset sets `vulkan_store_pipeline_cache = false`;
+NVIDIA launchers turn it off once). The SDK keeps each pipeline's driver data in
+`shaders/local/*.vkpc` and seeds that pipeline's creation with it at the next start. On this driver not one of 404
+to 949 stored pipelines was reused in any of the 9 starts that read the file (`0 pipelines created from stored
+driver data, N compiled (N stale entries rebuilt)`: the creation feedback reports a miss, so each is created
+twice). Each entry also grew from about 60 KB in the first session to about 2 MB once later sessions added
+pipelines (a new pipeline's data held much more than itself), so the file reached the 512 MB a save keeps after
+five sessions: 252 pipelines in 510 MB, all of it held in RAM while playing. Benchmark, 3 starts each, alternating, with that file:
+
+| | File kept (0.2.6) | Off |
+| --- | --- | --- |
+| Shader warm-up, start to the race loading | 17 s, 24 s | 3 s, 10 s |
+| Private bytes, working set (peak) | 3.29 GB, 1.96 GB | 2.72 GB, 1.42 GB |
+| RAM free (least), system commit | 1.69 GB, 10.1 of 10.3 GB | 2.20 GB, 9.5 of 10.3 GB |
+| fps, 1% low, p99 | 45.2, 28.8, 31.8 ms | 46.0, 28.8, 31.5 ms |
+
+One start after the file had dropped out of the file cache spent 78 s reading it and reached the race loading
+after 106 s. Without the file the driver's own shader cache does the work: no pipeline stalls over 50 ms in either
+arm. On RADV the entries are reused (10 KB each), so the setting stays on for AMD and Intel.
+
+**Intel UHD (the same laptop, `--gpu_vendor=intel`): not playable with its driver.** The first start reached the
+benchmark at 1.4 fps: 3,500 `Failed to submit Vulkan sparse binds`, then upload buffers that could not be allocated,
+private bytes up to 6.1 GB, the system commit at its limit (Windows grew the page file from 10.3 to 13.4 GB) and
+314 MB of RAM free. Two more starts never showed a frame (`FORZA_STALL: no frame for 59 s`). With
+`--vulkan_sparse_shared_memory=false` the device was lost after 20 s. The driver is from 2020 (Vulkan
+1.2.131); the game needs a current Intel driver there, and the launcher already
+sends this laptop to the GeForce (#89). Not measured: a current Intel driver.
+
+**For #607.** On this CPU the command processor costs 3.7-4.6 us a draw (12-18 ms a frame at 3,000-4,400 draws)
+and is 65-77% busy; with the GPU relieved it is the next limit at 54-55 fps in the benchmark.
+
+## The GTX 1650 Ti laptop at 0.2.8, and its Intel UHD (#640, 2026-11-06)
+
+**Setup.** The laptop of the section above (i5-10300H, GTX 1650 Ti 4 GB on driver 555.97, Intel UHD on its 2020
+driver, 8 GB), on a "High performance" plan with the fans on Turbo. Main 64ea381 (0.2.8 and #713) built by the
+launcher, with the launch plan the launcher makes for this PC on a first start: the 540p scene (one pass with 2x
+MSAA), AMD FSR 1, 60 fps, vsync, 1920x1080 fullscreen, Vulkan, the driver pipeline file off. The golden TU4 save in a
+fresh user folder for each run, offline, audio muted, a warm shader cache shared by the runs of a setting (one
+warm-up session first). Scripted input through the SDK's keyboard pad from a helper in the signed-in session.
+**Benchmark**: the built-in one (its result.json). **Free roam**: 3 minutes of `tools/autodrive.py` on County Route
+203 at noon. **Race**: Goodyear Mountain Blast, 120 s of autodrive following the AI. Frame times from
+`FORZA_FRAMETIME_CSV`, command processor counters from `--fh1_frame_cost_csv`, CPU time of every thread every 15 s
+and process memory every 5 s (Win32: Toolhelp, GetThreadTimes, GetProcessMemoryInfo), `nvidia-smi` every 0.5 s.
+
+| | Benchmark (6 runs) | Free roam (3) | Race (3) |
+| --- | --- | --- | --- |
+| fps | 54.7 [52.8-56.0] | 59.4 (60 cap) | 59.7 (60 cap) |
+| 1% low, p99 | 37.9, 25.0 ms | 39.3, 22.9 ms | 40.3, 22.5 ms |
+| GPU busy | 95-97% | 97% | 93% |
+| Command processor: share of a thread, CPU a frame, draws | 68-70%, 12.0-13.0 ms, 3,300-3,700 | 59-60%, 10.7-10.8 ms, 2,630 | 57-59%, 10.2-10.5 ms, 2,810 |
+| Command processor waiting for the GPU / for the game, a frame | 1.3-2.1 / 2.2-2.5 ms | 2.1-2.4 / 2.7-2.9 ms | 0-0.1 / 5.0-5.3 ms |
+| Next busiest threads | three game threads 39-48%, Vulkan submission 26% | game threads 31-46%, submission 27% | game threads 34-38%, submission 21-22% |
+| Game process CPU | 3.2 threads (of 8) | 3.15 | 2.8-2.9 |
+| Working set, private bytes | 1.26-1.36 GB, 2.74-2.76 GB | 1.04-1.14 GB, 2.74 GB | 0.82-0.85 GB, 2.74 GB |
+| RAM free (least), system commit | 3.3-3.5 GB, 7.7 of 11.4 GB | 3.5-3.6 GB, 7.7 GB | 3.7 GB, 7.8 GB |
+| VRAM (`nvidia-smi`) | 1.31 GB | 1.31 GB | 1.31 GB |
+
+Against 0.2.7 (the 540p row of fix 2 above: 54.3 fps, 1% low 34.3, p99 27.0 ms) the benchmark holds its frame rate,
+with better lows. Free roam and the race stay at the cap. The GPU is the limit: 95-97% busy at its 50 W in the
+benchmark and free roam, with the command processor at two thirds of a thread and 2-3 ms a frame of waits.
+
+**Cuts tried on the benchmark.** One warm-up and one measured run each, on a copy of the warm cache:
+
+| Change | fps | 1% low |
+| --- | --- | --- |
+| Scene anti-aliasing Off (`scene_msaa=off`) | 51.6 | 35.9 |
+| Motion blur off | 54.7 | 38.0 |
+| Anisotropic filtering off | 54.4 | 38.3 |
+| Bilinear upscaling instead of FSR 1 | 57.1 | 39.3 |
+| `vulkan_present_on_submission_thread=true` (#613) | 56.0 | 40.3 |
+| `render_target_path_vulkan=fsi` | crash at start | |
+
+All within the run-to-run spread of the benchmark (52.8-56.0 at the same settings; its AI race draws 3,150-3,750
+draws a frame from run to run). The upscaler, the most promising, alternated 3 runs each: FSR 1 55.6 [55.0-56.0],
+bilinear 56.4 [55.7-56.8], CAS 55.9 [54.9-56.6], so FSR 1 costs under 1 fps and stays. #613 (the presenter's step on
+the submission thread), 3 runs each alternating on its rebased branch: benchmark 54.5 against 54.7 fps off, free roam
+p99 16.7-21.6 ms against 20.3-21.5 ms and 1% low 46.8 against 42.7 (scratchpad note for #613). Nothing cheap is left on
+the GPU here; what remains is the GPU's own work at 540p, which the SDK cannot split per pass yet (no GPU timestamps; now `fh1_gpu_profile`, below).
+
+`render_target_path_vulkan=fsi` (experimental) stops at once on this NVIDIA card: `Unhandled read fault at host 0x15
+(pc rexgpu-xenos.dll+0x30E00)` on the command processor thread (guest thread F8000018), the host chain
+`rexgpu-xenos.dll+0x30E00`, `+0xC9858`. On an Iris Xe it froze after the first frame (#201).
+
+**The Intel UHD.** With "Intel" chosen as the graphics card the launcher plans Direct3D 12 (#672: its Vulkan driver
+is 1.2.131), the 540p scene and 30 fps. On Vulkan the game still shows no frame (`FORZA_STALL: no frame for 59 s`), now
+without running out of memory.
+- On Direct3D 12 the picture is right (none of #201's Vulkan artifacts in free roam, the cockpit or the race), but
+  slow: 5.5-5.7 fps in free roam (`FORZA_FPSLOG` 7.2-7.4 over the session), 4.9 fps in the benchmark, with frames of
+  0.5-1.2 s. Private bytes 2.1-2.3 GB, working set 1.6-1.7 GB, 2.9 GB of RAM free.
+- `FORZA_FRAMETIME_CSV` wrote nothing at 30 fps: the frame time hook leaves the game's own timing at the console
+  rate before the CSV. It now writes a row per guest swap there (`frame_time.cpp`); rows of the main loop would be
+  wrong there, as the main loop keeps running at 30 when the render thread stops (it did, below).
+- The benchmark did not start in 2 of 3 runs on the first day (`benchmark_start_timeout`), and a race froze at its
+  start: the render thread waited in the HUD command buffer's slot wait (`FORZA_STALL` chain `82419284 8249E108
+  824A1E6C 8247F9E4 82616BFC 8261E1C0`, sub_824A1E40), right after `FFCB: woke the HUD command buffer worker: slot
+  ready, after 41-77 ms` (2 ms on the GeForce): #512's wake (`ffcb_wake.cpp`) wakes the worker every 2 ms while a slot
+  is not ready and falls back to the game's infinite wait after 2 s.
+- Those runs were the first with an empty Direct3D shader cache of the driver (`%LOCALAPPDATA%\D3DSCache`). With it
+  warm, 24 benchmarks alternating (8 each) did not freeze in any arm: the defaults 7 completed (4.8-5.1 fps), with
+  `FORZA_FFCB_WAKE=0` 6, with the first wake after 250 ms (`FORZA_FFCB_WAKE_AFTER_MS`, test only) 7; the 4 others, in
+  all three arms, ended in `Graphics device lost` as the race started (frames of up to 1.2 s; Windows resets a GPU
+  that runs 2 s). 12 more with the game's cache emptied each time (4 each: the defaults, the wake off, the wakes paced
+  to one per 250 ms): 11 completed, 1 device lost.
+- With the driver's cache moved aside before each run, 11 of 12 benchmarks (4 per arm; the 12th: device lost) ended in
+  `benchmark_start_timeout`, the wake off included, with no wake logged: the game kept presenting at about 10 fps
+  after 7-12 s frames of shader compiles, and the event did not load within the benchmark's 5 minutes. Race sign-ups
+  on a cold driver cache (3 per arm): 22 s without a frame after the move; with the wake off 0 of 3 crashed, with the
+  defaults 0 of 3, with the wakes paced (one per 250 ms) 3 of 4 crashed with `Unhandled read fault ... guest
+  0x00000004` on the render thread (chain `8249E118 824A1E6C 8247F9E4 82616BFC 8261E1C0`, lr 824469B8, r4 = 0: the
+  slot's state applied as null, the signature of #66). Pacing the wakes is therefore not the fix; the defaults stay.
+- On the GeForce the benchmark starts at 30 fps (30.0) and on Direct3D 12 (44.8, 45.0 fps).
+- **The benchmark's start limit (#725).** With an empty Direct3D shader cache of the driver the Intel UHD keeps
+  presenting at about 10 fps after 7-12 s frames of shader compiles, but the event does not load: 11 of 12
+  benchmarks timed out at the old 5 minutes in every #512 arm, and 2 of 2 at the new limit (it now waits while
+  frames come, up to 30 minutes; `benchmark_start.h`). That load stalls outright; with a warm driver cache it does
+  not happen.
+- **Device lost on Direct3D 12 (#725).** Vulkan ends a submission after 1000 draws on integrated GPUs
+  (`vulkan_submission_draw_limit`, #268) so that none runs past Windows' 2 s GPU timeout; the Direct3D 12 path had
+  no such limit. ReIGlue 0441 (its own PR; not yet in the pinned SDK) adds `d3d12_submission_draw_limit` (-1 = 1000 on UMA GPUs).
+  Benchmark race starts on the Intel UHD, warm caches, the SDK DLLs of one toolchain with and without it,
+  alternated: without the limit 1 of 10 lost the device, with it 0 of 10 (4.8-5.1 fps either way). With the earlier
+  runs without it (5 of 36) that is 6 of 46 without and 0 of 10 with: a hint, not proof. On the GeForce (not UMA, so
+  no split) the benchmark gives 55.3 fps on Vulkan and 45.5 on Direct3D 12, as before.
+
+## The benchmark's event that never loads after an empty driver shader cache (#725, 2026-11-07)
+
+**The symptom.** On the Intel UHD with its driver caches emptied (Direct3D 12, 540p, 30 fps), the benchmark asks for
+its event (`BENCHMARK: fixed event FR02 requested`) and the game takes the request: the world pauses (`Wheel: not
+driving (pause)`), and then nothing more happens. The world stays paused and keeps updating, the game draws a
+steady 10 fps for 29 minutes, and the load never begins (`benchmark_start_timeout`, 4 of 4 runs). In a warm run the
+world stops updating 4.5 s after the request (`Wheel: still not driving (menu or loading)`) and the race loads.
+After the first minute nothing is held and nothing spins. The busiest guest thread is F80012FC (one of four job
+workers started at 83075D18), at 15% of a core.
+
+**On Linux:** lavapipe (Mesa's CPU Vulkan driver, `VK_DRIVER_FILES=.../lvp_icd.x86_64.json`, about 2 fps) with an
+empty scratch `MESA_SHADER_CACHE_DIR`, the benchmark from a fresh profile. Right after the request it has the long
+frames the Intel UHD has: waits of 1-3.4 s for submissions full of the transition's new pipelines.
+
+| Build | Mesa cache | Runs | Race loads |
+| --- | --- | --- | --- |
+| No main-loop wait (`FORZA_MAIN_WAITS_RENDER=0`, main before #738) | empty | 7 | 0: stuck as on the Intel UHD in 5; the #725 null read 6 s after the request in 1; no frame (`benchmark_stalled`) in 1 |
+| No main-loop wait | warm | 2 | 2 |
+| #738 (the main loop waits for a render pass held over 1 s) | empty | 7 | 6; the 7th hung in the HUD slot wait (lr 8249E108) after the race loaded |
+
+So the event doesn't load when the render thread is held for seconds right after the request while the main loop
+runs on. Compiles alone don't cause it: with a warm cache the same slow renderer loads. Keeping the main loop with
+the render thread lets it load. On the Intel UHD, #738's first version (250 ms, waits for the HUD worker counted as
+held, the waits capped at 10 s, one run hitting the cap) did not help. The current version is untested there.
+
+**Where it stops.** The request is taken: the activity's state machine (activity + 0x164) accepts `load_into_event`.
+Then its current state object (state machine + 0x2C) stays the same for minutes. In a run that loads, the activity
+is freed within 6 s. The state machine is script-driven, so its logic is in the game's data, not the executable:
+- the definition object's vtable is 8209004C, with methods 829B9AD0, 829B9B78, 829B9B80, 829BB2A0 and 829BC990;
+- 829BB2A0 sets the script context (833F6CA0) and runs 82F111F0;
+- 829BC990 drains its event queue.
+
+So this is a waiting state machine: not a dropped request, and not a stuck file load (no reads are pending). What
+the script waits for is the next step.
+
+**The HUD worker, for reference** (render object `ro`):
+- The UI object (`ro + 0x978`, made by sub_82D13BC0 with pointers to `ro + 0x1A0C` and `ro + 0x1A19`) asks for a
+  HUD frame in sub_82D11BA0. If the pending flag `ro + 0x1A19` is clear, it sets it and the worker's event
+  `ro + 0x1A0C`.
+- The worker (sub_824A2080, guest thread F8001204) waits for that event, records with
+  `sub_824A3558(ro, *(ro + 0x1A1C) == 1)`, sets `ro + 0x1A10`, and waits again. `ro + 0x1A18` ends it.
+- The render pass (sub_826164D0) clears the pending flag, builds its command list (sub_8247F818; `ro + 0x1A1C` = 1
+  for the HUD path, 0 without), then, if the pending flag is set again, waits for `ro + 0x1A10` and clears it.
+
+**Diagnostic.** When the event was requested but no race has started 2 and 10 minutes later, and when the benchmark
+gives up, the log lists every guest thread's call chain:
+`BENCHMARK: the race has not started N s after the event's request (...); guest threads below (#725)`. Players' logs
+then show where it waits. Laptop runs ended with `terminate()` never reached the dump at window close.
+## The render thread held for seconds breaks the HUD command buffers (#725, #582, 2026-11-07)
+
+**The repro.** `FORZA_TEST_SWAP_STALLS="s:ms,..."` (testing only, `src/debug/frame_dump.cpp`) holds the render
+thread in its swap for `ms` once, `s` seconds after the first swap, as a slow GPU compiling shaders does (an Intel
+UHD with an empty Direct3D shader cache of the driver: frames of 7-12 s right after free roam appears). On Linux,
+the benchmark from a fresh profile with `12:6000,20:8000,30:10000,42:10000,54:8000` (the first hold lands a few
+seconds after free roam has loaded):
+- #512's wake on (the default): 2 of 2 crashed 6 s later, `Unhandled read fault at host 0x100000004 = guest
+  0x00000004` on the render thread (F80011AC), chain `8249E118 824A1E6C 8247F9E4 82616BFC 8261E1C0`, lr 824469B8,
+  r4 = 0. The signature of #66, #457, #540 and #582 (#582: the same on WARP at about 1 fps), and of the Intel UHD's
+  cold first races.
+- `FORZA_FFCB_WAKE=0`: no crash, but no frame again (`benchmark_stalled` after 60 s).
+- Without the knob the same build starts the benchmark as before (below).
+
+**The HUD's fixed-function command buffers** (TU4): a ring of 12 slots of 60 bytes at render object +0x470.
+- The worker records slot `produce` (+0x760): sub_8249E800 begins recording into the slot's command buffer
+  (+0x14), sub_824198A8 ends it, signals the slot's event (+0x1C) and moves `produce` on (mod 12).
+- The render thread's command list (sub_8247F818) consumes slot `consume` (+0x75C): sub_824A1E40 ->
+  sub_8249E0E0 waits for the slot's event (sub_82419270, infinite) and applies its command buffer
+  (sub_824469B0(device, slot+0x14, 0)), then moves `consume` on. Nothing keeps `produce` within 12 of
+  `consume`: with the render thread held, the worker goes round the ring, and the slot the render thread then
+  applies has no command buffer (the null read).
+- A throttle that made begin wait while all 12 slots were recorded and not consumed (an experiment, not kept)
+  removed the crash (0 of 4) but not the hang: the worker waited for a free slot for 30 s while the render thread
+  waited, after its command list, for the event at render object +0x1A10 (sub_826164D0, when +0x1A19 is set; not
+  the ring).
+
+**Who sets +0x1A10.** The FFCB worker (guest thread F8001204, from 824A2118, called from 82B3A4FC), once per main
+frame, after it has recorded that frame's slots; the render pass waits for it every frame (from 82616B9C and
+82616C28, through sub_82419270). The render thread's waits pair with the worker's signals only while the two stay
+within a frame or two of each other. During a hold of seconds the main loop does not wait for the render thread
+(it free-runs some 1,300 frames in a 10 s hold), the worker records and signals for every one of them, and when the
+render thread comes back its consume index and the worker's produce index no longer point at the same frames: it
+either applies a slot the worker is rewriting (the null read) or waits on an event whose signal was spent on an
+earlier frame (no frame).
+
+**The fix** (`src/hooks/frame_time.cpp`, `src/hooks/ffcb_wake.cpp`): the main loop (sub_8247C168) waits while the
+render thread has been working inside one render pass (sub_8259F3E8) for more than 1 s, until the pass ends, for at
+most 10 s. The render thread's waits for the HUD worker (the slot wait and the +0x1A10 waits) do not count: the
+worker is paced by the main loop, so the main loop must not wait for a pass that is waiting for it. A pass of
+normal length never triggers it; `FORZA_MAIN_WAITS_RENDER=0` turns it off, `FORZA_MAIN_WAITS_RENDER_MS` (testing)
+sets the limit. Linux, the knob above, the benchmark at 30 fps:
+
+| Build | Wake on | Wake off |
+| --- | --- | --- |
+| Before (8b83c6c) | 2 of 2 crashed (null read) | no frame (`benchmark_stalled`) |
+| Fix, `FORZA_MAIN_WAITS_RENDER=0` | crashed (null read) | no frame (`benchmark_stalled`) |
+| First fix (250 ms, worker waits counted) | 3 of 3 complete, 1% low 28.4-28.7 | 3 of 3 complete, 1% low 28.7-28.8 |
+| Fix, 250 ms | 3 of 3 complete, 1% low 23.7-28.1 | 3 of 3 complete, 1% low 26.2-27.8 |
+| Fix, 500 ms | 1 of 1 complete, 1% low 28.1 | 1 of 1 complete, 1% low 26.9 |
+| Fix, 1 s (the default) | 2 of 2 complete, 1% low 28.0-28.3 | 1 of 1 complete, 1% low 27.7 |
+
+All at 30.0 fps (the lower lows with another game on the PC), the main loop waiting 4 times per run. Holds of
+1-4 s instead (13 in one benchmark, `12:1500,16:2500,20:4000,...`) do not crash without the fix either: 2 of 2
+complete (and 2 of 2 with it at 1 s). Without the knob: the benchmark 5 of 5 complete (30.0 fps, 1% low 26.9-28.5),
+3 minutes of free roam 3 of 3 without a crash (30.0 fps, 1% low 25.7-25.9), and the main loop waited 0 times.
+
+**WARP** (`--gpu_backend=d3d12 --d3d12_adapter=-2`, the GTX 1650 Ti laptop's i5-10300H; #582's renderer): the game
+reaches free roam and runs 7 minutes there without a crash in every arm (12 runs). Its frames take 100-500 ms, so a
+low limit or counting the worker waits costs it:
+
+| Build | Free roam fps | Frames over 1 s |
+| --- | --- | --- |
+| No wait (`FORZA_MAIN_WAITS_RENDER=0`) | 7.4, 7.4 | 0, 0 |
+| First fix (250 ms, worker waits counted) | 4.8, 4.8 | 597 in 20 min, 241 in 7 min |
+| 250 ms | 6.2, 6.1 | 115, 113 |
+| 500 ms | 6.2, 6.5 | 39, 45 |
+| 1 s (the default) | 6.8, 7.0 | 12, 11 |
+
+At 1 s WARP still loses 0.4-0.6 fps: some of its passes still take over 1 s once the main loop waits, which a run
+without the wait does not show (its longest frame: 504 ms). Which other wait of the pass depends on the main loop is
+not known yet.
+
+**The Intel UHD with cold driver caches** (D3DSCache, NVIDIA's and Intel's caches moved aside for each run; the
+benchmark from a fresh game cache, 540p, 30 fps, the first fix): on Direct3D 12 the first minute has frames of 7-12 s,
+the main loop waited there 10-13 times, then the game presents a steady 10 fps for the remaining 29 minutes and the
+event (FR02, requested about 3 minutes in) never starts: `benchmark_start_timeout`, 2 of 2 with the fix and 2 of 2
+with `FORZA_MAIN_WAITS_RENDER=0`; no crash, no device lost. That stall is not the ring: after the first minute no
+pass is held and nothing spins (the busiest guest thread, F80012FC, at 15% of a core); it stays open in #725. On
+Vulkan its old driver (1.2.131) shows no frame at all, 4 of 4 in both arms (#672). The GeForce, warm caches, the
+benchmark with the fix: 52.7 and 54.8 fps (52.8-56.0 before), the main loop waiting 0 times.
+
+## Descriptor reuse in the command processor (#192, #179, 2026-11-08)
+
+The biggest cost of the GPU command processor was descriptor setup (20-23 % of its CPU time, #607 above): every
+draw wrote a new constants set and a new texture set for each stage, and acquired its samplers and requested its
+textures again. ReIGlue 0442-0445 reuse what has not changed, on by default; each part has an off switch:
+
+- `vulkan_dynamic_constants` (0442, Sean O'Connor's #179; at startup): the guest constants are bound as dynamic
+  uniform buffers, the draw's slices selected by offsets at bind time, and the frame's sets with the same buffers
+  and ranges are used again.
+- `vulkan_binding_request_reuse` (0443, Sean's #192): within a submission, unchanged samplers are kept and a texture
+  request whose bindings are all in sync is skipped. 0443 also clears the bound flags of the descriptor sets a
+  pipeline layout change makes incompatible (missing upstream).
+- `vulkan_texture_descriptor_reuse` (0444): the texture sets written in a frame are remembered by their exact
+  contents (layout, then every view and sampler handle) and used again, still bound if it is the bound one;
+  forgotten at each frame, when the pools are reset and when any view or sampler is destroyed (a later handle may
+  have the same value). Sean's first version of #192 reused texture sets by comparing a draw with the previous
+  one only, and drew wrong textures; it was removed.
+
+`FORZA_VK_DYNAMIC_CONSTANTS`, `FORZA_VK_BINDING_REUSE` and `FORZA_VK_TEXTURE_SET_REUSE` (0/1) override the cvars
+for A/B runs; `FORZA_VK_BINDING_VERIFY=1` runs the full sampler and texture path on predicted hits and logs a
+mismatch; `FORZA_VK_BINDING_STATS=1` logs the hits every 300 frames.
+
+**Method.** TU4 game of main 2e28667 with the ReIGlue branch's plugin and runtime, Ryzen 7 7800X3D, RX 9060 XT
+(RADV), the built-in benchmark (Recaro Rush, 60 s measured) uncapped (`--frame_rate=240`), 1280x720, the golden
+TU4 save in a scratch `--user_data_root`, scratch XDG dirs and caches (warmed by a run first), audio muted,
+`nice -n 10 ionice -c3`, BENCH lock held, each run started with a 1-minute load under 2 and no compiler running.
+Six cores: `taskset -c 0-5` from the start (a Ryzen 5 5600X stand-in; only Mesa's disk cache threads escaped it).
+The command processor's CPU time from `--fh1_frame_cost_csv` over the measured minute. Each race's AI draws a
+different amount (4,070-5,170 draws a frame), and the frame rate follows that; the command processor's time per
+draw is the steady figure.
+
+**All three off and on**, three interleaved pairs each:
+
+| | fps | 1% low | p99 ms | Command processor, ms a frame | us a draw |
+| --- | --- | --- | --- | --- | --- |
+| 8 cores, off | 133.4 (126.8, 146.2, 127.2) | 89.4 | 10.22 | 6.04 | 1.319 |
+| 8 cores, on | 147.3 (145.0, 150.7, 146.1) | 94.7 | 9.44 | 5.31 | 1.221 |
+| 6 cores, off | 136.8 (135.1, 145.7, 129.8) | 90.7 | 10.15 | 5.88 | 1.317 |
+| 6 cores, on | 142.2 (151.6, 149.4, 125.6) | 95.0 | 9.51 | 5.45 | 1.221 |
+
+- Time per draw: 1.311-1.330 us off and 1.194-1.243 us on in all 12 runs (7.4 % less on both core counts). With
+  the same draws (about 4,130 a frame): 146.2 to 150.7 fps on 8 cores, 145.7 to 149.4 on 6.
+- Hits in the race: about 95 % of the constants sets, 75-82 % of the texture sets (30-40 % still bound), 54 % of
+  the sampler acquisitions and 57 % of the texture requests; the texture set memo was never cleared within a frame.
+
+**Each part**, 8 cores (one off run and two of each, then two pairs of the other two parts without the texture set
+memo against all three, the same session):
+
+| | fps | 1% low | Command processor, us a draw |
+| --- | --- | --- | --- |
+| Off | 138.1 | 90.6 | 1.320 |
+| Dynamic constants only | 132.9, 134.1 | 87.9, 91.3 | 1.264, 1.265 |
+| Sampler and texture-request reuse only | 147.0, 147.8 | 94.0, 96.5 | 1.294, 1.301 |
+| Texture set memo only | 135.6, 133.2 | 89.6, 86.3 | 1.336, 1.314 |
+| Dynamic constants and request reuse | 139.8, 139.8 | 89.5, 90.1 | 1.273, 1.229 |
+| All three | 146.1, 141.1 | 94.4, 91.9 | 1.227, 1.243 |
+
+The dynamic constants save the most (4 % of the time per draw), the request reuse 2 %. The texture set memo alone
+saves nothing measurable (hashing the set costs about what writing it did); with the other two it is about 1 % more,
+within the runs' spread, and it also leaves 30-40 % of the texture sets bound, which the submission thread then does
+not bind again (not measured separately). The frame rates of the single parts follow their races' draws (4,140-4,680
+a frame).
+
+**Free roam**, 3 minutes from the golden save's spawn (throttle with a brake and a turn every 25 s), 45-210 s, 8 cores:
+off 180.8 fps, 1% low 91.3, the command processor 4.18 ms a frame (1.412 us a draw); with the defaults (all three
+on, no overrides) 183.1 fps, 1% low 96.7, 3.97 ms (1.344 us a draw, 4.8 % less).
+
+**Correctness.**
+
+- Benchmark with all three on, `FORZA_VK_BINDING_VERIFY=1` and the Khronos validation layer (1.4.341): complete, no
+  sampler or texture-request mismatch, no validation error (only `ShaderOutputNotConsumed`, as without the change).
+  With the defaults and synchronization validation (`VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true`): no hazard, no error.
+- `tools/render_test.py`: baselines recorded with all three off (three runs), then a check with all three on on
+  the same build: 6/6 scenes pass within their noise (race start dssim 0.0030 of 0.008, photo mode 0.0110 of 0.016).
+- VR true stereo's right eye (which resets every fetch constant and texture binding), the native HUD's texture
+  cache, texture packs and the upscalers' own pipelines were checked in the code, not in a run.
+- Only RADV is measured. The Vulkan path is the same on NVIDIA, Intel and Windows (dynamic uniform buffers are core
+  Vulkan 1.0; the constants need 5 of the 8 every device has); Direct3D 12 does not change.
+
+**With the command processor on two threads (0420, #474).** The ReIGlue branch with 0420 and 0442-0445, the game of
+#762 (the split on by default with 6 or more cores), the same PC and method; all off (`--gpu_split_command_processor=false`,
+the three reuses off) against all on (the split and the three reuses), three interleaved pairs on each core count:
+
+| | fps | 1% low | p99 ms | Draw thread, us a draw | Draws a frame |
+| --- | --- | --- | --- | --- | --- |
+| 8 cores, off | 123.6 (133.2, 117.5, 120.0) | 83.0 | 11.09 | 1.333 | 4,924 |
+| 8 cores, on | 153.5 (155.4, 161.0, 144.1) | 97.6 | 9.08 | 1.046 | 4,558 |
+| 6 cores, off | 131.5 (127.3, 136.1, 131.0) | 87.6 | 10.44 | 1.339 | 4,579 |
+| 6 cores, on | 153.0 (152.4, 157.5, 149.2) | 96.3 | 9.35 | 1.034 | 4,539 |
+
+- With the same draws: 120.0 to 144.1 fps on 8 cores (about 5,030 draws a frame), 136.1 to 157.5 on 6 cores
+  (about 4,400). The draw thread is the recorder when split (the decoder's CPU is on another core); its time per
+  draw drops 22-23 %, the reuses' 7 % and the PM4 decoding that moves to the decoder.
+- The memos are only used on the thread that runs the draws (the recorder when split): the decoder writes only its
+  shadow register file and records the writes, which the recorder applies (and with them the fetch constant
+  writes that the sampler and texture-request reuse follow).
+- Render tests with all on against the all-off baselines above: 6/6 within their noise (race start dssim 0.0027 of
+  0.008, photo mode 0.0087 of 0.016). No crash, no binding mismatch.
+
+**Windows, NVIDIA** (the GTX 1650 Ti laptop: i5-10300H, 4 cores, Windows 11, Vulkan; the split stays off with 4
+cores): the branch built by the launcher from a source checkout, the built-in benchmark uncapped at 1280x720, all three
+reuses off against on with `FORZA_VK_BINDING_VERIFY=1`: 47.8 fps (one off run; the other lost the device, below)
+against 46.7 and 47.2: the GPU is the limit there. The command processor 3.83 against 3.57 us a draw (7 % less, with
+the verification's extra work on), about the same hit rates as on RADV (92 % of the constants sets, 73-83 % of the texture
+sets), no mismatch; screenshots at the same point of the race look the same. One run with the reuses off lost the
+device 57 s into the measured minute (`VK_ERROR_DEVICE_LOST`, draw 431 of 2,381, #551), as players see without the
+change.
+
+## Where the GPU frame goes on a GTX 1650 Ti, and the stencil of render target transfers (#640, 2026-11-08)
+
+**Tool.** `--fh1_gpu_profile=5` (ReIGlue 0460) logs every 5 s the GPU time of a frame's command
+processor submissions, by kind and by render pass, from Vulkan timestamps written where the kind
+of work changes; `--fh1_gpu_profile_csv=FILE` also appends the reports to a CSV,
+`--fh1_gpu_profile_shaders=true` splits render passes by pixel shader. The presenter's own work
+(FSR 1 to the window) is outside those submissions. On, it costs the benchmark about 3% (53.2-53.9
+fps against 55.3-55.8 without it).
+
+**The laptop of the sections above** (GTX 1650 Ti 4 GB, driver 555.97, i5-10300H, Windows 11) at
+the launcher's settings for it (the 540p scene, AMD FSR 1, 60 fps, Vulkan), main 6e891d4 built by
+the launcher, the built-in benchmark, warm caches. The measured minute, ms of GPU time a frame:
+
+| Work | ms a frame | Notes |
+| --- | --- | --- |
+| Guest draws | 7.8 | the scene (960x540, 2x MSAA) 3.9; the reflection cube 0.7; shadow cascades, post-processing, bloom 0.3-0.6 each |
+| Render target ownership transfers | 5.3 | 41 a frame; 4.5 of them depth: the shadow maps and scene depth reinterpreted between 4x MSAA and 1x at the same EDRAM tiles |
+| Texture loads | 2.3 | resolved screen and shadow textures: the 1024x1024 shadow depth (k_24_8, 4 a frame) 0.6 |
+| Resolves | 1.7 | the render target dumped to the EDRAM buffer 0.9, the copy to guest memory 0.8 |
+| Uploads, swap | 0.5 | |
+| **All** | **17.7** | of a 18.8 ms frame (53 fps): the GPU is the limit, as `nvidia-smi` says (97%) |
+
+The transfers were the surprise. Without `VK_EXT_shader_stencil_export`, which NVIDIA's driver
+lacks (AMD's and Intel's have it), the SDK copies a depth render target's stencil in eight
+full-size draws, one per bit, each reading the source and discarding where its bit is clear: 9
+passes over every transferred pixel. The game draws each shadow map as a 4x MSAA depth target and
+reads it as a 1x one twice the size (and the reverse at the next frame), so every frame moves
+about 4 such surfaces each way. Skipping the bit draws altogether (a test, wrong in general) took
+the transfers from 5.3 to 1.9 ms and the frame from 17.4 to 14.5 ms. At a render scale of 2 those
+surfaces have 4 times the pixels, which fits the NVIDIA reports of a 1440p scene costing far more
+than its pixel count (#700, #500) and of ultrawide (#546).
+
+**Fix 1 (ReIGlue 0461, `vulkan_transfer_stencil_bit_mask`, on).** Before such a transfer a compute
+pass ORs the stencil of the rows each depth source is read from into eight words, and each bit's
+draws are conditional on its word (`VK_EXT_conditional_rendering`, which every desktop driver
+has). The stencil is still cleared to 0 before the bit draws, so the result is the same as
+before; a source whose stencil is 0 (FH1's shadow maps) costs the compute pass and no draws.
+Devices with stencil export and transfers from color are unchanged. In the benchmark, 85% of the
+depth transfers had their bit draws made conditional; transfers 5.3 -> 3.5 ms, the frame 17.4 ->
+16.0 ms.
+
+**Fix 2 (ReIGlue 0462, `vulkan_direct_unscaled_texture_upload`, on).** NVIDIA's direct texture
+upload (0071, 0406: the texture written straight into a storage image, without the scratch buffer
+and its buffer-to-image copy) applied only to scaled resolves, so at render scale 1 FH1's resolved
+screen and shadow textures took the copy path. The same shader reads the shared memory at scale 1:
+texture loads 2.2 -> 1.9 ms.
+
+**Measured** (the laptop above, 3 runs each way alternating, warm caches, the benchmark's minute):
+
+| Benchmark | Before | After |
+| --- | --- | --- |
+| 540p scene, 60 fps cap (the launcher's settings), fix 1 alone | 55.5 fps [55.3-55.8], GPU 97% busy | 58.1 fps [57.8-58.6], GPU 94% |
+| 540p scene, uncapped (`frame_rate=120`, vsync off), fix 1 alone | 55.8 fps [54.4-56.5] | 59.7 fps [59.0-60.9] |
+| 540p scene, 60 fps cap, fixes 1 and 2 | 55.1 fps [52.7-57.0], GPU 97% | 58.5 fps [56.3-59.9], GPU 92% |
+| Render scale 2 (the 1440p scene), 60 fps cap, fixes 1 and 2 | 19.0 fps [18.9-19.1], 1% low 16.6 | 23.7 fps [23.4-23.8], 1% low 20.8 |
+
+At render scale 2 the profile shows what the reports describe: of 52.1 ms of GPU time a frame,
+transfers took 19.4 ms (37%), more than the guest's draws (15.7 ms); with the fixes 9.6 ms, the
+frame 41.8 ms. What is left of the transfers there is mostly depth made from color (the stencil
+bits of a color source are not masked) and the depth copies themselves. Pictures (free roam at
+noon, two spots, both settings) show the same shadows and scene; the result is the same by
+construction. AMD and Intel drivers have stencil export, so fix 1 changes nothing there; fix 2 is
+NVIDIA only, like 0071.

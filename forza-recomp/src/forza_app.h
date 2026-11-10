@@ -6,6 +6,7 @@
 
 #include "debug/frame_stats.h"
 #include "debug/stall_watch.h"
+#include "hooks/fm4_track_mount.h"
 #include "kernel/live.h"
 #include "platform/achievement_toast.h"
 #include "platform/discord_presence.h"
@@ -218,6 +219,9 @@ class ForzaApp : public rex::ReXApp {
       rex::cvar::SetFlagByName("texture_pack_root", (user_data_root() / "textures").string());
     }
     auto* vfs = runtime()->file_system();
+    // An imported FM4 circuit (#648, experimental: the fm4_track_dir setting), mounted before the
+    // mods so their loose-file checks see its files.
+    forza::fm4_mount::Install(vfs);
     // Before the game opens its first archive.
     forza::InstallMods(vfs, user_data_root(), cache_root());
     const std::filesystem::path host = cache_root() / "cache";

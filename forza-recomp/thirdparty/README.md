@@ -15,7 +15,7 @@ pinned to the `fh1` branch of the project's fork of Scott's (zer0ducksgiven) ReG
 
 | Directory | Used by | Pinned revision | License |
 | --- | --- | --- | --- |
-| `ReGPU` | the optional Windows GPU plugin `rexgpu-regpu.dll` (`regpu-plugin/`, `FORZA_REGPU_PLUGIN`, `--gpu_plugin=regpu`) | [FH1-ReImagined/ReGPU@f4a685bf2dc45fbbb22f5eaebdb37963781627bc](https://github.com/FH1-ReImagined/ReGPU/tree/f4a685bf2dc45fbbb22f5eaebdb37963781627bc) (`fh1`: upstream [zer0ducksgiven/ReGPU](https://github.com/zer0ducksgiven/ReGPU)@561d0ae plus FH1's changes) | MIT (`ReGPU/LICENSE`, copied to `licenses/ReGPU.txt`) |
+| `ReGPU` | the optional Windows GPU plugin `rexgpu-regpu.dll` (`regpu-plugin/`, `FORZA_REGPU_PLUGIN`, `--gpu_plugin=regpu`) | [FH1-ReImagined/ReGPU@a3f89f21feb0346e9a4dde62cbe4c874e3e3495a](https://github.com/FH1-ReImagined/ReGPU/tree/a3f89f21feb0346e9a4dde62cbe4c874e3e3495a) (`fh1`: upstream [zer0ducksgiven/ReGPU](https://github.com/zer0ducksgiven/ReGPU)@561d0ae plus FH1's changes) | MIT (`ReGPU/LICENSE`, copied to `licenses/ReGPU.txt`) |
 
 It is built only into the plugin. The launcher's source bundle carries it on Windows only, and only the
 files its CMake needs (`builder.source_files`), not its notes or developer tools.

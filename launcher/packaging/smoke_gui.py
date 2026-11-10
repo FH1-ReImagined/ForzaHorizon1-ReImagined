@@ -33,12 +33,15 @@ def inside(report):
         cfg.gpu.update(checked=True, vendor='nvidia')
         cfg.d['check_updates'] = False
         app = QApplication([])
-        app.setStyleSheet(theme.QSS)
+        theme.load_fonts()
+        if sorted(theme.LOADED) != sorted(theme.FONT_FILES):
+            raise RuntimeError(f'Bundled fonts did not load: {sorted(set(theme.FONT_FILES) - set(theme.LOADED))}')
+        app.setStyleSheet(theme.stylesheet())
         if QPixmap(theme.CHECK).isNull():
             raise RuntimeError('Checkbox checkmark asset did not load')
         window = MainWindow(cfg)
         window.show()
-        for page in (0, 1, 2, 3, 4, 5):
+        for page in sorted(window._pages):
             window.show_page(page)
             app.processEvents()
             if window.grab().isNull():

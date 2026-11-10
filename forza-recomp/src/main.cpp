@@ -9,9 +9,11 @@
 #include "forza_app.h"
 #include "hooks/frame_time.h"
 #include "debug/performance_settings.h"
+#include "platform/cpu_cores.h"
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
+#include <rex/ui/flags.h>
 
 #include <string>
 #include <string_view>
@@ -100,10 +102,20 @@ void ApplyForzaCvarDefaults() {
   SetSdkCvarDefault("d3d12_allow_variable_refresh_rate_and_tearing", "false");
 #endif
   // frame_rate other than 30: the guest vblank at three times 20 or 40, twice a higher frame
-  // rate, or the frame rate when twice is past the SDK's limit (src/hooks/frame_time.cpp). A
-  // video_mode_refresh_rate set in forza.toml or on the command line wins.
+  // rate, or the frame rate when twice is past the SDK's limit (src/hooks/frame_time.cpp).
+  // A video_mode_refresh_rate set in forza.toml or on the command line gives way to it, as it
+  // does when the in-game Graphics menu saves (#756: 60 Hz left in forza.toml ran frame_rate 60
+  // at 30 fps until a graphics setting was changed); at 30 it stays.
   if (REXCVAR_GET(frame_rate) != 30) {
-    SetSdkCvarDefault("video_mode_refresh_rate", std::to_string(forza::frame_time::VblankHz()));
+    const std::string hz = std::to_string(forza::frame_time::VblankHz());
+    SetSdkCvarDefault("video_mode_refresh_rate", hz);
+    const double configured = REXCVAR_GET(video_mode_refresh_rate);
+    if (configured != forza::frame_time::StartVblankHz()) {
+      const bool set = rex::cvar::SetFlagByName("video_mode_refresh_rate", hz);
+      REXLOG_WARN("video_mode_refresh_rate = {} from the settings {}: frame_rate {} runs a {} Hz "
+                  "guest vblank (#756)", configured, set ? "is not used" : "could not be replaced",
+                  REXCVAR_GET(frame_rate), hz);
+    }
   }
 }
 
@@ -116,7 +128,43 @@ void ApplyForzaGpuCvarDefaults() {
   // need and costs nothing in a race; "fast" copies every resolve every frame and cost
   // 16-21% of the frame rate at 144 (docs/perf.md).
   SetSdkCvarDefault("readback_resolve", "some");
+  forza::ApplyPresentOnSubmissionDefault(rex::cvar::GetFlagByName("fh1_upscaler"));
+  // Vulkan: the GPU command processor on two threads (ReIGlue 0420, #474), "GPU Commands"
+  // decoding the PM4 stream and "GPU Recorder" running the draws. The thread a CPU-bound frame
+  // waits for gets shorter, but the two together use more CPU than the one did, so it pays only
+  // with cores to spare: on with 6 or more physical cores the game may run on (its affinity),
+  // where the benchmark ran faster uncapped (docs/perf.md); off below, where four cores without
+  // SMT ran free roam 11% slower. Not with a VR headset (true stereo's replay is off while split).
+  // forza.toml or the command line can still set it either way.
+  const unsigned cores = forza::cpu_cores::AvailablePhysicalCores();
+  if (rex::cvar::GetFlagByName("vr_mode") == "off" && cores >= 6) {
+    SetSdkCvarDefault("gpu_split_command_processor", "true");
+  }
+  REXLOG_INFO("Physical CPU cores available: {} (gpu_split_command_processor default {})", cores,
+              rex::cvar::GetFlagByName("gpu_split_command_processor"));
 }
+
+namespace forza {
+void ApplyPresentOnSubmissionDefault(std::string_view upscaler) {
+#if !defined(__APPLE__)
+  // Vulkan: the swap no longer waits for the submission thread to replay the frame; the
+  // presenter's step after the swap runs on that thread behind the frame (ReIGlue 0414, #476).
+  // The command processor, the thread the frame waits for, sat idle about 1 ms a frame there
+  // (docs/perf.md, #607). Not with a VR headset: in the emulated headset the game's part of the
+  // latency grew by about 5 ms at the same frame rate. Not tested on macOS (MoltenVK). Not with
+  // NVIDIA DLSS either, untested there: its evaluation is recorded on the submission thread with
+  // a copy of the frame's inputs, so nothing in it should need the wait, but it keeps the old
+  // one until an RTX card has run it. forza.toml or the command line can still set it either
+  // way; the graphics menu calls this again when it switches the upscaler.
+  const bool dlss = upscaler == "quality" || upscaler == "balanced" ||
+                    upscaler == "performance" || upscaler == "dlss" || upscaler == "dlaa";
+  const bool on = rex::cvar::GetFlagByName("vr_mode") == "off" && !dlss;
+  SetSdkCvarDefault("vulkan_present_on_submission_thread", on ? "true" : "false");
+#else
+  (void)upscaler;
+#endif
+}
+}  // namespace forza
 
 void LogForzaPerformanceSettings() {
   forza::performance_settings::Snapshot([](std::string_view name)

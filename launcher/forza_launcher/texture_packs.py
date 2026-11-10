@@ -7,7 +7,8 @@ it too) and an optional pack.toml (name, version, author, description). The game
 ("texture_packs": {"order": [...], "disabled": [...]}, the Mods page's format); with Use texture
 packs on, the game gets the packs to use as --texture_packs (folders '|'-separated, a later one
 winning for the same texture: SDK patch 0310). "hd-pack" is the pack Make HD pack writes
-(hd_pack.py); it starts at the top of the list, so the packs below it win.
+(hd_pack.py), "decal-pack" the one Make decal pack writes (decal_pack.py); they start at the top
+of the list, so the packs below them win.
 
 Texture files directly in the textures folder (milestone 1's layout) are the implicit pack
 "Loose files (textures folder)" (folder "."; the game reads "." as the files in the folder
@@ -33,6 +34,8 @@ STATE_KEY = "texture_packs"
 MANIFEST = "pack.toml"
 DUMP = "dump"
 HD_PACK = "hd-pack"
+DECAL_PACK = "decal-pack"
+MADE_HERE = {HD_PACK: "HD pack (made on this PC)", DECAL_PACK: "Decal pack (made on this PC)"}
 LOOSE = "."   # the loose files directly in the textures folder (--texture_packs name)
 LOOSE_TITLE = "Loose files (textures folder)"
 NONE = "|"  # --texture_packs value for "no packs"
@@ -72,7 +75,7 @@ class Pack:
             return LOOSE_TITLE
         if self.name:
             return self.name
-        return "HD pack (made on this PC)" if self.folder == HD_PACK else self.folder
+        return MADE_HERE.get(self.folder, self.folder)
 
     @property
     def loose(self) -> bool:
@@ -81,7 +84,7 @@ class Pack:
 
     @property
     def made_here(self) -> bool:
-        return self.folder == HD_PACK
+        return self.folder in MADE_HERE
 
     def summary(self) -> str:
         bits = [self.title]
@@ -343,12 +346,18 @@ def loose_files(directory: Path) -> int:
 
 def ordered(cfg, found: list) -> list:
     """`found` in the saved order, each on unless turned off. New packs go last (by name),
-    except the one made on this PC, which goes first: hand-made packs below it win over it."""
+    except the ones made on this PC: the HD pack goes first and the decal pack right below it (it
+    wins for a decal the HD pack has too, from a dump), so hand-made packs below them win over them."""
     saved = mods.state(cfg, STATE_KEY)["order"]
     out = mods.ordered(cfg, found, STATE_KEY)
     if HD_PACK not in saved:
         made = [p for p in out if p.folder == HD_PACK]
         out = made + [p for p in out if p.folder != HD_PACK]
+    if DECAL_PACK not in saved:
+        made = [p for p in out if p.folder == DECAL_PACK]
+        rest = [p for p in out if p.folder != DECAL_PACK]
+        at = next((i + 1 for i, p in enumerate(rest) if p.folder == HD_PACK), 0)
+        out = rest[:at] + made + rest[at:]
     return [p for p in out if p.loose] + [p for p in out if not p.loose]
 
 
@@ -423,8 +432,8 @@ def _install_name(name: str) -> str:
         raise InstallError(f'"{name}" cannot be a texture pack\'s folder name (not starting with a dot): '
                            'rename it and add it again')
     why = _valid_folder_name(name)
-    if why == "the dump" or name == HD_PACK:
-        return f"{name} (added)"  # the dump's and Make HD pack's folders stay theirs
+    if why == "the dump" or name in MADE_HERE:
+        return f"{name} (added)"  # the dump's, Make HD pack's and Make decal pack's folders stay theirs
     if why:
         raise InstallError(f'"{name}" cannot be a texture pack\'s folder name: {why}.')
     return name

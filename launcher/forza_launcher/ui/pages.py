@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QTimer, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QPixmap
-from PySide6.QtWidgets import (QCheckBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+from PySide6.QtWidgets import (QCheckBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
                                QPlainTextEdit, QProgressBar, QPushButton, QScrollArea,
                                QTabBar, QStackedWidget, QVBoxLayout, QWidget)
 
@@ -14,6 +14,7 @@ from .. import (GITHUB_URL, PRIVACY_URL, PUBLIC_SERVER, __version__, build_env, 
                installer, paths, pins, shader_prebuild, vr)
 from ..config import Config
 from . import theme, workers
+from .challenges_card import ChallengesCard
 from .widgets import Disclosure, Hero, SpinBox, StatusRow, card, label
 
 
@@ -46,6 +47,51 @@ def human_time(seconds):
     return f"{m // 60} h {m % 60} min" if m >= 60 else f"{m} min"
 
 
+class IntelDriverNotice(QFrame):
+    """Setup and Play: the Intel iGPU's Vulkan driver is below 1.3 (#672). On Windows "Use Direct3D 12"
+    switches the Graphics API, as the Settings banner's "Use recommended" does; nothing changes by itself."""
+
+    def __init__(self, cfg: Config, window):
+        super().__init__()
+        self.cfg, self.window = cfg, window
+        self.setObjectName("intelDriverNotice")
+        self.setStyleSheet(f"#intelDriverNotice {{ border: 1px solid {theme.ORANGE}; border-radius: 8px; }}")
+        row = QHBoxLayout(self)
+        row.setContentsMargins(16, 10, 16, 10)
+        row.setSpacing(12)
+        self.text = label("", "")
+        self.text.setTextFormat(Qt.PlainText)
+        row.addWidget(self.text, 1)
+        self.use_d3d12 = QPushButton("Use Direct3D 12")
+        self.use_d3d12.clicked.connect(self.apply)
+        row.addWidget(self.use_d3d12, 0, Qt.AlignVCenter)
+        self.hide()
+
+    def refresh(self):
+        text = self.cfg.intel_vulkan_warning()
+        self.text.setText(text)
+        self.use_d3d12.setVisible(bool(self.cfg.intel_vulkan_fix()))
+        self.setVisible(bool(text))
+
+    def apply(self):
+        fix = self.cfg.intel_vulkan_fix()
+        if not fix:
+            return self.refresh()
+        from .. import schema
+        self.cfg.settings.update(fix)
+        settings = getattr(self.window, "settings", None)
+        if settings is not None:
+            settings.apply_external({k: v for k, v in fix.items() if k in schema.BY_KEY})   # shows it there
+            settings.flush()
+        else:
+            try:
+                self.cfg.save()
+            except OSError as e:
+                self.window.status(f"Could not save launcher settings: {e}", True)
+        self.window.refresh_intel_driver_notices()
+        self.window.status("Graphics API: Direct3D 12 (Settings > Graphics)", False)
+
+
 # ================================================================== Play ==================
 
 class PlayPage(QWidget):
@@ -59,10 +105,18 @@ class PlayPage(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         sc, lay = scroll_page("Play", "")
+        # The banner's height follows the page's width (Hero.heightForWidth). With the page's
+        # content close to the window's height, a scroll bar that comes and goes changes that
+        # width, so the height, so whether the bar is needed: Qt's scroll area then recursed until
+        # the stack ran out (a crash on Windows with the Challenges card's height). A bar that is
+        # always there keeps the width the same.
+        sc.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
         outer.addWidget(sc)
         # the title is part of the banner; hide the text title on this page
         lay.itemAt(0).widget().hide()
         lay.addWidget(Hero())
+        self.intel_driver = IntelDriverNotice(cfg, window)
+        lay.addWidget(self.intel_driver)
         self.warn = label("", "warn")
         self.warn.hide()
         lay.addWidget(self.warn)
@@ -91,15 +145,11 @@ class PlayPage(QWidget):
         self.tuning_setup.hide()
         lay.addWidget(self.tuning_setup, 0, Qt.AlignLeft)
 
-        c, cl = card()
-        self.r_files = StatusRow("Game files")
-        self.r_build = StatusRow("Game")
-        self.r_dlc = StatusRow("DLC")
-        self.r_online = StatusRow("Online")
-        for r in (self.r_files, self.r_build, self.r_dlc, self.r_online):
-            cl.addWidget(r)
-
+        # The play card: one big Play (Play in VR and Stop beside it), what the game is doing, and
+        # the four things it needs at a glance.
+        c, cl = card(margins=(24, 22, 24, 20), spacing=14)
         row = QHBoxLayout()
+        row.setSpacing(12)
         self.play = QPushButton("Play")
         self.play.setObjectName("play")
         self.play.setCursor(Qt.PointingHandCursor)
@@ -110,42 +160,72 @@ class PlayPage(QWidget):
         self.play_vr.setToolTip("Experimental: starts the game in your VR headset.")
         self.play_vr.clicked.connect(self.play_vr_requested.emit)
         self.play_vr.hide()
-        row.addWidget(self.play_vr)
+        row.addWidget(self.play_vr, 0, Qt.AlignVCenter)
         self.stop = QPushButton("Stop")
         self.stop.clicked.connect(window.stop_game)
         self.stop.hide()
-        row.addWidget(self.stop)
+        row.addWidget(self.stop, 0, Qt.AlignVCenter)
         row.addStretch(1)
-        logs = QPushButton("Open log folder")
-        logs.clicked.connect(lambda: open_folder(cfg.data_home()))
-        row.addWidget(logs)
-        lay.addLayout(row)
+        cl.addLayout(row)
+        # Where Play starts: FH1's Colorado, or an imported FM4 circuit (#648, experimental). Hidden
+        # until a circuit is imported (Mods > Mods), so nothing changes for anyone else.
+        from .fm4_tracks import TrackPicker
+        self.track_picker = TrackPicker(cfg)
+        cl.addWidget(self.track_picker)
         self.vr_note = label("VR is experimental: it is playable, but expect rough edges. "
                              "Take a break if you feel motion sickness.", "warn")
         self.vr_note.hide()
-        lay.addWidget(self.vr_note)
-        launcher_logs = QPushButton("Open launcher log folder")
-        launcher_logs.setObjectName("link")
-        launcher_logs.setToolTip("Open the folder containing launcher.log (launcher errors and tracebacks).")
-        launcher_logs.clicked.connect(lambda: open_folder(paths.launcher_log().parent))
-        lay.addWidget(launcher_logs, 0, Qt.AlignLeft)
+        cl.addWidget(self.vr_note)
         self.msg = label("", "muted")
         self.msg.hide()
-        lay.addWidget(self.msg)
+        cl.addWidget(self.msg)
         self.crash_report = QPushButton("Review crash report…")
         self.crash_report.setObjectName("link")
         self.crash_report.hide()
         self.crash_report.clicked.connect(window.review_crash_report)
-        lay.addWidget(self.crash_report, 0, Qt.AlignLeft)
+        cl.addWidget(self.crash_report, 0, Qt.AlignLeft)
         self.shader_label = label("", "muted")
         self.shader_label.hide()
-        lay.addWidget(self.shader_label)
+        cl.addWidget(self.shader_label)
         self.shader_progress = QProgressBar()
         self.shader_progress.setTextVisible(False)
         self.shader_progress.setMaximumHeight(10)
         self.shader_progress.hide()
-        lay.addWidget(self.shader_progress)
+        cl.addWidget(self.shader_progress)
+        sep = QFrame()
+        sep.setObjectName("separator")
+        sep.setFixedHeight(1)
+        cl.addWidget(sep)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(28)
+        grid.setVerticalSpacing(10)
+        self.r_files = StatusRow("Game files")
+        self.r_build = StatusRow("Game")
+        self.r_dlc = StatusRow("DLC")
+        self.r_online = StatusRow("Online")
+        for i, r in enumerate((self.r_files, self.r_build, self.r_dlc, self.r_online)):
+            grid.addWidget(r, i // 2, i % 2)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        cl.addLayout(grid)
         lay.addWidget(c)
+        # Troubleshooting stays one click away, under the card.
+        links = QHBoxLayout()
+        links.setSpacing(22)
+        logs = QPushButton("Open log folder")
+        logs.setObjectName("link")
+        logs.setToolTip("Open the game's data folder, with forza.log.")
+        logs.clicked.connect(lambda: open_folder(cfg.data_home()))
+        links.addWidget(logs)
+        launcher_logs = QPushButton("Open launcher log folder")
+        launcher_logs.setObjectName("link")
+        launcher_logs.setToolTip("Open the folder containing launcher.log (launcher errors and tracebacks).")
+        launcher_logs.clicked.connect(lambda: open_folder(paths.launcher_log().parent))
+        links.addWidget(launcher_logs)
+        links.addStretch(1)
+        lay.addLayout(links)
+        self.challenges = ChallengesCard(cfg)   # daily and weekly challenges (forza-live #1)
+        lay.addWidget(self.challenges)
         self.install_details = Disclosure("Installation details")
         self.install_paths = label("", "help")
         self.install_paths.setTextFormat(Qt.PlainText)
@@ -177,6 +257,8 @@ class PlayPage(QWidget):
             self._clock_probe.result.connect(self._clock_result)
             self._clock_probe.start()
         cfg = self.cfg
+        self.intel_driver.refresh()
+        self.track_picker.refresh()
         root = cfg.game_files()
         if (root / "default.xex").is_file():
             files_ok, files_msg = installer.check_game_folder(root)
@@ -208,13 +290,14 @@ class PlayPage(QWidget):
             "local": "Local server on this PC (only you)",
             "custom": "Your server: " + (cfg.online.get("custom_server") or "(no address set)"),
             "offline": "Offline",
-        }[mode] + "   (Settings > Online)")
+        }[mode] + "   (Online > Servers)")
         details = [f"Game files: {root}", f"Saves and data: {cfg.data_home()}"]
         if install:
             details.append(f"Game executable: {install.exe}")
         if mode == "public":
             details.append(f"Online server: {PUBLIC_SERVER}")
         self.install_paths.setText("\n".join(details))
+        self.challenges.refresh()
         ready = files_ok and install is not None
         save_page = getattr(self.window, 'saves', None)
         if self.window._crash_probe is not None:
@@ -297,8 +380,9 @@ class StepCard:
         n = QLabel(str(number))
         n.setFixedSize(30, 30)
         n.setAlignment(Qt.AlignCenter)
-        n.setStyleSheet(f"background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 {theme.ORANGE}, stop:1 {theme.PINK});"
-                        f"color: #1a0f33; font-weight: 800; border-radius: 15px;")
+        n.setStyleSheet(f"background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 {theme.GRAD_START}, stop:1 {theme.RUST});"
+                        f"color: {theme.INK}; font-family: \"{theme.HEADLINE}\"; font-size: 15px; font-weight: 800; "
+                        "border-radius: 15px;")
         head.addWidget(n)
         t = label(title)
         t.setObjectName("cardTitle")
@@ -380,6 +464,8 @@ class SetupPage(QWidget):
         outer.addWidget(label("Setup", "pageTitle"))
         outer.addWidget(label("Build the game from your own copy of Forza Horizon. "
                               "No game code or data is included with the launcher.", "pageLead"))
+        self.intel_driver = IntelDriverNotice(cfg, window)
+        outer.addWidget(self.intel_driver)
         self.tabs = QTabBar()
         self.tabs.setExpanding(False)
         self.tabs.setDrawBase(False)
@@ -400,7 +486,7 @@ class SetupPage(QWidget):
         # 0. where --------------------------------------------------------------------
         f0, l0 = card(margins=(24, 24, 24, 24), spacing=20)
         t0 = QLabel("Game and save folder")
-        t0.setStyleSheet("font-weight: 700; font-size: 15px;")
+        t0.setObjectName("cardTitle")
         l0.addWidget(t0)
         folder_help = "Your game files, downloads, build and saves live here. Allow at least 15 GB of free space."
         if sys.platform == "win32":
@@ -629,6 +715,7 @@ class SetupPage(QWidget):
 
     def refresh(self):
         cfg = self.cfg
+        self.intel_driver.refresh()
         self.refresh_folder()
         root = cfg.game_files()
         have = (root / "default.xex").is_file()
@@ -686,11 +773,15 @@ class SetupPage(QWidget):
         state, detail = builder.build_status(cfg.data_home(), cfg["tu_package"])
         label_for = {"built": ("Built", True), "stale": ("Rebuild needed", None), "partial": ("Unfinished", None),
                      "none": ("Not built", None), "nosource": ("Missing sources", False)}[state]
+        outside = game.outside_build(cfg)
+        if outside is not None:  # Play starts this checkout's build or the Advanced game_dir, not ours
+            label_for = ("In use", True)
+            detail = game.outside_build_text(outside) + (f" {detail}" if state == "partial" else "")
         self.c3.set_badge(*label_for)
         self.go3.setText({"stale": "Rebuild", "partial": "Resume build", "built": "Rebuild"}.get(state, "Build"))
         self.status3.setText(self.fail.get("status3") or detail)
         st = builder.read_state(cfg.data_home())
-        if state == "built" and st.get("seconds") and not self.fail.get("status3"):
+        if state == "built" and outside is None and st.get("seconds") and not self.fail.get("status3"):
             self.status3.setText(f"{detail} (took {human_time(st['seconds'])}, up to {st.get('peak_rss_gb', '?')} GB of memory)")
         self.clean.setVisible(state == "built" and (builder.build_dir(cfg.data_home()) / "forza-recomp" / "out").exists())
         self._refresh_checks()
@@ -767,6 +858,7 @@ class SetupPage(QWidget):
         while self.checks.count():
             w = self.checks.takeAt(0).widget()
             if w:
+                w.hide()   # out of the layout until deleteLater runs: never painted over the new rows
                 w.deleteLater()
         root = self.cfg.data_home()
         tools = build_env.cached_tools(root)
@@ -1028,7 +1120,7 @@ class SetupPage(QWidget):
                                     "the base game.")
                 return
         if self.ms is not None and not self.ms.isChecked():
-            if not build_env.usable_vs_installed() and not (cfg.data_home() / "xwin" / "crt" / "include").is_dir():
+            if not build_env.usable_vs_installed() and build_env.xwin_dirs(cfg.data_home() / "xwin") is None:
                 QMessageBox.information(self, "Microsoft license",
                                         "Accept Microsoft's license for the C++ runtime and Windows SDK to continue "
                                         "(or install Visual Studio 2022 Build Tools).")
@@ -1188,14 +1280,18 @@ class AboutPage(QWidget):
         sc, lay = scroll_page("About", "")
         outer.addWidget(sc)
         head = QHBoxLayout()
+        head.setSpacing(18)
         logo = QLabel()
-        pm = QPixmap(str(paths.asset("logo.png")))
+        pm = QPixmap(str(paths.asset("logo-mark.png")))
         if not pm.isNull():
-            logo.setPixmap(pm.scaled(96, 96, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            ratio = self.devicePixelRatioF() or 1
+            scaled = pm.scaledToHeight(int(64 * ratio), Qt.SmoothTransformation)
+            scaled.setDevicePixelRatio(ratio)
+            logo.setPixmap(scaled)
         head.addWidget(logo)
         col = QVBoxLayout()
         t = QLabel("Forza Horizon 1: ReImagined")
-        t.setStyleSheet(f"font-size: 20px; font-weight: 800; color: {theme.CREAM};")
+        t.setStyleSheet(f"font-family: \"{theme.HEADLINE}\"; font-size: 22px; font-weight: 800; color: {theme.CREAM};")
         col.addWidget(t)
         self.ver = label("", "muted")
         col.addWidget(self.ver)

@@ -5,16 +5,18 @@ texture the game loads by a fingerprint of its contents, and draws a file named 
 fingerprint instead. The game itself never sees the file; it keeps its own texture, in its own
 memory, and only the graphics card's copy changes.
 
-A **texture pack** is a folder of such files. Packs come from two places, and the project hosts
-neither (they are derived from the game's art):
+A **texture pack** is a folder of such files. Packs come from these places, and the project hosts
+none of them (they are derived from the game's art):
 
 - **Make HD pack**: the launcher upscales the textures *you* dumped, on your PC, with an AI
   upscaler (Real-ESRGAN), and compresses them. Nothing of the game is downloaded or shared.
+- **Make decal pack**: the same for the Paint Shop's decals, read from your own game files (no
+  dump needed).
 - **Community packs**: packs other players made by hand, added with **Add pack…**.
 
 ## The Texture packs page
 
-The launcher's **Texture packs** page (also **Settings > Display > Texture packs > Texture packs
+The launcher's **Texture packs** page (also **Settings > Graphics > Texture packs > Texture packs
 page…**):
 
 | Launcher | cvar | What it does |
@@ -24,7 +26,7 @@ page…**):
 | The list of packs | `texture_packs` | The packs to use, in order (the launcher passes it) |
 | Open textures folder | | Opens `textures/` in the game's data folder |
 
-Both switches are off by default, are the same settings as in Settings > Display, and apply from
+Both switches are off by default, are the same settings as in Settings > Graphics, and apply from
 the next start. The folder is `textures` in the game's data folder
 (`~/.local/share/forza/textures` on Linux, `%LOCALAPPDATA%\ForzaReImagined\textures` on
 Windows): the launcher passes it as `texture_pack_root`; without the launcher it is
@@ -32,7 +34,12 @@ Windows): the launcher passes it as `texture_pack_root`; without the launcher it
 
 - `texture_dump_png` (on): with `texture_dump`, also write a `.png` of the largest level.
 - `texture_replace_preload` (off): read every pack file at start instead of when its texture
-  first loads, so no texture is shown at the original resolution first (more memory).
+  first loads, so no texture is shown at the original resolution first (more memory). Off, a
+  pack can ask for this for its own files: a top-level `preload = true` in its `pack.toml` (SDK
+  patch 0436; the decal pack does, [Make decal pack](#make-decal-pack)).
+- `texture_replace_memory_limit_mb` (0): the most graphics memory the replacements take, in MB
+  (0: 40% of the graphics card's own memory; on integrated graphics a quarter of the system
+  memory, up to 2 GB). See [Graphics memory](#graphics-memory) (SDK patch 0437).
 - `texture_pack_root`: another folder (the launcher then passes no `texture_packs`).
 
 ### The list
@@ -44,8 +51,9 @@ the selected row too). **Ticked packs are used from top to bottom: when two pack
 same texture, the one lower in the list wins** (as on the Mods page). The details under the list
 name the textures a pack shares with others and whose copy is used. **Move up**, **Move down**,
 **Remove** (asks first; a linked folder loses only the link) and **Refresh** work as on the Mods
-page. The pack Make HD pack writes, "HD pack (made on this PC)" (`hd-pack`), starts at the top, so
-hand-made packs below it win over it.
+page. The pack Make HD pack writes, "HD pack (made on this PC)" (`hd-pack`), starts at the top, and
+the one Make decal pack writes, "Decal pack (made on this PC)" (`decal-pack`), right below it, so
+hand-made packs below them win over them.
 
 launcher.json keeps the order and the packs turned off (`"texture_packs": {"order": [...],
 "disabled": [...]}`). With Use texture packs on, every start passes
@@ -74,8 +82,8 @@ only after you say yes (never while the game runs).
 Refused, in words under the list: a zip with an absolute path, `..` or a link (zip slip), more
 than 200,000 files or 32 GB unpacked, a texture over 2 GB, a texture dump (a folder with
 `index.tsv`: the game's own textures), and a pack without a single texture the game can use. A
-pack named `hd-pack` or `dump` is added as `hd-pack (added)` (those folders are Make HD pack's
-and the dump's). Kept, with a note: files the game cannot use (a cube map, a format it does not
+pack named `hd-pack`, `decal-pack` or `dump` is added as `hd-pack (added)` and so on (those
+folders are Make HD pack's, Make decal pack's and the dump's). Kept, with a note: files the game cannot use (a cube map, a format it does not
 read, a size over 16384, a file shorter than its header), files not named by a fingerprint, a
 texture in a pack twice, and files that are byte for byte the game's own dumped textures (they
 change nothing, and a pack must not contain them).
@@ -233,6 +241,67 @@ chase camera at 1440p the difference is clear on the near road and foliage, smal
 terrain. Compressed and PNG packs look the same in the game: the shots at the spawn point differ
 only where something moved between runs (foliage in the wind, traffic's tyre tracks on the dirt).
 
+## Make decal pack
+
+**Make decal pack** (the **Sharper decals** box on the Texture packs page, #659) upscales the Paint
+Shop's decals, the sponsor and brand logos you put on a car, into the pack "Decal pack (made on
+this PC)" (`textures/decal-pack`), at **2x** (default) or **4x**. A decal is a 256x256 picture (7
+of them 256x128) that the game stretches over part of the car: with **Paint job detail** at 2x
+(Settings > Graphics > World detail, see [graphics detail](graphics-detail.md#paint-job-detail-659)),
+a large decal covers about 900 pixels of the car's 2048x2048 paint job, so the decal itself is
+what looks soft. The pack also sharpens the decals' pictures in the Paint Shop's Decal Select.
+
+It needs no dump and no driving around: the launcher reads the 490 decal files of the game's own
+`media/Livery.zip` (in your game files), works out the fingerprint the game gives each decal's
+texture, and upscales every one. Nothing of the game is downloaded or shared; the result stays in
+your data folder. The upscaler is Make HD pack's (downloaded once for both, after you say yes),
+and so is the job: in the background, with a progress bar and **Cancel**; **Continue decal pack**
+goes on from where it stopped. A pack made at the other scale is replaced after you say yes.
+
+What is different from Make HD pack:
+
+- **No colour test.** Decals are flat logos, which the HD pack's data map test would leave out.
+- **The alpha goes through the upscaler too.** A decal's alpha is the logo's outline: scaled
+  smoothly, as the HD pack does, the outline would stay as soft as the original while the colour
+  inside sharpens. Here the alpha is upscaled as a grey picture of its own, its levels matched to
+  the original's (a model that made it a little darker would make the whole decal see-through),
+  and values within 3 of clear or opaque are made exactly that.
+- **No fringes.** The game stores white under a decal's transparent texels; the colour there is
+  filled from the logo's edge before upscaling (as for the HD pack's cut-outs), so the GPU's
+  filtering draws no white or dark line around the logo, on light or dark paint.
+
+Measured on a Ryzen 7 7800X3D with a Radeon RX 9060 XT (Linux), the 478 different decals:
+
+| | 2x (default) | 4x |
+| --- | --- | --- |
+| A decal | 512x512, BC7 with mips | 1024x1024, BC7 with mips |
+| Making the pack | 6 min 32 s | 6 min 33 s |
+| On disk | 160 MB | 633 MB |
+| Graphics memory of the whole pack (loaded at start, below) | 178 MiB | 652 MiB |
+
+476 of the decals come out BC7 (they have alpha), 2 BC1. The time is the same at both scales:
+the model works at 4x (2x is its output halved), and each decal goes through it twice, colour
+and alpha. Reading the 490 files from Livery.zip takes about 10 s of it.
+
+**Loaded at start.** The game draws a car's decals into its paint job once, when the car loads
+(and again only when the paint job changes). A replacement is read the first time its texture
+loads and drawn from the frame after, which for a decal is too late: the paint job is drawn with
+the game's own decal, and the pack changes nothing on the car. So the decal pack's `pack.toml`
+says `preload = true` (SDK patch 0436): the game reads that pack's files and puts them in graphics
+memory at start, 178 MiB at 2x or 652 MiB at 4x, and the game's own decal is never used. The
+other packs are read as their textures load, as before (an HD pack is not preloaded with it).
+
+How the decals are read (`launcher/forza_launcher/decal_pack.py`): each `decals/*.carbin` (zip
+method 21, the game's LZX, decoded in Python) has the texture's width, height, mip count and
+format word (`0x18287F86`, 8:8:8:8) at 0x143-0x152 and its largest level at 0x157, tiled and
+big-endian as the console loads it (4 bytes a texel: A, R, G, B). The fingerprint is the game's
+(`Packs::Fingerprint`, see [Dumping](#dumping)) of that level as a k_8_8_8_8 texture, k8in32, pitch
+width/32, tiled, packed mips. It was checked against the game: a dump of a Paint Shop visit (Decal
+Select's 42 decals) and of free roam with the Amsoil decal on the car has exactly these names. The
+picture upscaled is the untiled level, in the dump PNG's channel order. 12 of the 490 files share
+their picture with another, so the pack has 478 textures. `launcher/test_decal_pack.py` tests the
+reading, the fingerprint, the job and the page with a made-up Livery.zip.
+
 ## Making and sharing a pack
 
 A pack is a folder:
@@ -258,8 +327,8 @@ Rocks HD/
 **Sharing is your responsibility.** A pack holds changed game art, which belongs to the game's
 publisher; the project does not host packs and cannot vouch for any. Share only your own work:
 never the game's textures unchanged, the dumped files, files only re-saved or converted from them,
-or a dump; and keep the pack Make HD pack made on your PC to yourself (it is the game's art run
-through a program, not your work). The launcher notes files of an added pack that are the game's
+or a dump; and keep the packs Make HD pack and Make decal pack made on your PC to yourself (they
+are the game's art run through a program, not your work). The launcher notes files of an added pack that are the game's
 own textures unchanged.
 
 ## Dumping
@@ -331,26 +400,77 @@ and why (a wrong aspect ratio, an unsupported format).
 - A texture the game samples as signed data keeps its original (the replacement is only bound
   where the game reads it unsigned, which is how it reads colour textures).
 - The game's own texture still loads (its memory and its copy on the graphics card), so a
-  replacement adds graphics memory; replacements stay loaded until the game exits. The log's
-  summary line counts them (`MiB of GPU memory`).
+  replacement adds graphics memory, for as long as the game has the texture
+  ([Graphics memory](#graphics-memory)).
 - The mip level the GPU picks follows the replacement's size, so the distance where a texture
   turns blurry moves out, as it should; the game's mip clamps (`mip_min_level`) are levels of
   the new image, a little sharper than before.
 - Only what the list above dumps can be replaced: no cube maps (sky, reflections), 3D textures
   or other formats yet.
 
+## Graphics memory
+
+A replacement is on the graphics card while the game has a texture with its picture, as the
+game's own textures are streamed (SDK patch 0437, #677). When the game drops its texture (its
+texture cache frees it, or the game loads another picture into its memory), the replacement is
+freed 5 seconds later (the game often loads the same picture again right away). One the game
+has but has not drawn for 30 seconds is freed too: the game keeps textures it no longer draws
+until its own texture cache is full. Either way the file is read again when the texture is next
+loaded or drawn, and the game's own texture is drawn until then (a frame or a few). Preloaded packs ([Make decal pack](#make-decal-pack),
+`texture_replace_preload`) stay loaded.
+
+All replacements fit in a limit, `texture_replace_memory_limit_mb`: by default 40% of the
+graphics card's own memory (6.4 GB on a 16 GB card, 1.6 GB on a 4 GB one; on integrated graphics
+a quarter of the system memory, up to 2 GB), and less while the card is nearly full (the driver's
+memory budget, other programs included). A replacement that would not fit frees others first:
+those no texture has any more, then those not drawn for 2 seconds, least recently drawn first.
+Replacements on screen and preloaded ones are never freed for it. If it still does not fit, the
+game's own texture is drawn, and the replacement is tried again when the texture is drawn 30
+seconds or more later. The log says so once (`fill their graphics memory`), and its summary line
+counts what was freed and held back.
+
+Measured on a Ryzen 7 7800X3D with a Radeon RX 9060 XT (16 GB, Linux, RADV; limit 6,521 MiB):
+15 minutes of free roam each on the 28.5 km soak loop from the save's spawn (`tools/autodrive.py`,
+720p, 60 fps cap, nothing else running), with a test pack of 2,712 textures from a dump of that
+drive, upscaled 2x (6.9 GB of graphics memory as PNGs, 1.7 GB as BC7). The game's own textures
+stay under its cache's 384 MB the whole time, so none of them is destroyed. "Before" is SDK patch
+0436, "0437 (no idle)" the patch without the 30-second rule, "0437" the patch as it ships, and
+"256 MB" the no-idle build with `texture_replace_memory_limit_mb=256`:
+
+| | Replacements' graphics memory at 5 / 10 / 15 min | Files read | Freed | Held back | Game's graphics memory at 15 min | fps, p99, worst frame |
+| --- | --- | --- | --- | --- | --- | --- |
+| No pack | | | | | 1.3 GB | 59.9, 18.9 ms, 70 ms |
+| PNG, before | 2,803 / 4,028 / 5,041 MiB (still growing) | 2,197 | 0 | 0 | 6.4 GB | 60.0, 17.2 ms, 41 ms |
+| PNG, 0437 (no idle) | 2,386 / 2,853 / 3,297 MiB | 2,205 | 286 | 0 | 4.6 GB | 60.0, 17.1 ms, 33 ms |
+| PNG, 0437 | 658 / 692 / 890 MiB (peak 1,132) | 3,318 | 3,010 | 0 | 2.4 GB | 60.0, 17.0 ms, 52 ms |
+| BC7, before | 713 / 967 / 1,236 MiB | 2,170 | 0 | 0 | 2.6 GB | 60.0, 17.1 ms, 40 ms |
+| BC7, 0437 (no idle) | 591 / 733 / 853 MiB | 2,148 | 237 | 0 | 2.1 GB | 59.7, 17.4 ms, 100 ms (one burst of slow frames with no upload or wait behind it) |
+| PNG, 0437, 256 MB | 256 / 256 / 256 MiB | 9,654 | 1,615 | 7,933 | 1.6 GB | 60.0, 17.0 ms, 26 ms |
+
+At 256 MB the textures beyond it are drawn as the game's own (screenshots at the same places show
+the game's textures, no corruption); the cost is reading files again, 6.9 GB of them in 15
+minutes (from the page cache: 0.96 GB from disk), with no slower frame. Uploading took at most
+21 ms in one frame (PNG; 4 ms at 256 MB), within the 32 MiB a frame.
+
 ## The log
 
 At most once a minute while something happens; the counts are since the start:
 
 ```
-Texture packs: command processor time 6.4 ms (1.70 ms since the last summary; hashing 5.8 ms,
-dump copies 0.0 ms; at most 924 us for a load); 1902 loads fingerprinted (107.0 MiB); dumped 0
-(0.0 MiB written, 0 queued, 0 dropped, 0 failed); replacements for 22 textures (22 files read,
-0 not usable, 22 uploaded, 66.8 MiB of GPU memory); textures skipped: 3 format, 6
-cube/3D/array/scaled, 27 screen-sized, 51 dynamic, 0 mips only, 59 tiny; 164 GPU-written loads;
-formats not handled: k_32_FLOAT 1, k_24_8 1, k_2_10_10_10 1
+Texture packs: command processor time 28.3 ms (1.70 ms since the last summary; hashing 20.5 ms,
+dump copies 0.0 ms; at most 220 us for a load); 11104 loads fingerprinted (416.9 MiB); dumped 0
+(0.0 MiB written, 0 queued, 0 dropped, 0 failed); replacements for 2115 textures (2148 files
+read (1147.7 MiB), 0 not usable, 2148 uploaded (1217.8 MiB in 102.8 ms, at most 11.23 ms a
+frame), 237 freed (364.4 MiB), 0 held back by the limit; 853.4 MiB of GPU memory now, at most
+871.9, limit 6521 MiB); textures skipped: 3 format, 9 cube/3D/array/scaled, 20 screen-sized, 83
+dynamic, 0 mips only, 688 tiny; 245 GPU-written loads; formats not handled: k_32_FLOAT 1,
+k_24_8 1, k_2_10_10_10 1
 ```
+
+The replacements' part (SDK patch 0437): the files read and their size, the uploads (their size,
+the time they took and the most in one frame), the replacements freed, the ones held back by the
+limit, and the graphics memory they take now, the most they took and the limit
+([Graphics memory](#graphics-memory)).
 
 The command processor time is what fingerprinting cost the thread that feeds the GPU (every
 frame waits for it): it runs when a texture's data loads (created, or reloaded after the game
@@ -381,12 +501,15 @@ SDK patch 0280 (`docs/sdk_patches.md`): `src/graphics/pipeline/texture/pack.{h,c
 fingerprint, the dump writer with its untiling, DDS and PNG encoders, the replacement reader and
 its two worker threads), the hook in `TextureCache::CommitPreparedTextureLoad`, and the Vulkan
 texture cache's replacement images (`VulkanTextureCache::UploadTexturePackReplacement`,
-`GetTexturePackView`). SDK patch 0310: `texture_packs`, the packs to read in order, `.` for the loose files
+`GetTexturePackView`). SDK patch 0437: freeing and the limit (`TexturePackMakeRoom`,
+`FreeReleasedTexturePackReplacements`; the policy, `ReplacementMemoryLimit` and
+`ChooseEvictions` in `pack_format.cpp`, tested by `tools/test_texture_pack_dds.cpp`). SDK patch 0310: `texture_packs`, the packs to read in order, `.` for the loose files
 (`ParsePackOrder` in `pack_format.cpp`, tested by `tools/test_texture_pack_dds.cpp`). The game
 sets `texture_pack_root` (`src/forza_app.h`); the launcher's options are in
 `launcher/forza_launcher/schema.py`, the packs in `texture_packs.py` (tests:
 `launcher/test_texture_packs.py`), Make HD pack in `hd_pack.py` (tests: `launcher/test_hd_pack.py`,
-with a stand-in for the upscaler), the page in `ui/texture_packs_page.py` (its list is the Mods
+with a stand-in for the upscaler), Make decal pack in `decal_pack.py` (tests:
+`launcher/test_decal_pack.py`), the page in `ui/texture_packs_page.py` (its list is the Mods
 page's, `ui/mods_page.py` `FolderListPage`). The compressor (#413) is `forza-recomp/texcompress`
 (`texcompress.{h,cpp}`: mips, encoding, DDS; `main.cpp`: the program and its job list; built by the
 game's CMake and staged next to the game by `builder.stage_runtime`), tested by

@@ -237,6 +237,27 @@ class NavigationTests(unittest.TestCase):
         self.assertIs(self.app.focusWidget(), self.win.play.play)
         self.assertTrue(self.win.isVisible())
 
+    def test_section_tabs_work_with_a_controller(self):
+        # Library: down from its sidebar button reaches the page tabs; right opens Designs & vinyls.
+        self.press("next")
+        self.assertIs(self.win.stack.currentWidget(), self.win.gallery)
+        self.nav.focus(self.win.subnav)
+        self.press("right")
+        self.assertIs(self.win.stack.currentWidget(), self.win.catalogs)
+        self.assertIs(self.app.focusWidget(), self.win.subnav)
+        self.press("right")
+        self.assertIs(self.win.stack.currentWidget(), self.win.saves)
+        self.nav.focus(self.win.nav_button(4))
+        self.press("down")
+        self.assertIsNot(self.app.focusWidget(), self.win.nav_button(4))
+        self.press("next")   # Mods, on its first page
+        self.assertIs(self.win.stack.currentWidget(), self.win.mods)
+        self.press("next")   # Online: the Online settings, then Servers
+        self.assertIs(self.win.stack.currentWidget(), self.win.online)
+        self.nav.focus(self.win.subnav)
+        self.press("right")
+        self.assertIs(self.win.stack.currentWidget(), self.win.servers)
+
     def test_shoulders_visit_every_page_in_sidebar_order(self):
         # Designs (id 7) and Mods (id 8) included: the stack index of a page is its id.
         buttons = sorted(self.win.navs.buttons(), key=lambda b: b.parentWidget().layout().indexOf(b))
@@ -368,11 +389,10 @@ class NavigationTests(unittest.TestCase):
     def test_connection_status_lives_in_controls_and_sidebar_fits_at_minimum_size(self):
         self.win.resize(900, 620)
         self.nav.poll()
-        from forza_launcher import schema
         controls = getattr(self.win, "controls", None)
         self.win.show_page(self.win.stack.indexOf(controls) if controls is not None else 2)
         if controls is None:
-            self.win.settings.tabs.setCurrentIndex(schema.GROUPS.index("Controls"))
+            self.win.settings.show_tab("Controls")
             controls = self.win.settings.stack.currentWidget()
         self.app.processEvents()
         guide = self.win.controller_guide
@@ -383,14 +403,13 @@ class NavigationTests(unittest.TestCase):
             self.assertLess(button.geometry().bottom(), self.win.version.geometry().top())
 
     def test_controller_status_survives_settings_rebuild(self):
-        from forza_launcher import schema
         guide = self.win.controller_guide
         self.win.settings.rebuild()
         self.app.processEvents()
         self.nav.poll()
         self.assertIs(self.win.controller_guide, guide)
         self.assertEqual(guide.status.text(), "Connected")
-        scroll = self.win.settings.stack.widget(schema.GROUPS.index("Controls"))
+        scroll = self.win.settings.stack.widget(self.win.settings.tab_index("Controls"))
         controls = getattr(self.win, "controls", scroll)
         self.assertTrue(controls.isAncestorOf(guide))
 

@@ -44,7 +44,7 @@ class Detect(unittest.TestCase):
         self.assertFalse(df.ACCESS_DENIED_RE.search("[12/300] Building CXX object x.o"))
 
     def test_blocked_message_names_the_causes(self):
-        m = df.blocked_message(r"C:\Users\ann\Documents\forza", "GetLastError() = 5")
+        m = df.blocked_message(r"C:\Users\ann\Documents\forza", "GetLastError() = 5", system_name="windows")
         for w in ("OneDrive", "Controlled folder access", "antivirus", "Choose another folder", "GetLastError() = 5"):
             self.assertIn(w, m)
 

@@ -198,7 +198,19 @@ namespace forza::benchmark {
 bool Enabled() { return Requested(); }
 void Cancel() { Finish(false, "cancelled"); }
 void Fail(const char *reason) { Finish(false, reason); }
+std::atomic<int64_t> last_swap_ns{0};
+double SecondsSinceSwap() {
+  const int64_t last = last_swap_ns.load(std::memory_order_relaxed);
+  if (!last)
+    return -1;
+  const int64_t now =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count();
+  return double(now - last) / 1e9;
+}
 void OnSwap() {
+  last_swap_ns.store(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count(),
+      std::memory_order_relaxed);
   if (!recording.load())
     return;
   const auto now = Clock::now();

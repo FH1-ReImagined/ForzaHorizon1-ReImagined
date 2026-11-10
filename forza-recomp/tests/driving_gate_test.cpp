@@ -1,5 +1,5 @@
-// The trigger effects' "player is driving" gate (src/platform/driving_gate.h, #224): the game's
-// rumble turns it on, a hold bridges quiet moments, and it releases in a menu. And the racing
+// The trigger effects' "player is driving" gate (src/platform/driving_gate.h, #224, #692): the
+// game's rumble turns it on, a hold bridges quiet moments, and it releases in a menu, also online. And the racing
 // wheel's (#256, #304): the game's simulation state once a frame, counted in frames so that a
 // hitch, a wall hit, the window losing focus or a long drive never fade the forces. Build from the
 // repository root:
@@ -178,6 +178,27 @@ int main() {
   Check(!fast.Driving(), "240 fps: not driving before the settle time");
   fast.Frames(30, Driving(), 4);
   Check(fast.Driving(), "240 fps: driving after it");
+
+  // The trigger effects (#692): an online pause menu keeps the world running, so PlayerGate says
+  // driving; the game's rumble stopping turns the triggers off. Without any rumble (vibration off
+  // in the game's options, a wheel) PlayerGate alone decides.
+  using forza::telemetry::TriggerGate;
+  using forza::telemetry::Triggers;
+  DrivingGate quiet;
+  Check(TriggerGate(Drive::kDriving, quiet, 5000) == Triggers::kOn,
+        "triggers: a game that never rumbles follows PlayerGate");
+  Check(TriggerGate(Drive::kPause, quiet, 5000) == Triggers::kNotDriving,
+        "triggers: off in the pause menu offline");
+  DrivingGate online;
+  online.Rumble(0, 900, 10000);
+  Check(TriggerGate(Drive::kDriving, online, 10500) == Triggers::kOn, "triggers: on while driving");
+  online.Rumble(0, 0, 11000);  // the pause menu opens: the game stops its rumble, the world runs on
+  Check(TriggerGate(Drive::kDriving, online, 10000 + kDrivingHoldMs) == Triggers::kNoRumble,
+        "triggers: off in the online pause menu once the rumble hold ends");
+  Check(TriggerGate(Drive::kMenu, online, 10500) == Triggers::kNotDriving,
+        "triggers: off in a menu even with rumble");
+  online.Rumble(400, 0, 30000);  // resumed
+  Check(TriggerGate(Drive::kDriving, online, 30016) == Triggers::kOn, "triggers: back when driving");
 
   std::puts("PASS");
 }

@@ -5,6 +5,7 @@
 // PlayerGate, platform/wheel_bridge.cpp) and samples the Discord status details
 // (discord_details.cpp).
 #include "discord_details.h"
+#include "fm4_lap_timer.h"
 #include "../platform/driving_gate.h"
 #include "../platform/auto_pause.h"
 #include "../platform/camera_fov.h"
@@ -41,5 +42,6 @@ extern "C" REX_FUNC(sub_823E40D8) {
   f.rewinding = std::bit_cast<float>(std::byteswap(scale)) < 0.0f;
   f.stepped = g_substeps.load(std::memory_order_relaxed) != substeps;
   forza::telemetry::Player().Frame(forza::telemetry::DrivingNowMs(), f);
+  forza::fm4_lap::WorldFrame(base, f.loaded && !f.paused, f.rewinding);  // an FM4 circuit's lap timer
   forza::discord::WorldFrame(ctx, base);
 }

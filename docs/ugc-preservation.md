@@ -29,7 +29,7 @@ output; existing destinations are never overwritten.
 
 ## Launcher integration
 
-Open **Designs & vinyls** in the launcher's sidebar. Choose **Open save package** for
+Open **Library > Designs & vinyls** in the launcher's sidebar. Choose **Open save package** for
 a `LivCatalog` or `LivGroups` STFS save, or **Open catalog folder** for an extracted
 catalog. The page shows thumbnails, creator markers, car IDs, declared layer counts
 and whether storefront records were preserved. Search by title, creator or car ID,

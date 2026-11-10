@@ -185,6 +185,19 @@ class InGameGraphicsTests(unittest.TestCase):
                 self.assertFalse(ingame.import_pending(self.cfg, lambda _: None))
                 self.assertEqual(self.cfg.settings, previous)
 
+    def test_car_detail_is_imported_and_validated(self):
+        for value in ("high", "ultra", "console"):
+            with self.subTest(value=value):
+                self.request(frame_rate="60", world_car_detail=value)
+                self.assertTrue(ingame.import_pending(self.cfg, lambda _: None))
+                self.assertEqual(Config(self.cfg.path).settings["world_car_detail"], value)
+        previous = dict(self.cfg.settings)
+        for bad in ("off", "Ultra", ""):
+            with self.subTest(bad=bad):
+                self.request(frame_rate="120", world_car_detail=bad)
+                self.assertFalse(ingame.import_pending(self.cfg, lambda _: None))
+                self.assertEqual(self.cfg.settings, previous)
+
     def test_20_and_40_fps_are_imported(self):
         for rate in (20, 40, 30):
             with self.subTest(rate=rate):

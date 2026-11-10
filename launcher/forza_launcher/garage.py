@@ -62,8 +62,9 @@ def _keys(cfg):
     info = executable.stat()
     owner = profile_editor._owner(cfg)
     tables = profile_editor._tables(str(executable.resolve()), info.st_size, info.st_mtime_ns)
-    return tuple((bytes(((t[48+i] ^ owner[(i-5) % 8])+2*i) % 256 for i in range(16)),
-                  bytes(((t[16+i] ^ owner[(i-1) % 8])+2*i) % 256 for i in range(32))) for t in tables)
+    lead = profile_editor.TABLE_LEAD
+    return tuple((bytes(((t[lead+48+i] ^ owner[(i-5) % 8])+2*i) % 256 for i in range(16)),
+                  bytes(((t[lead+16+i] ^ owner[(i-1) % 8])+2*i) % 256 for i in range(32))) for t in tables)
 
 
 def _inflate(body, *, with_chunk_size=False):

@@ -30,6 +30,13 @@ class Target:
     root: Path
     identity: bytes
 
+    def __post_init__(self):
+        # Links above the data folders are the player's own layout (a Steam Deck SD card under
+        # /run/media, /home on Fedora Atomic, a drive linked into ~/Games): resolve them once,
+        # as the save manager does. _direct refuses every link at or below them.
+        object.__setattr__(self, 'home', Path(self.home).resolve())
+        object.__setattr__(self, 'root', Path(self.root).resolve())
+
     @property
     def folder(self):
         return self.root / game.LOCAL_PROFILE / TITLE_ID / '00000001'
@@ -68,20 +75,33 @@ def target_for(cfg):
     return target_for_plan(game.build_plan(cfg, install, write=False))
 
 
-def _direct(path):
-    path = Path(path).absolute()
-    for parent in (path, *path.parents):
-        if parent.is_symlink() or getattr(parent, 'is_junction', lambda: False)():
-            raise ugc.CatalogError('Linked save paths cannot be imported into.')
+def _direct(path, base):
+    """path, refused when it is outside base or a link or junction sits at or below base.
+
+    base is a resolved data folder (Target.home or Target.root), so links above it are fine;
+    one inside could send a write outside the folders the launcher controls. Like the save
+    manager (saves._inside), a link inside is refused even when it points inside."""
+    path, base = Path(os.path.abspath(path)), Path(base)
+    try:
+        parts = path.relative_to(base).parts
+    except ValueError as exc:
+        raise ugc.CatalogError('The save path is outside its data folder.') from exc
+    cursor = base
+    for part in ('',)+parts:
+        cursor = cursor/part
+        if cursor.is_symlink() or getattr(cursor, 'is_junction', lambda: False)():
+            raise ugc.CatalogError(f'Linked save paths cannot be imported into: {cursor}')
+    if not path.resolve().is_relative_to(base):
+        raise ugc.CatalogError('The save path leads outside its data folder.')
     return path
 
 
 @contextmanager
 def locked(target):
     """Same home-wide OS lease as the pending save manager; also held by Session."""
-    storage = _direct(target.home/'save-backups')
+    storage = _direct(target.home/'save-backups', target.home)
     storage.mkdir(parents=True, exist_ok=True)
-    lock_path = _direct(storage/'.manager.lock')
+    lock_path = _direct(storage/'.manager.lock', target.home)
     with lock_path.open('a+b') as lock:
         lock.seek(0, os.SEEK_END)
         if not lock.tell():
@@ -111,8 +131,8 @@ def locked(target):
                     fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
-def _read(path, limit=ugc.MAX_MEMBER):
-    path = _direct(path)
+def _read(path, base, limit=ugc.MAX_MEMBER):
+    path = _direct(path, base)
     info = path.stat()
     if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= limit:
         raise ugc.CatalogError('Invalid or oversized save file: '+path.name)
@@ -123,9 +143,9 @@ def _read(path, limit=ugc.MAX_MEMBER):
     return raw
 
 
-def _tree(folder, cancelled):
+def _tree(folder, cancelled, base):
     result, total, seen = {}, 0, set()
-    _direct(folder)
+    _direct(folder, base)
     if not folder.exists():
         return result
     if not folder.is_dir():
@@ -135,7 +155,7 @@ def _tree(folder, cancelled):
     for directory, dirs, files in os.walk(folder, onerror=failed, followlinks=False):
         ugc._check(cancelled)
         for name in dirs+files:
-            _direct(Path(directory)/name)
+            _direct(Path(directory)/name, base)
         for name in files:
             path = Path(directory)/name
             relative = path.relative_to(folder).as_posix()
@@ -200,10 +220,10 @@ def _encoded_database(db, keys):
     return codec.encode_stream(struct.pack('>3I', len(data), len(packed), len(data))+packed, keys)
 
 
-def _journal(path):
+def _journal(path, base):
     """Validate the complete journal before recovery can remove or rename anything."""
     try:
-        record = json.loads(_read(path, MAX_INDEX))
+        record = json.loads(_read(path, base, MAX_INDEX))
         if (not isinstance(record, dict) or
                 not isinstance(record.get('token'), str) or
                 not re.fullmatch('[a-f0-9]{32}', record['token']) or
@@ -228,17 +248,17 @@ def recovery_warning(target, error):
     storage = target.home/'save-backups/catalog-imports'
     backup = None
     try:
-        _direct(storage)
+        _direct(storage, target.home)
         for candidate in sorted(storage.iterdir(), reverse=True):
             try:
-                manifest = json.loads(_read(candidate/'manifest.json', MAX_INDEX))
-                if (manifest['target'] != str(target.folder/'LivCatalog') or
+                manifest = json.loads(_read(candidate/'manifest.json', target.home, MAX_INDEX))
+                if (os.path.normcase(manifest['target']) != os.path.normcase(str(target.folder/'LivCatalog')) or
                         manifest['identity'] != target.identity.hex().upper() or
                         type(manifest['existed']) is not bool or
                         not isinstance(manifest['files'], dict)):
                     continue
                 actual = {name: hashlib.sha256(raw).hexdigest() for name, raw in
-                          _tree(candidate/'LivCatalog', lambda: False).items()}
+                          _tree(candidate/'LivCatalog', lambda: False, target.home).items()}
                 if actual == manifest['files']:
                     backup = candidate
                     break
@@ -253,17 +273,17 @@ def recovery_warning(target, error):
 
 def recover(target):
     """Caller holds the lease. An interrupted publication rolls back before Play/import."""
-    folder = _direct(target.folder)
-    journal = _direct(folder/'.catalog-import.json')
+    folder = _direct(target.folder, target.root)
+    journal = _direct(folder/'.catalog-import.json', target.root)
     if not journal.exists():
         return
-    record = _journal(journal)
+    record = _journal(journal, target.root)
     token = record['token']
-    catalog = _direct(folder/'LivCatalog')
-    stage = _direct(folder/('.catalog-stage-'+token))
-    hold = _direct(folder/('.catalog-old-'+token))
+    catalog = _direct(folder/'LivCatalog', target.root)
+    stage = _direct(folder/('.catalog-stage-'+token), target.root)
+    hold = _direct(folder/('.catalog-old-'+token), target.root)
     def matches(path, expected):
-        return {name: hashlib.sha256(raw).hexdigest() for name,raw in _tree(path,lambda:False).items()} == expected
+        return {name: hashlib.sha256(raw).hexdigest() for name,raw in _tree(path,lambda:False,target.root).items()} == expected
     if hold.exists():
         if not matches(hold, record['originals']):
             raise ugc.CatalogError('Import recovery backup does not match its journal. Nothing was removed.')
@@ -294,14 +314,15 @@ def import_design(catalog, item_path, target, executable, cancelled=lambda: Fals
         ugc._safe_name(name)
         if PurePosixPath(name).name != name:
             raise ugc.CatalogError('Invalid design member filename.')
-    _direct(target.folder)
+    _direct(target.folder, target.root)
     if not (target.folder/'ForzaProfile/ForzaProfile').is_file():
         raise ugc.CatalogError('Start and save this profile in-game before importing a design.')
     ugc._check(cancelled)
     progress('Authenticating source and destination…')
-    executable = Path(executable)
+    # Only read and authenticated: the game files may sit anywhere, linked or not.
+    executable = Path(executable).resolve()
     try:
-        xex = Xex(_read(executable, codec.MAX_XEX))
+        xex = Xex(_read(executable, executable.parent, codec.MAX_XEX))
     except (SystemExit, struct.error, IndexError) as exc:
         raise ugc.CatalogError('Could not read the FH1 executable. Choose your game files in Setup.') from exc
     info = xex.opts.get(codec.aes.HDR_EXECUTION_INFO)
@@ -320,13 +341,15 @@ def import_design(catalog, item_path, target, executable, cancelled=lambda: Fals
     with locked(target):
         recover(target)
         # Authenticate career identity without parsing or changing any career data.
-        career = _read(target.folder/'ForzaProfile/ForzaProfile')
+        career = _read(target.folder/'ForzaProfile/ForzaProfile', target.root)
         if career[:4] != b'cmss' or len(career) < 76:
             raise ugc.CatalogError('Unsupported destination career save.')
         used = struct.unpack_from('>I', career, 4)[0]
         valid = False
-        for address in (0x8200D634, 0x82013A04):
-            off = address-xex.load_address+32
+        # the HMAC key of a TU4 profile follows the table's first half; a base-game profile's
+        # is the 32 bytes before the table (save_editor._keys)
+        for off in (address-xex.load_address+delta for address in (0x8200D634, 0x82013A04)
+                    for delta in (32, -32)):
             if 0 <= off <= len(image)-32:
                 key = bytes(((image[off+i]^target.identity[(i-4)%8])+2*i)%256 for i in range(32))
                 valid |= 68 <= used <= len(career)-8 and hmac.compare_digest(hmac.digest(key, career[40:8+used], 'sha256'), career[8:40])
@@ -345,8 +368,8 @@ def import_design(catalog, item_path, target, executable, cancelled=lambda: Fals
             # Only known local thumbnail paths are installed; no external references.
             if row[7] != expected+'thumb.xdc' or row[10] != expected+'thumb.xdc' or any(row[i] for i in (8,9,11,12)):
                 raise ugc.CatalogError('Unsupported thumbnail metadata for this design.')
-            current = _direct(target.folder/'LivCatalog')
-            originals = _tree(current, cancelled)
+            current = _direct(target.folder/'LivCatalog', target.root)
+            originals = _tree(current, cancelled, target.root)
             if INDEX in originals:
                 destination_db, variant = _database(originals[INDEX], destination_index_keys)
             else:
@@ -382,7 +405,7 @@ def import_design(catalog, item_path, target, executable, cancelled=lambda: Fals
             ugc._check(cancelled)
             progress('Backing up the existing catalog…')
             backup = _direct(target.home/'save-backups/catalog-imports'/
-                (datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')+'-'+uuid.uuid4().hex))
+                (datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')+'-'+uuid.uuid4().hex), target.home)
             backup.mkdir(parents=True)
             for name, data in originals.items():
                 ugc._check(cancelled)
@@ -396,9 +419,9 @@ def import_design(catalog, item_path, target, executable, cancelled=lambda: Fals
             (backup/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n',encoding='utf-8')
             progress('Publishing the verified design…')
             token = uuid.uuid4().hex
-            stage = _direct(target.folder/('.catalog-stage-'+token))
-            hold = _direct(target.folder/('.catalog-old-'+token))
-            journal = _direct(target.folder/'.catalog-import.json')
+            stage = _direct(target.folder/('.catalog-stage-'+token), target.root)
+            hold = _direct(target.folder/('.catalog-old-'+token), target.root)
+            journal = _direct(target.folder/'.catalog-import.json', target.root)
             stage.mkdir()
             try:
                 for name,data in updated.items():
@@ -407,9 +430,9 @@ def import_design(catalog, item_path, target, executable, cancelled=lambda: Fals
                     path.parent.mkdir(parents=True, exist_ok=True)
                     path.write_bytes(data)
                 # Recheck the destination after staging, before changing any original file.
-                if _tree(current, cancelled) != originals:
+                if _tree(current, cancelled, target.root) != originals:
                     raise ugc.CatalogError('The destination changed during import. Close the game and retry.')
-                if _read(target.folder/'ForzaProfile/ForzaProfile') != career:
+                if _read(target.folder/'ForzaProfile/ForzaProfile', target.root) != career:
                     raise ugc.CatalogError('The career changed during import. Close the game and retry.')
                 ugc._check(cancelled)
                 record = json.dumps(dict(token=token,existed=current.exists(),

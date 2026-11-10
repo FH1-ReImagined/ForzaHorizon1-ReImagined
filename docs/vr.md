@@ -8,7 +8,8 @@ Experimental: tested on a Meta Quest 3 with WiVRn on Linux. SteamVR and Meta Que
    normal flat game.
 
 Settings > VR has the options: **Mode** (Cockpit, recommended, or Big screen), **Sharpness** (Standard, Sharp,
-Sharpest: sharper needs a stronger graphics card) and **Seat height**. Recentre with the Home key, or hold both
+Sharpest: sharper needs a stronger graphics card), **Seat height** and **Swap eyes** (only if each eye sees the
+other eye's picture: the depth looks inside out). Recentre with the Home key, or hold both
 sticks pressed for a second. Play in VR sets what the headset needs (72 frames a second, no scene anti-aliasing,
 a higher render scale) for that session only; your normal settings are not changed.
 
@@ -283,6 +284,7 @@ run time, never linked.
 | `vr_cull_scale` | true | Cockpit: the object size cull as for the in-car camera's own field of view |
 | `vr_sharpen` | 0.5 | Cockpit: sharpening of the headset's picture, 0 to 1 (ReIGlue 0395) |
 | `vr_stereo` | off | Cockpit: `depth` makes each eye from the picture and its depth (version 3; ReIGlue 0394) |
+| Swap eyes (`vr_swap_eyes`) | false | Cockpit: each eye gets the other eye's picture, for a runtime or driver that shows them the wrong way round ([#705](#each-eye-to-its-view-705)) |
 | `vr_hud` | true | Cockpit: the HUD on its own panel in front of the seat (ReIGlue 0393) |
 | `vr_screen_width`, `vr_screen_distance` | 2.2, 2.5 | The virtual screen in metres (47 degrees wide; version 1: 3.2 m, 65 degrees) |
 | `vr_runtime_timeout` | 20 | Seconds to wait for the runtime at start |
@@ -510,14 +512,13 @@ when they are not there.
    is connected and waiting for an application. While it runs, WiVRn makes itself the active
    OpenXR runtime (`~/.config/openxr/1/active_runtime.json`). Connect first, then start the
    game: WiVRn makes the game wait until a headset is there (20 s, then the game starts flat).
-3. **Launcher:** Settings > Display > VR (experimental) > **VR headset (experimental)**:
-   **Virtual screen**. Press Play. For the trace, add `--vr_trace=true` to the extra arguments.
+3. **Launcher:** Settings > VR > **Mode**: **Big screen**. Press Play in VR. For the trace, add `--vr_trace=true` to the extra arguments.
 4. **What you should see:** the game in its window on the desktop as always, and in the headset a
    screen 2.2 m wide 2.5 m in front of you at eye height (47 degrees: the whole picture in view
    without turning the head) with the game on it, smooth when you move your head. Press **Home**
    on the keyboard, or hold **both sticks pressed** for a second, to bring the screen in front of
    you again. The pad works while you wear the headset, whichever window has the focus.
-5. **Cockpit:** close the game, set **VR headset (experimental)** to **Cockpit**, Play, sit as
+5. **Cockpit:** close the game, set **Mode** to **Cockpit**, Play in VR, sit as
    you would drive. Load into free roam, press **Home** (or hold both sticks) once while looking
    straight ahead, then switch to the in-car view (**RB** cycles the cameras; the one with the
    driver's hands on the wheel). You should be inside the car: turning and moving your head
@@ -1145,6 +1146,31 @@ side of the game, the render thread and the guest's command buffers run once.
   3's path). The HUD panel and the virtual screen are unchanged (the HUD is recovered from the right
   eye's picture). The game asks for true stereo only while the cockpit is shown, so menus and the
   screen cost one picture.
+
+### Each eye to its view (#705)
+
+A player on Windows 11 with a Quest 3 over Meta Quest Link (Meta's OpenXR runtime, an RX 6900 XT)
+saw each eye's picture in the other eye. Nothing in the game or ReIGlue differs between Windows and
+Linux here: the picture is one swapchain image with the eyes side by side, and the projection
+layer gave view `i` of `xrLocateViews` the half `i` and the eye pose `i`, which assumes OpenXR's
+order (view 0 the left eye). The eye passes' offsets come from the main view's handedness, which
+the shadow passes give the same on every platform (traced in the cockpit: every sun shadow pass of
+a cockpit frame has `c0.x` = -P00 of the cockpit view; the chase cameras' are -0.86 to -1.24).
+Meta Link with AMD drivers has shown other applications' eyes the wrong way round (Unity's
+single-pass instanced path on RX 7000/9000 with Adrenalin 25.10.2, Meta's forum in November
+2025), so the runtime or driver side is the likelier cause until the player's log says otherwise.
+
+Since then each view gets the eye the runtime puts it at: `xr_math.h` `LeftView` takes the view
+further left in the `VIEW` space as the left eye (kept while the positions are not valid), and the
+log says which (`VR: view 0 is the left eye (views at x -31.5 and 31.5 mm)`); the eye passes'
+parts of the picture follow. **Swap eyes** (`vr_swap_eyes`) turns them round for a runtime or
+driver that shows them the wrong way after composition. A test aid, `FORZA_VR_TEST_SWAP_VIEWS=1`,
+makes the game see the runtime's two views exchanged (in `xrLocateViews` and in the layer it
+submits), as from a runtime that numbered them the other way round. On the emulated Quest 3
+(`scratchpad/xremu`; between the eye views a point at infinity is 157 pixels apart, the wheel and
+the dashboard about 236): the game as before with the views exchanged showed the depth inside out
+(the near things 80 pixels apart, 279 patches against 8), the game now shows it right with the
+views in either order (304 against 1), and Swap eyes turns it round in both.
 
 ### Cost (RX 9060 XT, Ryzen 7 7800X3D, the cockpit at render scale 2, the benchmark lock held)
 

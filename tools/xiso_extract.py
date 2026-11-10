@@ -7,12 +7,16 @@ package, see xcontent_extract.Xdvdfs) at one of the offsets the disc formats use
 0x2090000 (some XGD3 dumps). The volume descriptor ("MICROSOFT*XBOX*MEDIA", root sector,
 root size) sits at sector 32 of the volume. The image is only ever opened for reading.
 
+An image split into parts (game.iso.1, game.iso.001, game.001, game.part1.iso, game.1.iso...)
+is read as one: choose any part, the others are found next to it (split_parts).
+
 Usage:
   xiso_extract.py ISO info
   xiso_extract.py ISO list
   xiso_extract.py ISO extract OUTDIR [PATH ...]   (no PATH = everything)
 """
 import os
+import re
 import struct
 import sys
 
@@ -29,6 +33,117 @@ class IsoError(Exception):
     pass
 
 
+# The ways a disc image is split into parts: (name pattern, how the parts' names are made).
+# group "n" is the part number; a part name is base + number (+ ext), the number zero-padded
+# like the chosen part's.
+_IMAGE_EXT = r"(?:iso|xiso|img|bin)"
+PART_PATTERNS = (
+    re.compile(r"(?i)^(?P<base>.+\." + _IMAGE_EXT + r"\.(?:part)?)(?P<n>\d{1,3})(?P<ext>)$"),
+    re.compile(r"(?i)^(?P<base>.+\.)(?P<n>\d{3})(?P<ext>)$"),
+    re.compile(r"(?i)^(?P<base>.+\.part)(?P<n>\d{1,3})(?P<ext>\." + _IMAGE_EXT + r")?$"),
+    re.compile(r"(?i)^(?P<base>.+\.)(?P<n>\d)(?P<ext>\." + _IMAGE_EXT + r")$"),
+)
+
+
+def part_number(path):
+    """The part number in a split image part's name, or None."""
+    name = os.path.basename(path)
+    for pattern in PART_PATTERNS:
+        m = pattern.match(name)
+        if m:
+            return int(m.group("n"))
+    return None
+
+
+def split_parts(path):
+    """The parts of a split image `path` is one of, in order ([path] when it is not a part).
+    Raises IsoError naming the first missing part."""
+    folder, name = os.path.split(os.path.abspath(path))
+    for pattern in PART_PATTERNS:
+        m = pattern.match(name)
+        if not m:
+            continue
+        base, ext = m.group("base").lower(), (m.group("ext") or "").lower()
+        found = {}
+        try:
+            names = os.listdir(folder)
+        except OSError:
+            return [path]
+        for other in names:
+            o = pattern.match(other)
+            if (o and o.group("base").lower() == base and (o.group("ext") or "").lower() == ext
+                    and os.path.isfile(os.path.join(folder, other))):
+                found[int(o.group("n"))] = os.path.join(folder, other)
+        if len(found) < 2:
+            continue
+        first = min(found)
+        if first > 1:
+            raise IsoError(f"{name} is part {int(m.group('n'))} of a split disc image, but its "
+                           f"first part is not next to it.")
+        for n in range(first, max(found) + 1):
+            if n not in found:
+                raise IsoError(f"{name} is one part of a split disc image, but part {n} is not "
+                               "next to it: put all the parts in one folder.")
+        return [found[n] for n in sorted(found)]
+    return [path]
+
+
+class Parts:
+    """The parts of a split image as one read-only file (seek, read, tell, close)."""
+
+    def __init__(self, paths):
+        self.parts, self.starts, pos = [], [], 0
+        try:
+            for p in paths:
+                f = open(p, "rb")
+                self.parts.append(f)
+                self.starts.append(pos)
+                pos += os.fstat(f.fileno()).st_size
+        except OSError:
+            self.close()
+            raise
+        self.size, self.pos = pos, 0
+
+    def seek(self, off, whence=0):
+        self.pos = off if whence == 0 else self.pos + off if whence == 1 else self.size + off
+        return self.pos
+
+    def tell(self):
+        return self.pos
+
+    def read(self, n=-1):
+        if n < 0:
+            n = self.size - self.pos
+        out = []
+        while n > 0 and self.pos < self.size:
+            i = max(k for k, s in enumerate(self.starts) if s <= self.pos)
+            f = self.parts[i]
+            f.seek(self.pos - self.starts[i])
+            end = self.starts[i + 1] if i + 1 < len(self.parts) else self.size
+            chunk = f.read(min(n, end - self.pos))
+            if not chunk:
+                break
+            out.append(chunk)
+            self.pos += len(chunk)
+            n -= len(chunk)
+        return b"".join(out)
+
+    def close(self):
+        for f in self.parts:
+            f.close()
+
+
+def _open(path, whole=False):
+    """(file, size, parts) of the image: a split image's parts joined (split_parts), unless
+    `whole` (the chosen file by itself)."""
+    parts = [path] if whole else split_parts(path)
+    if len(parts) == 1:
+        f = open(parts[0], "rb")
+        return f, os.fstat(f.fileno()).st_size, 1
+    f = Parts(parts)
+    return f, f.size, len(parts)
+
+
 def find_volume(f):
     """(offset, format name) of the XDVDFS volume in an open image, or None."""
     for off, name in VOLUME_OFFSETS:
@@ -41,21 +156,35 @@ def find_volume(f):
 def is_iso(path):
     """True when the file holds an XDVDFS volume at a disc offset (cheap: a few small reads)."""
     try:
-        with open(path, "rb") as f:
-            return find_volume(f) is not None
-    except OSError:
+        f = _open(path)[0]
+    except (OSError, IsoError):
         return False
+    try:
+        return find_volume(f) is not None
+    finally:
+        f.close()
 
 
 class Iso(xc.Xdvdfs):
     BLOCK = SECTOR
 
-    def __init__(self, path):
+    def __init__(self, path, whole=False):
+        if not whole and len(split_parts(path)) > 1:
+            # named like a part: a whole image by itself (two discs named game.1.iso and
+            # game.2.iso) is read alone, else the parts are joined
+            try:
+                alone = Iso(path, whole=True)
+                alone.entries()
+                self.__dict__.update(alone.__dict__)
+                return
+            except IsoError:
+                if "alone" in locals():
+                    alone.close()
         try:
-            self.files = [open(path, "rb")]
+            f, self.size, self.parts = _open(path, whole)
         except OSError as e:
             raise IsoError(f"Cannot read {path}: {e}")
-        f = self.files[0]
+        self.files = [f]
         found = find_volume(f)
         if not found:
             f.close()
@@ -64,7 +193,6 @@ class Iso(xc.Xdvdfs):
         self.offset, self.format = found
         f.seek(self.offset + 32 * SECTOR + len(xc.MEDIA_MAGIC))
         self.root_block, self.root_size = struct.unpack("<II", f.read(8))
-        self.size = os.fstat(f.fileno()).st_size
 
     def close(self):
         for f in self.files:
@@ -85,7 +213,9 @@ class Iso(xc.Xdvdfs):
         out = super().entries()
         for e in out:
             if not e.is_dir and e.runs and e.runs[0][1] + e.size > self.size:
-                raise IsoError(f"The image is truncated: {e.path} runs past its end.")
+                more = (f" (it has {self.parts} parts: is one missing or incomplete?)" if self.parts > 1
+                        else " (is it split into parts, or still downloading?)")
+                raise IsoError(f"The image is truncated: {e.path} runs past its end{more}.")
         return out
 
 

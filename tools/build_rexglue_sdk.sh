@@ -52,11 +52,24 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # (#609), and 0423: the frame cost CSV's pipelines on any thread, held frames and CPU write
 # faults (#614, ReIGlue PR #28), and 0424: the car paint's dirt map without a seam down the
 # bonnet's centre line (#164, ReIGlue PR #30), and 0426: resolve readback buffers reused instead
-# of allocated and freed on every miss and eviction (#536).
+# of allocated and freed on every miss and eviction (#536), and 0425: InputSystem thread safety,
+# non-blocking rumble I/O, and unchanged device refresh (#590, #420, #600, ReIGlue PR #31), and
+# 0427-0430: the guest memory's host commit in the log, the XMA decoder's FFmpeg state only for
+# the contexts in use, the driver pipeline cache held in memory up to what a save keeps, and
+# translations' SPIR-V freed once their shader module exists (#640), and 0435: no locked
+# instruction on every draw for the outdated-texture flag, no division per packet (#607), and
+# 0436: a texture pack's pack.toml can ask for its files to be read at start (the decal pack, #659),
+# and 0437: texture pack replacements freed with their textures, within a graphics memory limit (#677),
+# and 0438: a lost device names the draw the GPU was on (Vulkan breadcrumbs, D3D12 DRED, #551),
+# and 0442-0445: descriptor reuse on by default, dynamic guest constants, samplers and texture
+# requests kept within a submission, texture descriptor sets of the frame used again (#192, #179),
+# and 0460-0462: GPU time per kind of work (fh1_gpu_profile), render target transfers without
+# stencil export drawing only the stencil bits set in their source, NVIDIA's direct texture upload
+# at render scale 1 (#640).
 # A reviewed full commit can be pinned before a maintainer publishes a tag.
 # When a tag is supplied, its target must still match this immutable commit.
 REIGLUE_TAG=
-REIGLUE_COMMIT=70c798295c6d39295ddae09c0357508f89934e6f  # 0426 (#536) on ReIGlue main: #30 (0424, #164), #28 (0423, #614), 0421/0422 (#609), #15 (0410), #20-#25 (0413-0419)
+REIGLUE_COMMIT=5408d204c111ff9ccf1f5e3da37292b170f2645e  # ReIGlue main: 0420, 0442-0445 (ReIGlue #43) and 0460-0462 (#640, ReIGlue #45)
 REIGLUE_URL="${REIGLUE_URL:-https://github.com/FH1-ReImagined/ReIGlue}"
 NIGHTLY="${REXSDK_NIGHTLY:-$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64}"
 SRC="${REXSDK_SRC:-$HOME/rexglue-sdk-src-forza/sdk}"

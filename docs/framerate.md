@@ -164,9 +164,11 @@ beat the board's best from `GetBestScores`, at 60 and 144 alike.)
 Graphics menu changes it while the game runs) sets the guest vblank
 (`video_mode_refresh_rate`, which `VdQueryVideoMode` reports and the SDK's VSync thread
 follows) to three times 20 or 40 (60 and 120 Hz), twice a higher frame rate, or the frame
-rate when twice is past the SDK's limit (480 Hz with patch 0037, 240 without), unless
-`video_mode_refresh_rate` is set explicitly (then the frame rate is that rate divided by the
-same divider). The frame stats' `ontarget` uses the same target. Test switches:
+rate when twice is past the SDK's limit (480 Hz with patch 0037, 240 without). A
+`video_mode_refresh_rate` set in `forza.toml` or on the command line gives way to it at start
+(the log warns), as it does when the Graphics menu saves: 60 Hz left from a 30 fps setup ran
+`frame_rate = 60` at 30 fps until a graphics setting was saved (#756). At 30 an explicit
+`video_mode_refresh_rate` stays (the frame rate is then that rate over two). The frame stats' `ontarget` uses the same target. Test switches:
 `FORZA_FRAME_TIME=game` (the millisecond frame time), `FORZA_RENDER_SYNC=0` (no render sync,
 below), `FORZA_VBLANK_DIVIDER=1|2|3`, `FORZA_PRESENT_PACING=0` (20 and 40 fps, below),
 `FORZA_FRAMETIME_LOG=1`, `FORZA_FRAMETIME_CSV=<path>` (per frame: time, dt, the game's ms, on

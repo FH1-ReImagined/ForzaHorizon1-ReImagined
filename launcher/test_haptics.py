@@ -12,7 +12,8 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from forza_launcher.haptics.settings import normalize, DEFAULTS
 from forza_launcher.haptics.telemetry import WIRE, Decoder
-from forza_launcher.haptics.service import HapticsService, Pedal, effects, supported
+from forza_launcher.haptics.feel import Feel
+from forza_launcher.haptics.service import HapticsService, supported
 from forza_launcher.haptics.vendor.dualsense.triggers import off
 
 
@@ -56,53 +57,28 @@ class PacketTests(unittest.TestCase):
         self.assertIsNone(decoder.decode(packet(seq=1, stamp=99)))
         self.assertIsNotNone(decoder.decode(packet(seq=1, stamp=101)))
 
-    def test_sequence_wrap_and_raw_input_mapping(self):
+    def test_sequence_wrap_and_v1_pedal_weight(self):
         decoder = Decoder(1)
         self.assertIsNotNone(decoder.decode(packet(seq=0xffffffff)))
         frame = decoder.decode(packet(seq=0))
         prefs = {**DEFAULTS, 'enabled': True, 'intensity': 100}
-        left, right = effects(frame, prefs)
-        self.assertEqual(left[0], 0x21)
-        self.assertNotEqual(left, right)
-        self.assertEqual(effects(frame, {**prefs, 'intensity': 0}), (off(), off()))
-        self.assertEqual(effects(None, prefs), (off(), off()))
-
-    def test_held_half_press_does_not_flicker(self):
-        decoder = Decoder(1)
-        prefs = {**DEFAULTS, 'enabled': True, 'intensity': 100}
-        pedals = (Pedal(), Pedal())
-        def run(values, **kw):
-            out = []
-            for i, v in enumerate(values):
-                frame = decoder.decode(packet(seq=run.seq, stamp=run.seq+1, throttle=v, brake=0, **kw))
-                run.seq += 1
-                out.append(effects(frame, prefs, pedals)[1])
-            return out
-        run.seq = 0
-        # Jitter of a few counts around a rounding step (force 4 -> 5 at raw 120) and around the
-        # engage point: stays on, one steady effect.
-        shaken = run([20] + [127, 129, 126, 130, 128, 131, 125]*4)
-        self.assertEqual({e[0] for e in shaken[1:]}, {0x21})
-        self.assertEqual(len(set(shaken[1:])), 1)
-        # A real change in the trigger still follows, and a clear release turns it off.
-        self.assertNotEqual(run([200])[0], shaken[-1])
-        self.assertEqual(run([2, 6, 5])[0], off())
-        # Hovering at the engage point does not toggle either.
-        hover = run([90, 14, 11, 13, 10, 12, 9, 11])
-        self.assertEqual(len(set(hover[1:])), 1)
-        self.assertEqual(run([0])[0], off())
+        left, right = Feel().update(frame, prefs)
+        self.assertEqual(left[0], 0x21)  # a v1 game: light brake weight only (test_trigger_feel)
+        self.assertEqual(right, off())
+        self.assertEqual(Feel().update(frame, {**prefs, 'intensity': 0}), (off(), off()))
+        self.assertEqual(Feel().update(None, prefs), (off(), off()))
 
     def test_menus_release_the_triggers_and_driving_brings_them_back(self):
         decoder = Decoder(1)
         prefs = {**DEFAULTS, 'enabled': True, 'intensity': 100}
-        pedals = (Pedal(), Pedal())
+        feel = Feel()
         driving = decoder.decode(packet(seq=0, stamp=1, active=1))
         menu = decoder.decode(packet(seq=1, stamp=2, active=0, flags=0))
         again = decoder.decode(packet(seq=2, stamp=3, active=1))
-        on = effects(driving, prefs, pedals)
+        on = feel.update(driving, prefs)
         self.assertEqual(on[0][0], 0x21)
-        self.assertEqual(effects(menu, prefs, pedals), (off(), off()))
-        self.assertEqual(effects(again, prefs, pedals), on)
+        self.assertEqual(feel.update(menu, prefs), (off(), off()))
+        self.assertEqual(feel.update(again, prefs), on)
 
     def test_settings_normalize_and_capability_detection(self):
         self.assertEqual(normalize(None), DEFAULTS)
@@ -177,6 +153,41 @@ class ServiceTests(unittest.TestCase):
             self.assertEqual(report[layout['vf2']], 0)
             if layout['bt']:
                 self.assertEqual(struct.unpack_from('<I', report, 74)[0], zlib.crc32(b'\xa2'+report[:74]))
+
+    def test_unchanged_effects_write_once_over_usb_and_bluetooth(self):
+        # #692: the service asks for the effect pair on every telemetry frame. Only a change, or a
+        # reconnect, may reach the controller.
+        import types
+        from forza_launcher.haptics.vendor.dualsense.triggers import feedback
+        with patch.dict(sys.modules, {'hid': types.ModuleType('hid')}):
+            from forza_launcher.haptics.vendor.dualsense import main
+        for bus, report_id in ((3, 0x02), (5, 0x31)):
+            writes = []
+            class Hid:
+                def open_path(self, path): pass
+                def set_nonblocking(self, flag): pass
+                def read(self, size): return b''
+                def write(self, data): writes.append(bytes(data))
+                def close(self): pass
+            info = {'product_id': 0x0CE6, 'usage_page': 1, 'usage': 5, 'path': b'p', 'bus_type': bus}
+            fake = types.SimpleNamespace(enumerate=lambda vid, pid: [info], device=Hid)
+            with patch.object(main, 'hid', fake):
+                device = main.DualSense(retry_interval=.01)
+                device.open()
+                try:
+                    wait_for(lambda: device.connected and writes)
+                    on = feedback([0, 1, 2, 3, 4, 4, 5, 6, 7, 8])
+                    for _ in range(50):
+                        device.set(on, on)
+                        time.sleep(.002)
+                    wait_for(lambda: len(writes) == 2)
+                    time.sleep(.05)
+                    self.assertEqual(len(writes), 2)  # the connect write, then the effect once
+                    self.assertEqual(writes[-1][0], report_id)
+                    device.set(off(), off())
+                    wait_for(lambda: len(writes) == 3)
+                finally:
+                    device.close()
 
 
 class SettingsUiTests(unittest.TestCase):

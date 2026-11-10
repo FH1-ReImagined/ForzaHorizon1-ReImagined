@@ -187,6 +187,10 @@ bool LiveSendChat(const std::vector<uint8_t>& body);
 // the tab: scripted tests (FORZA_AUTOPRESS_FIFO "SAY:<text>" says it in World chat, "SAYC:" in
 // Club chat).
 void LiveChatSay(uint8_t channel, const std::string& text);
+// Sends a server command in World chat ("/event 4": the Co-op Festival's start from an event's
+// map card, hooks/coop_map_event.cpp), not shown in the Chat tab: the server answers with
+// notices. False when the game is not signed in to a Forza Live server with chat.
+bool LiveChatCommand(const std::string& text);
 void LiveChatMessage(const uint8_t* body, size_t size);
 // The ids of the sessions we host or joined (live_xmsg.cpp): the "session" chat channel
 // reaches the players in one of them.

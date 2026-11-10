@@ -103,6 +103,14 @@ class Presets(unittest.TestCase):
         self.assertLessEqual(p["resolution_scale"], 2)
         self.assertEqual(p["present_effect"], "fsr")
 
+    def test_nvidia_keeps_no_driver_pipelines(self):
+        # #640: the driver reused none of them in any start; the file grew to 512 MB and slowed every start
+        self.assertIs(gpu.PRESETS[gpu.NVIDIA].settings["vulkan_store_pipeline_cache"], False)
+        w = gpu.warnings(gpu.NVIDIA, {"vulkan_store_pipeline_cache": True})
+        self.assertEqual([(k, i) for k, _t, i in w], [("vulkan_store_pipeline_cache", 640)])
+        self.assertNotIn("vulkan_store_pipeline_cache", gpu.settings_for(gpu.AMD))   # RADV reuses them
+        self.assertEqual(gpu.warnings(gpu.AMD, {"vulkan_store_pipeline_cache": True}), [])
+
     def test_deck_is_light(self):
         p = gpu.PRESETS[gpu.DECK].settings
         self.assertEqual((p["resolution_scale"], p["frame_rate"], p["present_effect"]), (1, 30, "fsr"))
@@ -152,6 +160,24 @@ class ConfigFlow(unittest.TestCase):
             c.detect_gpu(gpu.Detected(gpu.NVIDIA, "x"))
             self.assertEqual(c.gpu_vendor(), gpu.NVIDIA)
             self.assertEqual((c.settings["frame_rate"], c.settings["resolution_scale"]), (144, 3))
+
+    def test_nvidia_launcher_json_of_0_2_6_drops_the_driver_pipelines_once(self):
+        with tempfile.TemporaryDirectory() as t:
+            c = self.cfg(t, {"gpu": {"vendor": "nvidia", "checked": True},
+                             "settings": {"vulkan_store_pipeline_cache": True}})
+            self.assertFalse(c.settings["vulkan_store_pipeline_cache"])
+            c.settings["vulkan_store_pipeline_cache"] = True     # the player turns it on again: it stays
+            c.save()
+            self.assertTrue(Config(c.path).settings["vulkan_store_pipeline_cache"])
+        with tempfile.TemporaryDirectory() as t:
+            c = self.cfg(t, {"gpu": {"vendor": "amd", "checked": True},
+                             "settings": {"vulkan_store_pipeline_cache": True}})
+            self.assertTrue(c.settings["vulkan_store_pipeline_cache"])
+        with tempfile.TemporaryDirectory() as t:
+            c = self.cfg(t)
+            c.detect_gpu(gpu.Detected(gpu.NVIDIA, "x"))
+            self.assertFalse(c.settings["vulkan_store_pipeline_cache"])
+            self.assertIn("vulkan_store_pipeline_cache = false", render_toml(c))
 
     def test_detected_once(self):
         with tempfile.TemporaryDirectory() as t:

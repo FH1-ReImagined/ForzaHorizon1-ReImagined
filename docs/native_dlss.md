@@ -1,6 +1,6 @@
 # Native NVIDIA reconstruction (Windows development branch)
 
-Settings > Display > NVIDIA DLSS offers Off, Quality, Balanced, Performance, and
+Settings > Graphics > NVIDIA DLSS offers Off, Quality, Balanced, Performance, and
 DLAA, with a separate 1080p, 1440p or 4K output choice. These use NVIDIA's NGX
 Vulkan runtime on a supported RTX GPU and driver. They are separate from the
 presenter's spatial upscaling filter. Changes require restarting the game.

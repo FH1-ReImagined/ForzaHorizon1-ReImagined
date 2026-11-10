@@ -45,8 +45,16 @@ UNKNOWN_FLAG = ("The game does not know the prebuild option: it was built by an 
 
 def build_problem(cfg) -> str:
     """Why the game cannot be prebuilt yet ('' when its build is current). Same test as the Setup page's
-    Build step: the build is complete and made from the project of this launcher (builder.build_status)."""
-    from . import builder
+    Build step: the build is complete and made from the project of this launcher (builder.build_status).
+    A build Play starts that is not the launcher's (this checkout's, or the Advanced game_dir) is not
+    the launcher's to judge: it is prebuilt as it is (an older one says it lacks the option, UNKNOWN_FLAG)."""
+    from . import builder, game
+    try:
+        outside = game.outside_build(cfg) is not None
+    except Exception:
+        outside = False
+    if outside:
+        return ""
     try:
         state, _detail = builder.build_status(cfg.data_home(), cfg["tu_package"])
     except Exception:
@@ -102,7 +110,15 @@ def store_key(plan) -> dict:
 
 
 def uses_vulkan(plan) -> bool:
-    return (_arg(plan.argv, "--gpu_backend") or "vulkan") == "vulkan"
+    """The Direct3D 12 backends (and ReGPU) are chosen in forza.toml, the command line can override it."""
+    backend = _arg(plan.argv, "--gpu_backend")
+    if backend is None:
+        from .config import parse_toml
+        try:
+            backend = parse_toml(getattr(plan, "toml_text", "") or "").get("gpu_backend")
+        except ValueError:
+            backend = None
+    return (backend or "vulkan") == "vulkan"
 
 
 def _file_id(path: Path) -> str:
@@ -364,7 +380,7 @@ def prebuild(cfg, game, status_cb=None, progress=None, cancelled=None, log=print
         raise PrebuildError(REBUILD_FIRST)
     plan = game_mod.build_plan(cfg, game, write=True, log=log, battery_saver=False)
     if not uses_vulkan(plan):
-        raise PrebuildError("Shader prebuild needs the Vulkan graphics API (Settings > Graphics API).")
+        raise PrebuildError("Shader prebuild needs the Vulkan graphics API (Settings > Graphics > Graphics API).")
     if ambiguous_paths(plan):
         raise PrebuildError(f"{ambiguous_paths(plan)} is given twice (Advanced > extra arguments): the game "
                             "would ignore both. Keep one.")

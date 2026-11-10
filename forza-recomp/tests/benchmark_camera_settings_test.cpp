@@ -28,11 +28,13 @@ REXCVAR_DEFINE_INT32(forza_unrelated_fixture, 0, "Test", "Not a graphics prefere
 
 namespace forza {
 void RestartForBenchmark() { Check(false && "No process restart in this fixture"); }
+void LogGuestThreads(const char*) {}
 }
 namespace forza::benchmark {
 bool Enabled() { return false; }
 void Fail(const char*) { Check(false && "No game flow in this fixture"); }
 void Cancel() { Check(false && "No game flow in this fixture"); }
+double SecondsSinceSwap() { return 0; }
 }
 extern "C" REX_FUNC(__imp__sub_8281CF68) {
   Check(false && "No guest calls in this fixture");

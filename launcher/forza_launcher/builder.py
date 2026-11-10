@@ -9,6 +9,7 @@ Layout under the data root (default ~/.local/share/forza, %LOCALAPPDATA%\\ForzaR
   build/       the project sources, generated code and the build tree
   runtime/     what Play runs: the program, its libraries, forza.toml
 """
+import dataclasses
 import hashlib
 import json
 import os
@@ -37,8 +38,9 @@ class BuildError(Exception):
 
 
 class FolderBlocked(BuildError):
-    """Windows denied access to the data folder (OneDrive, antivirus, Controlled folder access): the
-    player should choose another folder. Issue #38."""
+    """The data folder cannot be written: Windows denied access (OneDrive, antivirus, Controlled folder
+    access, #38), or on Linux it is read-only (in the Flatpak: a folder the sandbox may only read,
+    #717). The player should allow the access or choose another folder."""
 
 
 class Reporter:
@@ -104,6 +106,79 @@ def build_dir(root: Path) -> Path:
 
 def runtime_dir(root: Path) -> Path:
     return root / "runtime"
+
+
+# CMake cannot build in a folder whose path has one of these (#691). [ and ] (and * and ?, which
+# Windows does not allow) are patterns to file(GLOB), with which CMake finds its own compiler
+# identification files (the downloaded CMake lives in toolchain/) and the SDK's per-configuration
+# target files ("IMPORTED_LOCATION or IMPORTED_IMPLIB not set for imported target rex::runtime");
+# ; separates the items of CMake lists (and of INCLUDE and LIB); and on Windows %NAME% expands in
+# the commands ninja runs through cmd.exe.
+CMAKE_UNSAFE = "[]*?;" + ("%" if IS_WIN else "")
+
+
+def cmake_unsafe_chars(path) -> str:
+    """The characters of `path` CMake cannot build under (CMAKE_UNSAFE), each once."""
+    return "".join(dict.fromkeys(c for c in str(path) if c in CMAKE_UNSAFE))
+
+
+def link_home() -> Path:
+    """Where build_root puts its links: a folder of the launcher's own, outside every data folder."""
+    if IS_WIN:
+        d = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "ForzaReImagined-links"
+    else:
+        d = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "forza-reimagined" / "links"
+    return d if not cmake_unsafe_chars(d) else Path(tempfile.gettempdir()) / "forza-reimagined-links"
+
+
+def _is_link(p: Path) -> bool:
+    isjunction = getattr(os.path, "isjunction", None)   # Python 3.12
+    return os.path.islink(p) or bool(IS_WIN and isjunction and isjunction(p))
+
+
+def _make_link(target: Path, link: Path):
+    if IS_WIN:
+        import _winapi   # a junction: no administrator rights or Developer Mode needed, unlike a symlink
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        os.symlink(target, link, target_is_directory=True)
+
+
+def _remove_link(link: Path):
+    """Removes the link `link`, never what it points to."""
+    if IS_WIN:
+        os.rmdir(link)   # a junction
+    else:
+        os.unlink(link)
+
+
+def build_root(root: Path, rep: Reporter) -> Path:
+    """`root`, or when its path has characters CMake cannot build under (CMAKE_UNSAFE), a link to it
+    whose path has none: the build then runs through the link, on the folder's own files. The link
+    is kept for the next build (CMake's cache names it), and remade when it points elsewhere."""
+    bad = cmake_unsafe_chars(root)
+    if not bad:
+        return root
+    real = os.path.normcase(os.path.realpath(root))
+    home = link_home()
+    link = home / hashlib.sha1(real.encode("utf-8", "surrogateescape")).hexdigest()[:12]
+    try:
+        if not _is_link(link) and os.path.lexists(link):
+            raise OSError(f"{link} is in the way and is not a link")
+        if _is_link(link) and os.path.normcase(os.path.realpath(link)) != real:
+            _remove_link(link)
+        if not _is_link(link):
+            home.mkdir(parents=True, exist_ok=True)
+            _make_link(root, link)
+    except OSError as e:
+        raise BuildError(
+            f"The path of the folder the game is built in, {root}, has {' '.join(bad)} in it, which CMake "
+            f"cannot build under, and the launcher could not make a link to it without them ({e}). Choose "
+            f"a folder without these characters in {datafolder.CHANGE_FOLDER_UI}, then press Build "
+            "again.") from e
+    rep.log(f"The folder {root} has {' '.join(bad)} in its path, which CMake cannot build under: "
+            f"building through {link}, a link to it.")
+    return link
 
 
 EXCLUDE_DIRS = {"out", "__pycache__", ".git"}
@@ -542,13 +617,16 @@ def clamp_future_times(roots, now: float | None = None, slack: float = 2.0) -> i
 STAMP_NAME = ".forza-configure-stamp"
 
 
-def configure_stamp(tools, sdk_ident: str, tu: bool) -> str:
+def configure_stamp(tools, sdk_ident: str, tu: bool, root: Path | None = None) -> str:
     """What the CMake build tree was configured with: the launcher version (its project sources,
-    toolchain file and options), the SDK, the compilers and whether a title update is used. A tree
-    configured with anything else is deleted and configured again, not resumed."""
+    toolchain file and options), the SDK, the compilers, whether a title update is used, and the
+    path CMake saw the folder by when that was a link to it (build_root). A tree configured with
+    anything else is deleted and configured again, not resumed."""
     return hashlib.sha1("|".join([__version__, PLAT, pins.SDK_TAG, sdk_ident, str(bool(tu)),
                                   tools.cc, tools.cxx, tools.cmake, tools.ninja,
-                                  json.dumps(tools.source, sort_keys=True)]).encode()).hexdigest()
+                                  json.dumps(tools.source, sort_keys=True)] +
+                                 ([str(root)] if root is not None and root.parent == link_home() else [])
+                                 ).encode()).hexdigest()
 
 
 def reset_stale_build_tree(bdir: Path, stamp: str, rep: Reporter):
@@ -602,6 +680,45 @@ def llvm_member_wanted(name: str) -> bool:
     return parts[0] in ("lib",) and len(parts) > 1 and parts[1] == "clang" or parts[0].upper().startswith("LICENSE")
 
 
+def llvm_incomplete_message(folder: Path, lacking) -> str:
+    """The build cannot go on: a freshly unpacked LLVM still lacks files (#744)."""
+    first = folder.joinpath(*lacking[0].split("/"))
+    one = len(lacking) == 1
+    return (f"The downloaded LLVM compiler is incomplete after unpacking it: {', '.join(lacking)} "
+            f"{'is' if one else 'are'} missing in {folder} (for example {first}). An antivirus may have "
+            f"quarantined {'it' if one else 'them'}: look in its quarantine or protection history, restore "
+            f"or allow the {'file' if one else 'files'} (or the folder {folder.parent}), then press Build again.")
+
+
+def install_llvm(name: str, arc: Path, dest: Path, rep: Reporter, progress) -> None:
+    """Unpacks the LLVM archive into <dest>.part, checks that every file the build needs is there,
+    then puts it in place of dest, which may be an incomplete folder (an unpack that stopped
+    halfway, or a file an antivirus took away, #744). When something is still missing the archive
+    is kept, so the next try needs no download."""
+    stage = dest.with_name(dest.name + ".part")
+    if stage.exists():
+        _rmtree(stage)
+    fetch.unpack(name, arc, stage, strip=1, only=llvm_member_wanted, progress=progress,
+                 cancelled=rep.cancelled)
+    lacking = build_env.llvm_missing_files(stage)
+    if lacking:
+        raise BuildError(llvm_incomplete_message(stage, lacking))
+    for attempt in range(5):
+        try:
+            if dest.exists():
+                _rmtree(dest)
+            os.replace(stage, dest)
+            break
+        except OSError as e:  # an antivirus scanning the new files holds them open for a moment
+            if attempt == 4:
+                raise BuildError(f"Could not replace the LLVM folder {dest} with the new one ({e}). "
+                                 f"Close any program that uses it, or delete the folder, then press "
+                                 f"Build again.") from e
+            time.sleep(1)
+    rep.log(f"LLVM unpacked into {dest}")
+    arc.unlink(missing_ok=True)  # 2 GB: not needed any more
+
+
 def ensure_toolchain(opts: Options, rep: Reporter, lo, hi):
     tools = build_env.detect_tools(opts.root, opts.prefer_downloaded, max_age=0)
     for p in tools.problems:
@@ -625,10 +742,8 @@ def ensure_toolchain(opts: Options, rep: Reporter, lo, hi):
         arc = fetch.download(name, cache, _dl_progress(rep, a, a + (b - a) * 0.6, name), rep.cancelled)
         rep.status(f"Unpacking {name}")
         if name.startswith("llvm"):
-            dest = tdir / f"llvm-{pins.LLVM_VERSION}"
-            fetch.unpack(name, arc, dest, strip=1, only=llvm_member_wanted,
-                         progress=_dl_progress(rep, a + (b - a) * 0.6, b, "unpack"), cancelled=rep.cancelled)
-            arc.unlink(missing_ok=True)  # 2 GB: not needed any more
+            install_llvm(name, arc, tdir / f"llvm-{pins.LLVM_VERSION}", rep,
+                         _dl_progress(rep, a + (b - a) * 0.6, b, "unpack"))
         elif name.startswith("cmake"):
             fetch.unpack(name, arc, tdir / f"cmake-{pins.CMAKE_VERSION}", strip=1, cancelled=rep.cancelled)
         elif name.startswith("ninja"):
@@ -639,6 +754,9 @@ def ensure_toolchain(opts: Options, rep: Reporter, lo, hi):
     tools = build_env.detect_tools(opts.root, opts.prefer_downloaded, max_age=0)
     for p in tools.problems:
         raise BuildError(p)
+    if tools.llvm_incomplete:  # gone again after the check in install_llvm
+        raise BuildError(llvm_incomplete_message(build_env.downloaded_paths(opts.root)["llvm"].parent,
+                                                 tools.llvm_incomplete))
     if tools.missing:
         raise BuildError("The toolchain is incomplete after the download: " + ", ".join(tools.missing))
     for k, v in tools.source.items():
@@ -976,6 +1094,17 @@ def sync_toolchain_file(root: Path) -> Path:
 XWIN_MSVC_COMPAT = "19.33"
 
 
+def xwin_splat_command(exe, root: Path, xdir: Path) -> list:
+    """The xwin command that unpacks the CRT and SDK into `xdir` without making any link, so a
+    normal user can run it with Developer Mode off (#634, #739). --use-winsysroot-style: the plain
+    layout always links sdk/include/<sdk version> and sdk/lib/<sdk version> to their parent
+    (`symlink_on_windows_too` in xwin's splat.rs, 0.10.0), --disable-symlinks or not, which fails
+    with os error 1314; the /winsysroot layout puts the files in versioned folders and links nothing.
+    --disable-symlinks: the case aliases, which a file system that ignores case does not need."""
+    return [exe, "--accept-license", "--cache-dir", root / "downloads" / "xwin-cache", "splat",
+            "--disable-symlinks", "--use-winsysroot-style", "--output", xdir]
+
+
 def msvc_environment(opts: Options, rep: Reporter, tools, lo, hi):
     """Windows: the environment (INCLUDE, LIB, PATH) of the MSVC CRT and Windows SDK, from an
     installed Visual Studio, else from xwin, which needs the player to accept Microsoft's license."""
@@ -983,8 +1112,8 @@ def msvc_environment(opts: Options, rep: Reporter, tools, lo, hi):
     if env:
         return env
     xdir = opts.root / "xwin"
-    # All of it: a splat that failed half way leaves the CRT without the SDK.
-    if not all((xdir / p).is_dir() for p in ("crt/include", "sdk/include/ucrt", "sdk/lib/um/x86_64")):
+    dirs = build_env.xwin_dirs(xdir)
+    if dirs is None:
         if not opts.accept_ms_license:
             raise BuildError("The Microsoft C++ runtime and Windows SDK are needed and are not installed. "
                              "Accept Microsoft's license in the setup page to download them, or install "
@@ -994,15 +1123,19 @@ def msvc_environment(opts: Options, rep: Reporter, tools, lo, hi):
         fetch.unpack("xwin-windows", arc, tooldir, strip=1)
         exe = next(tooldir.rglob("xwin.exe"))
         rep.status("Downloading the Microsoft C++ runtime and Windows SDK")
-        # --disable-symlinks: xwin links the SDK's versioned folders and case aliases, and Windows
-        # lets a normal user make symlinks only with Developer Mode on (os error 1314). Its file
-        # system ignores case, and the paths below need no links.
-        run([exe, "--accept-license", "--cache-dir", opts.root / "downloads" / "xwin-cache", "splat",
-             "--disable-symlinks", "--output", xdir], opts.root, cleanenv.clean_environment(), rep)
-    inc = [xdir / "crt" / "include", xdir / "sdk" / "include" / "ucrt", xdir / "sdk" / "include" / "um",
-           xdir / "sdk" / "include" / "shared", xdir / "sdk" / "include" / "winrt"]
-    lib = [xdir / "crt" / "lib" / "x86_64", xdir / "sdk" / "lib" / "um" / "x86_64",
-           xdir / "sdk" / "lib" / "ucrt" / "x86_64"]
+        # A plain-layout splat that stopped half way (the 0.2.8 error of #739) leaves crt/ and most
+        # of sdk/; xwin itself only clears the folders of the layout it makes.
+        (xdir / build_env.XWIN_DONE).unlink(missing_ok=True)
+        for old in ("crt", "sdk", "vcrd"):
+            shutil.rmtree(xdir / old, ignore_errors=True)
+        run(xwin_splat_command(exe, opts.root, xdir), opts.root, cleanenv.clean_environment(), rep)
+        xdir.mkdir(parents=True, exist_ok=True)
+        (xdir / build_env.XWIN_DONE).write_text(f"xwin {pins.XWIN_VERSION} splat --use-winsysroot-style\n")
+        dirs = build_env.xwin_dirs(xdir)
+        if dirs is None:
+            raise BuildError(f"xwin finished but the Microsoft C++ runtime or Windows SDK is missing from {xdir}. "
+                             "Delete that folder and build again.")
+    inc, lib = dirs
     env = cleanenv.clean_environment()
     env["INCLUDE"] = os.pathsep.join(map(str, inc))
     env["LIB"] = os.pathsep.join(map(str, lib))
@@ -1022,10 +1155,13 @@ def compile_passes(opts: Options, rep: Reporter, tools, src: Path, bdir: Path, e
     for attempt in (1, 2):
         rep.status("Compiling" + (" (second pass)" if attempt == 2 else ": this takes a long time"))
         dirty = {"seen": False}
+        failed = []
 
         def on_line(line):
             if DIRTY_MANIFEST in line:
                 dirty["seen"] = True
+            if line.startswith("FAILED: "):
+                failed.append(line)
             m = NINJA_RE.match(line)
             if m:
                 n, total = int(m.group(1)), int(m.group(2))
@@ -1036,28 +1172,55 @@ def compile_passes(opts: Options, rep: Reporter, tools, src: Path, bdir: Path, e
                 low_priority=opts.low_priority, monitor=monitor)
         except BuildError as e:
             e.dirty_manifest = dirty["seen"]
+            e.failed = list(failed)
             raise
+
+
+def regpu_only_failure(failed) -> bool:
+    """Whether every ninja "FAILED: <output>" line is the ReGPU plugin's (regpu-plugin/, the DLL)."""
+    outputs = []
+    for line in failed:
+        rest = re.sub(r"^FAILED:\s*(?:\[code=\d+\]\s*)?", "", line).strip().replace("\\", "/")
+        outputs.append(rest.split(" ")[0])
+    return bool(outputs) and all(o.startswith("regpu-plugin/") or "rexgpu-regpu" in o for o in outputs)
 
 
 def run_build(opts: Options, rep: Reporter, game_files: Path) -> Path:
     """The whole pipeline; returns the runtime directory. Safe to cancel and run again.
-    On Windows a folder that cannot be written (OneDrive, antivirus, Controlled folder access) ends in
-    FolderBlocked with a message that says so, before or during the build."""
+    A folder that cannot be written (Windows: OneDrive, antivirus, Controlled folder access; Linux: a
+    read-only mount, in the Flatpak a folder it may only read, #717) ends in FolderBlocked with a
+    message that says so, before the build starts (a file is written there first) or during it."""
     global CURRENT_ROOT
     CURRENT_ROOT = opts.root
-    if IS_WIN:
-        for lvl, text in datafolder.check_folder(opts.root, need_toolchain=False):
-            if lvl == "error" and text.startswith("Cannot write"):
-                raise FolderBlocked(text)
-            if lvl == "warn":
-                rep.log("Warning: " + text)
+    for lvl, text in datafolder.check_folder(opts.root, need_toolchain=False):
+        if lvl == "error" and text.startswith("Cannot write"):
+            raise FolderBlocked(text)
+        if lvl == "warn":
+            rep.log("Warning: " + text)
     try:
-        return _run_build(opts, rep, game_files)
+        # A folder CMake cannot build under (#691) is built through a link to it; messages that name
+        # the folder (CURRENT_ROOT) keep its own path.
+        root = build_root(opts.root, rep)
+        if root == opts.root:
+            return _run_build(opts, rep, game_files)
+        return opts.root / _run_build(dataclasses.replace(opts, root=root), rep, game_files).relative_to(root)
     except OSError as e:
-        if IS_WIN and datafolder.is_access_denied_error(e):
+        if IS_WIN and datafolder.is_access_denied_error(e) or \
+                not IS_WIN and datafolder.is_read_only_error(e) and _inside(e.filename, opts.root):
             paths.log_error("build: access denied", e)
             raise FolderBlocked(datafolder.blocked_message(opts.root, str(e))) from e
         raise
+
+
+def _inside(name, root) -> bool:
+    """The file an OSError names is in the data folder, also through build_root's link (or there is no
+    name to tell)."""
+    if not name:
+        return True
+    try:
+        return Path(os.path.realpath(name)).is_relative_to(Path(os.path.realpath(root)))
+    except (TypeError, ValueError):
+        return False
 
 
 def _run_build(opts: Options, rep: Reporter, game_files: Path) -> Path:
@@ -1127,11 +1290,17 @@ def _run_build(opts: Options, rep: Reporter, game_files: Path) -> Path:
     overlay = sdk_overlay_archive()
     dev = dev_sdk_overlay()
     sdk_ident = sdk_identity(overlay, dev)
-    stamp = configure_stamp(tools, sdk_ident, tu is not None)
+    stamp = configure_stamp(tools, sdk_ident, tu is not None, root)
 
+    # ReGPU, the experimental Direct3D 12 renderer (Settings > Graphics API, regpu.py), is built with
+    # every Windows build, so choosing it needs no new build. It is optional: when only its plugin
+    # fails to compile, the game is built without it.
+    regpu_plugin = IS_WIN
     # A tree CMake configured for another version of the launcher (a build that stopped, then an
     # update) is deleted, not resumed; so is one ninja cannot get clean (see compile_pass).
-    for attempt in (1, 2):
+    attempt = 0
+    while attempt < 2:
+        attempt += 1
         reset_stale_build_tree(bdir, stamp, rep)
         fixed = clamp_future_times([src, sdk, build_dir(root) / "toolchain", build_env.toolchain_dir(root),
                                     root / "xwin"])
@@ -1143,7 +1312,8 @@ def _run_build(opts: Options, rep: Reporter, game_files: Path) -> Path:
              f"-DCMAKE_PREFIX_PATH={sdk.as_posix()}", f"-Drexglue_DIR={(sdk / 'lib/cmake/rexglue').as_posix()}",
              f"-DFORZA_REXGLUE={rexglue.as_posix()}",
              f"-DCMAKE_MAKE_PROGRAM={Path(tools.ninja).as_posix()}"] +
-            ([f"-DFORZA_XENOS_PLUGIN={(sdk / 'lib/librexgpu-xenos.so').as_posix()}"] if not IS_WIN else []) +
+            ([f"-DFORZA_XENOS_PLUGIN={(sdk / 'lib/librexgpu-xenos.so').as_posix()}"] if not IS_WIN else
+             [f"-DFORZA_REGPU_PLUGIN={'ON' if regpu_plugin else 'OFF'}"]) +
             cmake_extra, src, env, rep, low_priority=opts.low_priority)
         write_configure_stamp(bdir, stamp)
         rep.progress(0.24)
@@ -1151,6 +1321,13 @@ def _run_build(opts: Options, rep: Reporter, game_files: Path) -> Path:
             compile_passes(opts, rep, tools, src, bdir, env, monitor)
             break
         except BuildError as e:
+            if regpu_plugin and regpu_only_failure(getattr(e, "failed", ())):
+                rep.log("Warning: the experimental ReGPU renderer did not compile (the lines above); building "
+                        "the game without it. Settings > Graphics > Graphics API > ReGPU then plays with Vulkan.")
+                regpu_plugin = False
+                (bdir / "rexgpu-regpu.dll").unlink(missing_ok=True)
+                attempt -= 1
+                continue
             if not getattr(e, "dirty_manifest", False):
                 raise
             if attempt == 2:
@@ -1209,7 +1386,10 @@ def stage_runtime(opts: Options, rep: Reporter, bdir: Path, sdk: Path) -> Path:
     if IS_WIN:
         # rexgpu-regpu.dll and its d3dcompiler_47.dll: the optional ReGPU plugin (FORZA_REGPU_PLUGIN);
         # its licenses come with licenses/ above.
+        # A plugin from an earlier build is removed when this one has none (it would not match forza.exe).
         plugin = [bdir / n for n in ("rexgpu-regpu.dll", "d3dcompiler_47.dll") if (bdir / n).is_file()]
+        if not (bdir / "rexgpu-regpu.dll").is_file():
+            (rt / "rexgpu-regpu.dll").unlink(missing_ok=True)
         for f in [bdir / "forza.exe"] + sorted(bdir.glob("forza_*.dll")) + plugin:
             shutil.copy2(f, rt / f.name)
         for dll in sorted((sdk / "bin").glob("*.dll")):

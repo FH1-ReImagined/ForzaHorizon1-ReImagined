@@ -63,5 +63,8 @@ bool Enabled();
 bool WantsPauseRow(const PPCContext& ctx, uint8_t* base, uint32_t screen);
 // The last pause menu was built in an online session with the entry added.
 bool Active();
+// Photo mode's camera screen, every frame, with its state (+0x748: 0 in the camera, 3 from the
+// shutter while the photo is shown). Guest UI thread.
+void OnCameraScreen(uint32_t state);
 
 }  // namespace forza::online_photo

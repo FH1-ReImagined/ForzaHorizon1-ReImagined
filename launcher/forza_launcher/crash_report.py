@@ -16,13 +16,15 @@ SETTING_KEYS = (
     "internal_display_resolution", "draw_resolution_scale_x", "draw_resolution_scale_y",
     "present_effect", "swap_post_effect", "native_2x_msaa", "scene_msaa", "scene_resolution",
     "anisotropic_override",
-    "world_shadow_detail", "world_texture_detail", "world_shadow_filter", "world_ambient_occlusion",
+    "world_shadow_detail", "world_texture_detail", "world_car_detail", "livery_bake_scale",
+    "world_shadow_filter",
+    "world_ambient_occlusion",
     "motion_blur",
     "texture_dump", "texture_replace",
     "fh1_upscaler", "fh1_output_resolution", "fsr3_mode", "fsr3_output_resolution",
     "fh1_upscale_quality", "fh1_aa", "resolution", "forza_ultrawide",
     "fullscreen", "audio", "apu", "audio_driver", "time_scalar", "ai_rubber_banding",
-    "forza_car_tuning", "skip_startup_movies",
+    "forza_car_tuning", "skip_startup_movies", "fast_travel_anywhere",
 )
 MAX_ISSUE_URL = 7500
 # What to attach (#609): forza.log holds this session only; the launcher keeps the one before.

@@ -48,9 +48,18 @@ extern "C" void __llvm_profile_reset_counters(void);
 // plugin. The game's graphics screen sets them, and saves nothing when one is missing; the plugin
 // follows them (FollowGraphicsMenu). Registered after ReXGlue read the command line, so their
 // starting values are read from it again (StartingFlag).
-REXCVAR_DEFINE_BOOL(vsync, false, "Display", "Wait for the display's refresh (ReGPU)");
-REXCVAR_DEFINE_INT32(anisotropic_override, -1, "Display",
+// Their defaults are ReXGlue's (vsync on, 4x filtering), which the launcher leaves out of forza.toml.
+REXCVAR_DEFINE_BOOL(vsync, true, "Display", "Wait for the display's refresh (ReGPU)");
+REXCVAR_DEFINE_INT32(anisotropic_override, 3, "Display",
                      "Texture filtering: -1 the game's, 0 off, 1-5 1x-16x anisotropic (ReGPU)");
+// ReIGlue's readback_resolve_wait_range ((address << 32) | length, 0 for none; its command processor's,
+// not loaded with this plugin either): a guest physical range the game resolves every frame and reads on
+// the CPU now and then, so "some" would leave an old picture there. Forza sets it for photo mode's FOCUS
+// (the world depth target, #665), the Big Shot (the front buffers, #552) and the online photo (#576),
+// src/platform/readback_wait.h; without the setting they log that the SDK has none. ResolveWriteback
+// copies such resolves back every time, as the SDK's backends do.
+REXCVAR_DEFINE_UINT64(readback_resolve_wait_range, 0, "GPU",
+                      "Guest physical range whose resolves are always written back (ReGPU)");
 
 namespace glue2gpu
 {
@@ -177,12 +186,21 @@ void ApplyRenderChoice(regpu::Config& config, uint32_t outW, uint32_t outH, int 
 void MenuRenderSettings(regpu::Config& config)
 {
     const auto saved = SavedGraphicsSettings();
-    const auto get = [&](const char* key, const char* fallback) {
+    // What the graphics screen saved wins; without it the launcher's settings (forza.toml, the command
+    // line: resolution, fh1_upscaler, resolution_scale) stay, not the console's 720p. The launcher's
+    // upscaler is a Vulkan one (DLSS, FSR 3) unless it is one of ReGPU's FSR 1 modes.
+    const auto get = [&](const char* key, const char* flag) {
         const auto it = saved.find(key);
-        return it != saved.end() && !it->second.empty() ? it->second : std::string(fallback);
+        return it != saved.end() && !it->second.empty() ? it->second : rex::cvar::GetFlagByName(flag);
     };
-    const std::string output = get("output", "720p"), upscaler = get("upscaler", "off"),
-                      scale = get("resolution_scale", "1");
+    std::string output = get("output", "resolution"), upscaler = get("upscaler", "fh1_upscaler"),
+                scale = get("resolution_scale", "resolution_scale");
+    if (output.empty())
+        output = "720p";
+    if (upscaler.rfind("fsr1_", 0) != 0)
+        upscaler = "off";
+    if (scale.empty())
+        scale = "1";
     for (const auto& [flag, value] : { std::pair{ "resolution", output == "720p" ? std::string() : output },
                                        std::pair{ "fh1_upscaler", upscaler }, std::pair{ "resolution_scale", scale } })
         rex::cvar::SetFlagByName(flag, value);
@@ -190,10 +208,13 @@ void MenuRenderSettings(regpu::Config& config)
         if (StartingFlag(flag).empty())
             if (const auto it = saved.find(flag); it != saved.end() && !it->second.empty())
                 rex::cvar::SetFlagByName(flag, it->second);
-    if (output == "720p")
+    uint32_t outW = output == "4k" ? 3840 : output == "1440p" ? 2560 : output == "1080p" ? 1920 : 0;
+    uint32_t outH = output == "4k" ? 2160 : output == "1440p" ? 1440 : output == "1080p" ? 1080 : 0;
+    if (!outW && (std::sscanf(output.c_str(), "%ux%u", &outW, &outH) != 2 || outW < 640 || outH < 360 ||
+                  outW > 7680 || outH > 4320))
+        outW = outH = 0;   // 720p, or a size the launcher wouldn't give
+    if (!outW || outW <= 1280)
         return;
-    const uint32_t outW = output == "4k" ? 3840 : output == "1440p" ? 2560 : 1920;
-    const uint32_t outH = output == "4k" ? 2160 : output == "1440p" ? 1440 : 1080;
     ApplyRenderChoice(config, outW, outH, std::atoi(scale.c_str()), upscaler);
     g_outputW = outW;
     g_outputH = outH;
@@ -564,6 +585,15 @@ void GuestCall(PPCContext& ctx, uint32_t address)
     g_dispatcher->ExecuteInterrupt(thread->thread_state(), address, args, 2);
 }
 
+// Whether the resolve meets readback_resolve_wait_range (above).
+bool InWaitRange(const regpu::ResolveCopy& copy)
+{
+    const uint64_t r = REXCVAR_GET(readback_resolve_wait_range);
+    const uint64_t start = r >> 32, length = uint32_t(r);
+    const uint64_t bytes = uint64_t(copy.width) * copy.height * 4; // 32-bit pixels (depth: D24FS8 words)
+    return length && copy.base < start + length && start < copy.base + bytes;
+}
+
 // GLUE2GPU_WRITEBACK: which resolves are also written to guest memory, for titles that read them
 // on the CPU. "some" (the default, as stock ReXGlue's readback_resolve=some): an image the first
 // time it is resolved, and again after 60 frames without it; "all" (every resolve, deferred: ~4 fps
@@ -575,6 +605,12 @@ regpu::Writeback ResolveWriteback(const regpu::ResolveCopy& copy)
     regpu::Writeback w;
     if (mode == "none")
         return w;
+    if (InWaitRange(copy))
+    {
+        // ReGPU writes a depth copy only deferred (a frame or two late); colour at once, as the SDK waits.
+        w.mode = copy.depth ? regpu::Writeback::Mode::Deferred : regpu::Writeback::Mode::Now;
+        return w;
+    }
     if (mode == "some")
     {
         static std::mutex mutex;
@@ -760,6 +796,15 @@ X_STATUS ReGpuGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* di
     for (const char* name : { "REGPU_ASYNC_SHADERS", "REGPU_ASYNC_PIPELINES" })
         if (!std::getenv(name))
             regpu::driver::SetSwitch(name, true);
+    // REGPU_NO_SETTLED_SKIP: with async pipelines, an opaque draw whose pipeline is still building is
+    // skipped once the game has settled, on the assumption the next frame draws it again. FH1 draws a
+    // car's paint job (vinyls and decals) once, when the car loads, into textures the CPU then
+    // compresses: a skipped draw of that pass is gone for good, and the car came out with no paint job
+    // (FH1R #690: the side composites, the pristine copy and its mips were the skipped draws). Opaque
+    // draws wait for their pipeline instead (a hitch the first time a new one appears, then it is in
+    // the pipeline library). GLUE2GPU_SETTLED_SKIP=1 skips them as before.
+    if (!std::getenv("GLUE2GPU_SETTLED_SKIP") && !std::getenv("REGPU_NO_SETTLED_SKIP"))
+        regpu::driver::SetSwitch("REGPU_NO_SETTLED_SKIP", true);
     // REGPU_NO_TILE_MERGE: FH1 draws its scene in three tiles. Merging them once lost the sky for a frame now
     // and then (fixed in ReGPU: later-tile stencil draws are kept); with that fix it saves nothing here (FX
     // 31.5 fps merged, 32.8 not), so FH1 draws its tiles as they come. GLUE2GPU_TILE_MERGE=1 merges.

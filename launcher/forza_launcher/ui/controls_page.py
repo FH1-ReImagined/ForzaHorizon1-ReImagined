@@ -136,8 +136,18 @@ class ControlsPage(QWidget):
         self.cfg, self.window = cfg, window
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        scroll, layout = scroll_page('Controls', 'Choose your controller to translate the game’s Xbox button prompts.')
+        scroll, layout = scroll_page('Controls', '')
         outer.addWidget(scroll)
+        # The lead and Control settings share the first row (index 1: the controller status card
+        # of ui/gamepad.py goes in at index 2, under them).
+        top = QHBoxLayout()
+        top.setSpacing(16)
+        top.addWidget(label('Choose your controller to translate the game’s Xbox button prompts.', 'pageLead'), 1)
+        settings = QPushButton('Control settings')
+        settings.setToolTip('Settings > Controls: controller, keyboard and mouse, racing wheel and player options.')
+        settings.clicked.connect(self.settings_requested)
+        top.addWidget(settings, 0, Qt.AlignVCenter)
+        layout.addLayout(top)
         frame, content = card(margins=(24, 20, 24, 20), spacing=14)
         header = QHBoxLayout()
         header.addWidget(label('Controller layout', 'cardTitle'), 1)
@@ -166,16 +176,13 @@ class ControlsPage(QWidget):
         self.all_controls = Disclosure('All driving controls')
         self.legend = label('', 'muted')
         self.all_controls.content.addWidget(self.legend)
-        credit = QLabel('Controller artwork: <a href="https://github.com/e7d/gamepad-viewer">Gamepad Viewer</a> · MIT license')
+        credit = QLabel('Controller artwork: <a href="https://github.com/e7d/gamepad-viewer" style="color: ' + theme.ORANGE + ';">Gamepad Viewer</a> · MIT license')
         credit.setObjectName('help')
         credit.setOpenExternalLinks(True)
         self.all_controls.content.addWidget(credit)
         layout.addWidget(self.all_controls)
         layout.addWidget(label('Default driving layout. Actions can change with the layout and transmission chosen in the game. '
                                'Selecting a controller here changes this guide; the game still shows Xbox prompts.', 'help'))
-        settings = QPushButton('Control settings')
-        settings.clicked.connect(self.settings_requested)
-        layout.addWidget(settings, 0, Qt.AlignLeft)
         self._local_settings = schema.defaults()
         frame, content = card(margins=(24, 20, 24, 20), spacing=12)
         self.bindings = BindingsEditor(self.current_settings, self.apply_settings)
@@ -226,8 +233,8 @@ class ControlsPage(QWidget):
         content.addWidget(self.haptics_enabled)
         self.haptics_fields = {}
         for key, title, maximum, suffix in [('intensity', 'Overall intensity', 100, '%'),
-                                           ('throttle_strength', 'Throttle resistance · R2', 8, ''),
-                                           ('brake_strength', 'Brake resistance · L2', 8, '')]:
+                                           ('throttle_strength', 'Throttle strength · R2', 8, ''),
+                                           ('brake_strength', 'Brake strength · L2', 8, '')]:
             row = QHBoxLayout()
             row.setSpacing(24)
             row.addWidget(label(title, 'muted'), 1)
@@ -245,9 +252,11 @@ class ControlsPage(QWidget):
         self.haptics_status = label('', 'help')
         content.addWidget(self.haptics_status)
         content.addWidget(label('Uses the default driving layout: LT brakes and RT accelerates. '
-                                'Set resistance to Off if you use a different trigger assignment. '
-                                'Triggers release when telemetry stops. RPM, tire slip, ABS and road effects '
-                                'are not available in this first FH1 bridge.', 'help'))
+                                'Set a strength to Off if you use a different trigger assignment. '
+                                'The triggers follow the car: the brake stiffens as the car slows and '
+                                'pulses with ABS, the throttle buzzes on wheelspin, and both shake on rough '
+                                'ground and in a crash. They release in menus and when telemetry stops.',
+                                'help'))
         credit = QLabel(f'Trigger transport: <a style="color:{theme.ORANGE}" '
                         'href="https://github.com/haritha99ch/HorizonHaptics">HorizonHaptics</a> · MIT license')
         credit.setObjectName('help')

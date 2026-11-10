@@ -1,6 +1,6 @@
 # HDR output (#33)
 
-HDR output is opt-in under **Settings > Display > HDR**. It requires Vulkan,
+HDR output is opt-in under **Settings > Graphics > HDR**. It requires Vulkan,
 an HDR-capable display, HDR enabled in the desktop settings, and a Vulkan surface
 offering `R16G16B16A16_SFLOAT` with `EXTENDED_SRGB_LINEAR_EXT`. Otherwise the
 presenter logs the reason and keeps ordinary SDR. Direct3D 12 does not use this
@@ -174,7 +174,7 @@ reuses that folder; choosing it does not require another extraction or a 7.6 GB
 copy. Both facade files and the `media` folder must accompany `default.xex`.
 See [launcher setup](launcher.md) for supported executable checks and TU4 setup.
 
-Under **Settings > Online**, choose the public server, local server, or a custom
+Under **Online > Servers**, choose the public server, This PC, or add a
 `host:port`. For a self-hosted server on Windows, from the repository root:
 
 ```powershell

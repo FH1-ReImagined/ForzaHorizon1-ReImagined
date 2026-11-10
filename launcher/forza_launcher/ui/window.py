@@ -1,4 +1,5 @@
-"""Play, gallery, catalogs, setup, settings, controls and saves."""
+"""The main window: a sidebar of sections (Play, Library, Mods, Online, Controls, Settings, Setup, About),
+each section's title and page tabs, and starting the game."""
 import sys
 import threading
 import time
@@ -6,7 +7,7 @@ import time
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QMainWindow,
-                               QMessageBox, QPushButton, QStackedWidget, QVBoxLayout, QWidget)
+                               QMessageBox, QPushButton, QStackedWidget, QTabBar, QVBoxLayout, QWidget)
 
 from .. import (APP_NAME, __version__, builder, cleanenv, coop_grant, crash_report, errors, game, paths, dlss,
                online_features, shader_share)
@@ -28,6 +29,39 @@ MODS_PAGE_ID = 8
 TEXTURE_PACKS_PAGE_ID = 9
 RADIO_PAGE_ID = 10
 SERVERS_PAGE_ID = 11
+FM4_LAPS_PAGE_ID = 13  # Mods > FM4 laps (#648): shown once an FM4 circuit is imported
+SAVES_PAGE_ID = 6
+ONLINE_PAGE_ID = 12   # Online > Online: the Online settings (built by the Settings page)
+SIDEBAR_WIDTH = 224
+
+# The sidebar: (section, [(tab title, page id)], in the footer). A section of several pages shows
+# them as tabs under its title. The page ids stay the stack indexes (and show_page()'s argument).
+SECTIONS = [
+    ("Play", [("Play", 0)], False),
+    ("Library", [("Photos", 4), ("Designs && vinyls", CATALOG_PAGE_ID), ("Saves", SAVES_PAGE_ID)], False),
+    ("Mods", [("Mods", MODS_PAGE_ID), ("Texture packs", TEXTURE_PACKS_PAGE_ID), ("Radio", RADIO_PAGE_ID),
+              ("FM4 laps", FM4_LAPS_PAGE_ID)], False),
+    ("Online", [("Online", ONLINE_PAGE_ID), ("Servers", SERVERS_PAGE_ID)], False),
+    ("Controls", [("Controls", 5)], False),
+    ("Settings", [("Settings", 2)], False),
+    ("Setup", [("Setup", 1)], False),
+    ("About", [("About", 3)], True),
+]
+
+
+def _hide_title(title):
+    """Hide a page's title; a row it shared with buttons (Photos: Refresh) keeps them on the right."""
+    title.hide()
+    parent = title.parentWidget()
+    stack = [parent.layout()] if parent is not None and parent.layout() is not None else []
+    while stack:
+        layout = stack.pop()
+        index = layout.indexOf(title)
+        if index >= 0:
+            if isinstance(layout, QHBoxLayout):
+                layout.insertStretch(index, 1)
+            return
+        stack.extend(layout.itemAt(i).layout() for i in range(layout.count()) if layout.itemAt(i).layout())
 
 
 class VrChecklist(QDialog):
@@ -64,12 +98,20 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.cfg = cfg
         if not cfg.gpu.get("vendor") and not cfg.gpu.get("checked"):
-            cfg.detect_gpu()   # once: preselects the GPU's choice in Settings > Display (#52)
+            cfg.detect_gpu()   # once: preselects the GPU's choice in Settings > Graphics (#52)
             try:
                 cfg.save()
             except OSError:
                 pass
-        if cfg.detect_specs():   # once, and again when the graphics card changed (#206)
+        if cfg.detect_specs() or cfg.notices:   # once, and again when the graphics card changed (#206)
+            try:
+                cfg.save()   # a one-time change (cfg.notices) is saved at once, so it is never made again
+            except OSError:
+                pass
+        # The Vulkan driver's API version (#672): before the first settings are written on a new
+        # launcher.json (an old Intel driver gets Direct3D 12), else at each start in the background.
+        self._vulkan_probe = None
+        if not cfg.loaded and cfg.detect_vulkan():
             try:
                 cfg.save()
             except OSError:
@@ -106,32 +148,11 @@ class MainWindow(QMainWindow):
 
         side = QWidget()
         side.setObjectName("sidebar")
-        side.setFixedWidth(210)
+        side.setFixedWidth(SIDEBAR_WIDTH)
         sl = QVBoxLayout(side)
-        sl.setContentsMargins(0, 22, 0, 16)
+        sl.setContentsMargins(0, 20, 0, 14)
         sl.setSpacing(2)
-        brand = QHBoxLayout()
-        brand.setContentsMargins(18, 0, 12, 14)
-        brand.setSpacing(10)
-        logo = QLabel()
-        logo.setFixedSize(44, 44)
-        logo.setAlignment(Qt.AlignCenter)
-        pm = QPixmap(str(paths.asset("logo.png")))
-        if not pm.isNull():
-            logo.setPixmap(pm.scaled(44, 44, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-        brand.addWidget(logo, 0, Qt.AlignVCenter)
-        wordmark = QWidget()
-        col = QVBoxLayout(wordmark)
-        col.setContentsMargins(0, 0, 0, 0)
-        col.setSpacing(2)
-        a = QLabel("Forza Horizon 1")
-        a.setObjectName("brand")
-        b = QLabel("ReImagined")
-        b.setObjectName("brandSub")
-        col.addWidget(a)
-        col.addWidget(b)
-        brand.addWidget(wordmark, 1, Qt.AlignVCenter)
-        sl.addLayout(brand)
+        sl.addLayout(self._brand())
 
         self.stack = QStackedWidget()
         self.play = PlayPage(cfg, self)
@@ -149,8 +170,12 @@ class MainWindow(QMainWindow):
         self.mods = ModsPage(cfg, self)
         self.texture_packs = TexturePacksPage(cfg, self)
         self.radio = RadioPage(cfg, self)
+        from .fm4_tracks import Fm4LapsPage
+        self.fm4_laps = Fm4LapsPage(cfg, self)
         self.servers = ServersPage(cfg, self)
         self.servers.changed.connect(self._server_chosen)
+        self.settings.attach_servers(self.servers)
+        self.online = self.settings.online_page
         self._close_after_radio = False
         self.radio.idle.connect(lambda: QTimer.singleShot(0, self.close) if self._close_after_radio else None)
         self.navs = QButtonGroup(self)
@@ -158,38 +183,50 @@ class MainWindow(QMainWindow):
                        4: self.gallery, 5: self.controls, 6: self.saves,
                        CATALOG_PAGE_ID: self.catalogs, MODS_PAGE_ID: self.mods,
                        TEXTURE_PACKS_PAGE_ID: self.texture_packs, RADIO_PAGE_ID: self.radio,
-                       SERVERS_PAGE_ID: self.servers}
+                       SERVERS_PAGE_ID: self.servers, ONLINE_PAGE_ID: self.online,
+                       FM4_LAPS_PAGE_ID: self.fm4_laps}
         # In id order, so a page's stack index is its id.
         for page in self._pages.values():
             self.stack.addWidget(page)
-        for i, name in ((0, "Play"), (4, "Photo gallery"),
-                        (CATALOG_PAGE_ID, "Designs && vinyls"), (1, "Setup"),
-                        (5, "Controls"), (SERVERS_PAGE_ID, "Servers"), (2, "Settings"), (6, "Saves"), (MODS_PAGE_ID, "Mods"),
-                        (TEXTURE_PACKS_PAGE_ID, "Texture packs"), (RADIO_PAGE_ID, "Radio"), (3, "About")):
+        # Each page's own title would repeat the section header above it.
+        for page in self._pages.values():
+            for title in page.findChildren(QLabel, "pageTitle"):
+                _hide_title(title)
+        self._section_of = {}       # page id -> index in SECTIONS
+        self._last_page = {}        # section index -> the page last shown in it
+        for index, (name, pages, small) in enumerate(SECTIONS):
+            if small:
+                sl.addStretch(1)
             btn = QPushButton(name)
-            btn.setObjectName("nav")
+            btn.setObjectName("navSmall" if small else "nav")
             btn.setCheckable(True)
             btn.setCursor(Qt.PointingHandCursor)
-            self.navs.addButton(btn, i)
+            btn.setAccessibleName(name)
+            if len(pages) > 1:
+                btn.setToolTip(" · ".join(t.replace("&&", "&") for t, _ in pages))
+            self.navs.addButton(btn, pages[0][1])
             sl.addWidget(btn)
-        self.navs.idClicked.connect(self.show_page)
-        sl.addStretch(1)
-        self.version = QLabel(f"Launcher {__version__}")
-        self.version.setObjectName("version")
-        self.version.setContentsMargins(20, 0, 10, 0)
-        self.version.setWordWrap(True)
+            for _title, page_id in pages:
+                self._section_of[page_id] = index
+        self.navs.idClicked.connect(self._nav_clicked)
         self.update_notice = QPushButton("Update available")
         self.update_notice.setObjectName("link")
-        self.update_notice.setStyleSheet("margin-left: 20px; margin-right: 10px;")
+        self.update_notice.setStyleSheet("margin-left: 22px; margin-right: 10px;")
         self.update_notice.hide()
         self.update_notice.clicked.connect(lambda: self.show_page(3))
         self.about.updates.available.connect(lambda tag: self.update_notice.setVisible(bool(tag)))
         sl.addWidget(self.update_notice)
+        self.version = QLabel(f"Launcher {__version__}")
+        self.version.setObjectName("version")
+        self.version.setContentsMargins(22, 6, 10, 0)
+        self.version.setWordWrap(True)
         sl.addWidget(self.version)
         h.addWidget(side)
         body = QWidget()
         bl = QVBoxLayout(body)
-        bl.setContentsMargins(28, 24, 20, 0)
+        bl.setContentsMargins(26, 18, 16, 0)
+        bl.setSpacing(16)
+        bl.addWidget(self._section_header())
         bl.addWidget(self.stack, 1)
         self.footer = QLabel("")
         self.footer.setObjectName("muted")
@@ -214,6 +251,14 @@ class MainWindow(QMainWindow):
         ask_online = self._first_run()
         self.show_page(0)
         self.refresh_all()
+        if cfg.notices:   # one-time changes to the saved settings, e.g. the 540p scene on an entry card (#640)
+            self.play.show_message(" ".join(cfg.notices))
+        if cfg.loaded:
+            from .. import gpu
+            from .workers import Probe
+            self._vulkan_probe = Probe(gpu.vulkan_devices, "Vulkan devices", self)
+            self._vulkan_probe.result.connect(self._vulkan_result)
+            self._vulkan_probe.start()
         if sys.platform == "win32":
             QTimer.singleShot(600, self.setup.offer_move)
         update_result = self.show_update_result()
@@ -248,10 +293,108 @@ class MainWindow(QMainWindow):
         return bool(result)
 
     # ---- navigation -------------------------------------------------------------------
-    def show_page(self, i):
+    def _brand(self):
+        """The sidebar's head: the logo mark and the name, as on the website's navbar."""
+        brand = QHBoxLayout()
+        brand.setContentsMargins(18, 0, 12, 12)
+        brand.setSpacing(12)
+        logo = QLabel()
+        logo.setObjectName("brandLogo")
+        logo.setAccessibleName("Forza Horizon 1: ReImagined logo")
+        pm = QPixmap(str(paths.asset("logo-mark.png")))
+        if pm.isNull():
+            pm = QPixmap(str(paths.asset("logo.png")))
+        if not pm.isNull():
+            ratio = self.devicePixelRatioF() or 1
+            scaled = pm.scaledToHeight(int(36 * ratio), Qt.SmoothTransformation)
+            scaled.setDevicePixelRatio(ratio)
+            logo.setPixmap(scaled)
+        brand.addWidget(logo, 0, Qt.AlignVCenter)
+        wordmark = QWidget()
+        col = QVBoxLayout(wordmark)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(0)
+        a = QLabel("FORZA HORIZON 1")
+        a.setObjectName("brand")
+        b = QLabel("ReImagined")
+        b.setObjectName("brandSub")
+        col.addWidget(a)
+        col.addWidget(b)
+        brand.addWidget(wordmark, 1, Qt.AlignVCenter)
+        return brand
+
+    def _section_header(self):
+        """The section's title and, for a section of several pages, their tabs."""
+        self.header = QWidget()
+        self.header.setObjectName("sectionHeader")
+        lay = QVBoxLayout(self.header)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        self.section_title = QLabel("")
+        self.section_title.setObjectName("sectionTitle")
+        lay.addWidget(self.section_title)
+        self.subnav = QTabBar()
+        self.subnav.setObjectName("subnav")
+        self.subnav.setExpanding(False)
+        self.subnav.setDrawBase(False)
+        self.subnav.setDocumentMode(True)
+        self.subnav.setCursor(Qt.PointingHandCursor)
+        self.subnav.setAccessibleName("Pages")
+        self.subnav.currentChanged.connect(self._subnav_changed)
+        lay.addWidget(self.subnav, 0, Qt.AlignLeft)
+        self._subnav_section = None
+        return self.header
+
+    def _nav_clicked(self, nav_id):
+        """A section's button: the page of that section shown last (its first page at first)."""
+        section = self._section_of[nav_id]
+        self.show_page(self._last_page.get(section, nav_id))
+
+    def _subnav_changed(self, index):
+        if index < 0 or self._subnav_section is None:
+            return
+        page_id = self.subnav.tabData(index)
+        if page_id is not None and self.stack.currentWidget() is not self._pages[page_id]:
+            self.show_page(page_id, focus=False)
+
+    def _show_section(self, section, page_id):
+        name, pages, _small = SECTIONS[section]
+        self.header.setVisible(page_id != 0)   # Play has its banner
+        self.section_title.setText(name)
+        self.subnav.blockSignals(True)
+        # a page may hide its tab (FM4 laps until a circuit is imported)
+        pages = [(t, p) for t, p in pages
+                 if p == page_id or getattr(self._pages[p], "tab_visible", lambda: True)()]
+        if self._subnav_section != (section, tuple(pages)):
+            while self.subnav.count():
+                self.subnav.removeTab(0)
+            for title, pid in pages:
+                self.subnav.setTabData(self.subnav.addTab(title), pid)
+            self._subnav_section = (section, tuple(pages))
+        for i in range(self.subnav.count()):
+            if self.subnav.tabData(i) == page_id:
+                self.subnav.setCurrentIndex(i)
+        self.subnav.blockSignals(False)
+        self.subnav.setVisible(len(pages) > 1)
+        self._apply_radio_lock()
+
+    def nav_button(self, page_id):
+        """The sidebar button of the section a page belongs to."""
+        return self.navs.button(SECTIONS[self._section_of[page_id]][1][0][1])
+
+    def current_nav_button(self):
+        page = self.stack.currentWidget()
+        return next((self.nav_button(i) for i, p in self._pages.items() if p is page), None)
+
+    def show_page(self, i, focus=True):
+        section = self._section_of[i]
+        self._last_page[section] = i
         self.stack.setCurrentWidget(self._pages[i])
-        self.navs.button(i).setChecked(True)
-        self.navs.button(i).setFocus(Qt.OtherFocusReason)
+        self._show_section(section, i)
+        button = self.nav_button(i)
+        button.setChecked(True)
+        if focus:
+            button.setFocus(Qt.OtherFocusReason)
         if i == 0:
             self.play.refresh()
         elif i == 1:
@@ -264,21 +407,39 @@ class MainWindow(QMainWindow):
             self.saves.refresh()
         elif self._pages[i] is self.mods:
             self.mods.refresh()
+        elif self._pages[i] is self.fm4_laps:
+            self.fm4_laps.refresh()
         elif self._pages[i] is self.texture_packs:
             self.texture_packs.refresh()
         elif self._pages[i] is self.radio:
             self.radio.refresh()
         elif self._pages[i] is self.servers:
             self.servers.refresh()
+        elif self._pages[i] is self.online:
+            self.settings.sync_server()
         if self._pages[i] is not self.servers:
             self.servers.leave()
         self.status("")
 
     def _server_chosen(self):
-        """The Servers page changed the server Play uses (or its list): Settings > Online shows it,
+        """The Servers page changed the server Play uses (or its list): Online > Online shows it,
         and launcher.json and forza.toml are saved now."""
         self.settings.sync_server()
         self.settings.flush()
+
+    def _vulkan_result(self, devices):
+        if devices and self.cfg.detect_vulkan(devices):
+            try:
+                self.cfg.save()
+            except OSError:
+                pass
+        self.refresh_intel_driver_notices()
+
+    def refresh_intel_driver_notices(self):
+        """The old Intel Vulkan driver's notice on Play and Setup and next to Graphics API (#672)."""
+        self.play.intel_driver.refresh()
+        self.setup.intel_driver.refresh()
+        self.settings._refresh_gpu_warnings()
 
     def refresh_all(self):
         self.play.refresh()
@@ -288,8 +449,7 @@ class MainWindow(QMainWindow):
         self.write_toml()
 
     def show_control_settings(self):
-        from .. import schema
-        self.settings.tabs.setCurrentIndex(schema.GROUPS.index('Controls'))
+        self.settings.show_tab("Controls")
         self.show_page(2)
 
     def status(self, text, error=False):
@@ -305,8 +465,15 @@ class MainWindow(QMainWindow):
 
     def lock_radio_navigation(self, locked):
         # Keeps folder changes, installs and other publishers out of a radio build.
+        self._radio_locked = locked
         for button in self.navs.buttons():
-            button.setEnabled(not locked or self.navs.id(button) == RADIO_PAGE_ID)
+            button.setEnabled(not locked or button is self.nav_button(RADIO_PAGE_ID))
+        self._apply_radio_lock()
+
+    def _apply_radio_lock(self):
+        locked = getattr(self, "_radio_locked", False)
+        for i in range(self.subnav.count()):
+            self.subnav.setTabEnabled(i, not locked or self.subnav.tabData(i) == RADIO_PAGE_ID)
 
     def closeEvent(self, e):
         if self.about.steam is not None and self.about.steam.busy():
@@ -671,21 +838,26 @@ class MainWindow(QMainWindow):
         stopped = getattr(self.session, "stop_requested", False) is True
         self.session.cleanup()
         self.session = None
+        # a session on an imported FM4 circuit (#648) sends nothing: its shaders are FM4's
+        fm4_circuit = bool(getattr(self.session_plan, "fm4_track", ""))
         try:  # shader lists from play (#276): in the background, silent, never holds up Play
-            shader_share.share_in_background(self.cfg, self.session_plan)
+            if not fm4_circuit:
+                shader_share.share_in_background(self.cfg, self.session_plan)
         except Exception as e:
             paths.log_error("start the shader list upload", e)
         try:  # co-op campaign results (#309): the player's own festival event results to its save
-            profile = getattr(self.session_plan, "save_profile", None)
-            coop_grant.record_session(self.cfg, profile, getattr(self, "_session_started", 0),
-                                      time.time())
-            notes = self._coop_notes = []
-            self._coop_thread = coop_grant.after_session_in_background(
-                self.cfg, profile, lambda line: (print(line), notes.append(line)))
-            if self._coop_thread is not None:
-                self._coop_timer.start()
+            if not fm4_circuit:
+                profile = getattr(self.session_plan, "save_profile", None)
+                coop_grant.record_session(self.cfg, profile, getattr(self, "_session_started", 0),
+                                          time.time())
+                notes = self._coop_notes = []
+                self._coop_thread = coop_grant.after_session_in_background(
+                    self.cfg, profile, lambda line: (print(line), notes.append(line)))
+                if self._coop_thread is not None:
+                    self._coop_timer.start()
         except Exception as e:
             paths.log_error("start applying co-op results", e)
+        self.play.challenges.refresh(force=True)  # the session's results are on the server now
         self._shader_warmup_status = None
         self.play.set_shader_warmup(None)
         plan = self.session_plan
@@ -750,7 +922,9 @@ def run(argv):
     # Qt file dialogs participate in controller navigation. In Flatpak they also keep
     # the real paths needed for a Games on Demand package and its adjacent .data folder.
     app.setAttribute(_Qt.ApplicationAttribute.AA_DontUseNativeDialogs)
-    app.setStyleSheet(theme.QSS)
+    theme.load_fonts()
+    theme.apply_palette(app)
+    app.setStyleSheet(theme.stylesheet())
 
     def report(exc_type, exc, tb):
         """Any exception that reaches the top (a slot, a thread): log it and say so, never vanish."""

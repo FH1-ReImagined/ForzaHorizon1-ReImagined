@@ -10,7 +10,7 @@ from forza_launcher.config import Config
 
 
 class SceneResolutionTests(unittest.TestCase):
-    """Settings > Display > Picture > 3D scene resolution (forza-recomp/src/hooks/scene_resolution.cpp)."""
+    """Settings > Graphics > Picture > 3D scene resolution (forza-recomp/src/hooks/scene_resolution.cpp)."""
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

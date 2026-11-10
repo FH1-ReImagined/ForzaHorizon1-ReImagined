@@ -26,6 +26,10 @@
 //   buffers, stays 1280x720.
 // - The D3D device is made with the first scenario's size as its back buffer
 //   (sub_82C3F058, TU4 sub_82CFF9C8); it stays 1280x720.
+// - The sun's shadow mask (sub_824532F0, TU4 sub_824829D8) is drawn with a 1280x720 viewport
+//   and blur and quad offsets for 1280x720 written in its code; while it runs they are the scene
+//   size, or the mask came out of a 1280x720 drawing over the scene's depth and was resolved
+//   cropped (#682: the car's shadow a long streak up and to the left).
 // Not with the SDK's scene reconstruction (fh1_upscaler: FSR 3, DLSS, SMAA), its separate scene
 // AA or native ultrawide, which find the scene by its 720p targets: the scene stays 720p.
 // tu_address_map: TU4 addresses
@@ -70,6 +74,14 @@ REXCVAR_DECLARE(bool, forza_ultrawide);         // src/platform/ultrawide.cpp
 #define OriginalPostPass __imp__sub_824728D8
 #define TextureHeader sub_82AFE678
 #define OriginalTextureHeader __imp__sub_82AFE678
+#define ShadowMask sub_824829D8
+#define OriginalShadowMask __imp__sub_824829D8
+#define SetViewport sub_82440BE0
+#define OriginalSetViewport __imp__sub_82440BE0
+#define MaskVolumeQuad sub_82EA04E8
+#define OriginalMaskVolumeQuad __imp__sub_82EA04E8
+#define BlurTaps sub_82412BD8
+#define OriginalBlurTaps __imp__sub_82412BD8
 constexpr uint32_t kScenarioTable = 0x833901F8;
 constexpr uint32_t kTextureTable = 0x8330C830;
 #else
@@ -87,6 +99,14 @@ constexpr uint32_t kTextureTable = 0x8330C830;
 #define OriginalPostPass __imp__sub_824426B8
 #define TextureHeader sub_82A40F28
 #define OriginalTextureHeader __imp__sub_82A40F28
+#define ShadowMask sub_824532F0
+#define OriginalShadowMask __imp__sub_824532F0
+#define SetViewport sub_82410C30
+#define OriginalSetViewport __imp__sub_82410C30
+#define MaskVolumeQuad sub_82DDDEE0
+#define OriginalMaskVolumeQuad __imp__sub_82DDDEE0
+#define BlurTaps sub_823E2C48
+#define OriginalBlurTaps __imp__sub_823E2C48
 constexpr uint32_t kScenarioTable = 0x832A4860;
 constexpr uint32_t kTextureTable = 0x832295B0;
 #endif
@@ -97,6 +117,10 @@ extern "C" REX_FUNC(OriginalScenarioSurface);
 extern "C" REX_FUNC(OriginalScreenTextures);
 extern "C" REX_FUNC(OriginalPostPass);
 extern "C" REX_FUNC(OriginalTextureHeader);
+extern "C" REX_FUNC(OriginalShadowMask);
+extern "C" REX_FUNC(OriginalSetViewport);
+extern "C" REX_FUNC(OriginalMaskVolumeQuad);
+extern "C" REX_FUNC(OriginalBlurTaps);
 
 namespace forza {
 namespace {
@@ -111,6 +135,8 @@ bool g_scaled[scene_resolution::kTextureCount] = {};
 scene_resolution::Size g_native[scene_resolution::kTextureCount] = {};
 std::atomic<uint32_t> g_textures{0};
 thread_local bool g_making_textures = false;
+// Set on the render thread while the sun's shadow mask is drawn (ShadowMask).
+thread_local bool g_drawing_shadow_mask = false;
 
 uint32_t Load32(const uint8_t* p) {
   return uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | p[3];
@@ -363,4 +389,66 @@ extern "C" REX_FUNC(CreateDevice) {
   OriginalCreateDevice(ctx, base);
   forza::Store32(params, pw);
   forza::Store32(params + 4, ph);
+}
+
+// Draws the sun's shadow mask over the depth pre-pass (sub_824532F0: the cascades' passes, the
+// blur and the resolve into the ShadowMask texture, docs/graphics-detail.md "Shadow softness").
+// Its viewport and its blur's and volume quad's texel offsets are for 1280x720, written in the
+// code: they follow the scene while it runs (the hooks below).
+extern "C" REX_FUNC(ShadowMask) {
+  if (!forza::g_width.load(std::memory_order_relaxed) || forza::g_drawing_shadow_mask) {
+    OriginalShadowMask(ctx, base);
+    return;
+  }
+  forza::g_drawing_shadow_mask = true;
+  OriginalShadowMask(ctx, base);
+  forza::g_drawing_shadow_mask = false;
+}
+
+// D3DDevice_SetViewport (r4: x, y, width, height, min z, max z). The shadow mask's 1280x720
+// viewport is the scene's while the mask is drawn.
+extern "C" REX_FUNC(SetViewport) {
+  uint8_t* vp = ctx.r4.u32 ? forza::GuestPtr(base, ctx.r4.u32) : nullptr;
+  if (!forza::g_drawing_shadow_mask || !vp) {
+    OriginalSetViewport(ctx, base);
+    return;
+  }
+  sr::Viewport v{forza::Load32(vp), forza::Load32(vp + 4), forza::Load32(vp + 8),
+                 forza::Load32(vp + 12)};
+  const sr::Viewport original = v;
+  if (!sr::ScaleMaskViewport(v, {forza::g_width.load(std::memory_order_relaxed),
+                                 forza::g_height.load(std::memory_order_relaxed)})) {
+    OriginalSetViewport(ctx, base);
+    return;
+  }
+  forza::Store32(vp + 8, v.width);
+  forza::Store32(vp + 12, v.height);
+  OriginalSetViewport(ctx, base);
+  forza::Store32(vp + 8, original.width);
+  forza::Store32(vp + 12, original.height);
+}
+
+// The shadow mask's helpers given the screen size in r4 x r5: the cascades' volume quad with its
+// half-texel offsets (sub_82DDDEE0, TU4 sub_82EA04E8) and the blur's tap offsets (sub_823E2C48,
+// TU4 sub_82412BD8). 1280x720 is the scene size while the mask is drawn.
+namespace {
+void ScaleMaskScreenSize(PPCContext& ctx) {
+  if (!forza::g_drawing_shadow_mask) return;
+  sr::Size s{ctx.r4.u32, ctx.r5.u32};
+  if (sr::ScaleMaskScreenSize(s, {forza::g_width.load(std::memory_order_relaxed),
+                                  forza::g_height.load(std::memory_order_relaxed)})) {
+    ctx.r4.u64 = s.width;
+    ctx.r5.u64 = s.height;
+  }
+}
+}  // namespace
+
+extern "C" REX_FUNC(MaskVolumeQuad) {
+  ScaleMaskScreenSize(ctx);
+  OriginalMaskVolumeQuad(ctx, base);
+}
+
+extern "C" REX_FUNC(BlurTaps) {
+  ScaleMaskScreenSize(ctx);
+  OriginalBlurTaps(ctx, base);
 }

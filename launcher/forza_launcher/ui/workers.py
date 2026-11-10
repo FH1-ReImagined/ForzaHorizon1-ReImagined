@@ -95,6 +95,11 @@ def extract_task(package, dest):
         def prog(done, total, name):
             t.progress.emit(done / total if total else 0, name)
         t.report_status("Extracting the game files")
+        folder = Path(dest).parent      # the data folder: fail at once when it cannot be written (#717)
+        err = datafolder.probe_writable(folder)
+        if err:
+            t.blocked = True
+            raise installer.InstallError(datafolder.cannot_write_message(folder, err))
         notes = []
         total = installer.extract_game(package, Path(dest), prog, t.cancelled, notes.append)
         return f"Extracted {total / 2**30:.1f} GB. " + " ".join(notes)
@@ -161,7 +166,7 @@ def move_task(old, new, with_user, with_game):
         except InterruptedError:
             raise installer.Cancelled()
         except OSError as e:
-            if datafolder.is_access_denied_error(e):
+            if datafolder.is_write_blocked_error(e):
                 t.blocked = True
                 raise installer.InstallError(datafolder.blocked_message(new, str(e))) from e
             raise

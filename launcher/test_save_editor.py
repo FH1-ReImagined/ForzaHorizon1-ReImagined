@@ -82,12 +82,22 @@ class EditorTests(unittest.TestCase):
         cfg['game_root'] = str(self.profile.home/'game')
         cfg.game_files().mkdir()
         (cfg.game_files()/'default.xex').write_bytes(b'fake')
-        table = bytes(range(64))
+        window = bytes(range(200, 232)) + bytes(range(64))  # TABLE_LEAD bytes, then the table
         owner = bytes.fromhex('B13EBABEBABEBABE')
-        with patch.object(editor, '_tables', return_value=(table,)):
-            aes, mac = editor._keys(cfg)[0]
+        with patch.object(editor, '_tables', return_value=(window,)):
+            (aes, mac), (base_aes, base_mac) = editor._keys(cfg)
         self.assertEqual(aes, bytes(((i ^ owner[(i-2)%8])+2*i)%256 for i in range(16)))
         self.assertEqual(mac, bytes((((i+32) ^ owner[(i-4)%8])+2*i)%256 for i in range(32)))
+        # a profile the base game wrote (before TU4 converts it): the same AES key, the HMAC
+        # key from the 32 bytes before the table
+        self.assertEqual(base_aes, aes)
+        self.assertEqual(base_mac, bytes((((200+i) ^ owner[(i-4)%8])+2*i)%256 for i in range(32)))
+        # the garage's keys come from the same table, both builds alike
+        from forza_launcher import garage
+        with patch.object(editor, '_tables', return_value=(window,)):
+            ((garage_aes, garage_mac),) = garage._keys(cfg)
+        self.assertEqual(garage_aes, bytes((((48+i) ^ owner[(i-5)%8])+2*i)%256 for i in range(16)))
+        self.assertEqual(garage_mac, bytes((((16+i) ^ owner[(i-1)%8])+2*i)%256 for i in range(32)))
 
     def test_edit_changes_only_allowed_body_bytes_and_preserves_capacity(self):
         changed = editor.encode(self.doc, {'Main/Credits': 1_000_000, 'Main/XP': 450_000})

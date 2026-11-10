@@ -24,7 +24,8 @@
 // the frame statistics (RECOMP_PERF, src/debug/frame_stats.cpp); "PROF:START" and
 // "PROF:STOP" run the CPU sampler (src/debug/cpu_profile.cpp); "SAY:<text>" says <text> in
 // World chat and "SAYC:<text>" in Club chat (live_friends.cpp; the Co-op Festival's /event and
-// the /club commands in scripted tests).
+// the /club commands in scripted tests); "CVAR:<name>=<value>" sets a setting at once (a test
+// switching readback_resolve_wait_range in one session, #665).
 
 #include "input_caps.h"
 #include "live.h"
@@ -40,6 +41,7 @@
 #include "../debug/cpu_profile.h"
 #include "../debug/frame_stats.h"
 
+#include <rex/cvar.h>
 #include <rex/logging.h>
 #include <rex/ppc/context.h>
 #include <rex/ppc/func.h>
@@ -183,6 +185,13 @@ void ReadFifo(std::string path, std::vector<Press>* schedule,
       } else {
         forza::cpuprof::Stop();
       }
+      line.clear();
+      continue;
+    }
+    if (line.rfind("CVAR:", 0) == 0 && line.find('=') != std::string::npos) {  // a setting, now
+      const size_t eq = line.find('=');
+      const bool ok = rex::cvar::SetFlagByName(line.substr(5, eq - 5), line.substr(eq + 1));
+      REXLOG_INFO("FORZA_AUTOPRESS_FIFO: t={:.2f}s {} ({})", now, line, ok ? "set" : "unknown");
       line.clear();
       continue;
     }
@@ -406,6 +415,10 @@ bool RoutedUser(uint32_t user_index, uint32_t flags, uint32_t& user) {
 }  // namespace
 
 // DWORD XamInputGetState(DWORD user_index, DWORD flags, X_INPUT_STATE* state)
+namespace forza::autopilot {
+bool Drive(uint8_t* base, int16_t& steer, uint8_t& brake, uint8_t& throttle);
+}
+
 extern "C" REX_FUNC(__imp__XamInputGetState) {
   static GuestFunc sdk = Sdk("__imp__XamInputGetState");
   InitScripting();
@@ -442,6 +455,15 @@ extern "C" REX_FUNC(__imp__XamInputGetState) {
                    state.triggers[0], state.triggers[1], state.sticks[0], state.sticks[1],
                    state.sticks[2], state.sticks[3]);
       std::fflush(record_file);
+    }
+  }
+  if (user == 0 && connected) {  // the dev autopilot (src/debug/autopilot.cpp)
+    int16_t steer;
+    uint8_t lt, rt;
+    if (forza::autopilot::Drive(base, steer, lt, rt)) {
+      state.sticks[0] = steer;
+      state.triggers[0] = lt;
+      state.triggers[1] = rt;
     }
   }
   if (user == 0 && forza::benchmark::WantsPad()) connected = true;

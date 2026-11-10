@@ -29,6 +29,7 @@
 #include "../platform/online_photo.h"
 #include "../platform/guest_addr.h"
 #include "../platform/guest_memory.h"
+#include "../platform/readback_wait.h"
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
@@ -39,7 +40,6 @@
 #include <chrono>
 #include <cstdint>
 #include <mutex>
-#include <string>
 
 REXCVAR_DEFINE_BOOL(forza_online_photo, false, "Interface",
                     "Photo mode in online free roam and lobbies: one frame, the session keeps running");
@@ -89,8 +89,7 @@ constexpr uint64_t kAllPhysical = 0x20000000;  // start 0, length 512 MB
 
 void Readback(bool on) {  // shutter_mutex held
   if (on == readback_set) return;
-  if (!rex::cvar::SetFlagByName("readback_resolve_wait_range",
-                                on ? std::to_string(kAllPhysical) : std::string("0"))) {
+  if (!readback_wait::Request(readback_wait::Owner::kOnlinePhoto, on ? kAllPhysical : 0)) {
     if (on) REXLOG_WARN("Online photo: the SDK has no readback_resolve_wait_range; a saved photo may be black");
     return;
   }
@@ -125,6 +124,18 @@ bool WantsPauseRow(const PPCContext& ctx, uint8_t* base, uint32_t screen) {
 }
 
 bool Active() { return active.load(); }
+
+// Photo mode's camera screen, every frame (src/hooks/photo_focus.cpp hooks it): back in the
+// camera after the shutter (state 0), the world's camera updates go through again.
+void OnCameraScreen(uint32_t state) {
+  if (!Active() || state != 0) return;
+  std::lock_guard lock(shutter_mutex);
+  if (!shutter.Held()) return;
+  shutter.Reset();
+  Readback(false);
+  REXLOG_INFO("Online photo: back in the camera after {:.1f} s",
+              std::chrono::duration<double>(std::chrono::steady_clock::now() - shutter_time).count());
+}
 
 }  // namespace forza::online_photo
 
@@ -176,24 +187,4 @@ extern "C" REX_FUNC(sub_827E4130) {
   __imp__sub_827E4130(ctx, base);
 }
 
-// Photo mode's camera screen, every frame. Its state (+0x748) is 3 from the shutter while the
-// photo is shown (PREPARING PHOTO, SAVE, the upload question) and 0 back in the camera.
-extern "C" REX_FUNC(__imp__sub_827DBE70);
-extern "C" REX_FUNC(sub_827DBE70) {
-  using namespace forza::online_photo;
-  if (Active() && ctx.r3.u32) {
-    const auto* p = forza::GuestPtr(base, ctx.r3.u32 + 0x748);
-    const uint32_t state = uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | p[3];
-    if (state == 0) {
-      std::lock_guard lock(shutter_mutex);
-      if (shutter.Held()) {
-        shutter.Reset();
-        Readback(false);
-        REXLOG_INFO("Online photo: back in the camera after {:.1f} s",
-                    std::chrono::duration<double>(std::chrono::steady_clock::now() - shutter_time).count());
-      }
-    }
-  }
-  __imp__sub_827DBE70(ctx, base);
-}
 #endif
