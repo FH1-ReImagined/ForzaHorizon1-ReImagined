@@ -1006,10 +1006,9 @@ Steam Deck, or "Other / not sure". The launcher detects the card once (first sta
   Ultrawide gameplay keep 720p. With high-end graphics (not a Steam Deck) a new launcher also starts above the
   console's World detail (`specs.HIGH_WORLD_DETAIL`): Shadow detail Ultra, Distant texture detail High (Ultra can
   shimmer on fine patterns), Car detail Ultra, Shadow softness Soft, Ambient occlusion Low (Vulkan only: not with
-  Direct3D 12 or ReGPU), Paint job detail 2x and Anisotropic filtering 16x. Measured on an RX 9060 XT
+  Direct3D 12 or ReGPU) and Anisotropic filtering 16x. Paint job detail stays Console: at 2x the game's own memory heap ran out after the Race Central cutscene (#779). Measured on an RX 9060 XT
   (docs/graphics-detail.md): shadow, texture and car detail within the noise, Soft nothing measurable, ambient
-  occlusion about 0.5 ms a frame at 2560x1440 (nothing under a 60 fps cap), paint job 2x about 50 MB per car with a
-  paint job. A value the vendor's known problems reject is left out, as for the rest. Settings that are heavy for the PC get an orange line with the numbers (render scale 2 renders 2560x1440
+  occlusion about 0.5 ms a frame at 2560x1440 (nothing under a 60 fps cap). A value the vendor's known problems reject is left out, as for the rest. Settings that are heavy for the PC get an orange line with the numbers (render scale 2 renders 2560x1440
   ...). A launcher with existing settings is never changed silently: a banner on the Settings page offers "Use
   recommended" (only the settings that warn) or "Keep mine", and comes back only when the hardware changes.
   On high-end graphics the same banner offers the World detail above once ("This PC can run higher world detail:
