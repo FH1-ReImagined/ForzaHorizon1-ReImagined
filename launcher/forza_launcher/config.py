@@ -64,7 +64,8 @@ def _default():
         "web_account": {"linked": False},
         # One-time fixes of values an older launcher saved: done once, so a later choice sticks.
         "migrated": {"discord_application_id": False, "gpu_wait_blocking": False,
-                     "nvidia_pipeline_cache": False, "scene_540": False},
+                     "nvidia_pipeline_cache": False, "scene_540": False,
+                     "paint_job_2x": False},
     }
 
 
@@ -108,7 +109,7 @@ class Config:
         except (OSError, ValueError):
             # A new launcher.json starts with today's defaults: nothing to migrate later.
             self.d["migrated"].update(discord_application_id=True, gpu_wait_blocking=True,
-                                      nvidia_pipeline_cache=True, scene_540=True)
+                                      nvidia_pipeline_cache=True, scene_540=True, paint_job_2x=True)
             return
         if isinstance(data, dict):
             _merge(self.d, data)
@@ -158,6 +159,7 @@ class Config:
         if isinstance(saved_tag, str) and saved_tag.strip() != self.d["settings"]["gamertag"]:
             self.gamertag_cleaned = (saved_tag, self.d["settings"]["gamertag"])
         self._migrate_scene_540()
+        self._migrate_paint_job_2x()
         online = self.d["online"]
         if online.get("mode") == "custom" and online.get("custom_server", "").strip() in OLD_PUBLIC_SERVERS:
             online["mode"], online["custom_server"] = "public", ""
@@ -268,6 +270,20 @@ class Config:
                 and specs.scene_540_applies(self.settings)):
             self.settings["scene_resolution"] = "540"
             self.notices.append(specs.scene_540_notice(s))
+
+    def _migrate_paint_job_2x(self):
+        """0.3.2 started high-end PCs at Paint job detail 2x, and at 2x the game's own memory heap ran out after
+        the Race Central cutscene and the game crashed (#779). Done once, with a notice: Paint job detail goes
+        back to Console, and a player who sets 2x again keeps it."""
+        migrated = self.d["migrated"]
+        if migrated.get("paint_job_2x"):
+            return
+        migrated["paint_job_2x"] = True
+        if str(self.settings.get("livery_bake_scale")) == "2":
+            self.settings["livery_bake_scale"] = 1
+            self.notices.append("Paint job detail is back to Console: at 2x the game could run out of memory and "
+                                "crash after the Race Central cutscene. To use 2x again: Settings > Graphics > "
+                                "World detail > Paint job detail.")
 
     def effective_settings(self, log=None) -> dict:
         """The settings as the game will get them: "Match display" (frame_rate 0) as a number (#215)."""

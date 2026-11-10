@@ -205,7 +205,7 @@ class Recommendations(unittest.TestCase):
                 self.assertEqual(r[key], value, (vendor, key))
         self.assertEqual(specs.HIGH_WORLD_DETAIL, {
             "world_shadow_detail": "ultra", "world_texture_detail": "high", "world_car_detail": "ultra",
-            "world_shadow_filter": "soft", "world_ambient_occlusion": "low", "livery_bake_scale": 2,
+            "world_shadow_filter": "soft", "world_ambient_occlusion": "low",
             "anisotropic_override": 5})
         for key, value in specs.HIGH_WORLD_DETAIL.items():       # every value is one of the setting's choices
             self.assertIn(value, [v for v, _ in schema.BY_KEY[key].choices], key)
@@ -250,10 +250,10 @@ class Recommendations(unittest.TestCase):
         self.assertNotIn("world_shadow_detail", offer)
         self.assertNotIn("anisotropic_override", offer)              # 8x: theirs
         self.assertEqual(offer["world_ambient_occlusion"], "low")    # Off is the default
-        self.assertEqual(offer["livery_bake_scale"], 2)
+        self.assertNotIn("livery_bake_scale", offer)                # 2x crashed at Race Central (#779)
         text = specs.world_detail_text(RX9060XT, offer)
         self.assertTrue(text.startswith("This PC can run higher world detail: use it? Distant texture detail High, "))
-        self.assertIn("Paint job detail 2x", text)
+        self.assertNotIn("Paint job detail", text)
         self.assertNotIn("Shadow detail", text)
 
     def test_no_fsr3_or_smaa_default_on_a_low_card(self):
@@ -398,7 +398,7 @@ class Flow(unittest.TestCase):
                     changed = c.use_recommended()
                     self.assertEqual(sorted(changed), sorted(set(specs.HIGH_WORLD_DETAIL) - {"world_car_detail"}))
                     self.assertEqual(c.settings["world_car_detail"], "high")
-                    self.assertEqual((c.settings["world_shadow_detail"], c.settings["livery_bake_scale"]), ("ultra", 2))
+                    self.assertEqual((c.settings["world_shadow_detail"], c.settings.get("livery_bake_scale", 1)), ("ultra", 1))
                 else:
                     c.dismiss_specs_banner()
                     self.assertEqual(c.settings["world_shadow_detail"], "console")
@@ -461,6 +461,28 @@ class Flow(unittest.TestCase):
             with tempfile.TemporaryDirectory() as t:
                 c = self.cfg(t, {**old, "specs": {"checked": True, "fingerprint": "x", "values": card.__dict__}})
                 self.assertEqual((c.settings["scene_resolution"], c.notices), ("720", []), card.gpu_name)
+
+    def test_paint_job_2x_goes_back_to_console_once(self):
+        old = {"gpu": {"vendor": "amd", "checked": True},
+               "specs": {"checked": True, "fingerprint": "x", "values": RX9060XT.__dict__},
+               "settings": {"livery_bake_scale": 2, "world_shadow_detail": "ultra"},
+               "migrated": {"discord_application_id": True, "scene_540": True}}   # a launcher.json of 0.3.2
+        with tempfile.TemporaryDirectory() as t:
+            c = self.cfg(t, old)
+            self.assertEqual(c.settings["livery_bake_scale"], 1)                   # 2x crashed at Race Central (#779)
+            self.assertEqual(c.settings["world_shadow_detail"], "ultra")
+            self.assertEqual(len(c.notices), 1)
+            self.assertIn("Settings > Graphics > World detail > Paint job detail", c.notices[0])
+            c.settings["livery_bake_scale"] = 2                                    # the player sets 2x again: it stays
+            c.save()
+            c = Config(c.path)
+            self.assertEqual((c.settings["livery_bake_scale"], c.notices), (2, []))
+        with tempfile.TemporaryDirectory() as t:                                    # already Console: no notice
+            c = self.cfg(t, {**old, "settings": {"livery_bake_scale": 1}})
+            self.assertEqual((c.settings["livery_bake_scale"], c.notices), (1, []))
+            self.assertTrue(c.d["migrated"]["paint_job_2x"])
+        with tempfile.TemporaryDirectory() as t:                                    # a new launcher: nothing to do
+            self.assertTrue(self.cfg(t).d["migrated"]["paint_job_2x"])
 
     def test_540p_migration_waits_for_the_specs(self):
         with tempfile.TemporaryDirectory() as t:

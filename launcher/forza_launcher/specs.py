@@ -680,9 +680,10 @@ def warnings(s: Specs, settings: dict) -> list:
 # occlusion about 0.5 ms a frame at 2560x1440 (nothing under a 60 fps cap), paint job 2x about 50 MB of memory per
 # car with a paint job. Distant texture detail stays at High: Ultra can shimmer on fine patterns. 16x anisotropic
 # filtering suits the sharper distant textures (the in-game High preset's filtering too).
+# Not Paint job detail 2x: at Race Central (the Green Wristband cutscene) it ran one of the game's own memory
+# heaps out of room and crashed (#779), so it stays a choice the player makes.
 HIGH_WORLD_DETAIL = {"world_shadow_detail": "ultra", "world_texture_detail": "high", "world_car_detail": "ultra",
-                     "world_shadow_filter": "soft", "world_ambient_occlusion": "low", "livery_bake_scale": 2,
-                     "anisotropic_override": 5}
+                     "world_shadow_filter": "soft", "world_ambient_occlusion": "low", "anisotropic_override": 5}
 
 
 def high_world_detail(s: Specs, settings: dict, vendor: str = "") -> dict:
