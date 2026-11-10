@@ -305,9 +305,8 @@ class GarageTests(unittest.TestCase):
         with garage._open(database(owned=(320,326,330,1082,1197,1233,1488,309))) as db:
             db.execute("UPDATE Career_Garage SET DefaultManufacturerColorIndex=0, LiveryFileName='', "
                        "OriginalOwner='ReImagined', NumOwners=1, Flags=73, PartsValue=987, Tuning_firstGear=3")
-            # These are deliberately not repairable: valid paint (2), another owner (4),
-            # second-hand car (6) and a non-unicorn (8).
-            # Upgraded/driven cars with native flags (5) and in-game livery attempts (3) ARE repaired.
+            # The repair skips valid paint (2), a custom livery (3), another owner (4),
+            # a second-hand car (6) and a non-unicorn (8). Native flags (5) still qualify.
             db.execute('UPDATE Career_Garage SET DefaultManufacturerColorIndex=2 WHERE Id=2')
             db.execute("UPDATE Career_Garage SET LiveryFileName='Liveries/custom.liv' WHERE Id=3")
             db.execute("UPDATE Career_Garage SET OriginalOwner='Someone else' WHERE Id=4")
@@ -327,16 +326,15 @@ class GarageTests(unittest.TestCase):
         with garage._open(garage.decode(self.profile, original, (KEYS,)).database) as db:
             before = [dict(row) for row in db.execute('SELECT * FROM Career_Garage ORDER BY Id')]
         result = garage.repair_factory_paint(self.cfg, self.profile)
-        self.assertEqual(result.repaired, (1, 3, 5, 7))
+        self.assertEqual(result.repaired, (1, 5, 7))
         self.assertEqual((result.backup.path/'save/ForzaProfile/PlayerDatabase').read_bytes(), original)
         with garage._open(garage.decode(self.profile, self.path.read_bytes(), (KEYS,)).database) as db:
             after = [dict(row) for row in db.execute('SELECT * FROM Career_Garage ORDER BY Id')]
             self.assertEqual(db.execute('SELECT LastUsedGarageId FROM LastUsedGarageId').fetchone()[0], 50)
             self.assertEqual(db.execute('SELECT value FROM OtherProgress').fetchone()[0], 'preserved')
         for row in before:
-            if row['Id'] in (1, 3, 5, 7):
+            if row['Id'] in (1, 5, 7):
                 row['DefaultManufacturerColorIndex'] = 1
-                row['LiveryFileName'] = ''
         self.assertEqual(after, before)
         self.assertEqual(self.companion.read_bytes(), b'unchanged profile and active-car choice')
         updated = self.path.read_bytes()
