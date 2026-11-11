@@ -688,3 +688,11 @@ frame before and none after (the SList push took it 5 times in the whole run).
 The 8-core rows leave out a first pair taken while another job loaded the machine (153.9 against 146.5 fps). On a
 30 fps session (boot, three minutes of free roam, the GoPro Millennia Masters race) the log had only the two error
 lines every run has (`ResolvePath(\Device)`, `XMsgStartIORequestEx`) and no `FORZA_STALL`. Not checked: Windows, the Steam Deck, four cores.
+
+## ReIGlue 0480: a test hook for the transfers of drivers without stencil export (#640)
+
+`FORZA_TEST_NO_STENCIL_EXPORT=1` (an environment variable, for testing) leaves `VK_EXT_shader_stencil_export` off. NVIDIA's
+driver lacks the extension, so its render target transfers to depth copy the stencil in one draw per bit (0461 skips the
+bits the source does not have); with the hook AMD's and Intel's drivers take that path too, so a change to it can be
+checked, and its pictures compared, on Linux. Unset, nothing changes. What it was used for is in
+[perf.md](perf.md#the-gtx-1650-tis-gpu-frame-after-770-and-two-transfer-cuts-that-do-not-pay-640-2026-11-11).
