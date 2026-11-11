@@ -65,11 +65,12 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # requests kept within a submission, texture descriptor sets of the frame used again (#192, #179),
 # and 0460-0462: GPU time per kind of work (fh1_gpu_profile), render target transfers without
 # stencil export drawing only the stencil bits set in their source, NVIDIA's direct texture upload
-# at render scale 1 (#640).
+# at render scale 1 (#640),
+# and 0470-0471: guest atomic sections (lwarx/stwcx.) and mfmsr without the global lock (#506).
 # A reviewed full commit can be pinned before a maintainer publishes a tag.
 # When a tag is supplied, its target must still match this immutable commit.
 REIGLUE_TAG=
-REIGLUE_COMMIT=5408d204c111ff9ccf1f5e3da37292b170f2645e  # ReIGlue main: 0420, 0442-0445 (ReIGlue #43) and 0460-0462 (#640, ReIGlue #45)
+REIGLUE_COMMIT=eb0abc84f30a8b2f3e567d9135d7e98ba88a7089  # ReIGlue main 5408d20 + 0470-0471 (#506, branch perf/atomics-cas)
 REIGLUE_URL="${REIGLUE_URL:-https://github.com/FH1-ReImagined/ReIGlue}"
 NIGHTLY="${REXSDK_NIGHTLY:-$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64}"
 SRC="${REXSDK_SRC:-$HOME/rexglue-sdk-src-forza/sdk}"
