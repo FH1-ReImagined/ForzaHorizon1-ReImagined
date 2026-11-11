@@ -59,7 +59,8 @@ jobs:
           python-version: "3.12"
       - if: runner.os == 'Linux'
         name: Qt runtime libraries
-        run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libfontconfig1 libfreetype6 libxkbcommon0 libdbus-1-3
+        # ci_apt.sh: APT with retries, and archive.ubuntu.com when the runner's Azure mirror does not resolve
+        run: launcher/packaging/ci_apt.sh update && launcher/packaging/ci_apt.sh install -y libegl1 libgl1 libfontconfig1 libfreetype6 libxkbcommon0 libdbus-1-3
       - name: Install launcher dependencies
         run: python -m pip install -r launcher/requirements.txt
       - name: Verify Qt runtime is available
@@ -199,6 +200,16 @@ jobs:
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src tools/test_live_signing.cpp -o "$RUNNER_TEMP/live-signing-test"
           "$RUNNER_TEMP/live-signing-test"
       - if: runner.os == 'Linux'
+        name: Signing in to the Forza Live server
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/live_signin_test.cpp -o "$RUNNER_TEMP/live-signin-test"
+          "$RUNNER_TEMP/live-signin-test"
+      - if: runner.os == 'Linux'
+        name: Checked identity file write
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/identity_file_test.cpp -o "$RUNNER_TEMP/identity-file-test"
+          "$RUNNER_TEMP/identity-file-test"
+      - if: runner.os == 'Linux'
         name: Effective startup performance settings
         run: |
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/performance_settings_test.cpp -o "$RUNNER_TEMP/performance-settings-test"
@@ -295,8 +306,13 @@ jobs:
   # The patched SDK pieces for Linux: the plugin, runtime and codegen tool built from ReIGlue,
   # the project's fork of the SDK, at the revision tools/build_rexglue_sdk.sh pins. Cached on that script.
   sdk-linux:
-    # 22.04: the oldest runner image, so the overlay needs glibc 2.35 only
-    runs-on: ubuntu-22.04
+    # Pushes and tags build on 22.04, the oldest runner image, so the overlay (which launcher-linux
+    # and the Flatpak ship) needs glibc 2.35 only. Pull requests only test it, on 24.04, whose
+    # archive has g++-14: PR checks don't depend on Launchpad's toolchain PPA. On 22.04 the C++23
+    # library is GCC 14 built from GNU's sources (ci-toolchain-gcc.yml) in ~/gcc-14, which every
+    # clang of the job uses (ci_linux_sdk_setup.sh writes clang.cfg next to it and puts the variables
+    # in GITHUB_ENV); without it, the PPA's g++-14 packages from the project's GitHub copy, then the PPA.
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'ubuntu-22.04' }}
     steps:
       - uses: actions/checkout@v4
       - name: Test scoped event radio wrappers (disc and TU4)
@@ -306,12 +322,12 @@ jobs:
           ctest --test-dir "$RUNNER_TEMP/radio-events" -C Release --output-on-failure
 
       - name: Test Linux dependency retry handling
-        run: python3 -m unittest launcher/test_ci_linux_sdk_setup.py
+        run: python3 -m unittest launcher/test_ci_linux_sdk_setup.py launcher/test_ci_toolchain_mirror.py
       - id: cache
         uses: actions/cache@v4
         with:
           path: rexglue-overlay-linux-amd64.tar.gz
-          key: sdk-overlay-linux-${{ hashFiles('tools/tests/auto-pause/**','forza-recomp/tests/auto_pause*','forza-recomp/src/platform/auto_pause*','forza-recomp/src/hooks/telemetry.cpp','forza-recomp/src/platform/camera_fov.h','forza-recomp/src/platform/driving_gate.h','forza-recomp/src/platform/guest_*.h','forza-recomp/src/platform/sdk_import.*','forza-recomp/src/platform/xr.h','forza-recomp/src/tu4_addresses.h','tools/test_presenter_reconnect.cpp', 'tools/build_rexglue_sdk.sh', 'tools/test_readback_history.cpp', 'tools/test_frame_cost.cpp', 'tools/test_world_ao.cpp', 'tools/test_vr_stereo.cpp', 'tools/test_texture_pack_dds.cpp', 'tools/test_shader_load_memo.cpp', 'tools/test_descriptor_memo.cpp', 'tools/test_pipeline_lookahead.cpp', 'forza-recomp/tests/wheel_ff_log_test.cpp', 'forza-recomp/tests/wheel_ff_reject_test.cpp', 'forza-recomp/tests/wheel_thrustmaster_test.cpp', 'forza-recomp/tests/wheel_rumble_test.cpp', 'forza-recomp/tests/wheel_rumble_pace_test.cpp', 'forza-recomp/tests/wheel_ff_test.cpp', 'forza-recomp/tests/wheel_devices_test.cpp', 'forza-recomp/tests/wheel_buttons_test.cpp', 'forza-recomp/tests/wheel_shifter_test.cpp', 'forza-recomp/tests/wheel_min_force_test.cpp', 'forza-recomp/tests/wheel_gear_request_test.cpp', 'forza-recomp/tests/wheel_handbrake_test.cpp', 'forza-recomp/tests/wheel_primary_test.cpp', 'tools/test_wait_wakeups.cpp', 'tools/test_driver_pipeline_cache.cpp', 'tools/test_pipeline_store.cpp', 'tools/test_fh1_screen_raster.cpp', 'tools/test_render_target_trim.cpp', 'tools/test_vulkan_memory_placement.cpp', 'tools/test_submission_watch.cpp', 'tools/test_device_lost_trail.cpp', 'tools/test_gamepad_remap.cpp', 'tools/test_pipeline_prebuild.cpp', 'tools/test_vfs_host_errors.cpp', 'tools/test_xma_invalid_input.cpp', 'launcher/packaging/ci_linux_sdk_setup.sh', 'launcher/packaging/ci_toolchain_debs.txt', 'launcher/forza_launcher/pins.py') }}
+          key: sdk-overlay-linux-${{ github.event_name == 'pull_request' && 'noble' || 'jammy' }}-${{ hashFiles('tools/tests/auto-pause/**','forza-recomp/tests/auto_pause*','forza-recomp/src/platform/auto_pause*','forza-recomp/src/hooks/telemetry.cpp','forza-recomp/src/platform/camera_fov.h','forza-recomp/src/platform/driving_gate.h','forza-recomp/src/platform/guest_*.h','forza-recomp/src/platform/sdk_import.*','forza-recomp/src/platform/xr.h','forza-recomp/src/tu4_addresses.h','tools/test_presenter_reconnect.cpp', 'tools/build_rexglue_sdk.sh', 'tools/test_readback_history.cpp', 'tools/test_frame_cost.cpp', 'tools/test_world_ao.cpp', 'tools/test_vr_stereo.cpp', 'tools/test_texture_pack_dds.cpp', 'tools/test_shader_load_memo.cpp', 'tools/test_descriptor_memo.cpp', 'tools/test_pipeline_lookahead.cpp', 'forza-recomp/tests/wheel_ff_log_test.cpp', 'forza-recomp/tests/wheel_ff_reject_test.cpp', 'forza-recomp/tests/wheel_thrustmaster_test.cpp', 'forza-recomp/tests/wheel_rumble_test.cpp', 'forza-recomp/tests/wheel_rumble_pace_test.cpp', 'forza-recomp/tests/wheel_ff_test.cpp', 'forza-recomp/tests/wheel_devices_test.cpp', 'forza-recomp/tests/wheel_buttons_test.cpp', 'forza-recomp/tests/wheel_shifter_test.cpp', 'forza-recomp/tests/wheel_min_force_test.cpp', 'forza-recomp/tests/wheel_gear_request_test.cpp', 'forza-recomp/tests/wheel_handbrake_test.cpp', 'forza-recomp/tests/wheel_primary_test.cpp', 'tools/test_wait_wakeups.cpp', 'tools/test_driver_pipeline_cache.cpp', 'tools/test_pipeline_store.cpp', 'tools/test_fh1_screen_raster.cpp', 'tools/test_render_target_trim.cpp', 'tools/test_vulkan_memory_placement.cpp', 'tools/test_submission_watch.cpp', 'tools/test_device_lost_trail.cpp', 'tools/test_gamepad_remap.cpp', 'tools/test_pipeline_prebuild.cpp', 'tools/test_vfs_host_errors.cpp', 'tools/test_xma_invalid_input.cpp', 'launcher/packaging/ci_linux_sdk_setup.sh', 'launcher/packaging/ci_toolchain_debs.txt', 'launcher/packaging/ci_toolchain_sha256sums.txt', 'launcher/forza_launcher/pins.py') }}
       - if: steps.cache.outputs.cache-hit != 'true'
         name: Build dependencies, LLVM, CMake and the pinned SDK nightly
         run: |
@@ -430,11 +446,16 @@ jobs:
       - name: Compile performance overlay against stock nightly headers
         run: |
           # Also runs on an SDK cache hit: game sources aren't part of that cache key.
-          if [ ! -d /usr/include/c++/14 ]; then
-            launcher/packaging/ci_linux_sdk_setup.sh --compiler-only
-          fi
+          # LLVM first: on 22.04 the compiler setup points its clang at ~/gcc-14.
           if [ ! -x "$HOME/llvm/bin/clang++" ]; then
             python3 launcher/packaging/ci_fetch.py llvm-linux "$HOME/llvm" --strip 1
+          fi
+          # CI_CXX_HEADERS: set by an earlier ci_linux_sdk_setup.sh in this job when it used ~/gcc-14.
+          if [ ! -d "${CI_CXX_HEADERS:-/usr/include/c++/14}" ]; then
+            launcher/packaging/ci_linux_sdk_setup.sh --compiler-only
+            # Its GITHUB_ENV lines reach the later steps only. This step's tests run with
+            # ~/gcc-14's libstdc++ too: 22.04's lacks GLIBCXX_3.4.31 and newer.
+            if [ -f "$HOME/gcc-14/.fh1-env" ]; then . "$HOME/gcc-14/.fh1-env"; fi
           fi
           if [ ! -x "$HOME/cmake/bin/cmake" ]; then
             python3 launcher/packaging/ci_fetch.py cmake-linux "$HOME/cmake" --strip 1
@@ -618,7 +639,7 @@ jobs:
       - name: Smoke test the window
         timeout-minutes: 5
         run: |
-          sudo apt-get update && sudo apt-get install -y libegl1 libxkbcommon0 libxcb-cursor0 libdbus-1-3
+          launcher/packaging/ci_apt.sh update && launcher/packaging/ci_apt.sh install -y libegl1 libxkbcommon0 libxcb-cursor0 libdbus-1-3
           QT_QPA_PLATFORM=offscreen python -m unittest discover -s launcher -p 'test_gamepad.py' -v
           launcher/dist/forza-launcher/forza-launcher --run-script launcher/packaging/gamepad_smoke.py gamepad-smoke.txt
           test -s gamepad-smoke.txt

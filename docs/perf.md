@@ -3749,3 +3749,159 @@ bits of a color source are not masked) and the depth copies themselves. Pictures
 noon, two spots, both settings) show the same shadows and scene; the result is the same by
 construction. AMD and Intel drivers have stencil export, so fix 1 changes nothing there; fix 2 is
 NVIDIA only, like 0071.
+
+## The split command processor: decoding, register writes and the hand-off (#607, 2026-11-08)
+
+Item 2 of #607 (PM4 decode and register writes, 19-25 % of the command processor in the ranking above), with
+the command processor on two threads (0420, on by default with 6 or more cores): which thread is the limit now,
+where the decoder's time goes, and ReIGlue 0450-0452.
+
+**Method.** One build of the game of #764 (its branch before main's #761 was merged in, so the swap setting is
+on the command line) with ReIGlue a4aff83's plugin (#764's pin) against one built from ReIGlue 0450-0452, both with `-gline-tables-only` (the same code); the built-in benchmark uncapped (`--frame_rate=240`),
+`--gpu_split_command_processor=true --vulkan_present_on_submission_thread=true`, 1280x720, the PC's default
+preset, the golden TU4 save in a scratch `--user_data_root`, scratch XDG dirs and warm scratch caches, audio
+muted, the hidden display, `nice -n 10 ionice -c3`, BENCH lock held, no other game; 6 cores is `taskset -c
+0-5`. Per thread: CPU time from `/proc/<pid>/task/*/schedstat` between the measured minute's start and end;
+the recorder's time per draw from `--fh1_frame_cost_csv` (split, the CSV times the recorder); `PERF_CPUPROF`
+over the measured minute in separate runs. The races draw 4,150-4,890 a frame and the frame rate follows that
+(about 0.4-0.7 us a draw), so the frame rates below are also given fitted to the same draws.
+
+**Where the time goes (base, 8 cores, 176.6 fps, 4,145 draws a frame).** Neither thread is saturated: the
+recorder ("GPU Recorder", the draws) 4.35 ms a frame and 77 % busy, the decoder ("GPU Commands") 3.52 ms and
+62 % busy. The recorder is the longer one; most of the rest of its frame it waits for the game.
+
+- Decoder: 24 % of its samples were `RecordWaitProgress`, polling while the recorder worked. About 13
+  `WAIT_REG_MEM` memory waits a frame, about 250 us each, all on three words written by scratch register
+  write-back (Direct3D's fences: `SCRATCH_ADDR` + 4 x register 0, 1 and 5), never on an `EVENT_WRITE_SHD`
+  fence and never with the recorder idle; the decoder polled after every batch the recorder finished and the
+  recorder signalled it after each one. 26-30 % the elision of unchanged registers
+  (`PacketWriteRegistersFromMem`), whose hot lines are the first loads of the game's freshly written command
+  data, 11 % `ExecutePacket` (the same: the first word of each packet), 8 % `sched_yield` (waiting for the
+  game's next commands), 2-3 % growing the record vector (zero-filled, then overwritten).
+- Recorder: the register work (applying the recorded runs: `ExecuteRecordBatch`, the backend's
+  `WriteRegistersFromMem`, `WriteRegister`, the byte swaps) 12.3 % of its samples; the rest is draw setup
+  (#607 item 4, flat), `memcpy` 7.5 %, `mprotect` 4.2 %, the hand-off's signals and lock wakes 3.1 %.
+
+**Changes (ReIGlue 0450-0452, split path only).**
+
+- 0450: the decoder records register runs in host byte order (it swaps them for its shadow anyway) and marks
+  runs whose registers the backend only stores; the recorder copies those into the register file with no
+  call (0360's direct copy, off while split).
+- 0451: the elision builds a 64-register bit mask of the changed values (SSSE3) and reads the runs from it;
+  the record words grow without zeroing; single writes of plain registers (draw initiator, index buffer) are
+  plain runs too.
+- 0452: the decoder notes where the recorder will store a word (scratch write-back from its shadow,
+  `EVENT_WRITE_SHD`) and in which batch; a wait for such a word sleeps until the batch before it, polls only
+  during that batch, and is woken once (at most 100 us at a time, as before for the CPU's writes). The recorder
+  wakes the decoder only at the batch it waits for. While the recorder has run everything published, a batch
+  goes after 4 draws instead of 32.
+
+**Measured**, three interleaved pairs each (mean, per run in brackets for the draw-bound columns):
+
+| | fps | 1% low | p99 ms | Draws a frame | Recorder us a draw | Decoder ms a frame | Decoder busy | Process CPU ms a frame |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 8 cores, base | 168.5 (164.0, 176.9, 164.6) | 110.5 | 7.89 | 4,614 | 1.018 (1.013, 1.033, 1.009) | 3.76 | 63 % | 19.5 |
+| 8 cores, 0450-0452 | 168.6 (168.2, 166.9, 170.6) | 110.9 | 7.83 | 4,755 | 0.985 (0.985, 0.972, 0.997) | 2.69 | 46 % | 18.5 |
+| 6 cores, base | 176.4 | 109.9 | 7.85 | 4,206 | 1.036 | 3.47 | 61 % | 18.2 |
+| 6 cores, 0450-0452 | 172.7 (171.8, 170.9, 175.3) | 109.2 | 8.05 | 4,482 | 1.000 (0.993, 1.018, 0.989) | 2.56 | 44 % | 17.7 |
+
+- The decoder's CPU time falls 26-28 % a frame (0.82 to 0.57 us a draw, -31 %), almost all of it the polling;
+  in the profile `RecordWaitProgress` (23.5 %) is gone and the targeted wait takes 0.9 %; the recorder's
+  signals to the decoder (1.1 % of it) are gone.
+- The recorder's time per draw falls 3.2 % on 8 cores and 3.5 % on 6, every run of the change below every base
+  run; its register work 12.3 % -> 9.8 % of its samples (0450-0451 alone, one profile run each).
+- The frame rate: fitted to the same draws a frame, 168.2 -> 171.7 fps on 8 cores (+2 %) and 174.2 -> 173.6 on 6
+  (the same). The process uses 0.5-1.0 ms of CPU a frame less.
+- 0451's vectorised compare changes little by itself: the elision is bound by reading the game's command data
+  for the first time, not by the compare.
+
+**Render check** (2026-11-11, rebased on ReIGlue 5408d20 and main: the base is 5408d20, against 0450-0451 and
+0450-0452 on it; same game build, split on). `tools/render_test.py` (festival session, 6 scenes) against the
+stored baselines, interleaved, passes per scene:
+
+| | Runs | All 6 pass | title | free roam midday | free roam dawn | cockpit | photo mode | race start | Scenes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Base | 6 | 4 | 5 | 4 | 5 | 5 | 4 | 5 | 28/36 |
+| 0450-0451 | 3 | 1 | 2 | 2 | 3 | 3 | 3 | 1 | 14/18 |
+| 0450-0452 | 6 | 4 | 5 | 5 | 5 | 5 | 5 | 6 | 31/36 |
+
+The first check's 2 of 6 (on a4aff83) was the run's scene, not the picture: the base fails the same way. In one
+run of the base and one of 0450-0452 the car rests a little differently at the spawn point (photo mode's yaw
+reads 280.0 instead of 280.1, or the trees move against the car), which fails cockpit, both free roam scenes and
+photo mode together; the other failures are traffic and drivatar name tags in view, the race clock up to 2 s apart at
+the start, and the title's attract camera a frame early (0.0150 against 0.015). When the pose matches, 0450-0452
+matches the baselines as closely as the base (free roam midday 0.0009 and dawn 0.0006 against 0.005 and 0.01).
+
+**Benchmark on the rebased stack** (same method as above, 8 cores, base 5408d20 against 0450-0452 on it, base,
+change, change, base):
+
+| | fps | 1% low | p99 ms | Draws a frame | Recorder us a draw | Decoder ms a frame | Decoder busy | Process CPU ms a frame |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Base | 171.8 (173.4, 170.3) | 112.1 | 7.72 | 4,339 | 1.052 | 3.67 | 63 % | 19.1 |
+| 0450-0452 | 172.4 (171.1, 173.7) | 118.3 | 7.44 | 4,345 | 1.027 | 2.65 | 46 % | 18.0 |
+
+At the same draws a frame: the decoder 28 % less CPU a frame, the recorder 2.4 % less a draw, the 1% low +5.5 %
+(Windows on an RTX 5060 Ti: +7 %), the average the same.
+
+**Left.** The recorder still runs 77-79 % of the frame and its time is the draw setup; the draw-setup study
+(#607 item 4) found it flat and points at register-group dirty bits that the decoder could produce (what
+changed since the previous draw) so the recorder skips the unchanged groups' work: the next step here.
+
+## The GTX 1650 Ti's GPU frame after #770, and two transfer cuts that do not pay (#640, 2026-11-11)
+
+**The frame now.** The laptop above (GTX 1650 Ti 4 GB, i5-10300H, 8 GB, Windows 11), main
+7156c95 built by the launcher (ReIGlue pin 5408d20, as #770 left it), the launcher's settings for it
+(the 540p scene, AMD FSR 1, 60 fps, Vulkan), warm caches, `--fh1_gpu_profile=5`. Two benchmark
+runs (the measured minute) and a 3-minute free-roam drive at noon, ms of GPU time a frame:
+
+| Work | Benchmark (2 runs) | Free roam |
+| --- | --- | --- |
+| Guest draws | 8.14, 7.92 | 7.96 |
+| Transfers to depth from depth | 1.98, 2.00 | 1.89 |
+| Texture loads | 1.90, 1.94 | 1.88 |
+| Resolves (to the EDRAM buffer, then to guest memory) | 0.87 + 0.83, 0.87 + 0.84 | 0.87 + 0.83 |
+| Transfers to depth from color | 0.72, 0.72 | 0.73 |
+| Transfers between color targets | 0.46, 0.46 | 0.44 |
+| Uploads | 0.39, 0.41 | 0.27 |
+| Color clears, transfers to color from depth, the swap, depth clears | 0.19, 0.07, 0.07, 0.04 | 0.20, 0.08, 0.07, 0.05 |
+| **All** | **15.68, 15.54** | **15.28** |
+
+The benchmark: 58.4 fps without the profile, 57.4 and 58.6 with it. Transfers are still the largest
+cost after the guest's draws: 3.5 ms a frame, about 25 a frame to depth. The test without any
+stencil bit draws in the section above (wrong in general) puts the bit draws that are left at about
+1.1 ms of the transfers from depth and 0.5 ms of those from color: the depth target at EDRAM tile 720
+(kD24S8) has stencil in it, and 0461 can skip only bits that are set nowhere in the source.
+
+**A test hook (ReIGlue 0480).** `FORZA_TEST_NO_STENCIL_EXPORT=1` leaves
+`VK_EXT_shader_stencil_export` off, so an AMD or Intel GPU takes the NVIDIA transfer path (the
+stencil in one draw per bit) and a change to it can be checked on Linux: the render tests'
+pictures with it match those without it within the run-to-run noise on an RX 9060 XT (RADV).
+
+**Cut 1, not kept: transfers whose result is known.** Counted on that RX 9060 XT with the hook, a
+render-test session (title, free roam, cockpit, photo mode, a race start), about 96 000 transfers
+to depth a minute:
+- 56% copy tiles back to the depth target they were last copied from, which has not been written
+  since. But the target in between had always drawn into them (depth or stencil writes), so none
+  could be skipped.
+- 4.7% come from a source that holds only a resolve clear's value where they read, and could be a
+  clear. They are small ones (about 0.003 ms each): not worth the bookkeeping.
+- None of the transfers to depth from color copy back unchanged data, and the color sources that
+  had been resolve-cleared were cleared elsewhere than the tiles transferred.
+
+**Cut 2, not kept: stencil bit draws only over the tiles with the bit.** A compute pass listed,
+for each bit, the destination's tiles whose source tile has it, and each bit's draw went
+indirect over that list (depth sources, and k_8_8_8_8 color sources, whose stencil is their red
+byte). The pictures were unchanged (Linux, with the hook), but on the GTX 1650 Ti, one profiled
+benchmark run each way: transfers to depth from depth 1.97 -> 2.09 ms, from color 0.72 -> 0.74 ms
+(the GPU frame 15.30 -> 15.90 ms). FH1's stencil, where it is set, is set in most tiles, so the
+lists leave almost every tile in, and their pass and the many small quads cost more than they
+save. At the 60 fps cap, three alternating runs each way: 59.2 fps [58.1-59.8] off against 56.9
+[53.4-59.4] on. (The exact stencil of k_2_10_10_10 and k_2_10_10_10_FLOAT sources gave wrong
+pictures and was left out.) The code is on ReIGlue's branch `exp/640-stencil-tile-lists`.
+
+**Next.** The stencil bit draws (about 1.6 ms) need a way to write the stencil other than one draw
+per bit: for a one-sample destination (about half of these transfers: the scene depth and the
+shadow map going back to 1x) a compute pass could write the stencil bytes to a buffer and copy them
+into the image's stencil aspect, which Vulkan allows for single-sample images. Then the texture
+loads (1.9 ms; the 1024x1024 k_24_8 shadow map loaded 4 times a frame is 0.52 ms of it) and the
+resolves (1.7 ms in 88 a frame, about 10 us each, mostly fixed cost).
