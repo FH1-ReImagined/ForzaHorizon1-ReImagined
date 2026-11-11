@@ -196,10 +196,10 @@ class Calls(ServiceTest):
         self.svc.refuse_next = 10
         with self.assertRaises(web_account.WebAccountError) as e:
             self.start()
-        self.assertIn("Play online on the public server once", str(e.exception))
+        self.assertIn("Start the game once with the Public server picked", str(e.exception))
 
     def test_refusals_become_the_player_s_messages(self):
-        for status, error, says in ((409, "play online first", "Play online on the public server once"),
+        for status, error, says in ((409, "play online first", "Upload one speed trap first"),
                                     (403, "not available", "cannot link"),
                                     (429, "changed in the past day", "Try again tomorrow"),
                                     (503, "linking is not available", "not available right now"),
@@ -208,6 +208,23 @@ class Calls(ServiceTest):
             with self.assertRaises(web_account.WebAccountError) as e:
                 self.start()
             self.assertIn(says, str(e.exception))
+
+    def test_the_service_s_own_words_for_what_the_game_still_needs(self):
+        said = "Upload one speed trap first: drive through any speed trap camera, then try again."
+        for status, doc, says in ((409, {"error": "play online first", "message": said}, said),
+                                  (409, {"error": "play online first", "message": " "}, "Upload one speed trap"),
+                                  (409, {"error": "play online first", "message": 7}, "Upload one speed trap"),
+                                  (403, {"error": "not available", "message": "internal detail"}, "cannot link")):
+            self.svc.fail_with = (status, doc)
+            with self.assertRaises(web_account.WebAccountError) as e:
+                self.start()
+            self.assertEqual(e.exception.code, doc["error"])
+            self.assertIn(says, str(e.exception))
+            self.assertNotIn("internal detail", str(e.exception))
+        self.svc.fail_with = (409, {"error": "play online first", "message": "x" * 5000})
+        with self.assertRaises(web_account.WebAccountError) as e:
+            self.start()
+        self.assertEqual(len(str(e.exception)), web_account.MESSAGE_CHARS)
 
     def test_a_confirm_before_the_claim(self):
         doc = self.start()
@@ -318,13 +335,13 @@ class Interface(ServiceTest):
         self.spin(lambda: d.waiter.isFinished())
 
     def test_a_refusal_is_shown(self):
-        self.svc.fail_with = (409, {"error": "play online first"})
+        self.svc.fail_with = (409, {"error": "play online first", "message": "Upload one speed trap first."})
         d, opened = self.dialog()
-        self.spin(lambda: "Play online" in d.text.text())
+        self.spin(lambda: "Upload one speed trap first." in d.text.text())
         self.assertEqual(opened, [])
         self.assertEqual(d.close_button.text(), "Close")
 
-    def test_the_card_shows_only_for_the_public_server_and_asks_only_after_a_link(self):
+    def test_the_card_shows_for_every_server_and_asks_only_after_a_link(self):
         from forza_launcher.config import Config
         from forza_launcher.ui import web_account as ui
         from forza_launcher.ui.settings_page import SettingsPage
@@ -341,14 +358,29 @@ class Interface(ServiceTest):
                 online = page.online_page   # Online > Online in the window
                 online.show()
                 self.app.processEvents()
+                card = page.web_account
                 self.assertTrue(page.web_account_frame.isVisibleTo(online))
+                self.assertFalse(card.public_button.isVisibleTo(card))
                 asked.assert_not_called()  # never linked: nothing is sent
-                cfg.online["mode"] = "offline"   # as Servers' Offline row does
-                page.sync_server()
-                self.assertFalse(page.web_account_frame.isVisibleTo(online))
-                cfg.online["mode"] = "public"
-                page.sync_server()
+                for mode in ("offline", "local", "custom"):   # as Servers' other rows do
+                    cfg.online["mode"] = mode
+                    page.sync_server()
+                    self.assertTrue(page.web_account_frame.isVisibleTo(online))
+                    self.assertTrue(card.public_note.isVisibleTo(card) and card.public_button.isVisibleTo(card))
+                    self.assertIn("Public server", card.public_note.text())
+                    self.assertTrue(card.link_button.isEnabled())
+                window.write_toml.reset_mock()
+                card.public_button.click()   # Use the Public server: saved now
+                self.assertEqual(cfg.online["mode"], "public")
+                window.write_toml.assert_called_once()
+                self.assertTrue((Path(root) / "launcher.json").exists())
+                self.assertIn("Public server", page.server_status.text())
                 self.assertTrue(page.web_account_frame.isVisibleTo(online))
+                self.assertFalse(card.public_note.isVisibleTo(card) or card.public_button.isVisibleTo(card))
+                with mock.patch.object(ui, "identity_of", return_value=None):
+                    card.link_button.click()   # before the game made its key
+                self.assertIn("Start the game once with the Public server picked", card.status.text())
+                self.assertIn("speed trap", card.status.text())
                 online.hide()
                 page._save_timer.stop()
                 page.deleteLater()
