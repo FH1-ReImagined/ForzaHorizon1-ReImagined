@@ -78,6 +78,8 @@ Works:
   (walls and the ground).
 - Timed laps with sectors, the best-lap ghost and the laps page.
 - All 24 circuits of Disc 1 convert and load. Suzuka is the most tested one.
+- The road's painted lines and edges and the rubber on it (FM4 draws them over the road, as
+  decals). A circuit imported with an earlier launcher has none: import it again.
 
 Not yet:
 

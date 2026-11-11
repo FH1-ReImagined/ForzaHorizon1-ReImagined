@@ -1602,6 +1602,115 @@ def fix_pass_groups(data):
     return out
 
 
+# FM4 draws its road lines, road edges and other overlays (decals) in a pass of their own:
+# such a model has its command buffers in the third group of a pass's three alone (opaque,
+# transparent, decal): 11, 14 and 17, and with them 8 where its instances may show in mirrors
+# (their flag bit 4 clear) and 5 where in cube maps (bit 9 clear). Its instances carry flag
+# bit 28. FH1 does not take these buffers in its decal pass (the fault fh1_flags tells of),
+# so the bit is dropped, and then nothing drew them: an instance is drawn with its opaque or
+# its transparent groups, which these models leave empty.
+# The main pass's decal group (14) takes the place of the group the model's instances are
+# flagged for (DECAL_SLOT; the empty groups before it move up, the data stays where it is and
+# the file keeps its size), so FH1 draws the model in that pass with the buffer's own state:
+# FM4's polygon offset and, for the painted lines and edges, its cover by alpha (alpha to
+# mask, no blending; depth state below), for the blended road detail FM4's blending. In the
+# other group's place the load faults as it does with bit 28 (Suzuka's lines as transparent,
+# Infineon's road detail as opaque): the GPU reads at an address nothing has patched
+# (physical 0x20000000, the end of memory). The mirror and cube map groups stay where they
+# are, unused.
+# FM4_PVS_DECALS=0 leaves the decals undrawn, as before.
+DECALS = os.environ.get("FM4_PVS_DECALS", "1") == "1"
+DECAL_GROUPS = frozenset(range(2, 21, 3))
+# An instance's flag bits 2 (opaque) and 1 (transparent): the group that takes the decal
+# buffer. FM4_PVS_DECAL_BLENDED=0 leaves the transparent ones undrawn (a test).
+DECAL_SLOT = {0x4: 12, 0x2: 13}
+if os.environ.get("FM4_PVS_DECAL_BLENDED", "1") != "1":
+    del DECAL_SLOT[0x2]
+# RB_DEPTHCONTROL (register 0x2200) of a decal buffer drawn in the opaque pass, the bits
+# cleared and the bits set: FM4's 0x082082E3 tests the depth without writing it and draws
+# only where the stencil equals its reference (function EQUAL), a state for a pass that
+# comes after the road. In FH1's opaque pass the road may come after its lines: a line drawn
+# first fails the stencil test or is painted over by the road (whole stretches of Suzuka
+# without lines, the rest with). With the depth written (bit 2) and the stencil function
+# ALWAYS, as in the road's own 0x087087E7, a line stands whichever is drawn first: its
+# polygon offset puts it in front of the road under it. The buffers drawn in the transparent
+# pass keep FM4's state. FM4_PVS_DECAL_DEPTH=0 keeps it in the opaque pass too (a test).
+DECAL_DEPTH = (0x00700700, 0x00700704) if os.environ.get("FM4_PVS_DECAL_DEPTH", "1") == "1" else (0, 0)
+
+
+def decal_group_to(data, slot=12):
+    """The model file of a decal model with its main pass's decal group (14) in the place of
+    group slot (12 opaque, 13 transparent), and for 12 that group's depth state made
+    order-proof (DECAL_DEPTH); None for any other model (and for one whose buffer is not
+    laid out as expected)."""
+    k = data.rfind(b".fx")
+    if k < 0:
+        return None
+    p = k + 3
+    if p + 32 > len(data):
+        return None
+    head = struct.unpack_from(">8I", data, p)
+    if head[0] != 1:
+        return None
+    g = pass_groups(data, p + 32)
+    if not g:
+        return None
+    filled = [i for i, x in enumerate(g) if x[2] or any(x[3])]
+    if 14 not in filled or not set(filled) <= DECAL_GROUPS:
+        return None
+    # the group's command buffer in area B (see the layout above insert_fetch_constant)
+    o = 0
+    for i in filled:
+        o = (o + 31) & ~31
+        if i == 14:
+            break
+        o += g[i][3][1]
+    start = g[-1][1] + head[3] + o
+    buf = bytearray(data[start:start + g[14][3][1]])
+    packets = _pm4_packets(bytes(buf))
+    if packets is None:
+        return None
+    hit = 0
+    for at, w in packets:
+        reg, count = w & 0x7FFF, ((w >> 16) & 0x3FFF) + 1
+        if w >> 30 == 0 and not w & 0x8000 and reg <= 0x2200 < reg + count:
+            if slot == 12:
+                q = at + 4 + 4 * (0x2200 - reg)
+                struct.pack_into(">I", buf, q, struct.unpack_from(">I", buf, q)[0] & ~DECAL_DEPTH[0] | DECAL_DEPTH[1])
+            hit += 1
+    if not hit:
+        return None
+    data = data[:start] + bytes(buf) + data[start + len(buf):]
+    a0, b0, b1 = g[slot][0], g[14][0], g[14][1]
+    return data[:a0] + data[b0:b1] + data[a0:b0] + data[b1:]
+
+
+def draw_decals(converted, bin_dir):
+    """Has FH1 draw the decal models (see DECALS): each one's file in the track's bin folder
+    gets its decal group in the place its instances are flagged for (over every ribbon; a
+    model flagged both ways, or neither, is left). The number of models."""
+    if not DECALS or FLAGS != "map":
+        return 0
+    asked = {}
+    for _, _, _, P, _, _, _ in converted:
+        for inst in P["instances"] + P["dynamic"]:
+            asked.setdefault(inst["model"], set()).add(inst["flags"] & 0x6)
+    done = 0
+    for prefix in sorted({c[3]["prefix"] for c in converted}):
+        for m, bits in sorted(asked.items()):
+            path = os.path.join(bin_dir, f"{prefix}.{m:05d}.rmb.bin")
+            slot = DECAL_SLOT.get(next(iter(bits))) if len(bits) == 1 else None
+            if slot is None or not os.path.isfile(path):
+                continue
+            with open(path, "rb") as f:
+                out = decal_group_to(f.read(), slot)
+            if out is not None:
+                with open(path, "wb") as f:
+                    f.write(out)
+                done += 1
+    return done
+
+
 def convert_mod(mod, fh1_disc, loose):
     tracks = os.path.join(mod, "media", "tracks")
     (track,) = [d for d in os.listdir(tracks) if os.path.isdir(os.path.join(tracks, d))]
@@ -1684,6 +1793,9 @@ def convert_mod(mod, fh1_disc, loose):
             data = data.replace(a, b)
         os.makedirs(os.path.dirname(os.path.join(bin_dir, dst)), exist_ok=True)
         open(os.path.join(bin_dir, dst), "wb").write(data)
+    n_decals = draw_decals(converted, bin_dir)
+    if n_decals:
+        print(f"{track}: {n_decals} decal models (road lines, road edges) drawn in FH1's opaque and transparent passes")
     need = max(stream_blocks(c[2], c[4], c[5], bin_dir) for c in converted) if converted else 0
     order = archive_order(files + [zn for c in converted for zn in c[6]])
     index = {p: i for i, p in enumerate(order)}
