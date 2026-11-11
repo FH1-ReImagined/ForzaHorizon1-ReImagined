@@ -100,6 +100,9 @@ inline std::string ErrorText(uint8_t code, const std::string& server, const std:
       return server + " refused this game: it only lets in games with event-unlock support, "
                       "which this build does not have (" + detail +
              "). Pick another server in the launcher (Online > Servers)";
+    case 6:
+      return server + " asked this game to slow down: too many sign-ins from this address (" +
+             detail + "); trying again in a moment";
     default:
       return server + " sent error " + std::to_string(code) + ": " + detail;
   }
