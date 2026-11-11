@@ -13,7 +13,8 @@ APT = Path(__file__).parent / "packaging/ci_apt.sh"
 @unittest.skipUnless(os.name == "posix" and shutil.which("bash"), "requires a POSIX shell")
 class LinuxSdkSetupTests(unittest.TestCase):
     def run_setup(self, failures, *args, index_failures=0, headers=True,
-                  local_debs_install_headers=False, crlf_manifest=False, ppa_fails=False):
+                  local_debs_install_headers=False, crlf_manifest=False, ppa_fails=False,
+                  ubuntu="22.04"):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             packaging = root / "packaging"
@@ -27,6 +28,8 @@ class LinuxSdkSetupTests(unittest.TestCase):
             if crlf_manifest:
                 manifest = manifest.rstrip("\n").replace("\n", "\r\n")
             (packaging / "ci_toolchain_debs.txt").write_bytes(manifest.encode())
+            # The runner's own /etc/os-release must not decide the path under test.
+            (root / "os-release").write_text('ID=ubuntu\nVERSION_ID="%s"\n' % ubuntu)
             log = root / "commands"
             stub = r'''#!/usr/bin/env bash
 name="${0##*/}"
@@ -59,10 +62,18 @@ fi
                        CI_TEST_INDEX_FAILURES=str(index_failures),
                        CI_TEST_LOCAL_HEADERS=str(int(local_debs_install_headers)),
                        CI_TEST_PPA_FAILS=str(int(ppa_fails)), CI_APT_ETC=str(root / "etc-apt"),
-                       CI_CXX_HEADERS=str(root if headers else root / "missing"))
+                       CI_CXX_HEADERS=str(root if headers else root / "missing"),
+                       CI_OS_RELEASE=str(root / "os-release"))
             result = subprocess.run(["bash", str(script), *args], env=env, text=True,
                                     capture_output=True, timeout=10)
             return result, log.read_text().splitlines()
+
+    def test_ubuntu_24_uses_the_archive_and_never_launchpad(self):
+        result, commands = self.run_setup(0, ubuntu="24.04")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(any(row.startswith("add-apt-repository") for row in commands))
+        self.assertFalse(any("launchpad" in row for row in commands))
+        self.assertTrue(any(row.startswith("apt-get ") and "g++-14" in row for row in commands))
 
     def test_transient_install_failure_recovers(self):
         result, commands = self.run_setup(2)
