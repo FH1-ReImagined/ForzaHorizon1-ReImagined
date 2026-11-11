@@ -88,6 +88,8 @@ jobs:
         run: python -m unittest discover -s tools -p 'test_fm4_cars.py' -v
       - name: FM4 circuits' lap timing data (#648)
         run: python -m unittest discover -s tools -p 'test_fm4_timing.py' -v
+      - name: FM4 circuit command-buffer fixups (#648)
+        run: python -m unittest discover -s tools -p 'test_fm4_pvs.py' -v
       - name: Resource hook audit tests (synthetic images)
         run: python -m unittest discover -s tools -p 'test_resource_data_hooks.py' -v
       - name: Thumbnail and photo sync renewal contracts (no game)

@@ -88,6 +88,7 @@ Not yet:
   circuit with the Vulkan renderer (with ReGPU, the D3D12 renderer, circuits have no shadows
   yet). A circuit imported with an earlier launcher has none: import it again.
 - **The map and GPS** (FH1's map is Colorado's).
+- **1000 Club challenges.** They use Colorado's roads and locations. Play in Colorado to run them.
 - **Online play** on a circuit.
 
 Please report what you see, with your `forza.log`, on the issue tracker
