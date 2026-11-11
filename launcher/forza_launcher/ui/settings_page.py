@@ -1046,6 +1046,9 @@ class SettingsPage(QWidget):
                                  "Use this server")
         self.search.add("Add a server by address", "Servers", "Add a server", servers.address,
                         keywords="host port custom_server my own server community address")
+        self.search.add("Test connection", "Servers", "Servers", servers.test_button,
+                        keywords="can't get online not registered firewall VPN UDP blocked DNS reachable "
+                                 "connection problem sign in")
 
     def _show_server(self):
         mode = self.cfg.online["mode"]

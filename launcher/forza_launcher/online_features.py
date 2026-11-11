@@ -87,6 +87,22 @@ def answer(cfg, on: bool):
         turn_off(cfg)
 
 
+def offline_by_choice(cfg) -> bool:
+    """Whether Play is Offline because "Online features" was turned off (the installer's option or
+    the first-run question): the game then never signs in, often without the player knowing. The
+    Play and Servers pages show a banner with "Go online" (ui/offline_notice.py). Offline picked on
+    the Servers page with the features on is the player's own choice: no banner."""
+    return cfg.online.get("mode") == "offline" and state(cfg).get("on") is False
+
+
+def go_online(cfg):
+    """The banner's "Go online": online features on and Play on the Public server. Shader sharing,
+    co-op results, challenges and Discord activity keep their own settings (Online > Online)."""
+    st = state(cfg)
+    st["on"], st["ask"] = True, False
+    cfg.online["mode"] = "public"
+
+
 def keep_off_after_reset(cfg):
     """Reset settings: the defaults put online play, sharing, co-op results, challenges and Discord activity
     back on; a player who chose "Online features" off keeps them off."""

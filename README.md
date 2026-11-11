@@ -110,6 +110,8 @@ In **Online > Servers**, pick one:
 
 Community servers are run by volunteers in other regions, for a lower ping. Pick one in the launcher's **Online > Servers**, or add it by its address there. Each keeps its own friends list and leaderboards: only the public server's are the official ones on the website.
 
+Can't get online? Select the server in **Online > Servers** and click **Test connection**: it says whether the server is reachable, the game's UDP traffic is blocked (firewall, VPN or ISP), its name doesn't resolve (a DNS filter) or the server is down, with the fix. If the launcher shows "You are offline", "Online features" was turned off when the game was installed or first started: click **Go online**. No account or registration is needed.
+
 | Region | Address |
 | --- | --- |
 | US East | `reimagined-us-east.playit.plus:1819` |

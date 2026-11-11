@@ -117,6 +117,9 @@ class PlayPage(QWidget):
         lay.addWidget(Hero())
         self.intel_driver = IntelDriverNotice(cfg, window)
         lay.addWidget(self.intel_driver)
+        from .offline_notice import OfflineNotice
+        self.offline_notice = OfflineNotice(cfg)   # Offline because Online features is off
+        lay.addWidget(self.offline_notice)
         self.warn = label("", "warn")
         self.warn.hide()
         lay.addWidget(self.warn)
@@ -258,6 +261,7 @@ class PlayPage(QWidget):
             self._clock_probe.start()
         cfg = self.cfg
         self.intel_driver.refresh()
+        self.offline_notice.refresh()
         self.track_picker.refresh()
         root = cfg.game_files()
         if (root / "default.xex").is_file():
