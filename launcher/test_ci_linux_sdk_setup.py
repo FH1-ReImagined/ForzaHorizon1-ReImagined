@@ -1,33 +1,117 @@
 """Exercise CI dependency retries without installing packages or downloading tools."""
+import hashlib
+import io
 import os
 from pathlib import Path
 import shutil
 import subprocess
+import tarfile
 import tempfile
 import unittest
 
 SCRIPT = Path(__file__).parent / "packaging/ci_linux_sdk_setup.sh"
+APT = Path(__file__).parent / "packaging/ci_apt.sh"
+MANIFEST = SCRIPT.with_name("ci_toolchain_debs.txt")
+GITHUB = "https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/releases/download/ci-toolchain-jammy-gcc14/"
+
+
+def listed_packages():
+    return [line for line in MANIFEST.read_text().splitlines() if line and not line.startswith("#")]
+
+
+def asset(package):
+    """The GitHub copy's name for a package (+ and ~ spelled out, as ci_linux_sdk_setup.sh does)."""
+    return f"{package}_amd64.deb".replace("+", "plus").replace("~", "tilde")
+
+
+def fake_deb(name):
+    # What the curl stub writes for a GitHub copy download.
+    return f"deb:{name}".encode()
+
+
+GCC_TARBALL = "gcc-14.3.0-jammy-x86_64.tar.xz"
+GCC_INSTALL = "lib/gcc/x86_64-linux-gnu/14.3.0"
+
+
+def fake_gcc_tarball(path, headers=True):
+    """A tarball laid out like build_gcc14_jammy.sh's (gcc-14/...), with or without the headers."""
+    with tarfile.open(path, "w:xz") as tar:
+        names = [f"gcc-14/{GCC_INSTALL}/crtbegin.o", "gcc-14/lib64/libstdc++.so.6"]
+        if headers:
+            names.append("gcc-14/include/c++/14.3.0/expected")
+        for name in names:
+            info = tarfile.TarInfo(name)
+            data = name.encode()
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
 
 
 @unittest.skipUnless(os.name == "posix" and shutil.which("bash"), "requires a POSIX shell")
 class LinuxSdkSetupTests(unittest.TestCase):
     def run_setup(self, failures, *args, index_failures=0, headers=True,
-                  local_debs_install_headers=False, crlf_manifest=False):
+                  local_debs_install_headers=False, crlf_manifest=False, ppa_fails=False,
+                  ubuntu="22.04", github="missing", gcc="unpinned", gcc_preinstalled=False):
+        """github: what the GitHub copy does: "missing" (404, as before the mirror is filled),
+        "ok", "tampered" (one file differs from its pin) or "unpinned" (no pin for one file).
+        gcc: the GCC 14 tarball (build_gcc14_jammy.sh) in the release: "unpinned" (no pin, as
+        before the first build), "ok", "missing" (pinned, 404), "tampered" (other bytes) or
+        "noheaders" (pinned, but without the C++23 headers).
+        After the run, self.gcc_home, self.cfg (clang.cfg/clang++.cfg next to clang) and
+        self.github_env tell what the job's later steps get."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            home = root / "home"
+            home.mkdir()
+            (root / "llvm" / "bin").mkdir(parents=True)
+            gcc_tar = root / "gcc.tar.xz"
+            fake_gcc_tarball(gcc_tar, headers=gcc != "noheaders")
+            gcc_sum = hashlib.sha256(gcc_tar.read_bytes()).hexdigest()
+            if gcc_preinstalled:
+                (home / "gcc-14/include/c++/14.3.0").mkdir(parents=True)
+                (home / "gcc-14/.fh1-sha256").write_text(gcc_sum + "\n")
             packaging = root / "packaging"
             packaging.mkdir()
             script = packaging / SCRIPT.name
             script.write_bytes(SCRIPT.read_bytes())
+            (packaging / APT.name).write_bytes(APT.read_bytes())
+            (packaging / APT.name).chmod(0o755)
+            (root / "etc-apt").mkdir()
             manifest = SCRIPT.with_name("ci_toolchain_debs.txt").read_text()
             if crlf_manifest:
                 manifest = manifest.rstrip("\n").replace("\n", "\r\n")
             (packaging / "ci_toolchain_debs.txt").write_bytes(manifest.encode())
+            pinned = [asset(p) for p in listed_packages()]
+            if github == "unpinned":
+                pinned = pinned[:-1]
+            (packaging / "ci_toolchain_sha256sums.txt").write_text(
+                "# pins\n" + "".join(f"{hashlib.sha256(fake_deb(n)).hexdigest()}  {n}\n"
+                                     for n in pinned)
+                + ("" if gcc == "unpinned" else f"{gcc_sum}  {GCC_TARBALL}\n"))
+            # The runner's own /etc/os-release must not decide the path under test.
+            (root / "os-release").write_text('ID=ubuntu\nVERSION_ID="%s"\n' % ubuntu)
             log = root / "commands"
             stub = r'''#!/usr/bin/env bash
 name="${0##*/}"
 printf '%s %s\n' "$name" "$*" >> "$CI_TEST_LOG"
 if [ "$name" = id ]; then echo 0; exit 0; fi
+if [ "$name" = add-apt-repository ] && [ "$CI_TEST_PPA_FAILS" = 1 ]; then exit 1; fi
+if [ "$name" = curl ] && [[ "${*: -1}" == https://github.com/* ]]; then
+    out=""; prev=""
+    for arg in "$@"; do [ "$prev" != -o ] || out="$arg"; prev="$arg"; done
+    if [[ "${*: -1}" == */gcc-14.3.0-jammy-x86_64.tar.xz ]]; then
+        case "$CI_TEST_GCC" in
+            missing) exit 22 ;;
+            tampered) printf 'other bytes' > "$out" ;;
+            *) cp "$CI_TEST_GCC_TAR" "$out" ;;
+        esac
+        exit 0
+    fi
+    [ "$CI_TEST_GITHUB" != missing ] || exit 22
+    file="${out##*/}"
+    if [ "$CI_TEST_GITHUB" = tampered ] && [[ "$file" == libstdc* ]]; then file=changed; fi
+    printf 'deb:%s' "$file" > "$out"
+    exit 0
+fi
 if [ "$name" = apt-get ] && [[ "$*" == *g++-14* ]]; then
     n=0; [ ! -f "$CI_TEST_COUNT" ] || read -r n < "$CI_TEST_COUNT"
     n=$((n + 1)); echo "$n" > "$CI_TEST_COUNT"
@@ -53,10 +137,43 @@ fi
                        CI_TEST_FAILURES=str(failures), CI_TEST_INDEX=str(root / "index"),
                        CI_TEST_INDEX_FAILURES=str(index_failures),
                        CI_TEST_LOCAL_HEADERS=str(int(local_debs_install_headers)),
-                       CI_CXX_HEADERS=str(root if headers else root / "missing"))
+                       CI_TEST_PPA_FAILS=str(int(ppa_fails)), CI_APT_ETC=str(root / "etc-apt"),
+                       CI_CXX_HEADERS=str(root if headers else root / "missing"),
+                       CI_OS_RELEASE=str(root / "os-release"), CI_TEST_GITHUB=github,
+                       CI_TEST_GCC=gcc, CI_TEST_GCC_TAR=str(gcc_tar), HOME=str(home),
+                       CI_LLVM_HOME=str(root / "llvm"), GITHUB_ENV=str(root / "github-env"))
+            env.pop("CI_GCC_HOME", None)
+            env.pop("LD_LIBRARY_PATH", None)
             result = subprocess.run(["bash", str(script), *args], env=env, text=True,
                                     capture_output=True, timeout=10)
+            self.home = home
+            self.gcc_home = home / "gcc-14"
+            self.gcc_headers = (self.gcc_home / "include/c++/14.3.0").is_dir()
+            self.cfg = {name: (root / "llvm/bin" / name).read_text()
+                        for name in ("clang.cfg", "clang++.cfg") if (root / "llvm/bin" / name).exists()}
+            env_file = root / "github-env"
+            self.github_env = dict(line.split("=", 1) for line in env_file.read_text().splitlines()
+                                   ) if env_file.exists() else {}
+            # What the step that ran the script gets by sourcing ~/gcc-14/.fh1-env (release.yml
+            # does after --compiler-only), twice, onto an LD_LIBRARY_PATH that was already set.
+            self.step_env = {}
+            step_file = self.gcc_home / ".fh1-env"
+            if step_file.exists():
+                names = ("CI_GCC_HOME", "CI_CXX_HEADERS", "CI_CLANG_GCC_FLAGS", "LD_LIBRARY_PATH")
+                shown = subprocess.run(
+                    ["bash", "-c", '. "$1"; . "$1"; for n in ' + " ".join(names)
+                     + '; do printf "%s=%s\\n" "$n" "${!n}"; done', "bash", str(step_file)],
+                    env={"PATH": os.environ["PATH"], "LD_LIBRARY_PATH": "/before"},
+                    text=True, capture_output=True, check=True)
+                self.step_env = dict(line.split("=", 1) for line in shown.stdout.splitlines())
             return result, log.read_text().splitlines()
+
+    def test_ubuntu_24_uses_the_archive_and_never_launchpad(self):
+        result, commands = self.run_setup(0, ubuntu="24.04")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(any(row.startswith("add-apt-repository") for row in commands))
+        self.assertFalse(any("launchpad" in row for row in commands))
+        self.assertTrue(any(row.startswith("apt-get ") and "g++-14" in row for row in commands))
 
     def test_transient_install_failure_recovers(self):
         result, commands = self.run_setup(2)
@@ -82,7 +199,8 @@ fi
         self.assertEqual(sum(row.startswith("apt-get ") and "g++-14" in row for row in commands), 4)
         sed = [i for i, row in enumerate(commands) if row.startswith("sed ")]
         self.assertEqual(len(sed), 1)
-        self.assertTrue(commands[sed[0] + 1].endswith(" update"))
+        after = [row for row in commands[sed[0] + 1:] if row.startswith("apt-get ")]
+        self.assertTrue(after[0].endswith(" update"))
         self.assertEqual(sum(row.startswith("python3 ") for row in commands), 3)
 
     def test_success_does_not_retry(self):
@@ -109,14 +227,27 @@ fi
     def test_both_ppa_hosts_down_use_launchpad_files(self):
         result, commands = self.run_setup(6)
         self.assertEqual(result.returncode, 0, result.stderr)
-        files = [row for row in commands if row.startswith("curl ")]
-        listed = [line for line in SCRIPT.with_name("ci_toolchain_debs.txt").read_text().splitlines()
-                  if line and not line.startswith("#")]
+        files = [row for row in commands if row.startswith("curl ") and "launchpad.net" in row]
+        listed = listed_packages()
         self.assertEqual(len(files), len(listed))
         self.assertTrue(all("launchpad.net/~ubuntu-toolchain-r/+archive/ubuntu/test/+files/" in row
                             for row in files))
         installs = [row for row in commands if row.startswith("apt-get ") and "install" in row]
         self.assertIn(".deb", installs[-1])
+        self.assertEqual(sum(row.startswith("python3 ") for row in commands), 3)
+
+    def test_unaddable_ppa_uses_launchpad_files(self):
+        # add-apt-repository fails when api.launchpad.net does not resolve.
+        result, commands = self.run_setup(0, ppa_fails=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(sum(row.startswith("add-apt-repository ") for row in commands), 3)
+        self.assertEqual([row for row in commands if row.startswith("sleep ")],
+                         ["sleep 10", "sleep 20"])
+        self.assertFalse(any(row.startswith("sed ") for row in commands))
+        installs = [row for row in commands if row.startswith("apt-get ") and "g++-14" in row]
+        self.assertEqual(len(installs), 1)
+        self.assertIn(".deb", installs[0])
+        self.assertTrue(any(row.startswith("curl ") for row in commands))
         self.assertEqual(sum(row.startswith("python3 ") for row in commands), 3)
 
     def test_reachable_ppa_keeps_its_host(self):
@@ -143,12 +274,188 @@ fi
             0, "--compiler-only", headers=False, local_debs_install_headers=True,
             crlf_manifest=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        downloads = [row for row in commands if row.startswith("curl ")]
-        packages = [line for line in SCRIPT.with_name("ci_toolchain_debs.txt").read_text().splitlines()
-                    if line and not line.startswith("#")]
+        downloads = [row for row in commands if row.startswith("curl ") and "launchpad.net" in row]
+        packages = listed_packages()
         self.assertEqual(len(downloads), len(packages))
         for command, package in zip(downloads, packages):
             self.assertIn(f"/+files/{package}_amd64.deb", command)
+
+    def test_github_copy_installs_without_launchpad(self):
+        for args in ((), ("--compiler-only",)):
+            result, commands = self.run_setup(0, *args, github="ok")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(any(row.startswith("add-apt-repository") for row in commands))
+            self.assertFalse(any("launchpad" in row for row in commands))
+            downloads = [row for row in commands if row.startswith("curl ")]
+            self.assertEqual([row.split()[-1] for row in downloads],
+                             [GITHUB + asset(p) for p in listed_packages()])
+            installs = [row for row in commands if row.startswith("apt-get ") and "g++-14" in row]
+            self.assertEqual(len(installs), 1)
+            self.assertIn("gplusplus-14_", installs[0])
+            self.assertIn(".deb", installs[0])
+            self.assertEqual(sum(row.startswith("python3 ") for row in commands), 0 if args else 3)
+
+    def test_github_copy_404_costs_one_request(self):
+        result, commands = self.run_setup(0)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        github = [row for row in commands if row.startswith("curl ") and "github.com" in row]
+        self.assertEqual(len(github), 1)
+        self.assertNotIn("--retry-all-errors", github[0])
+        self.assertTrue(any(row.startswith("add-apt-repository") for row in commands))
+        installs = [row for row in commands if row.startswith("apt-get ") and "g++-14" in row]
+        self.assertEqual(len(installs), 1)
+        self.assertNotIn(".deb", installs[0])
+
+    def test_tampered_github_copy_is_never_installed(self):
+        result, commands = self.run_setup(0, github="tampered")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("does not match ci_toolchain_sha256sums.txt", result.stderr)
+        github = [row for row in commands if row.startswith("curl ") and "github.com" in row]
+        self.assertIn("libstdc", github[-1])
+        installs = [row for row in commands if row.startswith("apt-get ") and "g++-14" in row]
+        self.assertFalse(any(".deb" in row for row in installs))
+        self.assertTrue(any(row.startswith("add-apt-repository") for row in commands))
+
+    def test_unpinned_package_skips_the_github_copy(self):
+        result, commands = self.run_setup(0, github="unpinned")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("has no checksum for", result.stderr)
+        self.assertFalse(any(row.startswith("curl ") and "github.com" in row for row in commands))
+        self.assertTrue(any(row.startswith("add-apt-repository") for row in commands))
+
+    def test_github_copy_that_fails_to_install_falls_back_to_the_ppa(self):
+        # ci_apt.sh tries each install three times; the fourth (from the PPA) succeeds.
+        result, commands = self.run_setup(3, "--compiler-only", github="ok")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        installs = [row for row in commands if row.startswith("apt-get ") and "g++-14" in row]
+        self.assertEqual(len(installs), 4)
+        self.assertTrue(all(".deb" in row for row in installs[:3]))
+        self.assertNotIn(".deb", installs[3])
+        self.assertTrue(any(row.startswith("add-apt-repository") for row in commands))
+
+    def test_ubuntu_24_never_asks_the_github_copy(self):
+        result, commands = self.run_setup(0, ubuntu="24.04", github="ok")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(any(row.startswith("curl ") for row in commands))
+
+    def gcc_downloads(self, commands):
+        return [row for row in commands if row.startswith("curl ") and row.endswith(GCC_TARBALL)]
+
+    def test_gcc_tarball_is_the_first_choice_on_22_04(self):
+        for args in ((), ("--compiler-only",)):
+            result, commands = self.run_setup(0, *args, gcc="ok", github="ok", headers=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual([row.split()[-1] for row in self.gcc_downloads(commands)],
+                             [GITHUB + GCC_TARBALL])
+            # Neither the PPA nor the deb copy: g++-14 is ~/gcc-14.
+            self.assertFalse(any(row.startswith("add-apt-repository") for row in commands))
+            self.assertFalse(any("launchpad" in row or ".deb" in row for row in commands))
+            installs = [row for row in commands if row.startswith("apt-get ") and " install " in row]
+            self.assertTrue(installs)
+            self.assertFalse(any("g++-14" in row for row in installs))
+            self.assertIn("libc6-dev binutils", installs[-1])
+            self.assertTrue(self.gcc_headers)
+            install_dir = f"{self.gcc_home}/{GCC_INSTALL}"
+            self.assertEqual(self.cfg, {"clang.cfg": f"--gcc-install-dir={install_dir}\n",
+                                        "clang++.cfg": f"--gcc-install-dir={install_dir}\n"})
+            self.assertEqual(self.github_env["CI_CXX_HEADERS"], f"{self.gcc_home}/include/c++/14.3.0")
+            self.assertEqual(self.github_env["CI_CLANG_GCC_FLAGS"], f"--gcc-install-dir={install_dir}")
+            self.assertEqual(self.github_env["LD_LIBRARY_PATH"], f"{self.gcc_home}/lib64")
+            # The calling step's own commands get the same, with lib64 put first only once.
+            self.assertEqual(self.step_env, dict(self.github_env, CI_GCC_HOME=str(self.gcc_home),
+                                                 LD_LIBRARY_PATH=f"{self.gcc_home}/lib64:/before"))
+            self.assertEqual(sum(row.startswith("python3 ") for row in commands), 0 if args else 3)
+
+    def test_gcc_tarball_full_setup_keeps_the_build_packages(self):
+        result, commands = self.run_setup(0, gcc="ok")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        installs = [row for row in commands if row.startswith("apt-get ") and "libvulkan-dev" in row]
+        self.assertEqual(len(installs), 1)
+        self.assertIn(" make ", installs[0])
+        self.assertIn("libc6-dev", installs[0])
+
+    def test_tampered_gcc_tarball_is_never_unpacked(self):
+        result, commands = self.run_setup(0, "--compiler-only", gcc="tampered")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"{GCC_TARBALL} does not match ci_toolchain_sha256sums.txt", result.stderr)
+        self.assertFalse(self.gcc_home.exists())
+        self.assertEqual(self.cfg, {})
+        self.assertEqual(self.github_env, {})
+        self.assertEqual(self.step_env, {})
+        # The PPA's g++-14 instead.
+        self.assertTrue(any(row.startswith("add-apt-repository") for row in commands))
+        self.assertTrue(any(row.startswith("apt-get ") and row.endswith("install -y g++-14")
+                            for row in commands))
+
+    def test_gcc_tarball_without_headers_is_refused(self):
+        result, commands = self.run_setup(0, "--compiler-only", gcc="noheaders")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("did not unpack the C++23 headers", result.stderr)
+        self.assertFalse(self.gcc_home.exists())
+        self.assertEqual(self.cfg, {})
+        self.assertTrue(any(row.startswith("apt-get ") and "g++-14" in row for row in commands))
+
+    def test_missing_gcc_tarball_falls_back_to_the_deb_copy(self):
+        result, commands = self.run_setup(0, "--compiler-only", gcc="missing", github="ok")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.gcc_downloads(commands)), 1)
+        self.assertNotIn("--retry-all-errors", self.gcc_downloads(commands)[0])
+        installs = [row for row in commands if row.startswith("apt-get ") and "g++-14" in row]
+        self.assertEqual(len(installs), 1)
+        self.assertIn(".deb", installs[0])
+        self.assertFalse(any(row.startswith("add-apt-repository") for row in commands))
+        self.assertEqual(self.cfg, {})
+
+    def test_unpinned_gcc_tarball_is_not_downloaded(self):
+        result, commands = self.run_setup(0, "--compiler-only")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"no checksum for {GCC_TARBALL}", result.stderr)
+        self.assertEqual(self.gcc_downloads(commands), [])
+
+    def test_unpacked_gcc_is_reused_by_a_later_step(self):
+        result, commands = self.run_setup(0, "--compiler-only", gcc="ok", gcc_preinstalled=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.gcc_downloads(commands), [])
+        self.assertIn("clang++.cfg", self.cfg)
+        self.assertEqual(self.step_env["LD_LIBRARY_PATH"], f"{self.gcc_home}/lib64:/before")
+
+    def test_ubuntu_24_never_uses_the_gcc_tarball(self):
+        result, commands = self.run_setup(0, ubuntu="24.04", gcc="ok")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.gcc_downloads(commands), [])
+        self.assertEqual(self.cfg, {})
+        self.assertEqual(self.github_env, {})
+
+    def test_checked_in_gcc_pin_names_the_built_tarball(self):
+        # build_gcc14_jammy.sh, the setup script and the workflow agree on the file name.
+        here = Path(__file__).parent
+        build = (here / "packaging/build_gcc14_jammy.sh").read_text()
+        self.assertIn("TARBALL=gcc-$GCC_VERSION-jammy-x86_64.tar.xz", build)
+        self.assertIn("GCC_VERSION=14.3.0", build)
+        self.assertIn(f"GCC_TARBALL={GCC_TARBALL}", SCRIPT.read_text())
+        workflow = (here.parent / ".github/workflows/ci-toolchain-gcc.yml").read_text()
+        self.assertIn(f"TARBALL: {GCC_TARBALL}", workflow)
+        image = next(line.split("=", 1)[1] for line in build.splitlines() if line.startswith("IMAGE="))
+        self.assertIn(f"image: {image}", workflow)
+        # The GNU source the script checks is the one the release pins.
+        pins = dict(reversed(line.split()) for line in
+                    (here / "packaging/ci_toolchain_sha256sums.txt").read_text().splitlines()
+                    if line and not line.startswith("#"))
+        source = next(line.split("=", 1)[1] for line in build.splitlines()
+                      if line.startswith("GCC_SHA256="))
+        self.assertEqual(pins["gcc-14.3.0.tar.xz"], source)
+        self.assertIn(GCC_TARBALL, pins)
+
+    def test_compiler_only_steps_load_the_gcc_variables_themselves(self):
+        # GITHUB_ENV reaches only later steps; a step that runs --compiler-only and then its own
+        # tests sources ~/gcc-14/.fh1-env right after (the SDK cache-hit path, release.yml).
+        workflow = (Path(__file__).parent.parent / ".github/workflows/release.yml").read_text()
+        lines = [line.strip() for line in workflow.splitlines() if not line.strip().startswith("#")]
+        calls = [i for i, line in enumerate(lines) if line.endswith("ci_linux_sdk_setup.sh --compiler-only")]
+        self.assertTrue(calls)
+        for i in calls:
+            self.assertEqual(lines[i + 1],
+                             'if [ -f "$HOME/gcc-14/.fh1-env" ]; then . "$HOME/gcc-14/.fh1-env"; fi')
 
     def test_missing_headers_stop_before_downloads(self):
         for args in ((), ("--compiler-only",)):
@@ -156,6 +463,95 @@ fi
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("C++23 headers", result.stderr)
             self.assertFalse(any(row.startswith("python3 ") for row in commands))
+
+
+MIRRORS = ("http://azure.archive.ubuntu.com/ubuntu/\tpriority:1\n"
+           "https://archive.ubuntu.com/ubuntu/\tpriority:2\n"
+           "https://security.ubuntu.com/ubuntu/\tpriority:3\n")
+AZURE_ERROR = ("W: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/dists/jammy/InRelease"
+               "  Temporary failure resolving 'azure.archive.ubuntu.com'")
+
+
+@unittest.skipUnless(os.name == "posix" and shutil.which("bash"), "requires a POSIX shell")
+class CiAptTests(unittest.TestCase):
+    def run_apt(self, *args, resolves=True, azure_errors=0, azure_status=100, failures=0,
+                mirrors=MIRRORS):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            etc = root / "etc-apt"
+            (etc / "sources.list.d").mkdir(parents=True)
+            if mirrors:
+                (etc / "apt-mirrors.txt").write_text(mirrors)
+            (etc / "sources.list").write_text("deb mirror+file:/etc/apt/apt-mirrors.txt jammy main\n")
+            log = root / "commands"
+            stub = r'''#!/usr/bin/env bash
+name="${0##*/}"
+printf '%s %s\n' "$name" "$*" >> "$CI_TEST_LOG"
+if [ "$name" = id ]; then echo 0; exit 0; fi
+if [ "$name" = getent ]; then exit "$CI_TEST_GETENT"; fi
+if [ "$name" = apt-get ]; then
+    n=0; [ ! -f "$CI_TEST_COUNT" ] || read -r n < "$CI_TEST_COUNT"
+    n=$((n + 1)); echo "$n" > "$CI_TEST_COUNT"
+    if [ "$n" -le "$CI_TEST_AZURE" ]; then echo "$CI_TEST_AZURE_ERROR"; exit "$CI_TEST_AZURE_STATUS"; fi
+    if [ "$n" -le $((CI_TEST_AZURE + CI_TEST_FAILURES)) ]; then exit 100; fi
+fi
+'''
+            for name in ("id", "getent", "apt-get", "sleep"):
+                target = root / name
+                target.write_text(stub)
+                target.chmod(0o755)
+            env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
+                       CI_TEST_LOG=str(log), CI_TEST_COUNT=str(root / "count"),
+                       CI_TEST_GETENT="0" if resolves else "2", CI_TEST_AZURE=str(azure_errors),
+                       CI_TEST_AZURE_ERROR=AZURE_ERROR, CI_TEST_AZURE_STATUS=str(azure_status),
+                       CI_TEST_FAILURES=str(failures), CI_APT_ETC=str(etc))
+            result = subprocess.run(["bash", str(APT), *args], env=env, text=True,
+                                    capture_output=True, timeout=10)
+            mirror_file = etc / "apt-mirrors.txt"
+            return (result, log.read_text().splitlines(),
+                    mirror_file.read_text() if mirror_file.exists() else "")
+
+    def apt_calls(self, commands):
+        return [row.split(" ", 3)[-1] for row in commands if row.startswith("apt-get ")]
+
+    def test_unresolved_azure_mirror_is_replaced_up_front(self):
+        result, commands, mirrors = self.run_apt("update", resolves=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("azure", mirrors)
+        self.assertIn("http://archive.ubuntu.com/ubuntu/", mirrors)
+        self.assertIn("https://security.ubuntu.com/ubuntu/", mirrors)
+        self.assertEqual(self.apt_calls(commands), ["update"])
+
+    def test_azure_failure_during_install_switches_and_updates(self):
+        result, commands, mirrors = self.run_apt("install", "-y", "libegl1", azure_errors=1)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("azure", mirrors)
+        self.assertEqual(self.apt_calls(commands),
+                         ["install -y libegl1", "update", "install -y libegl1"])
+        self.assertFalse(any(row.startswith("sleep ") for row in commands))
+
+    def test_update_warning_about_azure_switches(self):
+        # apt-get update exits 0 when an index fails to download.
+        result, commands, mirrors = self.run_apt("update", azure_errors=1, azure_status=0)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("azure", mirrors)
+        self.assertEqual(self.apt_calls(commands), ["update", "update"])
+
+    def test_without_azure_mirror_retries_with_backoff(self):
+        result, commands, _ = self.run_apt("update", failures=99, mirrors="")
+        self.assertEqual(result.returncode, 100)
+        self.assertFalse(any(row.startswith("getent ") for row in commands))
+        self.assertEqual(len(self.apt_calls(commands)), 3)
+        self.assertEqual([row for row in commands if row.startswith("sleep ")],
+                         ["sleep 10", "sleep 20"])
+        self.assertTrue(all("Acquire::Retries=3" in row for row in commands
+                            if row.startswith("apt-get ")))
+
+    def test_transient_failure_recovers(self):
+        result, commands, mirrors = self.run_apt("update", failures=1)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("azure", mirrors)
+        self.assertEqual(len(self.apt_calls(commands)), 2)
 
 
 if __name__ == "__main__":

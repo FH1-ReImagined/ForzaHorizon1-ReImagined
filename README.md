@@ -73,6 +73,7 @@ C++ is generated from that copy on your machine. No game binaries are published 
 ## Contents
 
 - [Playing online](#playing-online)
+- [Can't get online?](#cant-get-online)
 - [Requirements](#requirements)
 - [Install with the launcher](#install-with-the-launcher)
 - [Known issues](#known-issues)
@@ -109,15 +110,40 @@ In **Online > Servers**, pick one:
 
 Community servers are run by volunteers in other regions, for a lower ping. Pick one in the launcher's **Online > Servers**, or add it by its address there. Each keeps its own friends list and leaderboards: only the public server's are the official ones on the website.
 
+Can't get online? Select the server in **Online > Servers** and click **Test connection**: it says whether the server is reachable, the game's UDP traffic is blocked (firewall, VPN or ISP), its name doesn't resolve (a DNS filter) or the server is down, with the fix. If the launcher shows "You are offline", "Online features" was turned off when the game was installed or first started: click **Go online**. No account or registration is needed.
+
 | Region | Address |
 | --- | --- |
 | US East | `reimagined-us-east.playit.plus:1819` |
+
+To get your own server on this list, follow [Getting listed](https://github.com/FH1-ReImagined/forza-live/blob/main/docs/hosting.md#getting-listed) in the hosting guide. The address players type is the UDP port, and the launcher and the listing check read the server's status page on the next port up. Behind a playit.gg tunnel, the TCP tunnel's public port therefore has to be the UDP tunnel's port plus 1, as with 1819 and 1820 above.
 
 Horizon World is the first playlist under Multiplayer, Find Game. The server places you in the fullest open world, up to 8 players (a world with one of your car club's members first, when one has room), or you open one and drive. Someone who joins later gets JUMP IN. When the host leaves, the others keep driving. Each world is its own session. A local test has run with four players. [`docs/online_vision.md`](docs/online_vision.md)
 
 Friends (F8, or hold the left stick on a controller) and chat (F9) use the server's list. Leaderboards cover speed traps, speed zones, events and Rivals (times, ghosts and bounties), and the public server's are on the [website](https://forza.dyotson.dev/leaderboards.html). Car clubs and the Message Center work. The club garage can share a car, and chat has a Club channel for the members online (`/club` lists them). [Title services](https://github.com/FH1-ReImagined/forza-live/blob/main/docs/title_services.md) · [`docs/playing.md`](docs/playing.md)
 
 Title Update 4 players and base-game players do not meet. The Auction House has no screens in this game. The server can store auctions, and there is nowhere in the game to open them.
+
+## Can't get online?
+
+You don't need to register or make an account to play online. There is no sign-up, key or Xbox account. The first time the game starts with a server picked, it makes its own online identity and signs in. The game's log, `forza.log` in the game data folder, shows what happened in its lines that start with `FORZA_LIVE`:
+
+- **`signed in to ... (player #N)`**: you are online.
+- **`server error 1: not registered`**: harmless. It often shows up at the start, just before `signed in to`, because the game asked for the player list before it had signed in. The game then signs in again at once.
+- **`has not answered in 30 s`**: something between your PC and the server drops the game's UDP traffic. That can be a firewall or antivirus, a VPN or proxy, or your network or provider. Allow `forza.exe` in Windows Firewall and in your antivirus, turn off the VPN or proxy, try a phone hotspot, or pick another server.
+- **`cannot resolve server`**: a DNS filter blocks the server's name (Pi-hole, AdGuard, NextDNS, router parental controls, an antivirus). Allow the name, or switch to a public DNS.
+- **No `FORZA_LIVE` lines at all**: Online is off. Unticking "Online features" in the installer, or answering no at the launcher's first start, sets it to Offline. In the launcher, open **Online > Servers**, select **Forza Live (main server)** (the public server) and press **Use this server**.
+- **You came back as a new player, or friends and chat are off**: the game could not find your identity file, `live_identity.txt`. On Windows it is in `Documents\forza\4D5309C9`. On Linux it is in `~/.local/share/forza/4D5309C9`, or `~/.var/app/io.github.dyotson.ForzaHorizon1ReImagined/data/forza/4D5309C9` in the Flatpak. It stays there even when you pick another game data folder. Keep a copy when you reinstall or move to another PC, and put it back before you start the game there. Without it the game makes a new player. If the log says `linked to another installation`, ask on [Discord](#community).
+- **You can't see a friend**: base-game and Title Update 4 players are in separate rooms. Play the same version.
+
+**Signing in on the website** ([forza.dyotson.dev](https://forza.dyotson.dev)):
+
+1. Upload one speed trap to the public server first: drive through a speed trap while the game is signed in to it. Single player is fine.
+2. In the launcher, open **Online > Online**. Under **Website account** (shown while the public server is picked), press **Link to website account**.
+3. Your browser opens forza.dyotson.dev. Sign in with Discord, GitHub or email, and click **Link**. On another device, open forza.dyotson.dev/account.html, sign in and enter the code the launcher shows.
+4. Back in the launcher, check the account it names and confirm.
+
+Likes and uploads work right after. Your likes are added to the public totals once your game is 3 days past its first sign-in and has signed in on 2 different days. A game's website link can change once a day. More: [`docs/playing.md`](docs/playing.md#cant-get-online).
 
 ## Requirements
 

@@ -196,10 +196,10 @@ class Calls(ServiceTest):
         self.svc.refuse_next = 10
         with self.assertRaises(web_account.WebAccountError) as e:
             self.start()
-        self.assertIn("Play online on the public server once", str(e.exception))
+        self.assertIn("Start the game once with the Public server picked", str(e.exception))
 
     def test_refusals_become_the_player_s_messages(self):
-        for status, error, says in ((409, "play online first", "Play online on the public server once"),
+        for status, error, says in ((409, "play online first", "Upload one speed trap first"),
                                     (403, "not available", "cannot link"),
                                     (429, "changed in the past day", "Try again tomorrow"),
                                     (503, "linking is not available", "not available right now"),
@@ -208,6 +208,23 @@ class Calls(ServiceTest):
             with self.assertRaises(web_account.WebAccountError) as e:
                 self.start()
             self.assertIn(says, str(e.exception))
+
+    def test_the_service_s_own_words_for_what_the_game_still_needs(self):
+        said = "Upload one speed trap first: drive through any speed trap camera, then try again."
+        for status, doc, says in ((409, {"error": "play online first", "message": said}, said),
+                                  (409, {"error": "play online first", "message": " "}, "Upload one speed trap"),
+                                  (409, {"error": "play online first", "message": 7}, "Upload one speed trap"),
+                                  (403, {"error": "not available", "message": "internal detail"}, "cannot link")):
+            self.svc.fail_with = (status, doc)
+            with self.assertRaises(web_account.WebAccountError) as e:
+                self.start()
+            self.assertEqual(e.exception.code, doc["error"])
+            self.assertIn(says, str(e.exception))
+            self.assertNotIn("internal detail", str(e.exception))
+        self.svc.fail_with = (409, {"error": "play online first", "message": "x" * 5000})
+        with self.assertRaises(web_account.WebAccountError) as e:
+            self.start()
+        self.assertEqual(len(str(e.exception)), web_account.MESSAGE_CHARS)
 
     def test_a_confirm_before_the_claim(self):
         doc = self.start()
@@ -265,30 +282,47 @@ class Interface(ServiceTest):
             time.sleep(0.01)
         self.assertTrue(until())
 
-    def dialog(self):
+    def patch(self, *args, **kw):
+        p = mock.patch.object(*args, **kw)
+        value = p.start()
+        self.addCleanup(p.stop)
+        return value
+
+    def dialog(self, view=None, **kw):
+        """A LinkDialog; `view` is what the launcher's window would be (None: no Qt WebEngine)."""
         from forza_launcher.ui import web_account as ui
+        from forza_launcher.ui import web_view
         opened = []
-        patcher = mock.patch.object(ui.QDesktopServices, "openUrl", side_effect=lambda url: opened.append(url) or True)
-        patcher.start()
-        self.addCleanup(patcher.stop)
-        fast = mock.patch.object(web_account, "POLL_SECONDS", 0.1)
-        fast.start()
-        self.addCleanup(fast.stop)
-        d = ui.LinkDialog(IDENTITY, None, self.base)
+        self.patch(web_view, "open_in_browser", side_effect=lambda url: opened.append(url) or True)
+        self.patch(ui, "make_view", side_effect=lambda site, parent: view)
+        self.patch(web_account, "POLL_SECONDS", 0.1)
+        d = ui.LinkDialog(IDENTITY, None, self.base, **kw)
         self.addCleanup(d.deleteLater)
+        self.addCleanup(self.ended, d)
         return d, opened
+
+    def ended(self, d):
+        """Close a dialog a test left open and let its threads finish (a QThread must not outlive
+        the test run)."""
+        if d.active:
+            d.reject()
+        self.spin(lambda: not ui_module()._running)
 
     def setUp(self):
         super().setUp()
-        p = mock.patch.object(web_account.fetch, "urlopen", self.opener)
-        p.start()
-        self.addCleanup(p.stop)
+        from forza_launcher.ui import web_view
+        self.patch(web_account.fetch, "urlopen", self.opener)
+        root = tempfile.TemporaryDirectory()
+        self.addCleanup(root.cleanup)
+        self.storage = Path(root.name) / "web-account"
+        self.patch(web_view, "storage_dir", return_value=self.storage)   # never the player's data folder
 
     def test_the_dialog_links_after_both_sides_approve(self):
         d, opened = self.dialog()
         self.spin(lambda: d.request is not None and d.code.text())
         self.assertEqual(len(opened), 1)
-        self.assertTrue(opened[0].toString().startswith(self.base[:-4] + "account.html#link="))
+        self.assertTrue(opened[0].startswith(self.base[:-4] + "account.html#link="))
+        self.assertIn("Your browser opened", d.text.text())
         self.assertIn("K7M2-QXPA", d.code.text())
         self.assertFalse(d.link_button.isVisibleTo(d))
         self.svc.claim(d.request["id"])
@@ -318,13 +352,28 @@ class Interface(ServiceTest):
         self.spin(lambda: d.waiter.isFinished())
 
     def test_a_refusal_is_shown(self):
-        self.svc.fail_with = (409, {"error": "play online first"})
+        self.svc.fail_with = (409, {"error": "play online first", "message": "Upload one speed trap first."})
         d, opened = self.dialog()
-        self.spin(lambda: "Play online" in d.text.text())
+        self.spin(lambda: "Upload one speed trap first." in d.text.text())
         self.assertEqual(opened, [])
         self.assertEqual(d.close_button.text(), "Close")
 
-    def test_the_card_shows_only_for_the_public_server_and_asks_only_after_a_link(self):
+    def test_service_words_are_plain_text(self):
+        from PySide6.QtCore import Qt
+        from forza_launcher.config import Config
+        from forza_launcher.ui import web_account as ui
+        self.svc.fail_with = (409, {"error": "play online first", "message": "<b>x</b>"})
+        d, _ = self.dialog()
+        self.spin(lambda: "<b>x</b>" in d.text.text())
+        self.assertEqual(d.text.textFormat(), Qt.PlainText)
+        self.assertEqual(d.code.textFormat(), Qt.PlainText)
+        with tempfile.TemporaryDirectory() as root:
+            cfg = Config(Path(root) / "launcher.json")
+            card = ui.WebAccountCard(cfg, None, self.base)
+            self.addCleanup(card.deleteLater)
+            self.assertEqual(card.status.textFormat(), Qt.PlainText)
+
+    def test_the_card_shows_for_every_server_and_asks_only_after_a_link(self):
         from forza_launcher.config import Config
         from forza_launcher.ui import web_account as ui
         from forza_launcher.ui.settings_page import SettingsPage
@@ -341,14 +390,29 @@ class Interface(ServiceTest):
                 online = page.online_page   # Online > Online in the window
                 online.show()
                 self.app.processEvents()
+                card = page.web_account
                 self.assertTrue(page.web_account_frame.isVisibleTo(online))
+                self.assertFalse(card.public_button.isVisibleTo(card))
                 asked.assert_not_called()  # never linked: nothing is sent
-                cfg.online["mode"] = "offline"   # as Servers' Offline row does
-                page.sync_server()
-                self.assertFalse(page.web_account_frame.isVisibleTo(online))
-                cfg.online["mode"] = "public"
-                page.sync_server()
+                for mode in ("offline", "local", "custom"):   # as Servers' other rows do
+                    cfg.online["mode"] = mode
+                    page.sync_server()
+                    self.assertTrue(page.web_account_frame.isVisibleTo(online))
+                    self.assertTrue(card.public_note.isVisibleTo(card) and card.public_button.isVisibleTo(card))
+                    self.assertIn("Public server", card.public_note.text())
+                    self.assertTrue(card.link_button.isEnabled())
+                window.write_toml.reset_mock()
+                card.public_button.click()   # Use the Public server: saved now
+                self.assertEqual(cfg.online["mode"], "public")
+                window.write_toml.assert_called_once()
+                self.assertTrue((Path(root) / "launcher.json").exists())
+                self.assertIn("Public server", page.server_status.text())
                 self.assertTrue(page.web_account_frame.isVisibleTo(online))
+                self.assertFalse(card.public_note.isVisibleTo(card) or card.public_button.isVisibleTo(card))
+                with mock.patch.object(ui, "identity_of", return_value=None):
+                    card.link_button.click()   # before the game made its key
+                self.assertIn("Start the game once with the Public server picked", card.status.text())
+                self.assertIn("speed trap", card.status.text())
                 online.hide()
                 page._save_timer.stop()
                 page.deleteLater()
@@ -361,6 +425,402 @@ class Interface(ServiceTest):
                 self.spin(lambda: "K7Q2-XM4P (GitHub" in card.status.text())
             self.assertTrue(card.unlink_button.isVisibleTo(card))
             card.deleteLater()
+
+    # --- the website's page in the launcher's own window (ui/web_view.py) ---
+
+    def fake_view(self):
+        from PySide6.QtCore import Signal
+        from PySide6.QtWidgets import QWidget
+
+        class FakeView(QWidget):
+            """Stands in for web_view.SignInView where the test needs no Qt WebEngine."""
+            failed = Signal(str)
+            notice = Signal(str)
+
+            def __init__(self):
+                super().__init__()
+                self.loaded, self.closed = [], 0
+
+            def load(self, url):
+                self.loaded.append(url)
+
+            def close_down(self):
+                self.closed += 1
+        view = FakeView()
+        self.addCleanup(view.deleteLater)
+        return view
+
+    def test_the_page_opens_in_the_launcher_and_links_in_the_same_window(self):
+        view = self.fake_view()
+        d, opened = self.dialog(view)
+        self.spin(lambda: view.loaded)
+        self.assertEqual(opened, [])          # no browser
+        self.assertEqual(len(view.loaded), 1)
+        self.assertTrue(view.loaded[0].startswith(self.base[:-4] + "account.html#link="))
+        self.assertTrue(view.isVisibleTo(d))
+        self.assertIn("Sign in below with Discord, GitHub or an emailed code", d.text.text())
+        self.assertIn("type the code on this page", d.note.text())
+        self.assertTrue(d.browser_button.isVisibleTo(d))
+        self.assertIn("K7M2-QXPA", d.code.text())       # another device still works
+        self.svc.claim(d.request["id"])                 # the page's Link
+        self.spin(lambda: d.claimed is not None)
+        self.assertIn("K7Q2-XM4P (Discord, created 2 Nov 2026)", d.text.text())
+        self.assertTrue(view.isVisibleTo(d))            # the page stays: it shows "linked" next
+        self.assertFalse(d.browser_button.isVisibleTo(d))
+        d.link_button.click()                           # the launcher's Link
+        self.spin(lambda: d.linked == "K7Q2-XM4P")
+        self.assertEqual(self.svc.link["id"], "K7Q2-XM4P")
+        self.assertEqual(view.closed, 0)
+        d.close_button.click()
+        self.assertEqual(d.result(), d.DialogCode.Accepted)
+        self.assertEqual(view.closed, 1)                # the page and its profile end with the dialog
+
+    def test_use_my_browser_instead(self):
+        view = self.fake_view()
+        d, opened = self.dialog(view)
+        self.spin(lambda: view.loaded)
+        d.browser_button.click()
+        self.assertEqual(view.closed, 1)
+        self.assertEqual(opened, view.loaded)           # the same link, now in the browser
+        self.assertFalse(d.browser_button.isVisibleTo(d))
+        self.assertIn("Your browser opened", d.text.text())
+        self.assertIn("K7M2-QXPA", d.code.text())
+        self.svc.claim(d.request["id"])                 # still waiting: the browser's claim works
+        self.spin(lambda: d.claimed is not None)
+        d.link_button.click()
+        self.spin(lambda: d.linked == "K7Q2-XM4P")
+        d.accept()
+        self.assertEqual(view.closed, 1)
+
+    def test_a_window_that_stops_falls_back_to_the_browser(self):
+        view = self.fake_view()
+        d, opened = self.dialog(view)
+        self.spin(lambda: view.loaded)
+        view.failed.emit("The launcher's window stopped.")
+        self.assertEqual(opened, view.loaded)
+        self.assertTrue(d.text.text().startswith("The launcher's window stopped. Your browser opened"))
+        self.assertEqual(view.closed, 1)
+
+    def test_closing_the_window_declines_and_ends_the_page(self):
+        view = self.fake_view()
+        d, _ = self.dialog(view)
+        self.spin(lambda: view.loaded)
+        rid = d.request["id"]
+        d.close_button.click()
+        self.assertEqual(view.closed, 1)
+        self.spin(lambda: self.svc.requests[rid]["state"] == "declined")
+
+    def test_a_security_key_s_prompt_is_shown(self):
+        view = self.fake_view()
+        d, _ = self.dialog(view)
+        self.spin(lambda: view.loaded)
+        view.notice.emit("Touch your security key.")
+        self.assertEqual(d.note.text(), "Touch your security key.")
+        self.assertTrue(d.note.isVisibleTo(d))
+        view.notice.emit("")
+        self.assertFalse(d.note.isVisibleTo(d))
+
+    def test_without_qt_webengine_the_browser_opens(self):
+        from forza_launcher.ui import web_account as ui
+        from forza_launcher.ui import web_view
+        with mock.patch.dict(os.environ, {"FORZA_NO_WEB_VIEW": "1"}):
+            self.assertFalse(web_view.available())
+            self.assertIsNone(web_view.create("https://forza.dyotson.dev"))
+        web_view.available()   # loaded before: patch.dict would unload what is first imported inside it
+        with mock.patch.dict(sys.modules, {"PySide6.QtWebEngineWidgets": None}):   # import fails
+            self.assertFalse(web_view.available())
+            self.assertIsNone(ui.make_view("https://forza.dyotson.dev", None))
+        d, opened = self.dialog(None)
+        self.spin(lambda: opened)
+        self.assertIsNone(d.web)
+        self.assertFalse(d.browser_button.isVisibleTo(d))
+
+    def test_the_browser_on_request(self):
+        from forza_launcher.ui import web_account as ui
+        d, opened = self.dialog(self.fake_view(), browser=True)
+        self.spin(lambda: opened)
+        self.assertIsNone(d.web)
+        ui.make_view.assert_not_called()
+
+    def test_the_card_signs_in_and_signs_the_window_out(self):
+        from forza_launcher.config import Config
+        from forza_launcher.ui import web_account as ui
+        with tempfile.TemporaryDirectory() as root:
+            cfg = Config(Path(root) / "launcher.json")
+            card = ui.WebAccountCard(cfg, None, self.base)
+            self.addCleanup(card.deleteLater)
+            self.assertEqual(card.link_button.text(), "Sign in or create an account")
+            self.assertFalse(card.forget_button.isVisibleTo(card))   # never signed in there
+            (self.storage / "Cookies").parent.mkdir(parents=True)
+            (self.storage / "Cookies").write_bytes(b"x")
+            card._buttons()
+            self.assertTrue(card.forget_button.isVisibleTo(card))
+            card.forget_button.click()
+            self.assertFalse(self.storage.exists())
+            self.assertFalse(card.forget_button.isVisibleTo(card))
+            self.assertIn("signed out of the website, Discord and GitHub", card.status.text())
+
+            view = self.fake_view()
+            self.patch(ui, "make_view", side_effect=lambda site, parent: view)
+            self.patch(ui, "identity_of", return_value=IDENTITY)
+            self.patch(web_account, "POLL_SECONDS", 0.1)
+            self.patch(web_view_module(), "open_in_browser", return_value=True)
+
+            def player():
+                d = card.findChild(ui.LinkDialog)
+                if d is None or d.request is None:
+                    return QTimer.singleShot(20, player)
+                if d.claimed is None:
+                    self.svc.requests[d.request["id"]]["state"] == "claimed" or self.svc.claim(d.request["id"])
+                    return QTimer.singleShot(20, player)
+                if d.linked is None:
+                    if d.link_button.isEnabled():
+                        d.link_button.click()
+                    return QTimer.singleShot(20, player)
+                d.close_button.click()
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(0, player)
+            card.link()
+            self.assertTrue(cfg.d["web_account"]["linked"])
+            self.assertIn("Linked to website account K7Q2-XM4P", card.status.text())
+            self.assertEqual(card.link_button.text(), "Link another website account")
+            self.assertEqual(view.closed, 1)
+
+
+def ui_module():
+    from forza_launcher.ui import web_account as ui
+    return ui
+
+
+def web_view_module():
+    from forza_launcher.ui import web_view
+    return web_view
+
+
+class Navigation(unittest.TestCase):
+    """web_view.decide: what the launcher's window may show itself."""
+
+    def where(self, url, **kw):
+        return web_view_module().decide(url, **kw)
+
+    def test_the_site_and_the_providers_stay_in_the_window(self):
+        for url in ("https://forza.dyotson.dev/account.html#link=abc", "https://FORZA.dyotson.dev:443/api/x",
+                    "https://discord.com/oauth2/authorize?client_id=1", "https://discord.com/login",
+                    "https://github.com/login/oauth/authorize?x=1", "https://github.com/login", "about:blank"):
+            self.assertEqual(self.where(url), "view", url)
+        # the site's sign-in form and the providers' redirects
+        self.assertEqual(self.where("https://github.com/login", current="https://forza.dyotson.dev/account.html"),
+                         "view")
+        # a link the player clicks on the provider's own page (Create an account, Forgot password)
+        self.assertEqual(self.where("https://github.com/signup", link_click=True, current="https://github.com/login"),
+                         "view")
+        self.assertEqual(self.where("https://discord.com/register", link_click=True,
+                                    current="https://discord.com/login"), "view")
+        self.assertEqual(self.where("https://forza.dyotson.dev/index.html", link_click=True,
+                                    current="https://forza.dyotson.dev/account.html"), "view")
+
+    def test_everything_else_goes_to_the_browser(self):
+        site = "https://forza.dyotson.dev/account.html"
+        for url, kw in (("https://github.com/FH1-ReImagined", {"link_click": True, "current": site}),
+                        ("https://discord.com/invite/abc", {"link_click": True, "current": site}),
+                        ("https://discord.com/x", {"link_click": True, "current": "https://github.com/login"}),
+                        ("https://discord.gg/abc", {"link_click": True}),
+                        ("https://docs.github.com/en/site-policy", {"link_click": True}),
+                        ("https://gist.github.com/x", {}),
+                        ("https://www.discord.com/", {}),
+                        ("https://discord.com.evil.example/login", {}),
+                        ("https://evil-github.com/login", {}),
+                        ("https://forza.dyotson.dev@evil.example/account.html", {}),
+                        ("https://forza.dyotson.dev.evil.example/account.html", {}),
+                        ("https://forza.dyotson.dev:8443/account.html", {}),
+                        ("https://github.com:444/login", {}),
+                        ("http://example.com/", {"link_click": True}),
+                        ("mailto:someone@example.com", {"link_click": True})):
+            self.assertEqual(self.where(url, **kw), "browser", url)
+
+    def test_refused(self):
+        for url, kw in (("http://forza.dyotson.dev/account.html", {}),
+                        ("http://github.com/login", {}),
+                        ("http://example.com/", {}),               # a redirect to plain HTTP
+                        ("file:///etc/passwd", {"link_click": True}),
+                        ("data:text/html,<h1>x</h1>", {"link_click": True}),
+                        ("javascript:alert(1)", {"link_click": True}),
+                        ("view-source:https://forza.dyotson.dev/", {}),
+                        ("chrome://settings", {"link_click": True}),
+                        ("mailto:someone@example.com", {}),
+                        ("steam://run/1", {"link_click": True}),
+                        ("https:///nohost", {})):
+            self.assertEqual(self.where(url, **kw), "refuse", url)
+
+    def test_frames(self):
+        for url, where in (("https://newassets.hcaptcha.com/captcha/v1/x", "view"),
+                           ("https://octocaptcha.com/", "view"), ("about:blank", "view"),
+                           ("about:srcdoc", "view"), ("blob:https://discord.com/1", "view"),
+                           ("http://example.com/", "refuse"), ("file:///etc/passwd", "refuse"),
+                           ("data:text/html,x", "refuse"), ("javascript:1", "refuse")):
+            self.assertEqual(self.where(url, main_frame=False), where, url)
+
+    def test_the_site_is_the_service_s(self):
+        site = "http://127.0.0.1:8123"
+        self.assertEqual(self.where("http://127.0.0.1:8123/account.html", site=site), "view")
+        self.assertEqual(self.where("http://127.0.0.1:8124/account.html", site=site), "refuse")
+        self.assertEqual(self.where("https://forza.dyotson.dev/account.html", site=site), "browser")
+
+
+class Profile(unittest.TestCase):
+    """The view's own profile folder and "Sign out of the website in the launcher"."""
+
+    def setUp(self):
+        root = tempfile.TemporaryDirectory()
+        self.addCleanup(root.cleanup)
+        self.storage = Path(root.name) / "web-account"
+
+    def test_it_lives_in_the_data_folder(self):
+        from forza_launcher import paths
+        self.assertEqual(web_view_module().storage_dir(), paths.data_home() / "web-account")
+
+    def test_forget_deletes_it(self):
+        wv = web_view_module()
+        self.assertFalse(wv.has_profile(self.storage))
+        (self.storage / "Local Storage").mkdir(parents=True)
+        (self.storage / "Cookies").write_bytes(b"x")
+        self.assertTrue(wv.has_profile(self.storage))
+        self.assertTrue(wv.forget(self.storage))
+        self.assertFalse(self.storage.exists())
+        self.assertFalse(wv.has_profile(self.storage))
+
+    def test_a_folder_still_in_use_goes_at_the_next_open(self):
+        wv = web_view_module()
+        (self.storage / "Cookies").parent.mkdir(parents=True)
+        (self.storage / "Cookies").write_bytes(b"x")
+        with mock.patch.object(wv.shutil, "rmtree"):      # Windows: a file still open
+            self.assertFalse(wv.forget(self.storage))
+        self.assertTrue((self.storage.parent / wv.FORGET_MARKER).exists())
+        self.assertFalse(wv.has_profile(self.storage))    # already signed out for the card
+        wv._forget_pending(self.storage)                  # what the next window does first
+        self.assertFalse(self.storage.exists())
+        self.assertFalse((self.storage.parent / wv.FORGET_MARKER).exists())
+
+
+class Page(http.server.BaseHTTPRequestHandler):
+    """A local stand-in for the account page, with links the launcher's window must keep out."""
+    BODY = (b"<!doctype html><title>account</title>"
+            b"<a id=out href='https://example.com/help'>help</a>"
+            b"<a id=gh href='https://github.com/FH1-ReImagined'>source</a>"
+            b"<a id=blank target=_blank href='https://example.org/new'>new</a>"
+            b"<a id=file href='file:///etc/hostname'>file</a>"
+            b"<a id=same href='/second.html'>second</a>")
+
+    def log_message(self, *a):
+        pass
+
+    def do_GET(self):
+        body = self.BODY if self.path.startswith("/account.html") else b"<!doctype html><title>second</title>"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+@unittest.skipUnless(web_view_module().available(), "Qt WebEngine is not installed")
+class RealWindow(unittest.TestCase):
+    """The real Qt WebEngine view against a page on 127.0.0.1: the allow-list, new windows, the
+    profile's folder and the teardown. No network beyond this machine."""
+
+    @classmethod
+    def setUpClass(cls):
+        from PySide6.QtCore import QCoreApplication, Qt
+        from PySide6.QtWidgets import QApplication
+        if QApplication.instance() is None:
+            QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
+        cls.app = QApplication.instance() or QApplication([])
+        cls.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Page)
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+        cls.site = "http://127.0.0.1:%d" % cls.server.server_address[1]
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+
+    def spin(self, until, seconds=20):
+        from PySide6.QtCore import QEvent
+        deadline = time.monotonic() + seconds
+        while not until() and time.monotonic() < deadline:
+            self.app.processEvents()
+            self.app.sendPostedEvents(None, QEvent.Type.DeferredDelete)   # as the event loop does
+            time.sleep(0.01)
+        return until()
+
+    def run_js(self, view, script):
+        out = []
+        view.page.runJavaScript(script, 0, out.append)
+        self.assertTrue(self.spin(lambda: out), script)
+        return out[0]
+
+    def test_the_window(self):
+        wv = web_view_module()
+        root = tempfile.TemporaryDirectory()
+        self.addCleanup(root.cleanup)
+        storage = Path(root.name) / "web-account"
+        opened = []
+        with mock.patch.object(wv, "open_in_browser", side_effect=lambda url: opened.append(
+                url if isinstance(url, str) else url.toString())):
+            view = wv.create(self.site, None, storage)
+            self.assertIsNotNone(view)
+            self.addCleanup(view.close_down)
+            self.assertEqual(Path(view.profile.persistentStoragePath()), storage)
+            self.assertFalse(view.profile.isOffTheRecord())
+            view.resize(800, 600)
+            view.show()
+            loaded = []
+            view.view.loadFinished.connect(loaded.append)
+            view.load(self.site + "/account.html")
+            self.assertTrue(self.spin(lambda: loaded and view.view.title() == "account"))
+            self.assertEqual(view.address.text(), self.site)
+            for anchor, expected in (("out", "https://example.com/help"),
+                                     ("gh", "https://github.com/FH1-ReImagined"),
+                                     ("blank", "https://example.org/new")):
+                self.run_js(view, f"document.getElementById('{anchor}').click(); 1")
+                self.assertTrue(self.spin(lambda: expected in opened), anchor)
+            self.run_js(view, "document.getElementById('file').click(); 1")
+            self.spin(lambda: False, 0.5)
+            self.assertEqual(view.view.title(), "account")       # stayed: nothing loaded in the window
+            self.assertNotIn("file:///etc/hostname", opened)
+            # every page permission is denied
+            self.run_js(view, "window.__n = 'asking'; Notification.requestPermission()"
+                              ".then(function (p) { window.__n = p; }); 1")
+            self.assertTrue(self.spin(lambda: self.run_js(view, "window.__n") != "asking"))
+            self.assertEqual(self.run_js(view, "window.__n"), "denied")
+            # the site's own links stay in the window
+            self.run_js(view, "document.getElementById('same').click(); 1")
+            self.assertTrue(self.spin(lambda: view.view.title() == "second"))
+            self.assertEqual(len(opened), 3)
+            page = view.page
+            ended = []
+            page.destroyed.connect(lambda *_: ended.append("page"))
+            view.profile.destroyed.connect(lambda *_: ended.append("profile"))
+            view.close_down()
+            view.close_down()                                      # twice is harmless
+            self.assertTrue(self.spin(lambda: len(ended) == 2))
+            self.assertEqual(ended, ["page", "profile"])
+            self.assertEqual(wv._closing, [])
+            self.assertEqual(wv._live, [])
+            view.deleteLater()
+            self.assertTrue(storage.is_dir())
+            # "Sign out of the website in the launcher", then the window again in the same session
+            self.assertTrue(wv.forget(storage))
+            again = wv.create(self.site, None, storage)
+            self.addCleanup(again.close_down)
+            loaded = []
+            again.view.loadFinished.connect(loaded.append)
+            again.load(self.site + "/account.html")
+            self.assertTrue(self.spin(lambda: loaded and again.view.title() == "account"))
+            self.assertTrue(storage.is_dir())
+            again.close_down()
+            self.assertTrue(self.spin(lambda: not wv._closing))
+            again.deleteLater()
 
 
 if __name__ == "__main__":

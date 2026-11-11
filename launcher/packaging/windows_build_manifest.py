@@ -13,7 +13,7 @@ import re
 
 
 MANIFEST = "windows-build-manifest.json"
-PACKAGES = ("pyinstaller", "pyinstaller-hooks-contrib", "PySide6-Essentials",
+PACKAGES = ("pyinstaller", "pyinstaller-hooks-contrib", "PySide6-Essentials", "PySide6-Addons", "PySide6-WebEngine",
             "shiboken6", "PySDL2", "pysdl2-dll", "hidapi", "certifi",
             "truststore", "pillow")
 

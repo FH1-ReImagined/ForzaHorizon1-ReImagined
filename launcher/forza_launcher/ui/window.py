@@ -9,7 +9,7 @@ from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QMainWindow,
                                QMessageBox, QPushButton, QStackedWidget, QTabBar, QVBoxLayout, QWidget)
 
-from .. import (APP_NAME, __version__, builder, cleanenv, coop_grant, crash_report, errors, game, paths, dlss,
+from .. import (APP_NAME, __version__, browser, builder, cleanenv, coop_grant, crash_report, errors, game, paths, dlss,
                online_features, shader_share)
 from ..config import Config, import_toml, render_toml
 from . import theme
@@ -174,6 +174,7 @@ class MainWindow(QMainWindow):
         self.fm4_laps = Fm4LapsPage(cfg, self)
         self.servers = ServersPage(cfg, self)
         self.servers.changed.connect(self._server_chosen)
+        self.play.offline_notice.went_online.connect(self._went_online)
         self.settings.attach_servers(self.servers)
         self.online = self.settings.online_page
         self._close_after_radio = False
@@ -426,6 +427,13 @@ class MainWindow(QMainWindow):
         and launcher.json and forza.toml are saved now."""
         self.settings.sync_server()
         self.settings.flush()
+
+    def _went_online(self):
+        """Play's "Go online" banner (Offline because Online features was off): saved and shown on
+        Online > Online and Servers."""
+        self.servers.fill()
+        self._server_chosen()
+        self.play.show_message("Online features are on again: Play now uses the Public server.")
 
     def _vulkan_result(self, devices):
         if devices and self.cfg.detect_vulkan(devices):
@@ -916,7 +924,11 @@ def run(argv):
     cleanenv.restore_process_environment()   # programs Qt starts (xdg-open) must not inherit _internal
     from PySide6.QtCore import Qt as _Qt
     QApplication.setHighDpiScaleFactorRoundingPolicy(_Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
+    # Qt WebEngine (the website sign-in window, ui/web_view.py) is imported only when that window
+    # opens, which Qt allows only with shared OpenGL contexts, set before the QApplication.
+    QApplication.setAttribute(_Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     app = QApplication([sys.argv[0]] + argv)
+    browser.install()   # links Qt opens itself take the same clean way (#815)
     app.setApplicationName("forza-reimagined-launcher")
     app.setDesktopFileName(paths.FLATPAK_ID or "forza-reimagined")
     # Qt file dialogs participate in controller navigation. In Flatpak they also keep

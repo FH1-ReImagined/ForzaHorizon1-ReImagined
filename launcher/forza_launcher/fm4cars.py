@@ -67,6 +67,50 @@ def stale(cfg):
     return _dlc(cfg) != sorted(info.get("dlc", []))
 
 
+SOUND_NOTICE = ("Some imported FM4 DLC cars (such as the 1986 Audi Sport quattro S1) had no engine sound bank, "
+                "and the game stopped with a disc read error when one was bought or was your current car. "
+                "They now use the sound of a similar FH1 engine, and your save starts again. To give them "
+                "their own engine sound, import FM4 cars again (Mods > Forza Motorsport 4 cars).")
+
+
+def repair_sound(cfg, log=print):
+    """Once for an import made before #776 (its marker has no "banks"): that import left out the
+    engine sound banks FH1 lacks, and a save whose current car was one of those cars stopped at
+    every start with the game's disc read error. Its harmonic tuning files that name a missing
+    bank get FH1's most similar one in the mod (which the game reads before the package), so the
+    cars drive with a similar engine's sound until the next import, which brings FM4's banks.
+    Returns a notice for the player when it changed something, else None."""
+    info = status(cfg)
+    if not info or info.get("banks"):
+        return None
+    folder = mods.mods_dir(cfg) / MOD
+    media = cfg.game_files() / "media"
+    if not media.is_dir():
+        return None  # no game files to check against: next time
+    try:
+        tools = _tools()
+        package, _ = _package(cfg)
+        fixes = tools.sound_fallbacks(str(media), str(package) if package.is_dir() else None, str(folder))
+        if fixes is None:
+            return None
+        ht_dir = folder / "media" / "audio" / "cars" / "engines" / "harmonictuning"
+        for name, (_, data) in fixes.items():
+            ht_dir.mkdir(parents=True, exist_ok=True)
+            (ht_dir / name).write_bytes(data)
+        info["banks"] = True
+        if fixes:
+            info["sound_fallback"] = {name: fh1 for name, (fh1, _) in sorted(fixes.items())}
+        (folder / MARKER).write_text(json.dumps(info, ensure_ascii=False, indent=1), encoding="utf-8")
+    except Exception as e:  # never in the way of starting the game
+        log(f"FM4 cars: could not check the engine sound banks ({e})")
+        return None
+    if not fixes:
+        return None
+    for name, (fh1, _) in sorted(fixes.items()):
+        log(f"FM4 cars: {name} names an engine sound bank no file has; FH1's {fh1} in its place (#776)")
+    return SOUND_NOTICE
+
+
 # ---- What the player chose (#681) --------------------------------------------------------------
 # Disc 1 can be a disc image (whole, trimmed or split into parts), a Games on Demand or hard drive
 # install package (its data parts hold the same XDVDFS volume as the disc), a folder with the
@@ -1108,7 +1152,8 @@ def _build(cfg, tools, target, backup, work, disc1, disc2, progress, cancelled, 
             fh1.close()
         if fm4 is not None:
             fm4.close()
-    info = {"format": 1, "cars": [c[1] for c in report["cars"]],
+    # banks: made with the engine sound banks FH1 lacks (#776), nothing for repair_sound to do
+    info = {"format": 1, "banks": True, "cars": [c[1] for c in report["cars"]],
             "skipped": [s[1] for s in report["skipped"]],
             "dlc": _dlc(cfg)}
     if dlc_packs or dlc:

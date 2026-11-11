@@ -425,6 +425,9 @@ ET = (b'<Engine>\r\n  <VolumeAdjustments EngineVolume="0.800000" TransmissionVol
       b'  <Exhaust><Upgrade L0="12N2_LP640_Exh_HT.xml"/></Exhaust>\r\n</Engine>\r\n')
 
 
+HT = b'<Soundbank name="%s">\r\n  <ExhaustL>\r\n    <Loop wavebankindex="0" rpm_min="500"/>\r\n  </ExhaustL>\r\n</Soundbank>\r\n'
+
+
 class EngineLevelTests(unittest.TestCase):
     """#712: an imported car keeps FM4's engine tuning, which FH1 never brought to its own cars'
     level; its GlobalCarVolume is raised, an FH1 car's tuning is left alone."""
@@ -446,20 +449,23 @@ class EngineLevelTests(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         self.addCleanup(lambda: fm4_cars.ZIPS.close(self.tmp))
 
-    def game(self, name, ets):
+    def game(self, name, ets, hts=None):
         media = os.path.join(self.tmp, name, "media")
         os.makedirs(os.path.join(media, "audio", "cars", "Engines"))
         for zname, members in (("CarModelTuning.zip", {}), ("Engines/EngineTuning.zip", ets),
-                               ("Engines/HarmonicTuning.zip", {})):
+                               ("Engines/HarmonicTuning.zip", hts or {})):
             with zipfile.ZipFile(os.path.join(media, "audio", "cars", *zname.split("/")), "w") as z:
                 for m, data in members.items():
                     z.writestr(m, data)
-        return mock.Mock(media=media, update=None, pack_audio=lambda: {"cmt": {}, "et": {}, "ht": {}})
+        return mock.Mock(media=media, update=None, pack_audio=lambda: {"cmt": {}, "et": {}, "ht": {}},
+                         banks=lambda: {})
 
     def converter(self, fh1_ets, fm4_ets):
         conv = fm4_cars.Converter.__new__(fm4_cars.Converter)
         conv.out, conv.pack = os.path.join(self.tmp, "out"), None
-        conv.fh1, conv.fm4 = self.game("fh1", fh1_ets), self.game("fm4", fm4_ets)
+        # FH1 has the harmonic tuning ET names (FH1's own, naming its own banks)
+        conv.fh1 = self.game("fh1", fh1_ets, {"12N2_LP640_Exh_HT.xml": HT % b"12N2_LP640_Exh.fsb"})
+        conv.fm4 = self.game("fm4", fm4_ets)
         conv.fh1db = sqlite3.connect(":memory:")
         conv.fh1db.execute("create table Data_Engine (EngineID INT, MediaName TEXT)")
         conv.fh1db.execute("create table List_UpgradeEngine (Ordinal INT, EngineID INT)")
@@ -486,6 +492,149 @@ class EngineLevelTests(unittest.TestCase):
         self.assertIsNone(self.et_out(conv, "HON_NSXRGT_05"))  # an FH1 car's engine (a swap)
         self.assertEqual(report["louder"], 2)
         self.assertEqual(report["audio"], [("CHE_CamaroSS_10", ["CHE_CamaroSS_10_ET.xml"])])
+
+
+S1 = "AUD_2_SportQuattro_86"
+S1_ET = ET.replace(b"12N2_LP640_Exh_HT.xml", b"5T1_A200_1478_Exh_HT.xml")
+S1_HT = HT % b"5T1_A200b_EXH.fsb"
+
+
+class SoundBankTests(unittest.TestCase):
+    """#776: an FM4 DLC car whose harmonic tuning names a sound bank FH1 lacks (the 1986 Audi
+    Sport quattro S1's 5T1_A200b_EXH.fsb): bought, or the save's current car, it stopped the game
+    with its disc read error. The import brings the bank as a loose file next to the car's zip;
+    a car whose bank no file has is left out; an older import gets FH1's most similar tuning."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(lambda: fm4_cars.ZIPS.close(self.tmp))
+        # FH1: its tuning archives and its loose banks (stand-ins, no game file)
+        self.fh1_media = os.path.join(self.tmp, "fh1", "media")
+        cars = os.path.join(self.fh1_media, "audio", "cars")
+        write_zip(os.path.join(cars, "CarModelTuning.zip"), {"LAM_MurcielagoLP640_07_CMT.xml": b"cmt"})
+        write_zip(os.path.join(cars, "Engines", "EngineTuning.zip"), {"LAM_MurcielagoLP640_07_ET.xml": ET})
+        write_zip(os.path.join(cars, "Engines", "HarmonicTuning.zip"), {
+            "12N2_LP640_Exh_HT.xml": HT % b"12N2_LP640_Exh.fsb",
+            "5T1_A200_Exh_HT.xml": HT % b"5T1_A200_Exh.fsb",
+            "5T1_A200_o633_Exh_HT.xml": HT % b"5T1_A200_Exh.fsb",
+            "5T1_A200_Int_HT.xml": HT % b"5T1_A200_Int.fsb",
+            "NA_Exh_HT.xml": HT % b"NA.fsb"})
+        for bank in ("12N2_LP640_Exh.fsb", "5T1_A200_Exh.fsb", "5T1_A200_Int.fsb"):
+            self.file(os.path.join(cars, "Engines", "Soundbanks", "LOD1", bank), b"FSB4" + bank.encode())
+        fh1db = self.file(os.path.join(self.fh1_media, "db", "gamedb.slt"), sqlite_bytes(
+            {"Data_Car": [(1017, "LAM_MurcielagoLP640_07")]},
+            {"Data_Car": "Id INT, MediaName TEXT", "Data_Engine": "EngineID INT, MediaName TEXT",
+             "List_UpgradeEngine": "Ordinal INT, EngineID INT"}))
+        self.fh1 = mock.Mock(media=self.fh1_media, update=None, db=lambda: sqlite3.connect(fh1db))
+        self.fh1db = self.fh1.db()
+        self.addCleanup(self.fh1db.close)
+        # FM4: a DLC pack's tuning (in its car zip) and its bank (loose next to it)
+        self.fm4_bank = self.file(os.path.join(self.tmp, "dlc", "Media", "DLCZips", "29_pri_65", "Media", "audio",
+                                               "cars", "Engines", "Soundbanks", "LOD1", "5T1_A200b_EXH.fsb"),
+                                  b"FSB4 the S1's exhaust")
+        pack_zip = write_zip(os.path.join(self.tmp, "dlc", "Media", "DLCZips", "29_pri_65.zip"), {
+            fm4_cars.PACK_AUDIO["et"] + S1 + "_ET.xml": S1_ET,
+            fm4_cars.PACK_AUDIO["ht"] + "5T1_A200_1478_Exh_HT.xml": S1_HT,
+            fm4_cars.PACK_AUDIO["cmt"] + S1 + "_CMT.xml": b"cmt"})
+        z = fm4_cars.ZIPS.get(pack_zip)
+        audio = {k: {} for k in fm4_cars.PACK_AUDIO}
+        for i in z.infolist():
+            for k, pre in fm4_cars.PACK_AUDIO.items():
+                if i.filename.startswith(pre):
+                    audio[k][i.filename[len(pre):].lower()] = (pack_zip, i)
+        self.fm4_banks = {"5t1_a200b_exh.fsb": (self.fm4_bank, "LOD1/5T1_A200b_EXH.fsb")}
+        fm4_media = os.path.join(self.tmp, "fm4", "Media")
+        os.makedirs(fm4_media)
+        self.fm4 = mock.Mock(media=fm4_media, pack_audio=lambda: audio, banks=lambda: self.fm4_banks)
+        self.package = os.path.join(self.tmp, "package")
+        self.mod = os.path.join(self.tmp, "mod")
+
+    def file(self, path, data):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(data)
+        return path
+
+    def converter(self, package=True):
+        conv = fm4_cars.Converter.__new__(fm4_cars.Converter)
+        conv.fh1, conv.fm4, conv.fh1db, conv.out = self.fh1, self.fm4, self.fh1db, self.mod
+        conv.pack = (fm4_cars.PackWriter(os.path.join(self.package, "Media", "DLCZips"), fm4_cars.PACK_STEM,
+                                         fm4_cars.PACK_PRIORITY) if package else None)
+        return conv
+
+    def loose_bank(self, zip_name="fm4cars1_pri_60"):
+        return os.path.join(self.package, "Media", "DLCZips", zip_name, "Media", "audio", "cars", "Engines",
+                            "Soundbanks", "LOD1", "5T1_A200b_EXH.fsb")
+
+    def import_s1(self):
+        """The S1 the way run() converts it: its files into the pack, then its sound."""
+        conv = self.converter()
+        report = {}
+        plan = conv.audio_plan(S1, [S1])
+        conv.pack.add("media/cars/%s/%s.carbin" % (S1, S1.lower()), b"car")
+        conv.audio_apply(S1, plan, report)
+        conv.audio(S1, [S1], report)  # a second car with the same engine: nothing twice
+        conv.pack.close()
+        self.file(os.path.join(self.mod, "media", "db", "gamedb.slt"), sqlite_bytes(
+            {"Data_Car": [(1478, S1), (1017, "LAM_MurcielagoLP640_07")], "Data_Engine": [(9, S1)],
+             "List_UpgradeEngine": [(1, 1478, 9)]},
+            {"Data_Car": "Id INT, MediaName TEXT", "Data_Engine": "EngineID INT, MediaName TEXT",
+             "List_UpgradeEngine": "Id INT, Ordinal INT, EngineID INT"}))
+        return report
+
+    def test_bank_names(self):
+        self.assertEqual(fm4_cars.bank_names(S1_HT), ["5T1_A200b_EXH.fsb"])
+        self.assertEqual(fm4_cars.bank_names(b'<Soundbank name="6N1_NSX_EngAmb">'), ["6N1_NSX_EngAmb.fsb"])
+
+    def test_the_bank_fh1_lacks_goes_next_to_the_cars_zip(self):
+        report = self.import_s1()
+        with open(self.loose_bank(), "rb") as f:
+            self.assertEqual(f.read(), b"FSB4 the S1's exhaust")
+        self.assertEqual(report["banks"], 1)
+        self.assertEqual(report["audio"][0], (S1, [S1 + "_CMT.xml", S1 + "_ET.xml", "5T1_A200_1478_Exh_HT.xml",
+                                                   "5T1_A200b_EXH.fsb"]))
+        names = zipfile.ZipFile(os.path.join(self.package, "Media", "DLCZips", "fm4cars1_pri_60.zip")).namelist()
+        self.assertIn(fm4_cars.PACK_AUDIO["ht"] + "5T1_A200_1478_Exh_HT.xml", names)
+        self.assertFalse([n for n in names if n.lower().endswith(".fsb")])  # never in a zip
+        self.assertEqual(fm4_cars.check_import(self.fh1, self.mod, self.package), [])
+
+    def test_a_bank_fh1_has_is_not_copied(self):
+        self.fm4_banks["5t1_a200_exh.fsb"] = (self.fm4_bank, "LOD1/5T1_A200_Exh.fsb")
+        conv = self.converter()
+        conv.audio("LAM_MurcielagoLP640_07", ["LAM_MurcielagoLP640_07"], {})
+        self.assertEqual(conv.pack.loose, set())
+
+    def test_a_car_whose_bank_no_file_has_is_left_out_before_anything_is_written(self):
+        self.fm4_banks.clear()
+        conv = self.converter()
+        with self.assertRaisesRegex(fm4_cars.ConvertError, "5T1_A200b_EXH.fsb is in none of the files"):
+            conv.audio_plan(S1, [S1])
+        self.assertFalse(os.path.exists(self.mod))
+        self.assertEqual(conv.pack.names, set())
+        with self.assertRaisesRegex(fm4_cars.ConvertError, "only from a package"):
+            self.fm4_banks["5t1_a200b_exh.fsb"] = (self.fm4_bank, "LOD1/5T1_A200b_EXH.fsb")
+            self.converter(package=False).audio_plan(S1, [S1])
+
+    def test_the_check_names_a_missing_bank_and_the_old_import_gets_fh1s_similar_tuning(self):
+        self.import_s1()
+        os.unlink(self.loose_bank())  # the import before #776 had no bank
+        self.assertEqual(fm4_cars.check_import(self.fh1, self.mod, self.package), [
+            ("%s (1478)" % S1, "5T1_A200_1478_Exh_HT.xml names the sound bank 5T1_A200b_EXH.fsb, which no file has")])
+        fixes = fm4_cars.sound_fallbacks(self.fh1_media, self.package, self.mod)
+        self.assertEqual(fixes, {"5T1_A200_1478_Exh_HT.xml": ("5T1_A200_Exh_HT.xml", HT % b"5T1_A200_Exh.fsb")})
+        self.file(os.path.join(self.mod, "media", "audio", "cars", "engines", "harmonictuning",
+                               "5T1_A200_1478_Exh_HT.xml"), fixes["5T1_A200_1478_Exh_HT.xml"][1])
+        self.assertEqual(fm4_cars.check_import(self.fh1, self.mod, self.package), [])  # the mod's copy is read
+        self.assertEqual(fm4_cars.sound_fallbacks(self.fh1_media, self.package, self.mod), {})  # once
+        self.assertIsNone(fm4_cars.sound_fallbacks(os.path.join(self.tmp, "none"), self.package, self.mod))
+
+    def test_similar_tunings(self):
+        fh1 = ["5T1_A200_o633_Exh_HT.xml", "5T1_A200_Int_HT.xml", "5T1_A200_Exh_HT.xml", "2RT2_RX7_Exh_HT.xml",
+               "2RN2_RX8_Exh_HT.xml", "2RN2_RX8_Int_HT.xml", "4N1_E30M3_Exh_HT.xml", "NA_Exh_HT.xml"]
+        self.assertEqual(fm4_cars.similar_tunings("5T1_A200_1478_Exh_HT.xml", fh1)[0], "5T1_A200_Exh_HT.xml")
+        self.assertEqual(fm4_cars.similar_tunings("2RN3_FBRX7_Int_HT.xml", fh1)[0], "2RN2_RX8_Int_HT.xml")
+        self.assertEqual(fm4_cars.similar_tunings("4R3_787B_Exh_HT.xml", fh1)[:2],
+                         ["2RN2_RX8_Exh_HT.xml", "2RT2_RX7_Exh_HT.xml"])  # a rotary before a 4-cylinder
 
 
 # ---- FM4 DLC packs: stand-ins with the layout FM4's packs have (no game file) -------------------

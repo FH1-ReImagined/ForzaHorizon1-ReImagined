@@ -164,7 +164,7 @@ class DialogTests(unittest.TestCase):
         self.addCleanup(self.dialog.deleteLater)
 
     def test_open_is_explicit_and_uses_edited_report(self):
-        with patch("forza_launcher.ui.crash_report.QDesktopServices.openUrl", return_value=True) as browser:
+        with patch("forza_launcher.browser.QDesktopServices.openUrl", return_value=True) as browser:
             self.dialog.show()
             self.app.processEvents()
             browser.assert_not_called()
@@ -178,7 +178,7 @@ class DialogTests(unittest.TestCase):
     def test_long_report_is_copied_intact_and_draft_explains_paste(self):
         body = "日本語\n" * 8000
         self.dialog.body.setPlainText(body)
-        with patch("forza_launcher.ui.crash_report.QDesktopServices.openUrl", return_value=True) as browser:
+        with patch("forza_launcher.browser.QDesktopServices.openUrl", return_value=True) as browser:
             self.dialog.github.click()
         self.assertEqual(self.app.clipboard().text(), body)
         self.assertIn("paste it", self.dialog.notice.text())
@@ -187,7 +187,7 @@ class DialogTests(unittest.TestCase):
         self.assertIn("Paste the crash report", parse_qs(urlparse(url).query)["body"][0])
 
     def test_browser_failure_preserves_report_and_offers_copy(self):
-        with patch("forza_launcher.ui.crash_report.QDesktopServices.openUrl", return_value=False):
+        with patch("forza_launcher.browser.QDesktopServices.openUrl", return_value=False):
             self.dialog.github.click()
         self.assertIn("Could not open", self.dialog.notice.text())
         self.dialog.copy.click()

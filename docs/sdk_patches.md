@@ -650,3 +650,85 @@ each cvar turns its part off, or `FORZA_VK_DYNAMIC_CONSTANTS=0`, `FORZA_VK_BINDI
 `FORZA_VK_TEXTURE_SET_REUSE=0`). With the split every memo is used on the recorder thread only. Measurements: -7.4 % of
 the command processor's time a draw; with the split, 123.6 to 153.5 fps uncapped in the benchmark on eight cores and
 131.5 to 153.0 on six ([perf.md](perf.md)).
+
+## ReIGlue 0470-0471: guest atomics without the global lock (#506)
+
+Xbox 360 code wraps every `lwarx`/`stwcx.` (`ldarx`/`stdcx.`) loop in an interrupts-off section (`mtmsrd r13`
+before the load-reserve, `mtmsrd` of an earlier `mfmsr` after the store-conditional), and the generated code took
+the global critical region, the recursive mutex the kernel exports share, for each section and again for the `mfmsr`
+before it. In FH1 these are the game's reference counts, exchanges and compare-exchanges.
+
+- **0470** (`lock_free_reservations` in the codegen config, on): the code generator checks each section before it
+  emits the function. A section whose every path is one load-reserve and at most one store-conditional of the same
+  width to the same, unchanged address registers, with only register arithmetic, compares and forward branches
+  between them, and which is entered only through its `mtmsrd r13`, is one atomic read-modify-write: its
+  store-conditional is already a host compare-exchange, so it runs without the lock, as on the console, where the
+  section only keeps this CPU's interrupts out. TU4: 1069 of the executable's 1070 sections (all but the SList push,
+  `sub_8320EF20`), and all of the speech and XMedia facade modules' (27 and 368). The codegen log line
+  `Interrupts-off sections: N, M of them lock-free` counts them.
+- **0471**: `mfmsr` reads this thread's count of locked sections instead of taking the lock to read a global count
+  (while a thread holds the lock no other thread is in a section, so that count was always the reader's own).
+
+After Pinyon Shift's single-reservation sections and thread-local interrupt depth (ShiftGlue `07b2b2a` and
+`b13a1b5`), written for ReIGlue's code generator; credited in ReIGlue's NOTICE. Tests: ReIGlue's
+`reservation_sections_test.cpp` (the shapes FH1 uses convert; other loads and stores, mixed widths, changed address
+registers, calls, barriers, nested sections, loops, entries from outside and unknown switch targets keep the lock)
+and `seq_reservation_sections.s` (FH1's sections run, the SList push included); all 1588 PPC tests pass.
+
+Measured on main `583e05c` (ReIGlue `5408d20`) against the same with 0470-0471 (TU4, Linux, Ryzen 7 7800X3D,
+RX 9060 XT, RADV; built-in benchmark, 1280x720, uncapped, three alternating pairs each). A build with
+`-DREX_GUEST_LOCK_STATS` counts the sections: in the benchmark's measured minute, 6,378 `mfmsr` and 6,378 sections a frame (about 970,000 a second each), so about 12,800 lock acquisitions a
+frame before and none after (the SList push took it 5 times in the whole run).
+
+| | Before (fps, 1% low) | After (fps, 1% low) |
+| --- | --- | --- |
+| 6 cores (`taskset -c 0-5`) | 165.9 [164.3-168.1], 106.9 | **175.5** [170.0-181.0], 114.0 (+5.8 %; each run above its pair's) |
+| 8 cores | 167.9 [164.0-170.3], 112.1 | 169.7 [158.9-180.5], 113.8 (within the spread) |
+
+The 8-core rows leave out a first pair taken while another job loaded the machine (153.9 against 146.5 fps). On a
+30 fps session (boot, three minutes of free roam, the GoPro Millennia Masters race) the log had only the two error
+lines every run has (`ResolvePath(\Device)`, `XMsgStartIORequestEx`) and no `FORZA_STALL`. Not checked: Windows, the Steam Deck, four cores.
+
+## ReIGlue 0480: a test hook for the transfers of drivers without stencil export (#640)
+
+`FORZA_TEST_NO_STENCIL_EXPORT=1` (an environment variable, for testing) leaves `VK_EXT_shader_stencil_export` off. NVIDIA's
+driver lacks the extension, so its render target transfers to depth copy the stencil in one draw per bit (0461 skips the
+bits the source does not have); with the hook AMD's and Intel's drivers take that path too, so a change to it can be
+checked, and its pictures compared, on Linux. Unset, nothing changes. What it was used for is in
+[perf.md](perf.md#the-gtx-1650-tis-gpu-frame-after-770-and-two-transfer-cuts-that-do-not-pay-640-2026-11-11).
+
+## ReIGlue 0510: fetch opcodes the GPU does not define, execs past the end of the microcode (#808)
+
+On the converted FM4 circuit Suzuka the game stopped 10-20 s into lap 1, on the command processor's thread:
+`IssueDraw -> Shader::AnalyzeUcode -> GatherTextureFetchInformation -> ParsedTextureFetchInstruction::Disassemble ->
+strlen(NULL)`. `ParseTextureFetchInstruction` has no case for a fetch opcode the GPU does not define (2-15, 20-23,
+27-31) and left the instruction's name null, which the disassembler appended. 0510 parses such a fetch as one that
+does nothing (no result, no texture binding, skipped by the translators) and disassembles it as `tfetch_opcode_N`;
+the other name tables (texture and anisotropic filters, the vertex fetch's data format) print a number for a value
+they have no name for. `tests/shader_disasm_test.cpp` in ReIGlue covers each case.
+
+Where the fetch came from: not an FM4 shader value. With the fix and `--dump_shaders`, no shader had such an
+opcode inside its microcode; three pixel shaders of 105 and 144 dwords had control flow that runs instruction 3720,
+and the analysis read the memory after the shader's copy of the microcode, where one of those "fetches" had an
+undefined opcode. 0510 also skips instructions past the end of the microcode (in the analysis and in translation,
+with a warning once per shader: `an exec runs instruction N, past the end of the microcode`).
+
+Those shaders are FM4 track shaders loaded from the wrong place. Matching the microcode dumped in a Suzuka run
+against the converted track's `.fxobj` files: 18 of its pixel shaders, each the second pass's of its effect
+(`DIFF_SPEC_1`, `DIFF_1_HQ`, `BARR_SHAD_DIFF_SPEC_1`, `BARR_SHAD_DIFF_1`, `DIFF_CLR_SPEC_OPAC_REFL_4`,
+`TREE_DIFF_OPAC_DIRLIGHT_2_2SD` and others), were loaded from their own physical part, but at the first pass's
+microcode offset and with its length. Where the
+first pass has literal constants (offset 0x40) and the second has none (offset 0), the GPU gets 64 bytes into the
+second shader, so its "control flow" is instruction words (the crash); where only the lengths differ the shader is
+cut short or runs on into the next one. In the guest memory of a running game, the address in the shader load
+packet is the second shader's physical part plus 0x40. The `.fxobj` files are FM4's own layout (the converter,
+`tools/fm4_shaders.py`, only patches microcode words; each blob's own header holds the right offset and length).
+FH1's own track effects also have second passes of another length than the first (195 of 197 files), and none of
+their shaders ran past its end in these runs, so what makes the game take the first pass's values for FM4's
+effects is still open (#808 keeps it). Until then those
+passes draw from the wrong microcode, without stopping the game.
+
+Checked (Linux, TU4 build of main 0ec811b6 with the FM4 cars mod, RX 9060 XT, RADV, 30 fps, the dev autopilot on
+`tools/fm4_line.py` lines): with the plugin of the current pin the crash came 9 s into lap 1, as in the three runs
+before; with 0510, Suzuka two full laps (4:07.49, 4:05.82) and Laguna Seca one (3:45.29), no crash; FH1's free roam
+in Colorado drives as before.

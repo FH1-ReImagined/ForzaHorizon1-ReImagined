@@ -4,12 +4,12 @@ from math import ceil
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QThread, QSize, Qt, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QIcon, QKeySequence, QPixmap, QShortcut
+from PySide6.QtGui import QIcon, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QFileDialog,
                                QHBoxLayout, QLabel, QListView, QListWidget,
                                QListWidgetItem, QMessageBox, QPushButton, QScrollArea, QVBoxLayout, QWidget)
 
-from .. import gallery, paths
+from .. import browser, gallery, paths
 from . import theme
 
 
@@ -461,7 +461,7 @@ class GalleryPage(QWidget):
 
     def open_folder(self):
         if self.profile and self.profile.is_dir():
-            if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.profile))):
+            if not browser.open_url(QUrl.fromLocalFile(str(self.profile))):
                 self.message.setText("The save folder could not be opened. Its path is shown below.")
 
     def shutdown(self):

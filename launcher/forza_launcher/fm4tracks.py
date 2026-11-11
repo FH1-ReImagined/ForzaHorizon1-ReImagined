@@ -32,6 +32,7 @@ and the start is offline: other players are in Colorado. The game folder is neve
 Nothing is downloaded and nothing leaves this PC.
 """
 import json
+import math
 import os
 import re
 import shutil
@@ -41,10 +42,12 @@ import sys
 import tempfile
 import threading
 import time
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from . import cleanenv, mods, paths
 from . import fm4cars
+from .config import _atomic_write
 from .fetch import Cancelled
 from .fm4cars import Fm4Error
 
@@ -381,6 +384,40 @@ def spawn_of(disc_root: Path, folder: str, ribbon: int):
     return f"{x:.1f},{y:.1f},{z:.1f},{fx:.3f},{fz:.3f}"
 
 
+def _ensure_festival_node(track_dir: Path, spawn):
+    """FH1's free-roam startup dereferences this Colorado node on imported circuits too."""
+    # The converter maps the free-roam layout to Ribbon_00, even when it started as Ribbon_01.
+    ribbon = fm4cars._find_ci(track_dir, "Ribbon_00") or track_dir / "Ribbon_00"
+    path = fm4cars._find_ci(ribbon, "gameobjs.xml") or ribbon / "gameobjs.xml"
+    try:
+        root = ET.parse(path, parser=ET.XMLParser(target=ET.TreeBuilder(insert_comments=True))).getroot()
+    except FileNotFoundError:
+        root = ET.Element("GameObjs")
+    except ET.ParseError as exc:
+        raise Fm4TrackError("Could not read the circuit's GameObjs.xml. Import the circuit again.") from exc
+    if root.tag != "GameObjs":
+        raise Fm4TrackError("Could not read the circuit's GameObjs.xml. Import the circuit again.")
+    node_id = "FESTIVAL_SECOND_NODE"
+    if any(obj.get("GameplayID") == node_id for obj in root):
+        return
+    try:
+        x, y, z, fx, fz = map(float, (spawn or "").split(","))
+        if not all(map(math.isfinite, (x, y, z, fx, fz))):
+            raise ValueError
+    except ValueError as exc:
+        raise Fm4TrackError("The circuit has no valid grid position. Import it again from FM4 Disc 1.") from exc
+    length = math.hypot(fx, fz)
+    fx, fz = (fx / length, fz / length) if length else (0, 1)
+    last = max((int(obj.tag[3:]) for obj in root
+                if isinstance(obj.tag, str) and re.fullmatch(r"Obj[0-9]+", obj.tag)), default=-1)
+    node = ET.SubElement(root, f"Obj{last + 1}", GameplayID=node_id)
+    ET.SubElement(node, "Pos", x=str(x), y=str(y), z=str(z))
+    orientation = ET.SubElement(node, "Orientation")
+    for axis, vector in (("XAxis", (fz, 0, -fx)), ("YAxis", (0, 1, 0)), ("ZAxis", (fx, 0, fz))):
+        ET.SubElement(orientation, axis, dict(zip("xyz", (f"{v:.6f}" for v in vector))))
+    _atomic_write(path, ET.tostring(root, encoding="unicode", xml_declaration=True) + "\n")
+
+
 def lap_line(disc_root: Path, folder: str, ribbon: int, name: str):
     """lap.txt for the game's lap timer (tools/fm4_timing.py: FM4's AI line, its sectors and
     length), or None when the disc has no AI line for the circuit."""
@@ -575,8 +612,10 @@ def _build_one(cfg, disc_root: Path, folder, game: Path, update: Path, work: Pat
                                      'description = "Made by Import FM4 tracks from your own FM4 disc. Never share it."\n',
                                      encoding="utf-8")
     ribbon = free_roam_ribbon(track_src)
+    spawn = spawn_of(disc_root, folder, ribbon)
+    _ensure_festival_node(dest, spawn)
     info = {"format": FORMAT, "key": key, "folder": folder, "name": name, "ribbon": ribbon,
-            "spawn": spawn_of(disc_root, folder, ribbon), "imported": time.strftime("%Y-%m-%d %H:%M"),
+            "spawn": spawn, "imported": time.strftime("%Y-%m-%d %H:%M"),
             "size": _tree_size(staged) + _tree_size(db_mod)}
     (staged / MARKER).write_text(json.dumps(info, ensure_ascii=False, indent=1), encoding="utf-8")
     if info["spawn"]:
@@ -704,8 +743,17 @@ def configure(cfg, env: dict, args: list, unset: list, notes: list, write=True):
     if info is None:
         return None
     folder = Path(info["path"])
-    if write and info.get("spawn") and not (folder / SPAWN_FILE).is_file():
-        (folder / SPAWN_FILE).write_text(info["spawn"] + "\n", encoding="utf-8")
+    if write:
+        spawn_file = folder / SPAWN_FILE
+        try:
+            with spawn_file.open(encoding="utf-8") as f:
+                saved_spawn = f.readline().strip()
+        except FileNotFoundError:
+            saved_spawn = ""
+        spawn = saved_spawn or info.get("spawn")
+        _ensure_festival_node(folder / "media" / "tracks" / key, spawn)
+        if not saved_spawn and spawn:
+            _atomic_write(spawn_file, spawn + "\n")
     extra = mods_for(cfg, key, write)
     for i, a in enumerate(args):
         if a.startswith("--forza_mods="):

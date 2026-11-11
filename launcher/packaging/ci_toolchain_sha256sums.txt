@@ -1,0 +1,15 @@
+# SHA-256 of every file in the release ci-toolchain-jammy-gcc14 (the project's GitHub copy of the
+# toolchain PPA's packages in ci_toolchain_debs.txt, and their source packages), by release file
+# name (+ spelled plus, ~ spelled tilde). ci_linux_sdk_setup.sh installs a package from that copy
+# only when it matches its line here; ci-toolchain-mirror.yml takes the hashes from the PPA's
+# signed index and prints the lines to add when the list changes.
+# GCC 14.3.0 built from GNU's sources for Ubuntu 22.04 (build_gcc14_jammy.sh, ci-toolchain-gcc.yml),
+# which ci_linux_sdk_setup.sh installs first, and the source it was built from.
+208888803d0787df18ef004b7dafee02a1f5dae1757af553089d73fa618ed4a9  gcc-14.3.0-jammy-x86_64.tar.xz
+e0dc77297625631ac8e50fa92fffefe899a4eb702592da5c32ef04e2293aca3a  gcc-14.3.0.tar.xz
+988423fb426374256b9d6ba6601406088add3d24d04990eff2f7a0822f58ba4c  gcc-14.3.0.tar.xz.sig
+49f089be11b490170bbf09ed2f51e5f5177f55be4cc66504a5861820e0fb06ab  gettext-0.22.tar.gz
+eae9326beb4158c386e39a356818031bd28f3124cf915f8c5b1dc4c7a36b4d7c  gmp-6.2.1.tar.bz2
+fcf78dd9656c10eb8cf9fbd5f59a0b6b01386205fe1934b3b287a0a1898145c0  isl-0.24.tar.bz2
+17503d2c395dfcf106b622dc142683c1199431d095367c6aacba6eec30340459  mpc-1.2.1.tar.gz
+feced2d430dd5a97805fa289fed3fc8ff2b094c02d05287fd6133e7f1f0ec926  mpfr-4.1.0.tar.bz2

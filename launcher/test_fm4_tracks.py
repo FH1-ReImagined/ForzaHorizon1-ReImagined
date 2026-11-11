@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest import mock
 
@@ -187,6 +188,11 @@ class Import(Base):
         # 15 m behind waypoint 0, facing along the line (FM4's (x, y, z) is FH1's (x, z + 1, y))
         self.assertEqual(info["spawn"], "0.0,11.0,-15.0,0.000,1.000")
         root = Path(info["path"])
+        objs = ET.parse(root / "media/tracks/suzuka/Ribbon_00/gameobjs.xml")
+        node = objs.find("Obj0[@GameplayID='FESTIVAL_SECOND_NODE']")
+        self.assertIsNotNone(node)
+        self.assertEqual(node.find("Pos").attrib, {"x": "0.0", "y": "11.0", "z": "-15.0"})
+        self.assertEqual(node.find("Orientation/ZAxis").get("z"), "1.000000")
         for rel in ("media/tracks/suzuka/bin.zip", "media/tracks/suzuka/fm4_stream_blocks.txt",
                     "media/tracks/suzuka/TrackSettings.xml", "media/tracks/suzuka/Ribbon_00/a.pvs",
                     "media/zipmanifest.xml", "media/audio/tracks/Suzuka/amb.fev",
@@ -303,7 +309,18 @@ class Start(Base):
         self.assertEqual(Config(self.cfg.path).d["fm4_tracks"]["selected"], "suzuka")
         folder = fm4tracks.store(self.cfg) / "suzuka"
         (folder / "spawn.txt").unlink()  # an import made before spawn.txt: written at the start
+        objs = folder / "media/tracks/suzuka/Ribbon_00/gameobjs.xml"
+        old_objects = b'<GameObjs><Obj0 GameplayID="KEEP_ME" /></GameObjs>'
+        objs.write_bytes(old_objects)  # an import made before the grid node was generated
+        self.plan(write=False)
+        self.assertEqual(objs.read_bytes(), old_objects)
         plan = self.plan(write=True)
+        repaired = objs.read_bytes()
+        root = ET.fromstring(repaired)
+        self.assertIsNotNone(root.find("Obj0[@GameplayID='KEEP_ME']"))
+        self.assertIsNotNone(root.find("Obj1[@GameplayID='FESTIVAL_SECOND_NODE']"))
+        self.plan(write=True)
+        self.assertEqual(objs.read_bytes(), repaired)
         self.assertEqual(plan.fm4_track, "suzuka")
         # the game mounts the circuit itself: the game folder stays the player's
         self.assertIn(f"--game_data_root={self.t / 'game'}", plan.argv)
