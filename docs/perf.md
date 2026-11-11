@@ -3815,6 +3815,34 @@ recorder ("GPU Recorder", the draws) 4.35 ms a frame and 77 % busy, the decoder 
 - 0451's vectorised compare changes little by itself: the elision is bound by reading the game's command data
   for the first time, not by the compare.
 
+**Render check** (2026-11-11, rebased on ReIGlue 5408d20 and main: the base is 5408d20, against 0450-0451 and
+0450-0452 on it; same game build, split on). `tools/render_test.py` (festival session, 6 scenes) against the
+stored baselines, interleaved, passes per scene:
+
+| | Runs | All 6 pass | title | free roam midday | free roam dawn | cockpit | photo mode | race start | Scenes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Base | 6 | 4 | 5 | 4 | 5 | 5 | 4 | 5 | 28/36 |
+| 0450-0451 | 3 | 1 | 2 | 2 | 3 | 3 | 3 | 1 | 14/18 |
+| 0450-0452 | 6 | 4 | 5 | 5 | 5 | 5 | 5 | 6 | 31/36 |
+
+The first check's 2 of 6 (on a4aff83) was the run's scene, not the picture: the base fails the same way. In one
+run of the base and one of 0450-0452 the car rests a little differently at the spawn point (photo mode's yaw
+reads 280.0 instead of 280.1, or the trees move against the car), which fails cockpit, both free roam scenes and
+photo mode together; the other failures are traffic and drivatar name tags in view, the race clock up to 2 s apart at
+the start, and the title's attract camera a frame early (0.0150 against 0.015). When the pose matches, 0450-0452
+matches the baselines as closely as the base (free roam midday 0.0009 and dawn 0.0006 against 0.005 and 0.01).
+
+**Benchmark on the rebased stack** (same method as above, 8 cores, base 5408d20 against 0450-0452 on it, base,
+change, change, base):
+
+| | fps | 1% low | p99 ms | Draws a frame | Recorder us a draw | Decoder ms a frame | Decoder busy | Process CPU ms a frame |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Base | 171.8 (173.4, 170.3) | 112.1 | 7.72 | 4,339 | 1.052 | 3.67 | 63 % | 19.1 |
+| 0450-0452 | 172.4 (171.1, 173.7) | 118.3 | 7.44 | 4,345 | 1.027 | 2.65 | 46 % | 18.0 |
+
+At the same draws a frame: the decoder 28 % less CPU a frame, the recorder 2.4 % less a draw, the 1% low +5.5 %
+(Windows on an RTX 5060 Ti: +7 %), the average the same.
+
 **Left.** The recorder still runs 77-79 % of the frame and its time is the draw setup; the draw-setup study
 (#607 item 4) found it flat and points at register-group dirty bits that the decoder could produce (what
 changed since the previous draw) so the recorder skips the unchanged groups' work: the next step here.
