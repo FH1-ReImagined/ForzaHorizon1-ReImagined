@@ -101,7 +101,8 @@ tools/run_forza.sh 120        # a two-minute test run; logs in ${XDG_RUNTIME_DIR
   (`python3 server/forza_live_server.py --http-port 21201`) and start the game with
   `FORZA_SERVER=host[:port]` (or `live_server = "host:port"` in `forza.toml` next to the
   binary). Your online identity (XUID, gamertag: your login name unless
-  `FORZA_GAMERTAG` is set) is kept in `~/.local/share/forza/4D5309C9/live_identity.txt`.
+  `FORZA_GAMERTAG` is set) is kept in `live_identity.txt`, in `Documents\forza\4D5309C9` on
+  Windows and `~/.local/share/forza/4D5309C9` on Linux ([below](#cant-get-online)).
   Everyone in the server's room is your friend. Title Update 4 and base-game players
   can't play together: a TU4 game uses the room's "#TU4" version, so each meets only
   players of its own version.
@@ -275,6 +276,62 @@ tools/run_forza.sh 120        # a two-minute test run; logs in ${XDG_RUNTIME_DIR
   5 s (unless SDL found no audio driver at all), so the sound comes back once the device is free.
   Builds before SDK patch 0103 stopped there (#244). On Windows, try another default output, or
   untick "Allow applications to take exclusive control" in the device's Properties > Advanced.
+
+## Can't get online?
+
+No registration or account is needed to play online: there is no sign-up, key, website
+account or Xbox account. The first time the game starts with a server picked (launcher
+**Online > Servers**), it makes its own online identity and signs in. `forza.log` in the game
+data folder says what happened, in the lines that start with `FORZA_LIVE`:
+
+- **`signed in to <server> as <gamertag> (player #N)`**: you are online.
+- **`server error 1: not registered`**: harmless. At the start the game can ask the server
+  for the player list before its first sign-in; the server answers with this, and the game
+  signs in again at once (`signed in to` follows within a few milliseconds).
+- **`has not answered in 30 s`**: the server never answered the game's UDP traffic. Something
+  between the PC and the server drops it: a firewall or antivirus, a VPN or proxy, or the
+  network or provider. Allow `forza.exe` in Windows Firewall and in the antivirus, turn off
+  the VPN or proxy, try a phone hotspot, or pick another server. Every online feature says
+  the Forza Horizon server is unavailable until the server answers once.
+- **`cannot resolve server <name>`**: the server's name does not resolve, usually because a
+  DNS filter blocks it (Pi-hole, AdGuard, NextDNS, router parental controls, an antivirus).
+  Allow the name or switch to a public DNS; `nslookup <name>` checks it.
+- **No `FORZA_LIVE` lines at all**: Online is off, so the game never tries to sign in.
+  Unticking "Online features" in the installer (an update's installer too) or answering no
+  to the launcher's first-start question on Linux sets it to Offline. Open **Online >
+  Servers**, select **Forza Live (main server)** (the public server) and press **Use this
+  server**.
+- **Back as a new player, or friends and chat off**: the identity is `live_identity.txt`
+  (XUID, gamertag, friends key, signing key). It is in `Documents\forza\4D5309C9` on Windows
+  (the Documents folder Windows names, which OneDrive may have moved), and in
+  `$XDG_DATA_HOME/forza/4D5309C9` (`~/.local/share/forza/4D5309C9`) on Linux, which is
+  `~/.var/app/io.github.dyotson.ForzaHorizon1ReImagined/data/forza/4D5309C9` in the Flatpak.
+  The launcher's game data folder setting does not move it. Without the file the game makes
+  a new XUID: the same save, but a new player with no friends list. Keep a copy when you
+  reinstall, reset Documents or move to another PC, and put it back before you start the game
+  there. A log line `has this XUID linked to another installation` means the file has the
+  old XUID without its signing key: put the whole original file back, or ask on Discord.
+- **Can't see a friend**: base-game and Title Update 4 players are in separate rooms (a TU4
+  game adds "#TU4" to its room), and so are players with different `live_room` settings. Play
+  the same version, in the same room.
+
+**Signing in on the website.** A website account on [forza.dyotson.dev](https://forza.dyotson.dev)
+(Discord, GitHub or an emailed code) is optional; likes and your own photos and designs there
+need it linked to your game.
+
+1. Upload one speed trap to the public server first: drive through any speed trap while the
+   game is signed in to the public server. Single player is fine. Until then the website
+   answers "Play online on the public server once, then try again."
+2. In the launcher, open **Online > Online**. The **Website account** card shows while the
+   public server is picked: press **Link to website account**.
+3. The browser opens forza.dyotson.dev: sign in and click **Link**. On another device, open
+   forza.dyotson.dev/account.html, sign in and enter the code the launcher shows (it works for
+   10 minutes).
+4. Back in the launcher, check the account it names and confirm.
+
+Likes and uploads work right after. Your likes are added to the public totals once your game
+is 72 hours past its first signed sign-in and has signed in on 2 different days. A game's link
+can change at most once a day.
 
 ## Car sound levels (#730)
 

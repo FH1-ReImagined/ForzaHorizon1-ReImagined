@@ -65,12 +65,16 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # requests kept within a submission, texture descriptor sets of the frame used again (#192, #179),
 # and 0460-0462: GPU time per kind of work (fh1_gpu_profile), render target transfers without
 # stencil export drawing only the stencil bits set in their source, NVIDIA's direct texture upload
-# at render scale 1 (#640), and 0480: FORZA_TEST_NO_STENCIL_EXPORT=1 takes NVIDIA's render target
-# transfer path on other GPUs (a test hook, #640).
+# at render scale 1 (#640),
+# and 0450-0452: the split command processor's register runs stored without the backend, its
+# unchanged-register elision, and its fence waits woken once (#607),
+# and 0470-0471: guest atomic sections and mfmsr without the global lock (#506),
+# and 0490: tile resolves on the fractional 1080p raster land at their 0.75 position (#785),
+# and 0480: FORZA_TEST_NO_STENCIL_EXPORT, a test hook that takes the stencil-export-free transfer path (#640).
 # A reviewed full commit can be pinned before a maintainer publishes a tag.
 # When a tag is supplied, its target must still match this immutable commit.
 REIGLUE_TAG=
-REIGLUE_COMMIT=b2aa86e585f1644a9c5c94fd99fb737b9e726700  # ReIGlue main (0420, 0442-0445, 0460-0462, ReIGlue #46) and 0480 (#640)
+REIGLUE_COMMIT=02b84628b7b724094e57b6ba162a9fed1369b901  # ReIGlue main: 0450-0452 (#47), 0470-0471 (#48), 0480 (#51), 0490 (#49) merged, with #46 (#607, #506, #640, #785)
 REIGLUE_URL="${REIGLUE_URL:-https://github.com/FH1-ReImagined/ReIGlue}"
 NIGHTLY="${REXSDK_NIGHTLY:-$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64}"
 SRC="${REXSDK_SRC:-$HOME/rexglue-sdk-src-forza/sdk}"

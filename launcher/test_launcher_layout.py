@@ -260,13 +260,16 @@ class LayoutTests(unittest.TestCase):
         servers.use_selected()
         self.assertEqual(self.win.cfg.online["mode"], "offline")
         self.assertEqual(self.win.settings.server_status.text(), "Play uses: Offline")
-        self.assertFalse(self.win.settings.web_account_frame.isVisibleTo(self.win.online))
+        card = self.win.settings.web_account   # still shown, with the way back to the Public server
+        self.assertTrue(self.win.settings.web_account_frame.isVisibleTo(self.win.online))
+        self.assertTrue(card.public_button.isVisibleTo(card))
         self.assertIn("(in use)", servers.table.item(len(servers.rows) - 1, 0).text())
         self.assertFalse(servers.remove_button.isEnabled())
         servers._select(servers.rows[0].address)
         servers.use_selected()
         self.assertEqual(self.win.cfg.online["mode"], "public")
         self.assertEqual(self.win.settings.server_status.text(), "Play uses: Public server")
+        self.assertFalse(card.public_button.isVisibleTo(card))
 
     def test_display_settings_split_into_graphics_and_display(self):
         from forza_launcher.ui.settings_page import tab_of

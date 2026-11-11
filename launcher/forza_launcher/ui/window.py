@@ -174,6 +174,7 @@ class MainWindow(QMainWindow):
         self.fm4_laps = Fm4LapsPage(cfg, self)
         self.servers = ServersPage(cfg, self)
         self.servers.changed.connect(self._server_chosen)
+        self.play.offline_notice.went_online.connect(self._went_online)
         self.settings.attach_servers(self.servers)
         self.online = self.settings.online_page
         self._close_after_radio = False
@@ -426,6 +427,13 @@ class MainWindow(QMainWindow):
         and launcher.json and forza.toml are saved now."""
         self.settings.sync_server()
         self.settings.flush()
+
+    def _went_online(self):
+        """Play's "Go online" banner (Offline because Online features was off): saved and shown on
+        Online > Online and Servers."""
+        self.servers.fill()
+        self._server_chosen()
+        self.play.show_message("Online features are on again: Play now uses the Public server.")
 
     def _vulkan_result(self, devices):
         if devices and self.cfg.detect_vulkan(devices):
