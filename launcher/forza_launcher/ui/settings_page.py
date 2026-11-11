@@ -2,13 +2,14 @@
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QRegularExpression, QTimer, Qt, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QIntValidator, QRegularExpressionValidator
+from PySide6.QtGui import QIntValidator, QRegularExpressionValidator
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog,
                                QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QLineEdit, QTabBar, QPlainTextEdit,
                                QMessageBox, QPushButton, QRadioButton, QScrollArea, QSlider, QStackedWidget,
                                QToolButton, QToolTip, QVBoxLayout, QWidget)
 
-from .. import PUBLIC_SERVER, display, dlss, fsr3, game, gamertag, gpu, power, regpu, schema, server_list, specs, vr
+from .. import (PUBLIC_SERVER, browser, display, dlss, fsr3, game, gamertag, gpu, power, regpu, schema, server_list,
+               specs, vr)
 from ..config import Config, render_toml, validate_extras
 from . import theme
 from .settings_search import SettingsSearch
@@ -832,7 +833,7 @@ class SettingsPage(QWidget):
         except OSError as e:
             QMessageBox.warning(self, "Texture packs", f"Could not create {folder}: {e}")
             return
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+        browser.open_url(QUrl.fromLocalFile(str(folder)))
 
     # --- graphics card (#52) --------------------------------------------------------
     def _gpu_block(self, lay):

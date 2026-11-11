@@ -9,7 +9,7 @@ from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QMainWindow,
                                QMessageBox, QPushButton, QStackedWidget, QTabBar, QVBoxLayout, QWidget)
 
-from .. import (APP_NAME, __version__, builder, cleanenv, coop_grant, crash_report, errors, game, paths, dlss,
+from .. import (APP_NAME, __version__, browser, builder, cleanenv, coop_grant, crash_report, errors, game, paths, dlss,
                online_features, shader_share)
 from ..config import Config, import_toml, render_toml
 from . import theme
@@ -925,6 +925,7 @@ def run(argv):
     from PySide6.QtCore import Qt as _Qt
     QApplication.setHighDpiScaleFactorRoundingPolicy(_Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication([sys.argv[0]] + argv)
+    browser.install()   # links Qt opens itself take the same clean way (#815)
     app.setApplicationName("forza-reimagined-launcher")
     app.setDesktopFileName(paths.FLATPAK_ID or "forza-reimagined")
     # Qt file dialogs participate in controller navigation. In Flatpak they also keep

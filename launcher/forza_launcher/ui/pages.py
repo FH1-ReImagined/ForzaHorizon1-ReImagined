@@ -5,13 +5,13 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import QTimer, Qt, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QPixmap
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (QCheckBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
                                QPlainTextEdit, QProgressBar, QPushButton, QScrollArea,
                                QTabBar, QStackedWidget, QVBoxLayout, QWidget)
 
-from .. import (GITHUB_URL, PRIVACY_URL, PUBLIC_SERVER, __version__, build_env, builder, datafolder, errors, game,
-               installer, paths, pins, shader_prebuild, vr)
+from .. import (GITHUB_URL, PRIVACY_URL, PUBLIC_SERVER, __version__, browser, build_env, builder, datafolder, errors,
+               game, installer, paths, pins, shader_prebuild, vr)
 from ..config import Config
 from . import theme, workers
 from .challenges_card import ChallengesCard
@@ -39,7 +39,7 @@ def scroll_page(title, lead):
 
 def open_folder(path: Path):
     path.mkdir(parents=True, exist_ok=True)
-    QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+    browser.open_url(QUrl.fromLocalFile(str(path)))
 
 
 def human_time(seconds):
@@ -132,7 +132,7 @@ class PlayPage(QWidget):
         lay.addWidget(self.clock_notice)
         self.clock_guide = QPushButton("Steam Deck GPU clock guide")
         self.clock_guide.setObjectName("link")
-        self.clock_guide.clicked.connect(lambda: QDesktopServices.openUrl(
+        self.clock_guide.clicked.connect(lambda: browser.open_url(
             QUrl(GITHUB_URL + "/blob/main/docs/steam_deck.md#manual-gpu-clock")))
         self.clock_guide.hide()
         lay.addWidget(self.clock_guide, 0, Qt.AlignLeft)
@@ -631,7 +631,7 @@ class SetupPage(QWidget):
             self.c3.lay.addWidget(self.ms)
             lnk = QPushButton("Read the license")
             lnk.setObjectName("link")
-            lnk.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(pins.MS_LICENSE_URL)))
+            lnk.clicked.connect(lambda: browser.open_url(QUrl(pins.MS_LICENSE_URL)))
             self.c3.lay.addWidget(lnk, 0, Qt.AlignLeft)
         brow = QHBoxLayout()
         self.go3 = QPushButton("Build")
@@ -1326,7 +1326,7 @@ class AboutPage(QWidget):
                           ("Report a problem", GITHUB_URL + "/issues")):
             b = QPushButton(text)
             b.setObjectName("link")
-            b.clicked.connect(lambda _=False, u=url: QDesktopServices.openUrl(QUrl(u)))
+            b.clicked.connect(lambda _=False, u=url: browser.open_url(QUrl(u)))
             lay.addWidget(b, 0, Qt.AlignLeft)
         lay.addStretch(1)
         self.cfg = cfg

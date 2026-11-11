@@ -1,10 +1,9 @@
 """Review and edit a local crash report before opening a GitHub issue draft."""
 from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QApplication, QDialog, QFileDialog, QHBoxLayout, QLabel,
                                QLineEdit, QPlainTextEdit, QPushButton, QVBoxLayout)
 
-from .. import crash_report, paths
+from .. import browser, crash_report, paths
 from .widgets import label
 
 
@@ -93,7 +92,7 @@ class CrashReportDialog(QDialog):
             # on the clipboard and explicitly ask the player to paste it into the draft.
             QApplication.clipboard().setText(body)
             url = crash_report.issue_url(title, "Paste the crash report copied by the launcher here.")
-        if not QDesktopServices.openUrl(QUrl(url)):
+        if not browser.open_url(QUrl(url)):
             self.message("Could not open your browser. Copy or save the report and open the project's "
                          "Issues page on GitHub.")
         elif copied:

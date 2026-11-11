@@ -167,7 +167,8 @@ class UpdateUITests(unittest.TestCase):
     def test_flatpak_download_has_manual_instructions_without_host_execution(self):
         import shlex
         from forza_launcher import paths, updater
-        from forza_launcher.ui.updates import QDesktopServices, QStandardPaths
+        from forza_launcher.browser import QDesktopServices
+        from forza_launcher.ui.updates import QStandardPaths
         downloads = Path(self.temp.name) / "Player's Downloads"
         asset = updater.Asset("ForzaHorizon1-ReImagined-x86_64.flatpak", "https://example.test", "0" * 64, 6)
         dest = downloads / "ForzaHorizon1-ReImagined" / self.release.tag / asset.name
@@ -247,7 +248,7 @@ class UpdateUITests(unittest.TestCase):
 
     def test_source_checkout_opens_download_without_replacing_code(self):
         from forza_launcher import paths, linux_update
-        from forza_launcher.ui.updates import QDesktopServices
+        from forza_launcher.browser import QDesktopServices
         self.card.downloaded = Path(self.temp.name) / self.asset.name
         with patch("forza_launcher.ui.updates.sys.platform", "linux"), \
                 patch.object(paths, "FROZEN", False), \
