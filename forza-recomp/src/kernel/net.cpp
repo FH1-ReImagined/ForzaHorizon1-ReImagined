@@ -1342,7 +1342,7 @@ class VNet {
           public_ep_ = {public_ip, public_port};
           last_welcome_ = Clock::now();
           last_welcome_received_ = last_welcome_;
-          signin_held_ = false;
+          signin_held_ = hello_now;  // a WELCOME with a new challenge waits for its answered HELLO
           resign_.Welcomed();
           cv_.notify_all();
         }
