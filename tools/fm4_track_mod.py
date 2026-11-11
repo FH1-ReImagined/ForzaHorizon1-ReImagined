@@ -21,10 +21,10 @@ Usage:
                         circuit's own, which the open world needs to load at all
   --loose DIR           with --fh1-disc: where to write the files that must be loose files of
                         the game folder (the track's sound banks, FMOD opens them by path)
-  --fm4-ai DIR          with --fh1-disc: FM4's Media/AI/Tracks folder. The circuit's road
-                        network and its race route are written from the layout's AI line
-                        (tools/fm4_routes.py); a circuit without one, or whose network would
-                        not load, is converted without them
+  --fm4-ai DIR          with --fh1-disc and --free-roam: FM4's Media/AI/Tracks folder. The
+                        circuit's road network and its race route are written from the
+                        layout's AI line (tools/fm4_routes.py). The step is optional: whatever
+                        goes wrong in it, the circuit is converted without them
 
 What the mod holds, at the paths FH1 builds for a track (docs/modding.md):
   media/tracks/<name>/bin/...      the members of the circuit's bin.zip (FH1 mounts a track's
@@ -261,33 +261,61 @@ def _into(base, rel):
 
 def add_routes(out, track, ribbon, ai_dir, fh1_disc):
     """The circuit's road network (<track>.nav, with Colorado's two small headers beside it as
-    the circuit's) and its race route, from FM4's AI lines (tools/fm4_routes.py). All of them
-    or none: a circuit without an AI line, or whose network FH1 would not load, keeps the
-    files it had (and so does every circuit of a build that lacks tools/fm4_routes.py).
+    the circuit's) and its race route, from the AI line of the circuit's layout
+    (tools/fm4_routes.py; its other layouts' own roads are left out, see there).
+    All of them or none, and never an error: the step is optional, so whatever goes wrong in
+    it (no AI line, a line or a network that is not what it should be, a build without
+    tools/fm4_routes.py, a disk that fills) the circuit keeps the files it had and the import
+    goes on. The files are written to a folder beside the mod's and moved in once every one
+    of them is there; a move that fails takes the ones before it out again.
     Returns the lap's length in metres when a race route was written."""
     key = track.lower()
     colorado = os.path.join(fh1_disc, "media", "tracks", "colorado")
+    media = os.path.join(out, "media")
+    stage, placed, made = None, [], []
     try:
         if HERE not in sys.path:
             sys.path.insert(0, HERE)
         import fm4_routes
-        geo, others = ai_lines(ai_dir, track, ribbon)
+        geo, _ = ai_lines(ai_dir, track, ribbon)
         if geo is None:
             print(f"no road network: FM4 has no AI line for {track}")
             return None
-        files = fm4_routes.build(track, geo, os.path.join(colorado, "colorado.nav"), others)
+        files = fm4_routes.build(track, geo, os.path.join(colorado, "colorado.nav"))
         with open(os.path.join(colorado, "colorado.oww"), "rb") as f:
             files[f"tracks/{key}/{key}.oww"] = f.read()
         lap = fm4_routes.length(fm4_routes.ai_line(geo)) if any(n.endswith(".owt") for n in files) else None
-    except (ImportError, OSError, ValueError, KeyError, IndexError, struct.error) as e:
-        print(f"no road network: {e}")
+        net = fm4_routes.read_nav(files[f"tracks/{key}/{key}.nav"])
+        stage = tempfile.mkdtemp(prefix="fm4routes-", dir=os.path.dirname(os.path.abspath(out)))
+        staged = []
+        for n, (rel, data) in enumerate(files.items()):
+            src = os.path.join(stage, str(n))
+            with open(src, "wb") as f:
+                f.write(data)
+            staged.append((src, rel))
+        for src, rel in staged:
+            dst = _into(media, rel)
+            missing, folder = [], os.path.dirname(dst)
+            while not os.path.isdir(folder):
+                missing.append(folder)
+                folder = os.path.dirname(folder)
+            for folder in reversed(missing):
+                os.mkdir(folder)
+                made.append(folder)
+            os.replace(src, dst)
+            placed.append(dst)
+    except Exception as e:  # the step is optional: no error of its own may stop the import
+        for path, undo in [(p, os.remove) for p in placed] + [(p, os.rmdir) for p in reversed(made)]:
+            try:
+                undo(path)
+            except OSError:
+                pass
+        known = isinstance(e, (ImportError, OSError, ValueError))
+        print(f"no road network: {e}" if known else f"no road network: {type(e).__name__}: {e}")
         return None
-    for rel, data in files.items():
-        dst = _into(os.path.join(out, "media"), rel)
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        with open(dst, "wb") as f:
-            f.write(data)
-    net = fm4_routes.read_nav(files[f"tracks/{key}/{key}.nav"])
+    finally:
+        if stage:
+            shutil.rmtree(stage, ignore_errors=True)
     print(f"road network: {len(net['nodes'])} nodes, {len(net['ways']) - 1} roads"
           + (f"; race route {fm4_routes.RACE_ROUTE}: {lap:.0f} m" if lap else "; no race route (not a lap)"))
     return lap
@@ -336,6 +364,10 @@ def main():
     ap.add_argument("--loose")
     ap.add_argument("--fm4-ai")
     a = ap.parse_args()
+    if a.fm4_ai and (not a.fh1_disc or a.free_roam is None):
+        # the route's files go in ribbon_00, the ribbon --free-roam makes the circuit's world
+        # (ribbon_as_zero), and the network's tag tables come from the FH1 disc
+        ap.error("--fm4-ai needs --fh1-disc and --free-roam")
     track = os.path.basename(os.path.normpath(a.track_dir))
     lower = track.lower()
     if os.path.exists(a.out):

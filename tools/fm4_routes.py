@@ -31,6 +31,11 @@ Kept from the network that then worked, not isolated as needs of their own: no c
 (Colorado has none, its closed ways are areas: a lap is a ring of open ways that share their
 end nodes, cut every ROAD_NODES nodes), and a road node near every route waypoint.
 
+The network is the road of the layout the circuit's world is. Its other layouts' own stretches
+of road are left out: the layout's barriers close them, and a road on the map that cannot be
+reached would mislead the map and whatever plans a route. "write ... OTHER_GEO" joins them, for
+the day barriers go by route.
+
 A race row's RouteId is not 0 (free roam's own): RACE_ROUTE. FH1 loaded a track's world from
 ribbon 0 whatever the row's RibbonIndex was, and the route's files from the row's ribbon, so
 they go in ribbon_00. No Tracks row uses the route yet: nothing reads its two files.
@@ -39,7 +44,7 @@ Usage:
   tools/fm4_routes.py write GEO COLORADO_NAV TRACK OUT_DIR [OTHER_GEO ...]
       writes the files above under OUT_DIR/media/ for the circuit TRACK (its folder's name);
       OTHER_GEO: the AI lines of the circuit's other layouts, whose own stretches of road
-      join the network (no route is written for them)
+      join the network (no route is written for them; the import passes none, see above)
   tools/fm4_routes.py nav FILE.nav      prints a road network's counts and tag names
   tools/fm4_routes.py owt FILE.owt      prints a route's length and width
 """
@@ -57,6 +62,9 @@ ROAD_NODES = 60         # a road's nodes at most: the ring is cut into open ways
 LINK_DISTANCE = 15.0    # another layout's line this far from the circuit's is a road of its own
 CURSOR_MARGIN = 400.0   # metres round the circuit: the map screen's cursor_area
 CLOSED_GAP = 60.0       # a line whose ends are farther apart is not a lap (a drag strip, a stage)
+MIN_LINE = 100.0        # metres: a shorter AI line is no road (one whose points coincide)
+MAX_LINE = 100000.0     # and a longer one is no circuit's (FM4's longest lap is under 26 km)
+FINISH_TRIGGER = 58.0   # metres before the line: the finish cannons' trigger, as Colorado's
 ROAD_TAGS = {"road_type": "a", "traffic_disabled": "true"}
 # The tag names TU4 looks up in a road network (all of them are in Colorado's table).
 LOOKED_UP = ("ai_disabled", "allowedfordemo", "area_type", "deadend", "discovery_zone", "display_name",
@@ -97,6 +105,20 @@ def is_lap(pts):
     return len(pts) >= 8 and math.dist(pts[0][0], pts[-1][0]) <= CLOSED_GAP
 
 
+def checked(pts, name="the AI line"):
+    """pts, if a road can be made of the line: every number finite, and MIN_LINE to MAX_LINE
+    metres from its first point to its last. A file of points that coincide, or of wild
+    coordinates, is refused here (ValueError) before anything divides by its length or makes a
+    point every 2 m of it."""
+    if not all(math.isfinite(v) for pos, across, chi in pts for v in (*pos, *across, chi)):
+        raise ValueError(f"{name}: a waypoint that is not a number")
+    total = length(pts, closed=False) if len(pts) > 1 else 0.0
+    if not MIN_LINE <= total <= MAX_LINE:
+        raise ValueError(f"{name}: {total:.0f} m of line (a circuit's is {MIN_LINE:.0f} m to "
+                         f"{MAX_LINE / 1000:.0f} km)")
+    return pts
+
+
 def _mix(a, b, t):
     return tuple(p + (q - p) * t for p, q in zip(a, b))
 
@@ -112,6 +134,8 @@ def resample(pts, spacing, closed=True):
     cum = [0.0]
     for a, b in zip(seq, seq[1:]):
         cum.append(cum[-1] + math.dist(a[0], b[0]))
+    if not 0.0 < cum[-1] <= 2 * MAX_LINE:  # see checked(): never a point count without bound
+        raise ValueError(f"a line of {cum[-1]:.0f} m cannot be resampled")
     n = max(2, int(cum[-1] // spacing))
     step = cum[-1] / n
     out, j = [], 0
@@ -130,6 +154,8 @@ def _at(pts, s):
     (negative: behind it)."""
     n = len(pts)
     seg = [math.dist(pts[i][0], pts[(i + 1) % n][0]) for i in range(n)]
+    if not sum(seg) > 0.0:
+        raise ValueError("a lap without length")
     s %= sum(seg)
     i = 0
     while s > seg[i] and i < n - 1:
@@ -189,10 +215,10 @@ def _beside(pos, across, metres, lift=0.0):
 
 def route_xml(pts, grid=8, grid_spacing=6.0, waypoint_spacing=250.0):
     """A lap race's places, laid out as Colorado's circuits are (its TrackRoute049.xml): five
-    finish cannons a side over the last 35 m, the finish trigger, the place the car is put
-    after the race, a route waypoint about every 250 m from the start line round to it again,
-    the start gantry's cannon, and `grid` start places behind the line in two staggered columns
-    (the first 10 m back)."""
+    finish cannons a side over the last 35 m, their trigger FINISH_TRIGGER metres before the
+    line (Colorado's is 57.9), the place the car is put after the race, a route waypoint about
+    every 250 m from the start line round to it again, the start gantry's cannon, and `grid`
+    start places behind the line in two staggered columns (the first 10 m back)."""
     total = length(pts)
     out = ["<TrackRoute>", "\t<NamedTransforms>"]
     for k in range(5):
@@ -200,7 +226,7 @@ def route_xml(pts, grid=8, grid_spacing=6.0, waypoint_spacing=250.0):
             pos, across, f = _at(pts, total - 35.0 + 8.0 * k)
             half = math.hypot(across[0], across[2])
             out += _place(f"end_race_cannon_{side}_{k:02d}", _beside(pos, across, sign * (half + 3.0)), f)
-    pos, across, f = _at(pts, total - 1.0)
+    pos, across, f = _at(pts, total - FINISH_TRIGGER)
     out += _place("end_race_cannon_trigger", _beside(pos, across, 0.0, 0.5), f, " width='50.0'")
     pos, across, f = _at(pts, total - 25.0)
     out += _place("post_race_location_00", _beside(pos, across, 1.5, 0.3), (-f[0], -f[1]))
@@ -374,10 +400,17 @@ def road_network(track, lap, others=(), keys=(), values=(), closed=True):
 
 def check_network(data, waypoints=(), reach=NAV_SPACING):
     """What is wrong with a road network for FH1, as a list of sentences (empty: nothing): a
-    tag name the game asks for missing (a crash), and what the networks that worked did not
-    have: a closed road, a route waypoint with no road node within `reach` metres."""
+    tag name the game asks for missing (a crash), the tag names out of order (the game finds
+    one by halving the table; Colorado's values are in order too, each once), and what the
+    networks that worked did not have: a closed road, a route waypoint with no road node within
+    `reach` metres."""
     net = read_nav(data)
     problems = []
+    for what, table in (("names", net["keys"]), ("values", net["values"])):
+        raw = [s.encode("latin1") for s in table]
+        if raw != sorted(set(raw)):
+            problems.append(f"the tag {what} are not in byte order, each once: FH1 finds a name by "
+                            "halving its table, and Colorado's two tables are in that order")
     key = {name: i for i, name in enumerate(net["keys"])}
     roads = []
     for w, (count, first, tag_count, first_tag) in enumerate(net["ways"]):
@@ -403,17 +436,18 @@ def check_network(data, waypoints=(), reach=NAV_SPACING):
 def build(track, geo, colorado_nav, other_geos=(), route=RACE_ROUTE):
     """{path under media/: bytes} of the circuit's road network and, for a lap, its race route.
     geo: the AI line of the layout the circuit's world is (ribbon 0's); other_geos: its other
-    layouts' lines; colorado_nav: the player's own media/tracks/colorado/colorado.nav, for the
-    tag tables. Raises ValueError when a file is not what it should be or the network would
-    not load (check_network)."""
-    pts = ai_line(geo)
+    layouts' lines, whose own stretches of road then join the network (the import passes none:
+    see the top of this file); colorado_nav: the player's own
+    media/tracks/colorado/colorado.nav, for the tag tables. Raises ValueError when a file is
+    not what it should be (checked) or the network would not load (check_network)."""
+    pts = checked(ai_line(geo), os.path.basename(geo))
     lap = is_lap(pts)
     with open(colorado_nav, "rb") as f:
         colorado = read_nav(f.read())
     key = track.lower()
     others = []
     for g in other_geos:
-        line = ai_line(g)
+        line = checked(ai_line(g), os.path.basename(g))
         if is_lap(line):
             others.append([p[0] for p in resample(line, NAV_SPACING)])
     nodes = [p[0] for p in resample(pts, NAV_SPACING, closed=lap)]

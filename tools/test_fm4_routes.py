@@ -17,6 +17,29 @@ import fm4_track_mod  # noqa: E402
 
 COLORADO_KEYS = fm4_routes.LOOKED_UP + ("grid_control", "uturn")  # Colorado has names of its own too
 
+# A road network written out by hand in the layout of the player's colorado.nav (which reads and
+# writes back byte for byte: 12,036 nodes, 459 ways): two nodes 10 m apart and one road between
+# them, tagged oneway = true and road_type = a. Nothing here comes from fm4_routes.
+HAND_NAV = bytes.fromhex(
+    "0E177551"                                      # the magic word
+    "00000002 00000001 00000002"                    # 2 nodes, 1 way, 2 tags
+    "00000002 00000002"                             # 2 node-list entries, 2 memberships
+    "00000002 00000002"                             # 2 tag names, 2 tag values
+    "00000011 00000007"                             # 17 bytes of names, 7 of values
+    # nodes, 32 bytes: id, x, y, z, memberships (count, first), tags (count, first)
+    "00000000 00000000 00000000 00000000 00000001 00000000 00000000 00000000"
+    "00000001 41200000 00000000 00000000 00000001 00000001 00000000 00000000"   # x = 10.0
+    # ways, 16 bytes: nodes (count, first in the node list), tags (count, first)
+    "00000002 00000000 00000002 00000000"
+    "00000000 00000001"                             # the node list
+    "00000000 00000000  00000000 00000001"          # memberships: (way, the node's index in it)
+    "00000000 00000001  00000001 00000000"          # tags: (name, value) = (oneway, true), (road_type, a)
+    "00000000 00000007"                             # where each name starts
+    "00000000 00000002"                             # where each value starts
+    "6F6E6577617900 726F61645F7479706500"           # "oneway", "road_type"
+    "6100 7472756500"                               # "a", "true"
+    "0E177551")                                     # the magic word again
+
 
 def write_geo(path, points, half_width=6.0, chi=0.25):
     """An FM4 AI line (MLPData) through `points` (FM4's x, y, with z the height): the waypoints,
@@ -113,6 +136,32 @@ class AiLine(Base):
         with self.assertRaises(ValueError):
             fm4_routes.ai_line(bad)
 
+    def test_a_line_no_road_can_be_made_of_is_refused(self):
+        # points that all coincide pass for a lap (its ends are 0 m apart), wild coordinates
+        # would ask for a point every 2 m of them: both are refused with a ValueError, before
+        # anything divides by the length or counts the points
+        lines = {"still": [(5.0, 5.0, 1.0)] * 20,
+                 "short": [(0.1 * i, 0.0, 1.0) for i in range(20)],
+                 "wild": [(1e30 * i, 0.0, 1.0) for i in range(20)],
+                 "nan": [(float("nan"), 2.0 * i, 1.0) for i in range(200)],
+                 "inf": [(2.0 * i, float("inf"), 1.0) for i in range(200)]}
+        for name, points in lines.items():
+            geo = os.path.join(self.ai, f"{name}_00.geo")
+            write_geo(geo, points)
+            pts = fm4_routes.ai_line(geo)
+            with self.assertRaises(ValueError, msg=name):
+                fm4_routes.checked(pts, name)
+            with self.assertRaises(ValueError, msg=name):
+                fm4_routes.build(name, geo, self.colorado)
+        good = fm4_routes.ai_line(self.geo)
+        self.assertIs(fm4_routes.checked(good), good)
+        still = fm4_routes.ai_line(os.path.join(self.ai, "still_00.geo"))
+        self.assertTrue(fm4_routes.is_lap(still))                     # which is why checked() comes first
+        for call in (lambda: fm4_routes.resample(still, 2.0), lambda: fm4_routes.route_xml(still),
+                     lambda: fm4_routes.resample(fm4_routes.ai_line(os.path.join(self.ai, "wild_00.geo")), 2.0)):
+            with self.assertRaises(ValueError):
+                call()
+
 
 class Route(Base):
     def test_owt_layout_and_round_trip(self):
@@ -153,9 +202,51 @@ class Route(Base):
         self.assertLess(grid[0][0], r)   # 0.35 of the half width to one side,
         self.assertGreater(grid[1][0], r)  # then to the other
         self.assertAlmostEqual(grid[0][1], 50.5, places=3)  # half a metre over the road
+        # the finish cannons' trigger is 58 m before the line, as in Colorado's TrackRoute049.xml
+        # (57.9 m), and the cannons stand over the last 35 m
+        def place(name):
+            m = re.search(rf"name='{name}'[^>]*>\s*<Transform pos\.x='([^']+)' pos\.y='([^']+)' pos\.z='([^']+)'", xml)
+            return tuple(float(v) for v in m.groups())
+        chord = lambda metres: 2 * r * math.sin(metres / (2 * r))  # noqa: E731
+        self.assertAlmostEqual(math.dist(place("end_race_cannon_trigger")[::2], way[0][::2]), chord(58.0), delta=0.3)
+        self.assertLess(place("end_race_cannon_trigger")[2], place("end_race_cannon_left_00")[2])
+        self.assertAlmostEqual(math.dist(place("post_race_location_00")[::2], way[0][::2]), chord(25.0), delta=1.6)
 
 
 class Network(Base):
+    def test_a_network_written_out_by_hand(self):
+        net = fm4_routes.read_nav(HAND_NAV)
+        self.assertEqual(net, {"nodes": [(0, 0.0, 0.0, 0.0, 1, 0, 0, 0), (1, 10.0, 0.0, 0.0, 1, 1, 0, 0)],
+                               "ways": [(2, 0, 2, 0)], "node_list": [0, 1], "memberships": [(0, 0), (0, 1)],
+                               "tags": [(0, 1), (1, 0)], "keys": ["oneway", "road_type"], "values": ["a", "true"]})
+        self.assertEqual(fm4_routes.write_nav(net), HAND_NAV)
+        # and the writer the converter uses makes the same file of the same road
+        made = fm4_routes.nav_of([(0.0, 0.0, 0.0), (10.0, 0.0, 0.0)], [([0, 1], {"road_type": "a", "oneway": "true"})])
+        self.assertEqual(made, HAND_NAV)
+        self.assertEqual(roads_of(net), [[0, 1]])
+        # a file cut short, or one that does not end on the magic word's place, is not read as less
+        with self.assertRaises((ValueError, struct.error)):
+            fm4_routes.read_nav(HAND_NAV[:60])
+
+    def test_the_string_tables_are_in_order(self):
+        # FH1 finds a tag name by halving the table, and Colorado's values are in order too
+        net = fm4_routes.read_nav(fm4_routes.road_network(
+            "Ring", [p[0] for p in fm4_routes.resample(fm4_routes.ai_line(self.geo), fm4_routes.NAV_SPACING)],
+            keys=COLORADO_KEYS, values=("freeway", "b")))
+        self.assertEqual(fm4_routes.check_network(fm4_routes.write_nav(net)), [])
+        for table, word in (("keys", "names"), ("values", "values")):
+            for change in (lambda t: t[1:2] + t[0:1] + t[2:],      # two swapped
+                           lambda t: t[:1] + t[:1] + t[1:]):       # one twice
+                bad = dict(net)
+                bad[table] = change(net[table])
+                problems = fm4_routes.check_network(fm4_routes.write_nav(bad))
+                self.assertTrue(any(f"tag {word} are not in byte order" in line for line in problems), (table, problems))
+        # byte order, not the alphabet's: "Z" comes before "a"
+        mixed = dict(net)
+        mixed["values"] = sorted(net["values"] + ["Zebra"], key=str.lower)
+        self.assertNotEqual(mixed["values"], sorted(mixed["values"]))
+        self.assertTrue(any("values" in line for line in fm4_routes.check_network(fm4_routes.write_nav(mixed))))
+
     def test_round_trip(self):
         with open(self.colorado, "rb") as f:
             d = f.read()
@@ -318,10 +409,83 @@ class TrackMod(Base):
         self.assertEqual(ribbons, ["Ribbon_00"])            # no second folder beside it
         self.assertEqual(os.listdir(os.path.join(media, "tracks", "ring", "Ribbon_00")), ["trackroute101.xml"])
         for rel in ("tracks/ring/ring.nav", "tracks/ring/ring.owr", "tracks/ring/ring.oww",
-                    "tracks/ring/ribbon_00/trackroute101.xml", "aiopenworld/ring/ribbon_00/route_101.owt"):
+                    "tracks/ring/Ribbon_00/trackroute101.xml", "aiopenworld/ring/ribbon_00/route_101.owt"):
             self.assertTrue(os.path.isfile(os.path.join(media, *rel.split("/"))), rel)
+        self.assertEqual([n for n in os.listdir(self.tmp.name) if n.startswith("fm4routes-")], [])   # the staging folder
         with open(os.path.join(media, "tracks", "ring", "ring.oww"), "rb") as f:
             self.assertEqual(f.read()[:4], b"OWWF")     # Colorado's, as the circuit's
+
+    def test_the_other_layouts_roads_are_left_out(self):
+        # Ring's other layouts leave the lap along roads of their own: the circuit's world is
+        # one layout, so its network is that layout's lap alone (two roads for a lap this short)
+        lap = [p[0] for p in fm4_routes.resample(fm4_routes.ai_line(self.geo), fm4_routes.NAV_SPACING)]
+        a, b = lap[10], lap[30]
+        chord = [tuple(p + (q - p) * t / 60 for p, q in zip(a, b)) for t in range(61)]
+        write_geo(os.path.join(self.ai, "Ring_01.geo"), [(x, z, y) for x, y, z in lap[:11] + chord[1:-1] + lap[30:]])
+        self.assertIsNotNone(fm4_track_mod.add_routes(self.out, "Ring", 0, self.ai, self.fh1))
+        with open(os.path.join(self.out, "media", "tracks", "ring", "ring.nav"), "rb") as f:
+            roads = roads_of(fm4_routes.read_nav(f.read()))
+        self.assertEqual([(r[0], r[-1]) for r in roads], [(0, 24), (24, 0)])
+        # the tool itself still joins them when it is given the lines
+        files = fm4_routes.build("Ring", self.geo, self.colorado, [os.path.join(self.ai, "Ring_01.geo")])
+        self.assertEqual(len(roads_of(fm4_routes.read_nav(files["tracks/ring/ring.nav"]))), 4)
+
+    def test_whatever_goes_wrong_the_import_goes_on(self):
+        # the step is optional: no error of its own reaches the import, and nothing is left behind
+        os.makedirs(os.path.join(self.out, "media", "tracks", "ring", "Ribbon_00"))
+        write_geo(os.path.join(self.ai, "Still_00.geo"), [(5.0, 5.0, 1.0)] * 20)
+        before = sorted(os.path.join(d, n) for d, ds, fs in os.walk(self.tmp.name) for n in ds + fs)
+
+        def nothing_left():
+            self.assertEqual(sorted(os.path.join(d, n) for d, ds, fs in os.walk(self.tmp.name) for n in ds + fs), before)
+        for error in (ZeroDivisionError("float modulo"), RuntimeError("anything"), MemoryError(), OverflowError("n"),
+                      RecursionError(), AssertionError(), TypeError("x"), OSError(28, "No space left on device")):
+            with mock.patch.object(fm4_routes, "build", side_effect=error):
+                self.assertIsNone(fm4_track_mod.add_routes(self.out, "Ring", 0, self.ai, self.fh1), error)
+            nothing_left()
+        self.assertIn("no road network: ZeroDivisionError: float modulo", self.said.getvalue())
+        # an AI line whose points all coincide (it passes for a lap): refused, not divided by
+        self.assertIsNone(fm4_track_mod.add_routes(self.out, "Still", 0, self.ai, self.fh1))
+        self.assertIn("no road network: Still_00.geo: 0 m of line", self.said.getvalue())
+        nothing_left()
+        # a file that cannot be written, and a move that fails after others were made: every
+        # file and folder the step made is taken out again
+        real_open, real_replace, moves = open, os.replace, []
+
+        def no_third_file(path, *a, **k):
+            if os.path.basename(os.path.dirname(str(path))).startswith("fm4routes-") and os.path.basename(str(path)) == "2":
+                raise OSError(28, "No space left on device")
+            return real_open(path, *a, **k)
+
+        def no_third_move(src, dst):
+            moves.append(dst)
+            if len(moves) == 5:     # the last one, after the folders of the route's line were made
+                raise PermissionError(13, "Permission denied", dst)
+            return real_replace(src, dst)
+        with mock.patch("builtins.open", no_third_file):
+            self.assertIsNone(fm4_track_mod.add_routes(self.out, "Ring", 0, self.ai, self.fh1))
+        nothing_left()
+        with mock.patch.object(os, "replace", no_third_move):
+            self.assertIsNone(fm4_track_mod.add_routes(self.out, "Ring", 0, self.ai, self.fh1))
+        self.assertEqual(len(moves), 5)
+        nothing_left()
+        # and with nothing in the way the same call writes all five
+        self.assertAlmostEqual(fm4_track_mod.add_routes(self.out, "Ring", 0, self.ai, self.fh1), 1000.0, delta=0.1)
+        self.assertEqual(sum(len(fs) for _, _, fs in os.walk(os.path.join(self.out, "media"))), 5)
+
+    def test_the_command_line_needs_the_free_roam_world(self):
+        # the route's files go in ribbon_00, which only --free-roam makes of a circuit without
+        # one (Le Mans): --fm4-ai without it would make a second, lower-case ribbon folder
+        track = os.path.join(self.tmp.name, "Disc 1", "Media", "tracks", "Ring")
+        os.makedirs(track)
+        for extra in (["--fh1-disc", self.fh1], ["--free-roam", "317"], []):
+            argv = ["fm4_track_mod.py", track, "media.zip", self.out, "--fm4-ai", self.ai] + extra
+            with mock.patch.object(sys, "argv", argv), contextlib.redirect_stderr(io.StringIO()) as said:
+                with self.assertRaises(SystemExit) as e:
+                    fm4_track_mod.main()
+            self.assertEqual(e.exception.code, 2)
+            self.assertIn("--fm4-ai needs --fh1-disc and --free-roam", said.getvalue())
+        self.assertFalse(os.path.exists(self.out))          # refused before anything is written
 
     def test_a_build_without_the_tool_converts_as_before(self):
         with mock.patch.dict(sys.modules, {"fm4_routes": None}):  # as if tools/fm4_routes.py were not there
