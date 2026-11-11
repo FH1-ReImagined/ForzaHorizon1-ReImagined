@@ -924,6 +924,9 @@ def run(argv):
     cleanenv.restore_process_environment()   # programs Qt starts (xdg-open) must not inherit _internal
     from PySide6.QtCore import Qt as _Qt
     QApplication.setHighDpiScaleFactorRoundingPolicy(_Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
+    # Qt WebEngine (the website sign-in window, ui/web_view.py) is imported only when that window
+    # opens, which Qt allows only with shared OpenGL contexts, set before the QApplication.
+    QApplication.setAttribute(_Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     app = QApplication([sys.argv[0]] + argv)
     browser.install()   # links Qt opens itself take the same clean way (#815)
     app.setApplicationName("forza-reimagined-launcher")

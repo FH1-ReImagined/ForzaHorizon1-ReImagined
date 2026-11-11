@@ -35,13 +35,17 @@ backing up its catalog. Apply the imported design to a matching car in-game. See
 
 **Website account (website #4):** Online > Online > Website account, shown with the public
 server only, links the game to an optional account on forza.dyotson.dev (Discord, GitHub or an
-emailed code), the second factor the website's player features need. **Link to website account**
-signs `POST https://forza.dyotson.dev/api/game/link/start` with the game's key (`live_auth.py`,
+emailed code), the second factor the website's player features need. **Sign in or create an
+account** signs `POST https://forza.dyotson.dev/api/game/link/start` with the game's key (`live_auth.py`,
 the `signing_seed` of `live_identity.txt`; the address is built in, never the server setting, and
-no friends key or key made from it is sent), opens the answer's `account.html#link=<token>` in the
-browser (`QDesktopServices.openUrl`, the OpenURI portal on Flatpak) and shows an 8-character code
-for another device (`forza.dyotson.dev/account.html`). It polls the request every 3 seconds in a
-`ui/workers.Task` thread. Once the browser's account claims it, the launcher asks "Link this game
+no friends key or key made from it is sent) and shows the answer's `account.html#link=<token>` in
+the launcher's own window (`ui/web_view.py`, a Qt WebEngine view; see "Website sign-in window"
+below): the player signs in there, or makes their account by signing in the first time, with
+Discord, GitHub or an emailed code, and clicks the page's Link. **Use my browser instead**, a
+launcher without Qt WebEngine, `FORZA_NO_WEB_VIEW=1` or a window whose page process stops open the
+same address in the browser instead (`QDesktopServices.openUrl`, the OpenURI portal on Flatpak).
+An 8-character code for another device (`forza.dyotson.dev/account.html`) is always shown. It
+polls the request every 3 seconds in a `ui/workers.Task` thread. Once the browser's account claims it, the launcher asks "Link this game
 to website account K7Q2-XM4P (Discord, created 2 Nov 2026)?": **Link** confirms that account by
 its id, **Not me** (or closing the dialog) declines it. After a link the card shows the account
 and offers **Unlink** and **Sign out everywhere** (every browser of the linked account), which
@@ -51,6 +55,37 @@ once a session when the card is shown. The calls are in `web_account.py` (HTTPS 
 `fetch.urlopen`, the operating system's certificates on Windows), the card and the dialog in
 `ui/web_account.py`; `test_web_account.py` runs them against a fake service that checks every
 signature. The service is forza-live's `accounts/` (its README has the API and the rules).
+
+**Website sign-in window (`ui/web_view.py`).** The dialog shows the page in a Qt WebEngine view
+with a read-only address line, Back and Reload, and the launcher's status and its Link / Not me
+under it. There are still two approvals: the page's Link (the account claims the request) and the
+launcher's Link (the key confirms the account id it was shown). The page cannot skip its click in
+the launcher: anything it could check to know it runs there, an attacker could send along with
+their own token. The view:
+- main frame: only the site's origin and `https://discord.com` and `https://github.com` (the
+  providers' sign-in, `web_view.decide`). A link on the site to Discord or GitHub, every other
+  address and every new window (`target=_blank`, `window.open`) open in the browser; `file:`,
+  `data:` and plain `http` are refused. Frames (the providers' captchas) may be any `https` page;
+- no scripts, no QWebChannel and no cookie access from the launcher; certificate errors are
+  rejected; downloads are cancelled; every page permission is denied; the menu has only editing
+  and Back/Forward/Reload. Passkeys and security keys get the account choice, the PIN and "Touch
+  your security key";
+- its own persistent profile in `<data folder>/web-account` (cookies, site storage, cache), shared
+  with nothing. The website's sign-in stays there like in a browser. **Sign out of the website in
+  the launcher** on the card deletes the folder (if a file is still open, a `web-account.forget`
+  marker deletes it at the next open);
+- an emailed code is typed into the view: the mail's link opens the browser, where the code does
+  not work (it belongs to the browser that asked for it).
+Qt WebEngine is imported only when the window opens (`AA_ShareOpenGLContexts` is set before the
+`QApplication`), the page and then the profile are deleted when the dialog closes so its processes
+end, and the packages carry `PySide6_WebEngine` (`launcher/requirements-build.txt`): the spec keeps
+only the en-US locale and drops the devtools and `.debug.pak` files, PyInstaller's hook adds
+QtWebEngineProcess and the NSS modules, and the Flatpak builds MIT krb5 (the pip Qt6Network needs
+`libgssapi_krb5.so.2`, which the runtime lacks) and runs `flatpak/trim_pyside6.py`, which deletes
+the 217 MB of Addons and WebEngine the launcher never loads. Measured on Linux (2026-11-11): the
+PyInstaller folder grows from 216 to 454 MB, 87 to 191 MB gzipped. On NVIDIA with Wayland a
+blank view is a known Qt WebEngine problem: `QTWEBENGINE_CHROMIUM_FLAGS=--disable-gpu` or **Use my
+browser instead**.
 
 Discord status sharing is available under **Online > Online > Discord** (off by
 default). See [Discord Rich Presence](discord.md) for the one-time public application

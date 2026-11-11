@@ -59,12 +59,38 @@ cleanup-commands:
   - mkdir -p ${FLATPAK_DEST}/lib/sdk/llvm22
 
 modules:
+  # MIT Kerberos's libgssapi_krb5.so.2, which the pip wheels' Qt6Network links and the freedesktop
+  # runtime does not carry: without it Qt WebEngine (the website sign-in window) does not import.
+  # Only the client libraries are kept.
+  - name: krb5
+    subdir: src
+    config-opts:
+      - --disable-static
+      - --disable-rpath
+      - --without-system-verto
+    cleanup:
+      - /bin
+      - /sbin
+      - /include
+      - /lib/pkgconfig
+      - /share
+      - /var
+    sources:
+      - type: archive
+        url: https://kerberos.org/dist/krb5/1.22/krb5-1.22.3.tar.gz
+        sha256: fe90af8441ad9fa9b064b8e53077cefb782a96f8a68276b031dc54af1789ff0b
+
   # The launcher's main third-party dependency. PySide6 6.12 wheels (Qt 6.12 inside), pinned.
+  # Addons and WebEngine carry Qt WebEngine for the website sign-in window (ui/web_view.py).
   - name: pyside6
     buildsystem: simple
     build-commands:
-      - pip3 install --verbose --exists-action=i --no-index --find-links="file://${PWD}" --prefix=${FLATPAK_DEST} --no-build-isolation pyside6_essentials shiboken6
+      - pip3 install --verbose --exists-action=i --no-index --find-links="file://${PWD}" --prefix=${FLATPAK_DEST} --no-build-isolation pyside6_essentials pyside6_addons pyside6_webengine shiboken6
+      # the parts of Addons and WebEngine the launcher never loads (about 200 MB)
+      - python3 trim_pyside6.py ${FLATPAK_DEST}/lib/python3*/site-packages
     sources:
+      - type: file
+        path: trim_pyside6.py
       - type: file
         url: https://files.pythonhosted.org/packages/7b/3c/7597d8dcb36aa8315427635ec6ec9d850ffbad4ce78b9118ac854889f2d3/pyside6_essentials-6.12.0-cp310-abi3-manylinux_2_34_x86_64.whl
         sha256: 16f4b5e41daf49235ae048458243da9efe5f3d8040f9cc5aa454ce69893d3bd9
@@ -72,6 +98,14 @@ modules:
       - type: file
         url: https://files.pythonhosted.org/packages/49/c2/a04fa003b4360e99d8e3fc2829abacf37396ace63ea1cd616402209ec7c6/shiboken6-6.12.0-cp310-abi3-manylinux_2_34_x86_64.whl
         sha256: 3bde565bb0890044b5c7f63808adddede5abc241e9395a2bfed61919884d6240
+        only-arches: [x86_64]
+      - type: file
+        url: https://files.pythonhosted.org/packages/ff/3e/0d6c5934de575286ac0699a701d4155048185035b8da0ee78d57a38bc7ef/pyside6_addons-6.12.0-cp310-abi3-manylinux_2_34_x86_64.whl
+        sha256: 4ab38c0017f0453671a9313d3a53ca1c0e378924f54b07e596bcea94a9642391
+        only-arches: [x86_64]
+      - type: file
+        url: https://files.pythonhosted.org/packages/ce/e0/cb8b68b962afc253709ed61555d0a4f297fd6786c0e77921d2e951504210/pyside6_webengine-6.12.0.140-cp310-abi3-manylinux_2_34_x86_64.whl
+        sha256: c041c9921d7c91c9e51a2c027f434d05c3c59baa2c8f17b71dc8194e77791f06
         only-arches: [x86_64]
 
   # SDL's mapped controller API; the same runtime is bundled with the standalone launchers.
