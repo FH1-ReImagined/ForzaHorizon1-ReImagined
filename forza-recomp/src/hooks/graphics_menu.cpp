@@ -11,6 +11,7 @@
 #include "../platform/hud_overlay.h"
 #include "../platform/graphics_presets.h"
 #include "../platform/graphics_resolution.h"
+#include "../platform/frame_rate_choices.h"
 #include "../platform/ultrawide.h"
 #ifdef __APPLE__
 #include "../platform/macos_graphics_config.h"
@@ -327,6 +328,14 @@ std::string BackendMode() {
   return settings[1].value != "off" ? settings[1].value :
       settings[kAntiAliasing].value == "game" ? "off" : settings[kAntiAliasing].value;
 }
+// The launcher's rates (#783), and the one in effect when it is not among them (a typed 72),
+// so opening the menu and saving keeps it.
+void FrameRateMenuChoices(const std::string &current) {
+  auto &rate = settings[3];
+  rate.choices.clear();
+  for (const int fps : FrameRateChoices(current))
+    rate.choices.push_back({std::to_string(fps), FrameRateLabel(fps)});
+}
 void Snapshot() {
   settings = {
       {"output",
@@ -349,16 +358,7 @@ void Snapshot() {
        "frame_rate",
        "Frame rate limit",
        "",
-       {{"20", "20 FPS"},
-        {"30", "30 FPS"},
-        {"40", "40 FPS"},
-        {"60", "60 FPS"},
-        {"90", "90 FPS"},
-        {"120", "120 FPS"},
-        {"144", "144 FPS"},
-        {"165", "165 FPS"},
-        {"180", "180 FPS"},
-        {"240", "240 FPS"}}},
+       {}},  // FrameRateChoices, below
       {"vsync",
        "vsync",
        "Vertical sync",
@@ -402,6 +402,7 @@ void Snapshot() {
       {"world_car_detail", "world_car_detail", "Car detail", "",
        {{"console", "Console"}, {"high", "High"}, {"ultra", "Ultra"}}},
   };
+  FrameRateMenuChoices(rex::cvar::GetFlagByName("frame_rate"));
   for (const auto index : kCameraFovs)
     for (int degrees = 40; degrees <= 90; ++degrees)
       settings[index].choices.push_back({std::to_string(degrees), std::to_string(degrees) + " degrees"});
@@ -490,6 +491,7 @@ void Snapshot() {
       if (!IsLive(settings[i]) && settings[i].key != "preset")
         settings[i].value = saved_settings[i].value;
   }
+  FrameRateMenuChoices(settings[3].value);
   AntiAliasingChoices();
   RememberPreview();
   saved_settings = settings;
