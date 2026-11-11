@@ -241,6 +241,57 @@ class Fm4ImportTests(_Setup, unittest.TestCase):
     def test_package_name_matches_the_tool(self):
         self.assertEqual(fm4cars.PACKAGE, fm4cars._tools().PACK_NAME)
 
+    def old_import_with_the_s1(self):
+        """An import made before #776: the S1's harmonic tuning in the package names a bank no
+        file has; FH1 (stand-in files) has a similar tuning and its bank."""
+        import json
+        import zipfile
+        self.build()
+        marker = mods.mods_dir(self.cfg) / fm4cars.MOD / fm4cars.MARKER
+        info = json.loads(marker.read_text())
+        self.assertTrue(info.pop("banks"))  # a new import says it has its banks
+        marker.write_text(json.dumps(info))
+        ht = '<Soundbank name="%s">\n</Soundbank>\n'
+        package, _ = fm4cars._package(self.cfg)
+        with zipfile.ZipFile(package / "Media/DLCZips/fm4cars1_pri_60.zip", "w") as z:
+            z.writestr("media/audio/cars/engines/harmonictuning/5T1_A200_1478_Exh_HT.xml", ht % "5T1_A200b_EXH.fsb")
+            z.writestr("media/audio/cars/engines/harmonictuning/4N1_Ok_Exh_HT.xml", ht % "4N1_Ok_Exh.fsb")
+        engines = self.cfg.game_files() / "media/audio/cars/Engines"
+        (engines / "Soundbanks/LOD1").mkdir(parents=True)
+        for bank in ("5T1_A200_Exh.fsb", "4N1_Ok_Exh.fsb"):
+            (engines / "Soundbanks/LOD1" / bank).write_bytes(b"FSB4")
+        with zipfile.ZipFile(engines / "HarmonicTuning.zip", "w") as z:
+            z.writestr("5T1_A200_Exh_HT.xml", ht % "5T1_A200_Exh.fsb")
+            z.writestr("5T1_A200_Int_HT.xml", ht % "5T1_A200_Int.fsb")
+        return (mods.mods_dir(self.cfg) / fm4cars.MOD / "media/audio/cars/engines/harmonictuning"
+                / "5T1_A200_1478_Exh_HT.xml")
+
+    def test_a_new_import_needs_no_sound_repair(self):
+        self.build()
+        self.assertTrue(fm4cars.status(self.cfg)["banks"])
+        self.assertIsNone(fm4cars.repair_sound(self.cfg, log=lambda m: None))
+
+    def test_an_old_import_without_the_s1s_bank_gets_fh1s_similar_tuning_once(self):
+        fixed = self.old_import_with_the_s1()
+        logged = []
+        note = fm4cars.repair_sound(self.cfg, log=logged.append)
+        self.assertIn("Audi Sport quattro S1", note)
+        self.assertIn("import FM4 cars again", note)
+        self.assertEqual(fixed.read_text(), '<Soundbank name="5T1_A200_Exh.fsb">\n</Soundbank>\n')
+        self.assertEqual(sorted(p.name for p in fixed.parent.iterdir()), ["5T1_A200_1478_Exh_HT.xml"])
+        info = fm4cars.status(self.cfg)
+        self.assertTrue(info["banks"])
+        self.assertEqual(info["sound_fallback"], {"5T1_A200_1478_Exh_HT.xml": "5T1_A200_Exh_HT.xml"})
+        self.assertEqual(info["cars"], ["BUG_Veyron_09"])  # the rest of the marker kept
+        self.assertTrue(any("5T1_A200_1478_Exh_HT.xml" in m for m in logged))
+        self.assertIsNone(fm4cars.repair_sound(self.cfg, log=lambda m: None))  # once
+
+    def test_the_sound_repair_waits_for_the_game_files(self):
+        self.old_import_with_the_s1()
+        shutil.rmtree(self.cfg.game_files() / "media")
+        self.assertIsNone(fm4cars.repair_sound(self.cfg, log=lambda m: None))
+        self.assertNotIn("banks", fm4cars.status(self.cfg))  # tried again at the next start
+
     def test_stale_after_dlc_changes(self):
         self.build()
         d = Path(self.cfg.data_home()) / "0000000000000000/4D5309C9/00000002/PACK"
