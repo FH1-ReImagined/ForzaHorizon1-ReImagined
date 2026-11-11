@@ -59,7 +59,8 @@ jobs:
           python-version: "3.12"
       - if: runner.os == 'Linux'
         name: Qt runtime libraries
-        run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libfontconfig1 libfreetype6 libxkbcommon0 libdbus-1-3
+        # ci_apt.sh: APT with retries, and archive.ubuntu.com when the runner's Azure mirror does not resolve
+        run: launcher/packaging/ci_apt.sh update && launcher/packaging/ci_apt.sh install -y libegl1 libgl1 libfontconfig1 libfreetype6 libxkbcommon0 libdbus-1-3
       - name: Install launcher dependencies
         run: python -m pip install -r launcher/requirements.txt
       - name: Verify Qt runtime is available
@@ -305,8 +306,10 @@ jobs:
   # The patched SDK pieces for Linux: the plugin, runtime and codegen tool built from ReIGlue,
   # the project's fork of the SDK, at the revision tools/build_rexglue_sdk.sh pins. Cached on that script.
   sdk-linux:
-    # 22.04: the oldest runner image, so the overlay needs glibc 2.35 only
-    runs-on: ubuntu-22.04
+    # Pushes and tags build on 22.04, the oldest runner image, so the overlay (which launcher-linux
+    # and the Flatpak ship) needs glibc 2.35 only. Pull requests only test it, on 24.04, whose
+    # archive has g++-14: PR checks don't depend on Launchpad's toolchain PPA.
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'ubuntu-22.04' }}
     steps:
       - uses: actions/checkout@v4
       - name: Test scoped event radio wrappers (disc and TU4)
@@ -321,7 +324,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: rexglue-overlay-linux-amd64.tar.gz
-          key: sdk-overlay-linux-${{ hashFiles('tools/tests/auto-pause/**','forza-recomp/tests/auto_pause*','forza-recomp/src/platform/auto_pause*','forza-recomp/src/hooks/telemetry.cpp','forza-recomp/src/platform/camera_fov.h','forza-recomp/src/platform/driving_gate.h','forza-recomp/src/platform/guest_*.h','forza-recomp/src/platform/sdk_import.*','forza-recomp/src/platform/xr.h','forza-recomp/src/tu4_addresses.h','tools/test_presenter_reconnect.cpp', 'tools/build_rexglue_sdk.sh', 'tools/test_readback_history.cpp', 'tools/test_frame_cost.cpp', 'tools/test_world_ao.cpp', 'tools/test_vr_stereo.cpp', 'tools/test_texture_pack_dds.cpp', 'tools/test_shader_load_memo.cpp', 'tools/test_descriptor_memo.cpp', 'tools/test_pipeline_lookahead.cpp', 'forza-recomp/tests/wheel_ff_log_test.cpp', 'forza-recomp/tests/wheel_ff_reject_test.cpp', 'forza-recomp/tests/wheel_thrustmaster_test.cpp', 'forza-recomp/tests/wheel_rumble_test.cpp', 'forza-recomp/tests/wheel_rumble_pace_test.cpp', 'forza-recomp/tests/wheel_ff_test.cpp', 'forza-recomp/tests/wheel_devices_test.cpp', 'forza-recomp/tests/wheel_buttons_test.cpp', 'forza-recomp/tests/wheel_shifter_test.cpp', 'forza-recomp/tests/wheel_min_force_test.cpp', 'forza-recomp/tests/wheel_gear_request_test.cpp', 'forza-recomp/tests/wheel_handbrake_test.cpp', 'forza-recomp/tests/wheel_primary_test.cpp', 'tools/test_wait_wakeups.cpp', 'tools/test_driver_pipeline_cache.cpp', 'tools/test_pipeline_store.cpp', 'tools/test_fh1_screen_raster.cpp', 'tools/test_render_target_trim.cpp', 'tools/test_vulkan_memory_placement.cpp', 'tools/test_submission_watch.cpp', 'tools/test_device_lost_trail.cpp', 'tools/test_gamepad_remap.cpp', 'tools/test_pipeline_prebuild.cpp', 'tools/test_vfs_host_errors.cpp', 'tools/test_xma_invalid_input.cpp', 'launcher/packaging/ci_linux_sdk_setup.sh', 'launcher/packaging/ci_toolchain_debs.txt', 'launcher/forza_launcher/pins.py') }}
+          key: sdk-overlay-linux-${{ github.event_name == 'pull_request' && 'noble' || 'jammy' }}-${{ hashFiles('tools/tests/auto-pause/**','forza-recomp/tests/auto_pause*','forza-recomp/src/platform/auto_pause*','forza-recomp/src/hooks/telemetry.cpp','forza-recomp/src/platform/camera_fov.h','forza-recomp/src/platform/driving_gate.h','forza-recomp/src/platform/guest_*.h','forza-recomp/src/platform/sdk_import.*','forza-recomp/src/platform/xr.h','forza-recomp/src/tu4_addresses.h','tools/test_presenter_reconnect.cpp', 'tools/build_rexglue_sdk.sh', 'tools/test_readback_history.cpp', 'tools/test_frame_cost.cpp', 'tools/test_world_ao.cpp', 'tools/test_vr_stereo.cpp', 'tools/test_texture_pack_dds.cpp', 'tools/test_shader_load_memo.cpp', 'tools/test_descriptor_memo.cpp', 'tools/test_pipeline_lookahead.cpp', 'forza-recomp/tests/wheel_ff_log_test.cpp', 'forza-recomp/tests/wheel_ff_reject_test.cpp', 'forza-recomp/tests/wheel_thrustmaster_test.cpp', 'forza-recomp/tests/wheel_rumble_test.cpp', 'forza-recomp/tests/wheel_rumble_pace_test.cpp', 'forza-recomp/tests/wheel_ff_test.cpp', 'forza-recomp/tests/wheel_devices_test.cpp', 'forza-recomp/tests/wheel_buttons_test.cpp', 'forza-recomp/tests/wheel_shifter_test.cpp', 'forza-recomp/tests/wheel_min_force_test.cpp', 'forza-recomp/tests/wheel_gear_request_test.cpp', 'forza-recomp/tests/wheel_handbrake_test.cpp', 'forza-recomp/tests/wheel_primary_test.cpp', 'tools/test_wait_wakeups.cpp', 'tools/test_driver_pipeline_cache.cpp', 'tools/test_pipeline_store.cpp', 'tools/test_fh1_screen_raster.cpp', 'tools/test_render_target_trim.cpp', 'tools/test_vulkan_memory_placement.cpp', 'tools/test_submission_watch.cpp', 'tools/test_device_lost_trail.cpp', 'tools/test_gamepad_remap.cpp', 'tools/test_pipeline_prebuild.cpp', 'tools/test_vfs_host_errors.cpp', 'tools/test_xma_invalid_input.cpp', 'launcher/packaging/ci_linux_sdk_setup.sh', 'launcher/packaging/ci_toolchain_debs.txt', 'launcher/forza_launcher/pins.py') }}
       - if: steps.cache.outputs.cache-hit != 'true'
         name: Build dependencies, LLVM, CMake and the pinned SDK nightly
         run: |
@@ -628,7 +631,7 @@ jobs:
       - name: Smoke test the window
         timeout-minutes: 5
         run: |
-          sudo apt-get update && sudo apt-get install -y libegl1 libxkbcommon0 libxcb-cursor0 libdbus-1-3
+          launcher/packaging/ci_apt.sh update && launcher/packaging/ci_apt.sh install -y libegl1 libxkbcommon0 libxcb-cursor0 libdbus-1-3
           QT_QPA_PLATFORM=offscreen python -m unittest discover -s launcher -p 'test_gamepad.py' -v
           launcher/dist/forza-launcher/forza-launcher --run-script launcher/packaging/gamepad_smoke.py gamepad-smoke.txt
           test -s gamepad-smoke.txt
