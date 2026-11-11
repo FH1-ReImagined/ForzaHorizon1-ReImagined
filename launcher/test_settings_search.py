@@ -101,8 +101,11 @@ class SettingsSearchTests(unittest.TestCase):
         from PySide6.QtWidgets import QLineEdit, QTableWidget, QWidget
         servers = QWidget()   # the window's Servers page: its address field and its list
         servers.table, servers.address = QTableWidget(servers), QLineEdit(servers)
+        from PySide6.QtWidgets import QPushButton
+        servers.test_button = QPushButton(servers)
         self.page.attach_servers(servers)
         self.assertIs(self.query("custom_server")[0].focus, servers.address)
+        self.assertIs(self.query("firewall")[0].focus, servers.test_button)   # Test connection
         self.assertEqual(self.query("custom_server")[0].group, "Servers")
         self.assertIs(self.query("Xenia content folder")[0].focus, self.page.xcontent)
         self.assertIs(self.query("extra_env")[0].focus, self.page.envs)
