@@ -10,7 +10,8 @@ chosen circuit and keeps the result in the data folder:
 
   <data>/fm4-tracks/<track>/            one imported circuit
       media/tracks/<track>/...          the converted track (bin.zip, ribbons, collision,
-                                        fm4_stream_blocks.txt): loose files of the game
+                                        fm4_stream_blocks.txt): loose files of the game,
+                                        with its road network (<track>.nav, tools/fm4_routes.py)
       media/audio/tracks/<Track>/...    the circuit's ambience sound banks (Colorado's)
       media/zipmanifest.xml             FH1's archive list with the track's bin.zip in it
       stx/<track>_stx_*.bin             FM4's static texture pack numbers (FORZA_FM4_STX)
@@ -19,8 +20,8 @@ chosen circuit and keeps the result in the data folder:
       track.json                        what was imported: name, size, start position
   <data>/fm4-tracks/laps/<track>.jsonl  the laps the game timed there (kept when it is removed),
       <track>.ghost.txt                 and the best lap's trace, time attack's ghost
-  <data>/mods/.fm4-track-<track>/       its database (free roam loads the circuit) and game
-                                        modes, a mod the Mods page does not list
+  <data>/mods/.fm4-track-<track>/       its database (free roam loads the circuit), game modes
+                                        and race route, a mod the Mods page does not list
 
 A start on a circuit passes --fm4_track_dir=<data>/fm4-tracks/<track>: the game mounts the
 folder at game:\\media\\tracks\\<track> (with its sound banks and zip manifest) and gives the
@@ -73,8 +74,9 @@ NOT_CIRCUITS = re.compile(r"(?i)^(homespace\d*|ui.*)$")  # FM4's garage sets and
 
 EXPERIMENTAL = ("Experimental. What works: free driving on the circuit, with its buildings, stands "
                 "and collision, and timed laps (lap, sectors and best lap on the game's HUD, kept "
-                "per circuit), your car's shadow. Not yet: events and races, the circuit's own "
-                "shadows, AI cars and traffic, the map and GPS. Suzuka is the most tested circuit. "
+                "per circuit), your car's shadow, the circuit's road on the minimap. Not yet: events "
+                "and races, the circuit's own shadows, AI cars and traffic, the map screen and GPS. "
+                "Suzuka is the most tested circuit. "
                 "A start on a circuit plays offline, and your save is backed up first.")
 EXPERIMENTAL_SHORT = ("Experimental: free driving and timed laps on the circuit (no events "
                       "yet). It plays offline, and your save is backed up first.")
@@ -530,8 +532,11 @@ def _build_one(cfg, disc_root: Path, folder, game: Path, update: Path, work: Pat
     env = _tool_env({"FM4_DISC": str(disc_root)})
     say = lambda line: step(0, line[:120])
     step(0, "reading the circuit")
+    # FM4's AI lines: the circuit's road network and race route (tools/fm4_routes.py)
+    ai = fm4cars._find_ci(disc_root, "Media", "AI", "Tracks")
     runner(tool_command("fm4_track_mod.py", track_src, update / "media.zip", mod, "--fm4-db", db or "",
-                        "--free-roam", FREE_ROAM_TRACK, "--fh1-disc", game, "--loose", loose),
+                        "--free-roam", FREE_ROAM_TRACK, "--fh1-disc", game, "--loose", loose,
+                        *(("--fm4-ai", ai) if ai else ())),
            env, say, cancelled)
     step(1, "converting the layout, zones and collision")
     runner(tool_command("fm4_pvs.py", "convert", mod, game, out), env, say, cancelled)
@@ -558,9 +563,10 @@ def _build_one(cfg, disc_root: Path, folder, game: Path, update: Path, work: Pat
         shutil.copyfile(f, staged / "stx" / f.name)
     if not (staged / "stx" / f"{key}_stx_numbers.bin").is_file():
         raise Fm4TrackError("The converter wrote no static texture numbers.")
-    # the database and game modes: a mod of their own (the cars' kind of files)
+    # the database, game modes and race route: a mod of their own (the cars' kind of files; the
+    # game reads a route from its aiopenworld archive, which a mod's files are laid over)
     db_mod = work / "dbmod"
-    for part in ("db", "gamemodes"):
+    for part in ("db", "gamemodes", "aiopenworld"):
         if (mod / "media" / part).is_dir():
             shutil.copytree(mod / "media" / part, db_mod / "media" / part)
     if not (db_mod / "media" / "db" / "gamedb.slt").is_file():
