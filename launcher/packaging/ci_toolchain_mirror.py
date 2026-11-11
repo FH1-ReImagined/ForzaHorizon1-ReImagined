@@ -338,10 +338,7 @@ def cmd_fetch(out):
                         index(work, hashes, "main/source/Sources.xz"))
     found = {asset_name(name): sha256 for name, (_, sha256, _) in files.items()}
     conflicts, unpinned = compare_pins(found, pins)
-    if conflicts and repin:
-        print("Not the pinned bytes (--repin: they go up as a new pin):\n  " + "\n  ".join(conflicts))
-        unpinned.update({name: found[name] for name in found if name in pins and pins[name] != found[name]})
-    elif conflicts:
+    if conflicts:
         raise SystemExit("The PPA's signed index and ci_toolchain_sha256sums.txt disagree; "
                          "nothing was downloaded:\n  " + "\n  ".join(conflicts))
     for name, (path, sha256, size) in sorted(files.items()):

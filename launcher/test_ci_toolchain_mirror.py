@@ -294,6 +294,41 @@ class UploadTests(unittest.TestCase):
             self.upload(FakeGh(prerelease=False), {"a.deb": b"a"})
 
 
+class FetchTests(unittest.TestCase):
+    """fetch: the PPA's signed index against the checked-in pins (ci-toolchain-mirror.yml)."""
+    def fetch(self, pins):
+        self.fetched = fetched = []
+        with tempfile.TemporaryDirectory() as tmp:
+            out, pins_file, manifest_file = Path(tmp) / "out", Path(tmp) / "pins", Path(tmp) / "manifest"
+            pins_file.write_text(mirror.format_sums(pins))
+            manifest_file.write_text("".join(f"{p}_{v}\n" for p, v in ENTRIES))
+            texts = {f"main/binary-{mirror.ARCH}/Packages.xz": PACKAGES.format(**H),
+                     "main/source/Sources.xz": SOURCES.format(**H)}
+            with mock.patch.object(mirror, "PINS", pins_file), \
+                    mock.patch.object(mirror, "MANIFEST", manifest_file), \
+                    mock.patch.object(mirror, "signing_key", lambda work: work / "key"), \
+                    mock.patch.object(mirror, "verified_inrelease", lambda work, key: ""), \
+                    mock.patch.object(mirror, "release_hashes", lambda text: {}), \
+                    mock.patch.object(mirror, "index", lambda work, hashes, path: texts[path]), \
+                    mock.patch.object(mirror, "fetch_checked",
+                                      lambda path, sha256, size, dest: fetched.append(dest.name)):
+                mirror.cmd_fetch(out)
+            return fetched, mirror.parse_sums((out / "UNPINNED").read_text())
+
+    def test_new_files_are_fetched_and_listed_as_unpinned(self):
+        fetched, unpinned = self.fetch({})
+        self.assertEqual(len(fetched), 5)
+        self.assertEqual(set(unpinned), set(fetched))
+
+    def test_an_index_that_disagrees_with_a_pin_stops_before_any_download(self):
+        deb = mirror.asset_name("g++-14_14.3.0-12ubuntu1~22~ppa2_amd64.deb")
+        with self.assertRaises(SystemExit) as raised:
+            self.fetch({deb: H["c"]})
+        self.assertIn("disagree; nothing was downloaded", str(raised.exception))
+        self.assertIn(deb, str(raised.exception))
+        self.assertEqual(self.fetched, [])
+
+
 class SumsTests(unittest.TestCase):
     """sums: the GCC 14 build's files (ci-toolchain-gcc.yml) before the upload."""
     def sums(self, files, pins, repin=False):
