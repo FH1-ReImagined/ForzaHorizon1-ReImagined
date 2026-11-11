@@ -7,23 +7,27 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SUDO=""; [ "$(id -u)" = 0 ] || SUDO=sudo
 export DEBIAN_FRONTEND=noninteractive
-# Launchpad occasionally returns 503 for individual packages. APT retries each
-# transfer; repeat the command too so already downloaded packages stay cached.
-apt_get() {
-    local attempt
-    for attempt in 1 2 3; do
-        if $SUDO apt-get -o Acquire::Retries=3 "$@"; then
-            return 0
-        fi
-        [ "$attempt" -lt 3 ] || return 1
-        echo "APT failed (attempt $attempt/3); retrying in $((attempt * 10)) seconds" >&2
-        sleep "$((attempt * 10))"
-    done
-}
+# APT with retries, and archive.ubuntu.com when the runner's Azure mirror stops resolving.
+apt_get() { "$HERE/ci_apt.sh" "$@"; }
 apt_get update
 apt_get install -y software-properties-common ca-certificates curl
-$SUDO add-apt-repository --no-update -y ppa:ubuntu-toolchain-r/test
-apt_get update
+# add-apt-repository asks api.launchpad.net for the PPA's signing key. When that stays unreachable,
+# the packages come from Launchpad's file links below (librarian_debs) instead.
+add_ppa() {
+    local attempt
+    for attempt in 1 2 3; do
+        if $SUDO add-apt-repository --no-update -y ppa:ubuntu-toolchain-r/test; then
+            return 0
+        fi
+        [ "$attempt" -lt 3 ] || break
+        echo "add-apt-repository failed (attempt $attempt/3); retrying in $((attempt * 10)) seconds" >&2
+        sleep "$((attempt * 10))"
+    done
+    echo "Could not add the toolchain PPA; using Launchpad's file links" >&2
+    return 1
+}
+ppa=1
+if add_ppa; then apt_get update; else ppa=0; fi
 # ppa.launchpadcontent.net can answer 503 for hours (the index, the packages or both) while the
 # older ppa.launchpad.net name still serves the same PPA (APT checks its signature either way).
 old_ppa_host() {
@@ -34,7 +38,7 @@ old_ppa_host() {
 }
 # APT only warns when an index fails, and a missing package name is read as a pattern, so look
 # for g++-14 itself.
-if ! apt-cache show g++-14 2>/dev/null | grep -x "Package: g++-14" >/dev/null; then
+if [ "$ppa" = 1 ] && ! apt-cache show g++-14 2>/dev/null | grep -x "Package: g++-14" >/dev/null; then
     old_ppa_host || true
 fi
 # Without the PPA, "install g++-14" matches clang-14 and the like instead of failing, so each
@@ -48,14 +52,16 @@ librarian_debs() {
     while IFS= read -r name || [ -n "$name" ]; do
         name="${name%$'\r'}"
         case "$name" in ''|'#'*) continue ;; esac
-        curl -fsSL --retry 3 -o "$debs/${name}_amd64.deb" \
+        curl -fsSL --connect-timeout 20 --retry 3 --retry-all-errors -o "$debs/${name}_amd64.deb" \
             "https://launchpad.net/~ubuntu-toolchain-r/+archive/ubuntu/test/+files/${name}_amd64.deb" || return 1
     done < "$HERE/ci_toolchain_debs.txt"
 }
 install_packages() {
-    if apt_get install -y "$@" && have_headers; then return 0; fi
-    old_ppa_host || true
-    if apt_get install -y "$@" && have_headers; then return 0; fi
+    if [ "$ppa" = 1 ]; then
+        if apt_get install -y "$@" && have_headers; then return 0; fi
+        old_ppa_host || true
+        if apt_get install -y "$@" && have_headers; then return 0; fi
+    fi
     if librarian_debs && apt_get install -y "$debs"/*.deb "$@" && have_headers; then return 0; fi
     echo "g++-14 did not install the C++23 headers; is the toolchain PPA reachable?" >&2
     exit 1
