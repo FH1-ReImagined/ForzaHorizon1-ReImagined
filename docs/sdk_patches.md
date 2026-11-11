@@ -650,3 +650,41 @@ each cvar turns its part off, or `FORZA_VK_DYNAMIC_CONSTANTS=0`, `FORZA_VK_BINDI
 `FORZA_VK_TEXTURE_SET_REUSE=0`). With the split every memo is used on the recorder thread only. Measurements: -7.4 % of
 the command processor's time a draw; with the split, 123.6 to 153.5 fps uncapped in the benchmark on eight cores and
 131.5 to 153.0 on six ([perf.md](perf.md)).
+
+## ReIGlue 0470-0471: guest atomics without the global lock (#506)
+
+Xbox 360 code wraps every `lwarx`/`stwcx.` (`ldarx`/`stdcx.`) loop in an interrupts-off section (`mtmsrd r13`
+before the load-reserve, `mtmsrd` of an earlier `mfmsr` after the store-conditional), and the generated code took
+the global critical region, the recursive mutex the kernel exports share, for each section and again for the `mfmsr`
+before it. In FH1 these are the game's reference counts, exchanges and compare-exchanges.
+
+- **0470** (`lock_free_reservations` in the codegen config, on): the code generator checks each section before it
+  emits the function. A section whose every path is one load-reserve and at most one store-conditional of the same
+  width to the same, unchanged address registers, with only register arithmetic, compares and forward branches
+  between them, and which is entered only through its `mtmsrd r13`, is one atomic read-modify-write: its
+  store-conditional is already a host compare-exchange, so it runs without the lock, as on the console, where the
+  section only keeps this CPU's interrupts out. TU4: 1069 of the executable's 1070 sections (all but the SList push,
+  `sub_8320EF20`), and all of the speech and XMedia facade modules' (27 and 368). The codegen log line
+  `Interrupts-off sections: N, M of them lock-free` counts them.
+- **0471**: `mfmsr` reads this thread's count of locked sections instead of taking the lock to read a global count
+  (while a thread holds the lock no other thread is in a section, so that count was always the reader's own).
+
+After Pinyon Shift's single-reservation sections and thread-local interrupt depth (ShiftGlue `07b2b2a` and
+`b13a1b5`), written for ReIGlue's code generator; credited in ReIGlue's NOTICE. Tests: ReIGlue's
+`reservation_sections_test.cpp` (the shapes FH1 uses convert; other loads and stores, mixed widths, changed address
+registers, calls, barriers, nested sections, loops, entries from outside and unknown switch targets keep the lock)
+and `seq_reservation_sections.s` (FH1's sections run, the SList push included); all 1588 PPC tests pass.
+
+Measured on main `583e05c` (ReIGlue `5408d20`) against the same with 0470-0471 (TU4, Linux, Ryzen 7 7800X3D,
+RX 9060 XT, RADV; built-in benchmark, 1280x720, uncapped, three alternating pairs each). A build with
+`-DREX_GUEST_LOCK_STATS` counts the sections: in the benchmark's measured minute, 6,378 `mfmsr` and 6,378 sections a frame (about 970,000 a second each), so about 12,800 lock acquisitions a
+frame before and none after (the SList push took it 5 times in the whole run).
+
+| | Before (fps, 1% low) | After (fps, 1% low) |
+| --- | --- | --- |
+| 6 cores (`taskset -c 0-5`) | 165.9 [164.3-168.1], 106.9 | **175.5** [170.0-181.0], 114.0 (+5.8 %; each run above its pair's) |
+| 8 cores | 167.9 [164.0-170.3], 112.1 | 169.7 [158.9-180.5], 113.8 (within the spread) |
+
+The 8-core rows leave out a first pair taken while another job loaded the machine (153.9 against 146.5 fps). On a
+30 fps session (boot, three minutes of free roam, the GoPro Millennia Masters race) the log had only the two error
+lines every run has (`ResolvePath(\Device)`, `XMsgStartIORequestEx`) and no `FORZA_STALL`. Not checked: Windows, the Steam Deck, four cores.
