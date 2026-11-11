@@ -2,7 +2,7 @@
 
 This policy covers Forza Horizon 1: ReImagined: the Windows installer, the Linux packages, the launcher, the game the launcher builds on your PC, the project's public Forza Live server, and the project website, forza.dyotson.dev, with its optional website accounts. It says what is sent over the network, when, where it goes, what is stored and for how long, what is public, and how to turn each thing off.
 
-Last updated: 2026-11-04. Every change to this policy is a change to this file, so its history on GitHub lists them: https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/commits/main/PRIVACY.md
+Last updated: 2026-11-11. Every change to this policy is a change to this file, so its history on GitHub lists them: https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/commits/main/PRIVACY.md
 
 ## In short
 
@@ -79,10 +79,16 @@ it never changes clock settings. Opening the setup guide opens GitHub in your br
 
 ### Website account link (only when you click Link)
 
-- What: when you click Online > Online > Website account > "Link to website account", the launcher asks the website's accounts service for a link, opens the website in your browser, then asks every 3 seconds whether a website account claimed it, and confirms the account you approve (or declines it, with "Not me"). "Unlink" and "Sign out everywhere" send one request each. These requests carry your XUID and a signature made with your signing key (not the key itself), over HTTPS. The answers contain the website account's id, its sign-in method and the day it was made, never another player's XUID.
+- What: when you click Online > Online > Website account > "Sign in or create an account", the launcher asks the website's accounts service for a link, shows the website's account page in its own window (or in your browser, with "Use my browser instead" or where the launcher has no such window), then asks every 3 seconds whether a website account claimed it, and confirms the account you approve (or declines it, with "Not me"). "Unlink" and "Sign out everywhere" send one request each. These requests carry your XUID and a signature made with your signing key (not the key itself), over HTTPS. The answers contain the website account's id, its sign-in method and the day it was made, never another player's XUID.
 - When: only when you click one of those buttons. After a link is made, the launcher also asks for the link's state once a session, when the Website account card is shown.
 - Where: forza.dyotson.dev (the project website's accounts service), whichever game server you use.
 - Turn off: don't link. "Unlink" ends the link; after that the launcher sends nothing until you link again.
+
+### The launcher's window onto the website (only when you sign in there)
+
+- What: the launcher's window is a built-in browser (Qt WebEngine) that shows forza.dyotson.dev's account page and, when you pick them, Discord's or GitHub's sign-in pages. Those sites get what any browser sends them, with a User-Agent that names Qt WebEngine. Every other address opens in your own browser. The launcher does not read the pages, what you type in them or their cookies, and allows them no camera, microphone, location, notifications, clipboard reading or downloads. It sends nothing else.
+- Stored: like a browser, the window keeps its own cookies, site storage and cache, so that you stay signed in to the website there (and to Discord or GitHub if you signed in to them there). They are in the web-account folder of the game data folder (see "What is stored on your PC") and shared with nothing else, not with your own browser.
+- Turn off: "Sign out of the website in the launcher" on the Website account card deletes that folder. "Use my browser instead" signs in with your own browser and stores nothing in the launcher.
 
 ### Servers page (only when you open it)
 
@@ -183,6 +189,7 @@ Your IP address and other players:
   - forza.log, the game's log of the last session (at most 100 MB: from 50 MB it continues in a new file and keeps the first part as forza.1.log), and forza.previous.log (with forza.previous.1.log) from the session before;
   - shader_share.json, which records the shader entries already sent;
   - live_identity.txt, which holds your XUID, gamertag, friends key and signing key;
+  - after you sign in to the website in the launcher's window: web-account, that window's cookies, site storage and cache (see "The launcher's window onto the website");
   - with "This PC": the local server's data in live_server, including its server.log and its player and friends records;
   - with "Continue a Xenia Canary save": a copy of that save in a xenia-<XUID> folder;
   - with Forza Motorsport 4 circuits imported: the converted circuits in fm4-tracks, their database in mods/.fm4-track-<circuit>, and your lap times and best-lap ghosts in fm4-tracks/laps.
@@ -228,7 +235,7 @@ The project website, forza.dyotson.dev, is static pages, plus an accounts servic
 ### Website accounts (optional)
 
 A website account is optional, and you don't need one to play, online or offline. Until you link it to your game (see "Linking your game") it can only browse. You must be 13 or older to make one. You make one by signing in for the first time on the account page (forza.dyotson.dev/account.html), in one of three ways:
-- **Discord or GitHub.** The browser goes to Discord or GitHub, which asks you to allow the sign-in, then comes back. The website asks Discord only for the "identify" permission and asks GitHub for no permission. It keeps only your account's numeric id at that service. It does not keep your username, display name, avatar, email address or the access token.
+- **Discord or GitHub.** The browser (or the launcher's window onto the website) goes to Discord or GitHub, which asks you to allow the sign-in, then comes back. The website asks Discord only for the "identify" permission and asks GitHub for no permission. It keeps only your account's numeric id at that service. It does not keep your username, display name, avatar, email address or the access token.
 - **An email address.** The website mails you an 8-digit code, which works for 10 minutes and only in the browser where you asked for it. The email relay receives your address and the mail, and keeps them under its own policy. The website never stores your address: it keeps only a one-way hash of it (HMAC-SHA256 with a secret key), which can't be turned back into the address. It is used to find your account the next time you sign in with the same address.
 
 What the website stores about an account:
@@ -247,7 +254,7 @@ Neither is used for tracking or shared with anyone.
 
 ### Linking your game
 
-Linking makes your game key the account's second factor: the website's features for players (likes, deleting your own photos and designs, and later uploads) need a linked game. You start a link in the launcher (Online > Online > Website account), sign in on the website page it opens and click Link there, then confirm the website account's id in the launcher. Both sides have to approve, so nobody can link your game to their account, or their game to yours, without you.
+Linking makes your game key the account's second factor: the website's features for players (likes, deleting your own photos and designs, and later uploads) need a linked game. You start a link in the launcher (Online > Online > Website account), sign in on the website page it shows (in its own window or in your browser) and click Link there, then confirm the website account's id in the launcher. Both sides have to approve, so nobody can link your game to their account, or their game to yours, without you.
 
 What a link stores:
 - your XUID, the public half of your signing key (never the key itself), your gamertag (shown on your account page), and when the link was made and moved;

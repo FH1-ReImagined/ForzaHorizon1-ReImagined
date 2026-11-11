@@ -1068,8 +1068,9 @@ class SettingsPage(QWidget):
         self.web_account = WebAccountCard(self.cfg, self)
         content.addWidget(self.web_account)
         self._show_web_account(self.cfg.online["mode"])
-        self.search.add("Link to website account", "Online", "Website account", self.web_account.link_button,
-                        keywords="forza.dyotson.dev website account Discord GitHub link unlink sign out")
+        self.search.add("Sign in or create an account", "Online", "Website account", self.web_account.link_button,
+                        keywords="forza.dyotson.dev website account Discord GitHub email register sign in "
+                                 "link unlink sign out")
 
     def sync_server(self):
         """Show the server the Servers page picked (#587)."""
