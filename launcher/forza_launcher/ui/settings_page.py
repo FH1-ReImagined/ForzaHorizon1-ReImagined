@@ -219,7 +219,7 @@ def make_control(s: schema.Setting, value, on_change, note=None, monitor=0):
         w = Combo()
         w.setEditable(True)
         w.addItem(display.label(monitor), 0)
-        for v in (*schema.LOW_FRAME_RATES, 60, 75, 90, 100, 120, 144, 165, 180, 200, 240):
+        for v in schema.FRAME_RATE_PRESETS:
             w.addItem(f"{v} fps", v)
         w.lineEdit().setValidator(QRegularExpressionValidator(QRegularExpression(r"[1-9]\d{0,2}(?: fps)?")))
         w.setToolTip("Pick a rate or type your own (20, 30, 40, or 60 to 240), such as your display's "
