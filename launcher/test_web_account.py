@@ -288,12 +288,13 @@ class Interface(ServiceTest):
         self.addCleanup(p.stop)
         return value
 
-    def dialog(self, view=None, **kw):
-        """A LinkDialog; `view` is what the launcher's window would be (None: no Qt WebEngine)."""
+    def dialog(self, view=None, opens=True, **kw):
+        """A LinkDialog; `view` is what the launcher's window would be (None: no Qt WebEngine),
+        `opens` whether the browser opens."""
         from forza_launcher.ui import web_account as ui
         from forza_launcher.ui import web_view
         opened = []
-        self.patch(web_view, "open_in_browser", side_effect=lambda url: opened.append(url) or True)
+        self.patch(web_view, "open_in_browser", side_effect=lambda url: opened.append(url) or opens)
         self.patch(ui, "make_view", side_effect=lambda site, parent: view)
         self.patch(web_account, "POLL_SECONDS", 0.1)
         d = ui.LinkDialog(IDENTITY, None, self.base, **kw)
@@ -475,6 +476,61 @@ class Interface(ServiceTest):
         self.assertEqual(d.result(), d.DialogCode.Accepted)
         self.assertEqual(view.closed, 1)                # the page and its profile end with the dialog
 
+    def test_a_browser_that_does_not_open_leaves_the_link_and_the_code(self):
+        from PySide6.QtGui import QGuiApplication
+        d, opened = self.dialog(None, opens=False)
+        self.spin(lambda: d.request is not None and d.code.text())
+        self.assertEqual(len(opened), 1)
+        url = d.request["url"]
+        self.assertEqual(opened, [url])
+        self.assertIn("Your browser did not open", d.text.text())
+        self.assertIn(url, d.text.text())
+        self.assertNotIn("Your browser opened", d.text.text())
+        self.assertIn("K7M2-QXPA", d.code.text())
+        self.assertTrue(d.copy_button.isVisibleTo(d))
+        d.copy_button.click()
+        self.assertEqual(QGuiApplication.clipboard().text(), url)
+        self.assertEqual(d.copy_button.text(), "Copied")
+        calls = len(self.svc.calls)
+        self.spin(lambda: len(self.svc.calls) >= calls + 3)   # still waiting: polls later
+        self.assertIsNone(d.claimed)
+        self.assertTrue(d.copy_button.isVisibleTo(d))
+        self.assertTrue(d.code.isVisibleTo(d))
+        self.assertIn(url, d.text.text())
+        self.svc.claim(d.request["id"])
+        self.spin(lambda: d.claimed is not None)
+        self.assertFalse(d.copy_button.isVisibleTo(d))   # claimed: Link or Not me now
+        self.assertFalse(d.code.isVisibleTo(d))
+
+    def test_copy_link_is_there_with_the_launcher_s_window_and_the_browser(self):
+        from PySide6.QtGui import QGuiApplication
+        view = self.fake_view()
+        d, opened = self.dialog(view)
+        self.spin(lambda: view.loaded)
+        self.assertTrue(d.copy_button.isVisibleTo(d))
+        d.browser_button.click()
+        self.assertIn("Your browser opened", d.text.text())
+        self.assertTrue(d.copy_button.isVisibleTo(d))
+        d.copy_button.click()
+        self.assertEqual(QGuiApplication.clipboard().text(), opened[0])
+        d.close_button.click()
+
+    def test_a_failed_link_has_no_copy_link(self):
+        d, _ = self.dialog(None)
+        self.spin(lambda: d.copy_button.isVisibleTo(d))
+        d._fail("The link is over (it lasts 10 minutes). Start again.")
+        self.assertFalse(d.copy_button.isVisibleTo(d))
+
+    def test_the_window_falls_back_to_a_browser_that_does_not_open(self):
+        view = self.fake_view()
+        d, opened = self.dialog(view, opens=False)
+        self.spin(lambda: view.loaded)
+        view.failed.emit("The launcher's window stopped.")
+        self.assertEqual(opened, view.loaded)
+        self.assertTrue(d.text.text().startswith("The launcher's window stopped. Your browser did not open"))
+        self.assertIn(d.request["url"], d.text.text())
+        self.assertTrue(d.copy_button.isVisibleTo(d))
+
     def test_use_my_browser_instead(self):
         view = self.fake_view()
         d, opened = self.dialog(view)
@@ -519,6 +575,16 @@ class Interface(ServiceTest):
         self.assertTrue(d.note.isVisibleTo(d))
         view.notice.emit("")
         self.assertFalse(d.note.isVisibleTo(d))
+
+    def test_the_browser_is_browser_open_url(self):
+        from forza_launcher import browser
+        wv = web_view_module()
+        for answer in (True, False):
+            with mock.patch.object(browser, "open_url", return_value=answer) as open_url:
+                self.assertIs(wv.open_in_browser("https://example.com/help"), answer)
+            open_url.assert_called_once_with("https://example.com/help")
+        self.assertEqual(wv.not_opened("https://example.com/help"),
+                         "Your browser did not open. Open this link in any browser: https://example.com/help")
 
     def test_without_qt_webengine_the_browser_opens(self):
         from forza_launcher.ui import web_account as ui
@@ -766,9 +832,11 @@ class RealWindow(unittest.TestCase):
         storage = Path(root.name) / "web-account"
         opened = []
         with mock.patch.object(wv, "open_in_browser", side_effect=lambda url: opened.append(
-                url if isinstance(url, str) else url.toString())):
+                url if isinstance(url, str) else url.toString()) or False):   # no browser opens
             view = wv.create(self.site, None, storage)
             self.assertIsNotNone(view)
+            notices = []
+            view.notice.connect(notices.append)
             self.addCleanup(view.close_down)
             self.assertEqual(Path(view.profile.persistentStoragePath()), storage)
             self.assertFalse(view.profile.isOffTheRecord())
@@ -784,6 +852,7 @@ class RealWindow(unittest.TestCase):
                                      ("blank", "https://example.org/new")):
                 self.run_js(view, f"document.getElementById('{anchor}').click(); 1")
                 self.assertTrue(self.spin(lambda: expected in opened), anchor)
+                self.assertIn(wv.not_opened(expected), notices)   # the link, to open by hand
             self.run_js(view, "document.getElementById('file').click(); 1")
             self.spin(lambda: False, 0.5)
             self.assertEqual(view.view.title(), "account")       # stayed: nothing loaded in the window
