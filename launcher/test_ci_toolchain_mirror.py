@@ -170,7 +170,9 @@ class InReleaseTests(unittest.TestCase):
                 self.run_gpgv(self.good(fpr).replace("GOODSIG", status), returncode=0)
 
 
-@unittest.skipUnless(shutil.which("gpg") and shutil.which("gpgv"), "needs gpg and gpgv")
+# The mirror job runs on Linux; Git for Windows' gpg can't make keys in a temporary home there.
+@unittest.skipUnless(os.name != "nt" and shutil.which("gpg") and shutil.which("gpgv"),
+                     "needs gpg and gpgv on Linux")
 class RealGpgvTests(unittest.TestCase):
     """InRelease signed by two keys, only one in the keyring, checked by the real gpgv."""
     def test_two_signers_one_trusted(self):
