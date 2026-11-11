@@ -285,10 +285,9 @@ account or Xbox account. The first time the game starts with a server picked (la
 data folder says what happened, in the lines that start with `FORZA_LIVE`:
 
 - **`signed in to <server> as <gamertag> (player #N)`**: you are online.
-- **`server error 1: not registered`**: harmless. Up to 0.3.2 the game asked the server for
-  the player list before its first sign-in, the server answered with this, and the game
-  signed in again at once (`signed in to` followed within a few milliseconds). This version
-  no longer writes it at the start.
+- **`server error 1: not registered`**: harmless. At the start the game can ask the server
+  for the player list before its first sign-in; the server answers with this, and the game
+  signs in again at once (`signed in to` follows within a few milliseconds).
 - **`has not answered in 30 s`**: the server never answered the game's UDP traffic. Something
   between the PC and the server drops it: a firewall or antivirus, a VPN or proxy, or the
   network or provider. Allow `forza.exe` in Windows Firewall and in the antivirus, turn off

@@ -127,7 +127,7 @@ Title Update 4 players and base-game players do not meet. The Auction House has 
 You don't need to register or make an account to play online. There is no sign-up, key or Xbox account. The first time the game starts with a server picked, it makes its own online identity and signs in. The game's log, `forza.log` in the game data folder, shows what happened in its lines that start with `FORZA_LIVE`:
 
 - **`signed in to ... (player #N)`**: you are online.
-- **`server error 1: not registered`**: harmless. Up to 0.3.2 this line showed up at almost every start, just before `signed in to`, because the game asked for the player list before it had signed in. The game then signs in again at once. This version no longer writes it at the start.
+- **`server error 1: not registered`**: harmless. It often shows up at the start, just before `signed in to`, because the game asked for the player list before it had signed in. The game then signs in again at once.
 - **`has not answered in 30 s`**: something between your PC and the server drops the game's UDP traffic. That can be a firewall or antivirus, a VPN or proxy, or your network or provider. Allow `forza.exe` in Windows Firewall and in your antivirus, turn off the VPN or proxy, try a phone hotspot, or pick another server.
 - **`cannot resolve server`**: a DNS filter blocks the server's name (Pi-hole, AdGuard, NextDNS, router parental controls, an antivirus). Allow the name, or switch to a public DNS.
 - **No `FORZA_LIVE` lines at all**: Online is off. Unticking "Online features" in the installer, or answering no at the launcher's first start, sets it to Offline. In the launcher, open **Online > Servers**, select **Forza Live (main server)** (the public server) and press **Use this server**.
