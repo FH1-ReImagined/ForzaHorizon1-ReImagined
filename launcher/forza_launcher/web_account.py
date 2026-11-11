@@ -34,9 +34,10 @@ TIMEOUT = 15
 METHODS = {"discord": "Discord", "github": "GitHub", "email": "email"}
 
 MESSAGES = {
-    "refused": "The public server does not know this game's key yet. Play online on the public "
-               "server once with this version of the game, then try again.",
-    "play online first": "Play online on the public server once, then try again.",
+    "refused": "The public server does not know this game's key yet. Start the game once with the "
+               "Public server picked, then try again.",
+    "play online first": "Upload one speed trap first: in game, with the Public server picked, drive "
+                         "through any speed trap camera, then try again.",
     "not available": "This game cannot link a website account.",
     "changed in the past day": "This game's website link changed in the past day. Try again tomorrow.",
     "too many requests": "Too many tries. Wait a few minutes, then try again.",
@@ -50,6 +51,12 @@ MESSAGES = {
     "not found": "The link is over. Start again.",
     "linking is not available": "Website accounts are not available right now. Try again later.",
 }
+
+
+# Refusals whose "message" the service words for the player (what the game still has to do), shown
+# as sent; MESSAGES is the fallback for a service that sends none.
+SERVICE_WORDED = {"play online first"}
+MESSAGE_CHARS = 300
 
 
 class WebAccountError(Exception):
@@ -68,6 +75,9 @@ def _error(e):
     finally:
         e.close()
     code = doc.get("error") if isinstance(doc, dict) and isinstance(doc.get("error"), str) else ""
+    said = doc.get("message") if isinstance(doc, dict) and isinstance(doc.get("message"), str) else ""
+    if code in SERVICE_WORDED and said.strip():
+        return WebAccountError(said.strip()[:MESSAGE_CHARS], code)
     return WebAccountError(MESSAGES.get(code) or f"The website answered {e.code}. Try again later.", code)
 
 

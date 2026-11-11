@@ -68,11 +68,12 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # at render scale 1 (#640),
 # and 0450-0452: the split command processor's register runs stored without the backend, its
 # unchanged-register elision, and its fence waits woken once (#607),
-# and 0470-0471: guest atomic sections and mfmsr without the global lock (#506).
+# and 0470-0471: guest atomic sections and mfmsr without the global lock (#506),
+# and 0490: tile resolves on the fractional 1080p raster land at their 0.75 position (#785).
 # A reviewed full commit can be pinned before a maintainer publishes a tag.
 # When a tag is supplied, its target must still match this immutable commit.
 REIGLUE_TAG=
-REIGLUE_COMMIT=5e34014f21ffdfae66bd03afe64a33650990008f  # ReIGlue main: 0450-0452 (ReIGlue #47) and 0470-0471 (ReIGlue #48) merged, with #46 (#607, #506)
+REIGLUE_COMMIT=051cbc3b12b777290ea12f98b40273c35394e74a  # ReIGlue main: 0450-0452 (#47), 0470-0471 (#48), 0490 (#49) merged, with #46 (#607, #506, #785)
 REIGLUE_URL="${REIGLUE_URL:-https://github.com/FH1-ReImagined/ReIGlue}"
 NIGHTLY="${REXSDK_NIGHTLY:-$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64}"
 SRC="${REXSDK_SRC:-$HOME/rexglue-sdk-src-forza/sdk}"
