@@ -26,8 +26,20 @@ add_ppa() {
     echo "Could not add the toolchain PPA; using Launchpad's file links" >&2
     return 1
 }
-ppa=1
-if add_ppa; then apt_get update; else ppa=0; fi
+# Ubuntu 24.04 and newer ship g++-14 in the archive itself: no PPA (PR checks run there, so they
+# don't depend on Launchpad; release builds stay on 22.04 for the glibc 2.35 overlay).
+native=0
+os_release="${CI_OS_RELEASE:-/etc/os-release}"
+if [ -r "$os_release" ]; then
+    os_id="$(. "$os_release"; echo "${ID:-}")"
+    os_major="$(. "$os_release"; echo "${VERSION_ID%%.*}")"
+    if [ "$os_id" = ubuntu ] && [ "$os_major" -ge 24 ] 2>/dev/null; then native=1; fi
+fi
+ppa=0
+if [ "$native" = 0 ]; then
+    ppa=1
+    if add_ppa; then apt_get update; else ppa=0; fi
+fi
 # ppa.launchpadcontent.net can answer 503 for hours (the index, the packages or both) while the
 # older ppa.launchpad.net name still serves the same PPA (APT checks its signature either way).
 old_ppa_host() {
@@ -57,6 +69,11 @@ librarian_debs() {
     done < "$HERE/ci_toolchain_debs.txt"
 }
 install_packages() {
+    if [ "$native" = 1 ]; then
+        if apt_get install -y "$@" && have_headers; then return 0; fi
+        echo "g++-14 did not install the C++23 headers from the Ubuntu archive" >&2
+        exit 1
+    fi
     if [ "$ppa" = 1 ]; then
         if apt_get install -y "$@" && have_headers; then return 0; fi
         old_ppa_host || true
