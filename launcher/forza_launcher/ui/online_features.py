@@ -1,10 +1,9 @@
 """The first-run "Online features" question (#497) where no Windows installer asked it: Linux,
 Flatpak and source checkouts. The same choice as the installer's option (online_features.py)."""
 from PySide6.QtCore import QUrl
-from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QCheckBox, QDialog, QDialogButtonBox, QLabel, QPushButton, QVBoxLayout
 
-from .. import PRIVACY_URL
+from .. import PRIVACY_URL, browser
 from .widgets import label
 
 FEATURES = (
@@ -37,7 +36,7 @@ class OnlineFeaturesDialog(QDialog):
                             "and on the About page.", "help"))
         policy = QPushButton("Read the privacy policy")
         policy.setObjectName("link")
-        policy.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(PRIVACY_URL)))
+        policy.clicked.connect(lambda: browser.open_url(QUrl(PRIVACY_URL)))
         lay.addWidget(policy)
         buttons = QDialogButtonBox()
         go = buttons.addButton("Continue", QDialogButtonBox.AcceptRole)

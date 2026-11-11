@@ -35,7 +35,7 @@ class PlayLogFolderTests(unittest.TestCase):
             try:
                 buttons = {button.text(): button for button in page.findChildren(QPushButton)}
                 with patch("forza_launcher.ui.pages.paths.launcher_log", return_value=launcher_log), \
-                     patch("forza_launcher.ui.pages.QDesktopServices.openUrl", return_value=True) as opened:
+                     patch("forza_launcher.browser.QDesktopServices.openUrl", return_value=True) as opened:
                     buttons["Open log folder"].click()
                     buttons["Open launcher log folder"].click()
                 self.assertEqual([Path(call.args[0].toLocalFile()) for call in opened.call_args_list],

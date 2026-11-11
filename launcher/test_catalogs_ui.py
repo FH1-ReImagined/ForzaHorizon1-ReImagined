@@ -116,7 +116,7 @@ class CatalogUITests(unittest.TestCase):
         self.assertTrue(self.page.export.isEnabled())  # export always preserves the whole catalog
 
     def test_export_snapshot_preserves_source_and_opens_folder(self):
-        from forza_launcher.ui.catalogs import QDesktopServices
+        from forza_launcher.browser import QDesktopServices
         before = {p: p.read_bytes() for p in self.source.rglob('*') if p.is_file()}
         self.load()
         # Source edits after inspection cannot silently change the preserved snapshot.
