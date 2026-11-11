@@ -132,15 +132,85 @@ class InReleaseTests(unittest.TestCase):
                     mock.patch.object(mirror.subprocess, "run", fake_run):
                 return mirror.verified_inrelease(work, work / "key.gpg")
 
+    @staticmethod
+    def good(fpr):
+        return (f"[GNUPG:] NEWSIG\n[GNUPG:] GOODSIG {fpr[-16:]} Launchpad PPA\n"
+                f"[GNUPG:] VALIDSIG {fpr} 2026-03-17 1773700000 0 4 0 1 10 01 {fpr}\n")
+
+    # The PPA's second signature, by its old 1024-bit key that the keyring leaves out.
+    OLD_KEY = ("[GNUPG:] NEWSIG\n[GNUPG:] ERRSIG 1E9377A2BA9EF27F 1 10 01 1773700000 9 -\n"
+               "[GNUPG:] NO_PUBKEY 1E9377A2BA9EF27F\n")
+
     def test_only_the_ppa_key_counts(self):
         fpr = mirror.PPA_KEY_FINGERPRINT
-        self.assertEqual(self.run_gpgv(f"[GNUPG:] VALIDSIG {fpr} 2026-03-17 x 0 4 0 1 10 01 {fpr}\n"),
+        self.assertEqual(self.run_gpgv(self.good(fpr)), "Origin: signed\n")
+        with self.assertRaises(SystemExit):
+            self.run_gpgv(self.good("A" * 40))
+        with self.assertRaises(SystemExit):
+            self.run_gpgv(f"[GNUPG:] VALIDSIG {fpr} 2026-03-17 x 0 4 0 1 10 01 {fpr}\n")
+
+    def test_the_old_keys_unchecked_signature_does_not_fail_it(self):
+        # gpgv exits 2 because it can't check the old key's signature; the PPA key's is good.
+        fpr = mirror.PPA_KEY_FINGERPRINT
+        self.assertEqual(self.run_gpgv(self.good(fpr) + self.OLD_KEY, returncode=2),
                          "Origin: signed\n")
-        other = "A" * 40
+        self.assertEqual(self.run_gpgv(self.OLD_KEY + self.good(fpr), returncode=2),
+                         "Origin: signed\n")
         with self.assertRaises(SystemExit):
-            self.run_gpgv(f"[GNUPG:] VALIDSIG {other} 2026-03-17 x 0 4 0 1 10 01 {other}\n")
+            self.run_gpgv(self.OLD_KEY, returncode=2)
+
+    def test_a_bad_signature_fails_it(self):
+        fpr = mirror.PPA_KEY_FINGERPRINT
         with self.assertRaises(SystemExit):
-            self.run_gpgv(f"[GNUPG:] VALIDSIG {fpr} x\n", returncode=1)
+            self.run_gpgv(f"[GNUPG:] NEWSIG\n[GNUPG:] BADSIG {fpr[-16:]} Launchpad PPA\n", returncode=1)
+        with self.assertRaises(SystemExit):  # a good one next to a bad one
+            self.run_gpgv(self.good(fpr) + "[GNUPG:] BADSIG 1E9377A2BA9EF27F old\n", returncode=1)
+        for status in ("EXPKEYSIG", "REVKEYSIG", "EXPSIG"):
+            with self.assertRaises(SystemExit):
+                self.run_gpgv(self.good(fpr).replace("GOODSIG", status), returncode=0)
+
+
+@unittest.skipUnless(shutil.which("gpg") and shutil.which("gpgv"), "needs gpg and gpgv")
+class RealGpgvTests(unittest.TestCase):
+    """InRelease signed by two keys, only one in the keyring, checked by the real gpgv."""
+    def test_two_signers_one_trusted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            home = work / "gnupg"
+            home.mkdir(mode=0o700)
+            env = {**os.environ, "GNUPGHOME": str(home)}
+            self.addCleanup(subprocess.run, ["gpgconf", "--kill", "gpg-agent"], env=env,
+                            capture_output=True)
+
+            def gpg(*args, **kwargs):
+                return subprocess.run(["gpg", "--batch", "--passphrase", "", "--pinentry-mode",
+                                       "loopback", *args], env=env, check=True,
+                                      capture_output=True, **kwargs)
+            for uid in ("new@test", "old@test"):
+                gpg("--quick-gen-key", uid, "ed25519", "sign", "never")
+            fpr = next(line.split(":")[9] for line in
+                       gpg("--with-colons", "--list-keys", "new@test", text=True).stdout.splitlines()
+                       if line.startswith("fpr:"))
+            (work / "msg").write_text("Origin: signed\n")
+            gpg("--clearsign", "-u", "new@test", "-u", "old@test", "-o", str(work / "good.asc"),
+                str(work / "msg"))
+            good = (work / "good.asc").read_text()
+            bad = good.replace("Origin: signed", "Origin: forged")
+            keyring = work / "new.gpg"
+            keyring.write_bytes(gpg("--export", "new@test").stdout)
+
+            def check(text):
+                def fake_download(url, dest, attempts=3):
+                    Path(dest).write_text(text)
+                inner = work / "inner"
+                inner.mkdir(exist_ok=True)
+                with mock.patch.object(mirror, "download", fake_download), \
+                        mock.patch.object(mirror, "PPA_KEY_FINGERPRINT", fpr):
+                    return mirror.verified_inrelease(inner, keyring)
+
+            self.assertEqual(check(good), "Origin: signed\n")
+            with self.assertRaises(SystemExit):
+                check(bad)
 
 
 class FakeGh:

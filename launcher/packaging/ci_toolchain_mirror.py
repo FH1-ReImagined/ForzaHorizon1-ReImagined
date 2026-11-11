@@ -260,6 +260,29 @@ def signing_key(work):
     return keyring
 
 
+def signature_problem(status):
+    """None when gpgv's status output shows a good signature by the PPA key, else why not.
+
+    gpgv's exit code is not used: the PPA also signs InRelease with its old 1024-bit key,
+    which is not in our keyring, so gpgv reports NO_PUBKEY for that signature and exits 2
+    even when the PPA key's signature is good. Like apt's gpgv method, a good signature
+    from the one trusted key is what counts, and any bad signature fails the file.
+    """
+    keyid = PPA_KEY_FINGERPRINT[-16:]
+    rows = [line.split()[1:] for line in status.splitlines() if line.startswith("[GNUPG:] ")]
+    if any(row and row[0] == "BADSIG" for row in rows):
+        return "InRelease has a bad signature"
+    for row in rows:
+        if len(row) > 1 and row[0] in ("EXPSIG", "EXPKEYSIG", "REVKEYSIG") and row[1] == keyid:
+            return f"the PPA key's signature is not valid ({row[0]})"
+    good = any(len(row) > 1 and row[0] == "GOODSIG" and row[1] == keyid for row in rows)
+    valid = any(len(row) > 1 and row[0] == "VALIDSIG" and PPA_KEY_FINGERPRINT in (row[1], row[-1])
+                for row in rows)
+    if not (good and valid):
+        return f"InRelease is not signed by {PPA_KEY_FINGERPRINT}"
+    return None
+
+
 def verified_inrelease(work, keyring):
     """The signed text of InRelease (gpgv's output, so unsigned text around it can't count)."""
     errors = []
@@ -274,11 +297,10 @@ def verified_inrelease(work, keyring):
         signed.unlink(missing_ok=True)
         result = subprocess.run(["gpgv", "--status-fd", "1", "--keyring", str(keyring),
                                  "--output", str(signed), str(raw)], capture_output=True, text=True)
-        valid = [line.split() for line in result.stdout.splitlines()
-                 if line.startswith("[GNUPG:] VALIDSIG ")]
-        if result.returncode == 0 and any(PPA_KEY_FINGERPRINT in (row[2], row[-1]) for row in valid):
+        problem = signature_problem(result.stdout)
+        if problem is None and signed.exists() and signed.stat().st_size:
             return signed.read_text()
-        errors.append(f"{host}: InRelease is not signed by {PPA_KEY_FINGERPRINT}: {result.stderr.strip()}")
+        errors.append(f"{host}: {problem or 'gpgv wrote no signed text'}: {result.stderr.strip()}")
     raise SystemExit("No verified InRelease:\n  " + "\n  ".join(errors))
 
 
