@@ -15,7 +15,9 @@ are Infineon 5-6's grey road, Indianapolis 7's pale sand and Top Gear 3's orange
 
 1. `tools/fm4_track_mod.py` builds a mod from FM4's track folder (`media/tracks/<track>`),
    the TU4 `media.zip` and FM4's game database: the track's files, a gamedb that makes free
-   roam load the circuit (`--free-roam 317` for Suzuka) and the gamemode files.
+   roam load the circuit (`--free-roam 317` for Suzuka) and the gamemode files. With
+   `--fm4-ai` (FM4's `Media/AI/Tracks`) also the circuit's road network and race route
+   (`tools/fm4_routes.py`, "The road network and the race route" below).
 2. `tools/fm4_pvs.py convert MOD FH1_DISC LOOSE` converts the mod's layouts (ribbons):
    - each PVS from FM4's version 27 to FH1's 50, split into 100 m hex zones (`.hex`,
      `__RnnZnnnnn.pvsz`, `FilenameMap_nn.dat`, `PVSZLookup_nn.dat`); big models go into every
@@ -1041,6 +1043,124 @@ and left for later. What it needs:
 
 Each piece has a precedent in the codebase, but together they are several boxes of work: the
 state-machine request first (one experiment decides it), then the per-world switches.
+
+## The road network and the race route (tools/fm4_routes.py)
+
+FH1's sat-nav and its races read files FM4's circuits lack. `fm4_track_mod.py --fm4-ai` (the
+launcher's import passes it) writes them from FM4's AI line of the layout that is the circuit's
+world (`media/AI/Tracks/<track>_NN.geo`: the waypoints, a vector across the road as long as half
+its width, the racing line's place on it):
+
+- `media/tracks/<track>/<track>.nav`, the road network (the format `tools/build_map_roads.py`
+  reads): a node every 20 m of the line (Colorado's median spacing), tagged a main road
+  (`road_type` a) without traffic (`traffic_disabled`) under the track's name. It is the
+  road of that one layout: the circuit's other layouts' own stretches are left out, since
+  the layout's barriers close them and a road on the map that cannot be reached would mislead
+  the map and whatever plans a route (`fm4_routes.py write ... OTHER_GEO` joins them at both
+  ends, for the day barriers go by route). With it `<track>.owr` (12 bytes: the magic word,
+  0, the magic word) and Colorado's 32-byte `colorado.oww` as the circuit's (what it holds is
+  not known).
+- `media/tracks/<track>/ribbon_00/trackroute101.xml`, a lap race's places, laid out as
+  Colorado's `TrackRoute049.xml` (measured there: the trigger 57.9 m before waypoint 0, the
+  cannons from 35 m to 3 m before it, the place after the race at 26 m, the grid from 10.7 m
+  back every 6 m): 8 start places from 10 m behind the line, 6 m apart, at 0.35 of the half
+  width to either side; 5 finish cannons a side over the last 35 m; their trigger 58 m
+  before the line; the place after the race; a route waypoint about every 250 m; the
+  gantry's cannon.
+- `media/aiopenworld/<track>/ribbon_00/route_101.owt`, the route's line every 2 m (centre,
+  the vector across, FM4's racing line as the factor). A file of the game's aiopenworld
+  archive, so the import keeps it with the circuit's database mod.
+
+What FH1 needs of a road network, found on TU4 before this converter, with Suzuka loaded as
+a track of its own in a package:
+
+- The tag names the game looks up, in the file's own table, which is sorted (a binary search,
+  sub_82D9D4A8). The game asks for a name and uses the answer unchecked: with a table of 4
+  names, free roam crashed once the network had more than one road (sub_82D98D20 asks for
+  `oneway` and calls sub_82D9C8E0 with it for each road), and so did the start of a race.
+  The names TU4 asks for: `ai_disabled`, `allowedfordemo`, `area_type`, `deadend`,
+  `discovery_zone`, `display_name`, `first_time_flow_disabled`, `iefestivaldrive`, `oneway`,
+  `point_of_interest` (not in Colorado's table either), `road_type`, `sat_nav_junction`,
+  `traffic_density`, `traffic_disabled`. The table carries Colorado's 17 names and its values,
+  from the player's own `colorado.nav`.
+- The map screen's `cursor_area`, a rectangle round the circuit (400 m here): without it the
+  circuit sat in a corner of the map.
+
+Kept from the network that then worked, and not isolated as needs of their own: no closed road
+(Colorado has none, its closed ways are areas: the lap is a ring of open ways that share their
+end nodes, cut at junctions and every 60 nodes, in two at least), and a road node near every
+route waypoint.
+
+`fm4_routes.check_network` refuses a network without those names, with its tag names or values
+out of byte order (Colorado's two tables are in it, each string once), with a closed road or
+with a waypoint off the roads; `fm4_routes.checked` refuses an AI line that is not 100 m to
+100 km of finite numbers (one whose points all coincide passes for a lap). The step is
+optional and never stops an import: whatever goes wrong in it, `fm4_track_mod.add_routes`
+says so in a line and leaves the circuit without the files, as before. They are written beside
+the mod and moved in once all are there, and a move that fails takes the others out again.
+A race row's RouteId is not 0 (free roam's): 101. In that package FH1 loaded a track's world
+from ribbon 0 whatever the row's RibbonIndex was and the route's files from the row's ribbon,
+so they are in `ribbon_00` (`--fm4-ai` needs `--free-roam`, which makes that ribbon).
+
+Measured:
+
+- The formats: the player's own `colorado.nav` (12,036 nodes, 459 ways, 585,674 bytes) reads
+  and writes back byte for byte, and so do all 46 routes of `aiopenworld.zip` (25 laps).
+- All 24 circuits of Disc 1 get a network that passes the check and a race route. The
+  smallest is Crown Jewel's (49 nodes, 2 roads, a 900 m lap), the largest the Nordschleife's
+  (1,229 nodes, 21 roads, 24.5 km), then Fujimi Kaido's (14 roads, 16.4 km) and Le Mans's
+  (12, 13.6 km). Every world layout is a lap (its line's ends 2 m apart).
+- An import of Suzuka by the launcher's code with and without `--fm4-ai` (98 s either way):
+  230 of the 231 files are the same byte for byte (the archive, the database, the game modes
+  and the rest); `track.json` differs in its size alone, by the five new files' 166,790 bytes.
+- In the game (Windows 11, Radeon RX 9070 XT, Vulkan, the 0.3.2 build, offline on a copy of a
+  save, the 1000 Club pack installed; started as the benchmark starts, with its event's
+  activity renamed so it stays in free roam; shots by `FORZA_SCREENSHOT_TRIGGER`): Suzuka and
+  Infineon without and with the files, 80 to 85 s each. Both load to the grid alike, with
+  the lap timer's prompt. Without, the minimap is the player's arrow alone (and Colorado's
+  pins); with, it draws the circuit's roads round it. Top Gear (the most roads) and Le Mans
+  (no ribbon 0: its ribbon 1 is the world), with the files, 80 s each: both load to the grid
+  with their roads on the minimap. The game's own places for the two other cars it teleports
+  in free roam differ: (0, -1020, 0) and (0, -1030, 0) with the files on all four circuits,
+  places near the origin without (Suzuka: (0.6, -123.0, 0.0) and (0.8, -119.8, 0.0)).
+- Suzuka against the package above, which was driven on ReImagined before (free roam with
+  the circuit's roads on the map, and lap races on its three layouts from multiplayer race
+  rows; AI drivers were not looked at there): the route's line (`route_101.owt`) and the
+  `.owr` are the package's byte for byte; the route's places differ in the finish trigger's
+  one line (the package had it 1 m before the line); the network is the package's byte for
+  byte when the tool is given the other layouts' lines (10 roads), and without them its lap's
+  5 roads.
+- A lap driven with the files (this branch on `main` with #777, #778 and #780; Suzuka
+  imported afresh by the launcher's code, started through the game's own menus on a copy of
+  a save; the dev autopilot on FM4's AI line at up to 80 km/h): 400 s, the whole 5.8 km lap
+  and 550 m of the next, the circuit's road on the minimap all the way round, the lap timer
+  running, no guest fault and no `ExecutePacketType0 overflow` in the log.
+
+Not done:
+
+- No Tracks row uses route 101, so nothing reads the race route yet. What a race row needed
+  in that package: RouteId 101, RibbonIndex 0, RibbonConfiguration 0 (a looped circuit; FH1's
+  leftover FM4 rows carry -1, which hid them as races), SurfaceTypeRibbonConfiguration 0, and
+  `gamemodes/<track>/cutscenes/tracks/cutscenes_<DevName>.xml` holding Colorado's
+  `prerace_countdown_<DevName>` cutscene renamed (its cameras are in car space; a route's
+  other Colorado cutscenes place cameras and people at Colorado's positions).
+- A race is not checked in this flow. With the benchmark's event (FR02) pointed at Suzuka's
+  row 37 in the circuit's database, on a start on the circuit with `FORZA_TRACK_NO_TRAFFIC=0`,
+  the event's load did not end on the 0.3.2 build: a black screen for 110 s without these
+  files (row 37 as it is), the loading screen for 250 s with them (row 37 set as above, the
+  countdown cutscene in place). The benchmark's own thread list at 120 s shows every guest
+  thread waiting. So whether the AI drives with the network is still to measure, with the
+  race tooling.
+- One difference seen in those runs: with the files in place the benchmark logs `BENCHMARK
+  AI: created native race driver for player container` when the world loads (6 runs of 6,
+  on the four circuits); without them it does not (3 of 3): the opponent factory
+  (sub_82A5D748) gives no container.
+- Only the world's own lap gets a route and its road. A race on another layout needs the
+  roads between them open and its barriers by route (FH1's way: instances and collision
+  polygons that carry route ids); until then the other layouts' roads stay out of the
+  network.
+- The map screen and GPS routes on a circuit were not looked at; the map's picture and pins
+  are Colorado's.
 
 ## Open
 
