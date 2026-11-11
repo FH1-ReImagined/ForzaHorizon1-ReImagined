@@ -4,7 +4,7 @@ polling and confirm in workers.Task threads, the card's status and buttons in wo
 
 The status is asked only after this launcher made a link (cfg.web_account["linked"]), when the
 card is first shown in a session and after each change: a player who never links sends nothing."""
-from PySide6.QtCore import QUrl, Signal
+from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QMessageBox, QPushButton, QVBoxLayout, QWidget
 
@@ -59,8 +59,10 @@ class LinkDialog(QDialog):
         lay = QVBoxLayout(self)
         lay.setSpacing(12)
         self.text = label("Asking forza.dyotson.dev for a link...")
+        self.text.setTextFormat(Qt.PlainText)   # may hold the service's own words
         lay.addWidget(self.text)
         self.code = label("", "help")
+        self.code.setTextFormat(Qt.PlainText)
         self.code.hide()
         lay.addWidget(self.code)
         buttons = QHBoxLayout()
@@ -184,6 +186,7 @@ class WebAccountCard(QWidget):
                             "email). The website's features for players need a linked game. You "
                             "confirm every link here, so nobody can link your game without you.", "help"))
         self.status = label("Not linked." if not self.state()["linked"] else "Linked to a website account.")
+        self.status.setTextFormat(Qt.PlainText)   # may hold the service's own words
         lay.addWidget(self.status)
         self.public_note = label(OTHER_SERVER, "help")
         lay.addWidget(self.public_note)

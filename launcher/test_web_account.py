@@ -341,6 +341,21 @@ class Interface(ServiceTest):
         self.assertEqual(opened, [])
         self.assertEqual(d.close_button.text(), "Close")
 
+    def test_service_words_are_plain_text(self):
+        from PySide6.QtCore import Qt
+        from forza_launcher.config import Config
+        from forza_launcher.ui import web_account as ui
+        self.svc.fail_with = (409, {"error": "play online first", "message": "<b>x</b>"})
+        d, _ = self.dialog()
+        self.spin(lambda: "<b>x</b>" in d.text.text())
+        self.assertEqual(d.text.textFormat(), Qt.PlainText)
+        self.assertEqual(d.code.textFormat(), Qt.PlainText)
+        with tempfile.TemporaryDirectory() as root:
+            cfg = Config(Path(root) / "launcher.json")
+            card = ui.WebAccountCard(cfg, None, self.base)
+            self.addCleanup(card.deleteLater)
+            self.assertEqual(card.status.textFormat(), Qt.PlainText)
+
     def test_the_card_shows_for_every_server_and_asks_only_after_a_link(self):
         from forza_launcher.config import Config
         from forza_launcher.ui import web_account as ui
