@@ -16,6 +16,9 @@ GROUPS = ["Display", "VR", "Controls", "Gameplay", "Audio", "Online", "Profile",
 # The frame rates under 60 the game runs (forza-recomp/src/main.cpp): 20 and 40 divide 60 and
 # 120 Hz screens, so every frame stays on screen for the same number of refreshes.
 LOW_FRAME_RATES = (20, 30, 40)
+# The rates the launcher's Frame rate list and the in-game Graphics menu offer (#783; the game's
+# copy is forza-recomp/src/platform/frame_rate_choices.h, test_frame_rate_presets.py keeps them equal).
+FRAME_RATE_PRESETS = (*LOW_FRAME_RATES, 60, 75, 90, 100, 120, 144, 165, 180, 200, 240)
 
 
 @dataclass
