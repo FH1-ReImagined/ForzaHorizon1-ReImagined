@@ -8,8 +8,10 @@ spec drops the same locales and devtools.
 
   trim_pyside6.py <site-packages>
 
-Only files the two wheels' RECORDs list are deleted, so Essentials (the rest of the launcher's Qt)
-is never touched."""
+Only files the two wheels' RECORDs list are deleted, and never one that Essentials' or shiboken6's
+RECORD lists too: the wheels share PySide6/__init__.py, _config.py, _git_pyside_version.py and
+py.typed, and without __init__.py PySide6 would turn into a namespace package. So Essentials (the
+rest of the launcher's Qt) is never touched."""
 import csv
 import sys
 from pathlib import Path
@@ -33,11 +35,23 @@ def recorded(site, dist):
                     yield row[0]
 
 
+# The wheels whose files stay whole, shared ones included.
+SHARED_WITH = ("pyside6_essentials", "shiboken6")
+
+
 def drops(site):
+    keep = set(ADDONS_KEEP)
+    for dist in SHARED_WITH:
+        owned = set(recorded(site, dist))
+        if not owned:
+            sys.exit(f"{site}: no {dist} RECORD, so the files it shares with Addons are unknown")
+        keep |= owned
     for path in recorded(site, "pyside6_addons"):
-        if path not in ADDONS_KEEP:
+        if path not in keep:
             yield path
     for path in recorded(site, "pyside6_webengine"):
+        if path in keep:
+            continue
         if path.startswith(WEBENGINE_LOCALES) and not path.endswith("/en-US.pak"):
             yield path
         elif path.startswith(WEBENGINE_DROP):
