@@ -298,8 +298,10 @@ jobs:
   sdk-linux:
     # Pushes and tags build on 22.04, the oldest runner image, so the overlay (which launcher-linux
     # and the Flatpak ship) needs glibc 2.35 only. Pull requests only test it, on 24.04, whose
-    # archive has g++-14: PR checks don't depend on Launchpad's toolchain PPA. On 22.04 the PPA's
-    # packages come from the project's GitHub copy first (ci-toolchain-mirror.yml).
+    # archive has g++-14: PR checks don't depend on Launchpad's toolchain PPA. On 22.04 the C++23
+    # library is GCC 14 built from GNU's sources (ci-toolchain-gcc.yml) in ~/gcc-14, which every
+    # clang of the job uses (ci_linux_sdk_setup.sh writes clang.cfg next to it and puts the variables
+    # in GITHUB_ENV); without it, the PPA's g++-14 packages from the project's GitHub copy, then the PPA.
     runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'ubuntu-22.04' }}
     steps:
       - uses: actions/checkout@v4
@@ -434,11 +436,13 @@ jobs:
       - name: Compile performance overlay against stock nightly headers
         run: |
           # Also runs on an SDK cache hit: game sources aren't part of that cache key.
-          if [ ! -d /usr/include/c++/14 ]; then
-            launcher/packaging/ci_linux_sdk_setup.sh --compiler-only
-          fi
+          # LLVM first: on 22.04 the compiler setup points its clang at ~/gcc-14.
           if [ ! -x "$HOME/llvm/bin/clang++" ]; then
             python3 launcher/packaging/ci_fetch.py llvm-linux "$HOME/llvm" --strip 1
+          fi
+          # CI_CXX_HEADERS: set by an earlier ci_linux_sdk_setup.sh in this job when it used ~/gcc-14.
+          if [ ! -d "${CI_CXX_HEADERS:-/usr/include/c++/14}" ]; then
+            launcher/packaging/ci_linux_sdk_setup.sh --compiler-only
           fi
           if [ ! -x "$HOME/cmake/bin/cmake" ]; then
             python3 launcher/packaging/ci_fetch.py cmake-linux "$HOME/cmake" --strip 1

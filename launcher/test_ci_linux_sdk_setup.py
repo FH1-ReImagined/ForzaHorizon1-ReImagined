@@ -1,9 +1,11 @@
 """Exercise CI dependency retries without installing packages or downloading tools."""
 import hashlib
+import io
 import os
 from pathlib import Path
 import shutil
 import subprocess
+import tarfile
 import tempfile
 import unittest
 
@@ -27,15 +29,46 @@ def fake_deb(name):
     return f"deb:{name}".encode()
 
 
+GCC_TARBALL = "gcc-14.3.0-jammy-x86_64.tar.xz"
+GCC_INSTALL = "lib/gcc/x86_64-linux-gnu/14.3.0"
+
+
+def fake_gcc_tarball(path, headers=True):
+    """A tarball laid out like build_gcc14_jammy.sh's (gcc-14/...), with or without the headers."""
+    with tarfile.open(path, "w:xz") as tar:
+        names = [f"gcc-14/{GCC_INSTALL}/crtbegin.o", "gcc-14/lib64/libstdc++.so.6"]
+        if headers:
+            names.append("gcc-14/include/c++/14.3.0/expected")
+        for name in names:
+            info = tarfile.TarInfo(name)
+            data = name.encode()
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+
+
 @unittest.skipUnless(os.name == "posix" and shutil.which("bash"), "requires a POSIX shell")
 class LinuxSdkSetupTests(unittest.TestCase):
     def run_setup(self, failures, *args, index_failures=0, headers=True,
                   local_debs_install_headers=False, crlf_manifest=False, ppa_fails=False,
-                  ubuntu="22.04", github="missing"):
+                  ubuntu="22.04", github="missing", gcc="unpinned", gcc_preinstalled=False):
         """github: what the GitHub copy does: "missing" (404, as before the mirror is filled),
-        "ok", "tampered" (one file differs from its pin) or "unpinned" (no pin for one file)."""
+        "ok", "tampered" (one file differs from its pin) or "unpinned" (no pin for one file).
+        gcc: the GCC 14 tarball (build_gcc14_jammy.sh) in the release: "unpinned" (no pin, as
+        before the first build), "ok", "missing" (pinned, 404), "tampered" (other bytes) or
+        "noheaders" (pinned, but without the C++23 headers).
+        After the run, self.gcc_home, self.cfg (clang.cfg/clang++.cfg next to clang) and
+        self.github_env tell what the job's later steps get."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            home = root / "home"
+            home.mkdir()
+            (root / "llvm" / "bin").mkdir(parents=True)
+            gcc_tar = root / "gcc.tar.xz"
+            fake_gcc_tarball(gcc_tar, headers=gcc != "noheaders")
+            gcc_sum = hashlib.sha256(gcc_tar.read_bytes()).hexdigest()
+            if gcc_preinstalled:
+                (home / "gcc-14/include/c++/14.3.0").mkdir(parents=True)
+                (home / "gcc-14/.fh1-sha256").write_text(gcc_sum + "\n")
             packaging = root / "packaging"
             packaging.mkdir()
             script = packaging / SCRIPT.name
@@ -52,7 +85,8 @@ class LinuxSdkSetupTests(unittest.TestCase):
                 pinned = pinned[:-1]
             (packaging / "ci_toolchain_sha256sums.txt").write_text(
                 "# pins\n" + "".join(f"{hashlib.sha256(fake_deb(n)).hexdigest()}  {n}\n"
-                                     for n in pinned))
+                                     for n in pinned)
+                + ("" if gcc == "unpinned" else f"{gcc_sum}  {GCC_TARBALL}\n"))
             # The runner's own /etc/os-release must not decide the path under test.
             (root / "os-release").write_text('ID=ubuntu\nVERSION_ID="%s"\n' % ubuntu)
             log = root / "commands"
@@ -62,9 +96,17 @@ printf '%s %s\n' "$name" "$*" >> "$CI_TEST_LOG"
 if [ "$name" = id ]; then echo 0; exit 0; fi
 if [ "$name" = add-apt-repository ] && [ "$CI_TEST_PPA_FAILS" = 1 ]; then exit 1; fi
 if [ "$name" = curl ] && [[ "${*: -1}" == https://github.com/* ]]; then
-    [ "$CI_TEST_GITHUB" != missing ] || exit 22
     out=""; prev=""
     for arg in "$@"; do [ "$prev" != -o ] || out="$arg"; prev="$arg"; done
+    if [[ "${*: -1}" == */gcc-14.3.0-jammy-x86_64.tar.xz ]]; then
+        case "$CI_TEST_GCC" in
+            missing) exit 22 ;;
+            tampered) printf 'other bytes' > "$out" ;;
+            *) cp "$CI_TEST_GCC_TAR" "$out" ;;
+        esac
+        exit 0
+    fi
+    [ "$CI_TEST_GITHUB" != missing ] || exit 22
     file="${out##*/}"
     if [ "$CI_TEST_GITHUB" = tampered ] && [[ "$file" == libstdc* ]]; then file=changed; fi
     printf 'deb:%s' "$file" > "$out"
@@ -97,9 +139,21 @@ fi
                        CI_TEST_LOCAL_HEADERS=str(int(local_debs_install_headers)),
                        CI_TEST_PPA_FAILS=str(int(ppa_fails)), CI_APT_ETC=str(root / "etc-apt"),
                        CI_CXX_HEADERS=str(root if headers else root / "missing"),
-                       CI_OS_RELEASE=str(root / "os-release"), CI_TEST_GITHUB=github)
+                       CI_OS_RELEASE=str(root / "os-release"), CI_TEST_GITHUB=github,
+                       CI_TEST_GCC=gcc, CI_TEST_GCC_TAR=str(gcc_tar), HOME=str(home),
+                       CI_LLVM_HOME=str(root / "llvm"), GITHUB_ENV=str(root / "github-env"))
+            env.pop("CI_GCC_HOME", None)
+            env.pop("LD_LIBRARY_PATH", None)
             result = subprocess.run(["bash", str(script), *args], env=env, text=True,
                                     capture_output=True, timeout=10)
+            self.home = home
+            self.gcc_home = home / "gcc-14"
+            self.gcc_headers = (self.gcc_home / "include/c++/14.3.0").is_dir()
+            self.cfg = {name: (root / "llvm/bin" / name).read_text()
+                        for name in ("clang.cfg", "clang++.cfg") if (root / "llvm/bin" / name).exists()}
+            env_file = root / "github-env"
+            self.github_env = dict(line.split("=", 1) for line in env_file.read_text().splitlines()
+                                   ) if env_file.exists() else {}
             return result, log.read_text().splitlines()
 
     def test_ubuntu_24_uses_the_archive_and_never_launchpad(self):
@@ -271,6 +325,109 @@ fi
         result, commands = self.run_setup(0, ubuntu="24.04", github="ok")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(any(row.startswith("curl ") for row in commands))
+
+    def gcc_downloads(self, commands):
+        return [row for row in commands if row.startswith("curl ") and row.endswith(GCC_TARBALL)]
+
+    def test_gcc_tarball_is_the_first_choice_on_22_04(self):
+        for args in ((), ("--compiler-only",)):
+            result, commands = self.run_setup(0, *args, gcc="ok", github="ok", headers=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual([row.split()[-1] for row in self.gcc_downloads(commands)],
+                             [GITHUB + GCC_TARBALL])
+            # Neither the PPA nor the deb copy: g++-14 is ~/gcc-14.
+            self.assertFalse(any(row.startswith("add-apt-repository") for row in commands))
+            self.assertFalse(any("launchpad" in row or ".deb" in row for row in commands))
+            installs = [row for row in commands if row.startswith("apt-get ") and " install " in row]
+            self.assertTrue(installs)
+            self.assertFalse(any("g++-14" in row for row in installs))
+            self.assertIn("libc6-dev binutils", installs[-1])
+            self.assertTrue(self.gcc_headers)
+            install_dir = f"{self.gcc_home}/{GCC_INSTALL}"
+            self.assertEqual(self.cfg, {"clang.cfg": f"--gcc-install-dir={install_dir}\n",
+                                        "clang++.cfg": f"--gcc-install-dir={install_dir}\n"})
+            self.assertEqual(self.github_env["CI_CXX_HEADERS"], f"{self.gcc_home}/include/c++/14.3.0")
+            self.assertEqual(self.github_env["CI_CLANG_GCC_FLAGS"], f"--gcc-install-dir={install_dir}")
+            self.assertEqual(self.github_env["LD_LIBRARY_PATH"], f"{self.gcc_home}/lib64")
+            self.assertEqual(sum(row.startswith("python3 ") for row in commands), 0 if args else 3)
+
+    def test_gcc_tarball_full_setup_keeps_the_build_packages(self):
+        result, commands = self.run_setup(0, gcc="ok")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        installs = [row for row in commands if row.startswith("apt-get ") and "libvulkan-dev" in row]
+        self.assertEqual(len(installs), 1)
+        self.assertIn(" make ", installs[0])
+        self.assertIn("libc6-dev", installs[0])
+
+    def test_tampered_gcc_tarball_is_never_unpacked(self):
+        result, commands = self.run_setup(0, "--compiler-only", gcc="tampered")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"{GCC_TARBALL} does not match ci_toolchain_sha256sums.txt", result.stderr)
+        self.assertFalse(self.gcc_home.exists())
+        self.assertEqual(self.cfg, {})
+        self.assertEqual(self.github_env, {})
+        # The PPA's g++-14 instead.
+        self.assertTrue(any(row.startswith("add-apt-repository") for row in commands))
+        self.assertTrue(any(row.startswith("apt-get ") and row.endswith("install -y g++-14")
+                            for row in commands))
+
+    def test_gcc_tarball_without_headers_is_refused(self):
+        result, commands = self.run_setup(0, "--compiler-only", gcc="noheaders")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("did not unpack the C++23 headers", result.stderr)
+        self.assertFalse(self.gcc_home.exists())
+        self.assertEqual(self.cfg, {})
+        self.assertTrue(any(row.startswith("apt-get ") and "g++-14" in row for row in commands))
+
+    def test_missing_gcc_tarball_falls_back_to_the_deb_copy(self):
+        result, commands = self.run_setup(0, "--compiler-only", gcc="missing", github="ok")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.gcc_downloads(commands)), 1)
+        self.assertNotIn("--retry-all-errors", self.gcc_downloads(commands)[0])
+        installs = [row for row in commands if row.startswith("apt-get ") and "g++-14" in row]
+        self.assertEqual(len(installs), 1)
+        self.assertIn(".deb", installs[0])
+        self.assertFalse(any(row.startswith("add-apt-repository") for row in commands))
+        self.assertEqual(self.cfg, {})
+
+    def test_unpinned_gcc_tarball_is_not_downloaded(self):
+        result, commands = self.run_setup(0, "--compiler-only")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"no checksum for {GCC_TARBALL}", result.stderr)
+        self.assertEqual(self.gcc_downloads(commands), [])
+
+    def test_unpacked_gcc_is_reused_by_a_later_step(self):
+        result, commands = self.run_setup(0, "--compiler-only", gcc="ok", gcc_preinstalled=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.gcc_downloads(commands), [])
+        self.assertIn("clang++.cfg", self.cfg)
+
+    def test_ubuntu_24_never_uses_the_gcc_tarball(self):
+        result, commands = self.run_setup(0, ubuntu="24.04", gcc="ok")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.gcc_downloads(commands), [])
+        self.assertEqual(self.cfg, {})
+        self.assertEqual(self.github_env, {})
+
+    def test_checked_in_gcc_pin_names_the_built_tarball(self):
+        # build_gcc14_jammy.sh, the setup script and the workflow agree on the file name.
+        here = Path(__file__).parent
+        build = (here / "packaging/build_gcc14_jammy.sh").read_text()
+        self.assertIn("TARBALL=gcc-$GCC_VERSION-jammy-x86_64.tar.xz", build)
+        self.assertIn("GCC_VERSION=14.3.0", build)
+        self.assertIn(f"GCC_TARBALL={GCC_TARBALL}", SCRIPT.read_text())
+        workflow = (here.parent / ".github/workflows/ci-toolchain-gcc.yml").read_text()
+        self.assertIn(f"TARBALL: {GCC_TARBALL}", workflow)
+        image = next(line.split("=", 1)[1] for line in build.splitlines() if line.startswith("IMAGE="))
+        self.assertIn(f"image: {image}", workflow)
+        # The GNU source the script checks is the one the release pins.
+        pins = dict(reversed(line.split()) for line in
+                    (here / "packaging/ci_toolchain_sha256sums.txt").read_text().splitlines()
+                    if line and not line.startswith("#"))
+        source = next(line.split("=", 1)[1] for line in build.splitlines()
+                      if line.startswith("GCC_SHA256="))
+        self.assertEqual(pins["gcc-14.3.0.tar.xz"], source)
+        self.assertIn(GCC_TARBALL, pins)
 
     def test_missing_headers_stop_before_downloads(self):
         for args in ((), ("--compiler-only",)):
