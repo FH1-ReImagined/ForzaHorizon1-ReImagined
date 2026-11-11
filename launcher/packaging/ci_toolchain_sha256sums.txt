@@ -1,0 +1,5 @@
+# SHA-256 of every file in the release ci-toolchain-jammy-gcc14 (the project's GitHub copy of the
+# toolchain PPA's packages in ci_toolchain_debs.txt, and their source packages), by release file
+# name (+ spelled plus, ~ spelled tilde). ci_linux_sdk_setup.sh installs a package from that copy
+# only when it matches its line here; ci-toolchain-mirror.yml takes the hashes from the PPA's
+# signed index and prints the lines to add when the list changes.

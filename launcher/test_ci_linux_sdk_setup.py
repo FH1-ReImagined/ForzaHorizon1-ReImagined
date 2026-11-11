@@ -1,4 +1,5 @@
 """Exercise CI dependency retries without installing packages or downloading tools."""
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -8,13 +9,31 @@ import unittest
 
 SCRIPT = Path(__file__).parent / "packaging/ci_linux_sdk_setup.sh"
 APT = Path(__file__).parent / "packaging/ci_apt.sh"
+MANIFEST = SCRIPT.with_name("ci_toolchain_debs.txt")
+GITHUB = "https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/releases/download/ci-toolchain-jammy-gcc14/"
+
+
+def listed_packages():
+    return [line for line in MANIFEST.read_text().splitlines() if line and not line.startswith("#")]
+
+
+def asset(package):
+    """The GitHub copy's name for a package (+ and ~ spelled out, as ci_linux_sdk_setup.sh does)."""
+    return f"{package}_amd64.deb".replace("+", "plus").replace("~", "tilde")
+
+
+def fake_deb(name):
+    # What the curl stub writes for a GitHub copy download.
+    return f"deb:{name}".encode()
 
 
 @unittest.skipUnless(os.name == "posix" and shutil.which("bash"), "requires a POSIX shell")
 class LinuxSdkSetupTests(unittest.TestCase):
     def run_setup(self, failures, *args, index_failures=0, headers=True,
                   local_debs_install_headers=False, crlf_manifest=False, ppa_fails=False,
-                  ubuntu="22.04"):
+                  ubuntu="22.04", github="missing"):
+        """github: what the GitHub copy does: "missing" (404, as before the mirror is filled),
+        "ok", "tampered" (one file differs from its pin) or "unpinned" (no pin for one file)."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             packaging = root / "packaging"
@@ -28,6 +47,12 @@ class LinuxSdkSetupTests(unittest.TestCase):
             if crlf_manifest:
                 manifest = manifest.rstrip("\n").replace("\n", "\r\n")
             (packaging / "ci_toolchain_debs.txt").write_bytes(manifest.encode())
+            pinned = [asset(p) for p in listed_packages()]
+            if github == "unpinned":
+                pinned = pinned[:-1]
+            (packaging / "ci_toolchain_sha256sums.txt").write_text(
+                "# pins\n" + "".join(f"{hashlib.sha256(fake_deb(n)).hexdigest()}  {n}\n"
+                                     for n in pinned))
             # The runner's own /etc/os-release must not decide the path under test.
             (root / "os-release").write_text('ID=ubuntu\nVERSION_ID="%s"\n' % ubuntu)
             log = root / "commands"
@@ -36,6 +61,15 @@ name="${0##*/}"
 printf '%s %s\n' "$name" "$*" >> "$CI_TEST_LOG"
 if [ "$name" = id ]; then echo 0; exit 0; fi
 if [ "$name" = add-apt-repository ] && [ "$CI_TEST_PPA_FAILS" = 1 ]; then exit 1; fi
+if [ "$name" = curl ] && [[ "${*: -1}" == https://github.com/* ]]; then
+    [ "$CI_TEST_GITHUB" != missing ] || exit 22
+    out=""; prev=""
+    for arg in "$@"; do [ "$prev" != -o ] || out="$arg"; prev="$arg"; done
+    file="${out##*/}"
+    if [ "$CI_TEST_GITHUB" = tampered ] && [[ "$file" == libstdc* ]]; then file=changed; fi
+    printf 'deb:%s' "$file" > "$out"
+    exit 0
+fi
 if [ "$name" = apt-get ] && [[ "$*" == *g++-14* ]]; then
     n=0; [ ! -f "$CI_TEST_COUNT" ] || read -r n < "$CI_TEST_COUNT"
     n=$((n + 1)); echo "$n" > "$CI_TEST_COUNT"
@@ -63,7 +97,7 @@ fi
                        CI_TEST_LOCAL_HEADERS=str(int(local_debs_install_headers)),
                        CI_TEST_PPA_FAILS=str(int(ppa_fails)), CI_APT_ETC=str(root / "etc-apt"),
                        CI_CXX_HEADERS=str(root if headers else root / "missing"),
-                       CI_OS_RELEASE=str(root / "os-release"))
+                       CI_OS_RELEASE=str(root / "os-release"), CI_TEST_GITHUB=github)
             result = subprocess.run(["bash", str(script), *args], env=env, text=True,
                                     capture_output=True, timeout=10)
             return result, log.read_text().splitlines()
@@ -127,9 +161,8 @@ fi
     def test_both_ppa_hosts_down_use_launchpad_files(self):
         result, commands = self.run_setup(6)
         self.assertEqual(result.returncode, 0, result.stderr)
-        files = [row for row in commands if row.startswith("curl ")]
-        listed = [line for line in SCRIPT.with_name("ci_toolchain_debs.txt").read_text().splitlines()
-                  if line and not line.startswith("#")]
+        files = [row for row in commands if row.startswith("curl ") and "launchpad.net" in row]
+        listed = listed_packages()
         self.assertEqual(len(files), len(listed))
         self.assertTrue(all("launchpad.net/~ubuntu-toolchain-r/+archive/ubuntu/test/+files/" in row
                             for row in files))
@@ -175,12 +208,69 @@ fi
             0, "--compiler-only", headers=False, local_debs_install_headers=True,
             crlf_manifest=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        downloads = [row for row in commands if row.startswith("curl ")]
-        packages = [line for line in SCRIPT.with_name("ci_toolchain_debs.txt").read_text().splitlines()
-                    if line and not line.startswith("#")]
+        downloads = [row for row in commands if row.startswith("curl ") and "launchpad.net" in row]
+        packages = listed_packages()
         self.assertEqual(len(downloads), len(packages))
         for command, package in zip(downloads, packages):
             self.assertIn(f"/+files/{package}_amd64.deb", command)
+
+    def test_github_copy_installs_without_launchpad(self):
+        for args in ((), ("--compiler-only",)):
+            result, commands = self.run_setup(0, *args, github="ok")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(any(row.startswith("add-apt-repository") for row in commands))
+            self.assertFalse(any("launchpad" in row for row in commands))
+            downloads = [row for row in commands if row.startswith("curl ")]
+            self.assertEqual([row.split()[-1] for row in downloads],
+                             [GITHUB + asset(p) for p in listed_packages()])
+            installs = [row for row in commands if row.startswith("apt-get ") and "g++-14" in row]
+            self.assertEqual(len(installs), 1)
+            self.assertIn("gplusplus-14_", installs[0])
+            self.assertIn(".deb", installs[0])
+            self.assertEqual(sum(row.startswith("python3 ") for row in commands), 0 if args else 3)
+
+    def test_github_copy_404_costs_one_request(self):
+        result, commands = self.run_setup(0)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        github = [row for row in commands if row.startswith("curl ") and "github.com" in row]
+        self.assertEqual(len(github), 1)
+        self.assertNotIn("--retry-all-errors", github[0])
+        self.assertTrue(any(row.startswith("add-apt-repository") for row in commands))
+        installs = [row for row in commands if row.startswith("apt-get ") and "g++-14" in row]
+        self.assertEqual(len(installs), 1)
+        self.assertNotIn(".deb", installs[0])
+
+    def test_tampered_github_copy_is_never_installed(self):
+        result, commands = self.run_setup(0, github="tampered")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("does not match ci_toolchain_sha256sums.txt", result.stderr)
+        github = [row for row in commands if row.startswith("curl ") and "github.com" in row]
+        self.assertIn("libstdc", github[-1])
+        installs = [row for row in commands if row.startswith("apt-get ") and "g++-14" in row]
+        self.assertFalse(any(".deb" in row for row in installs))
+        self.assertTrue(any(row.startswith("add-apt-repository") for row in commands))
+
+    def test_unpinned_package_skips_the_github_copy(self):
+        result, commands = self.run_setup(0, github="unpinned")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("has no checksum for", result.stderr)
+        self.assertFalse(any(row.startswith("curl ") and "github.com" in row for row in commands))
+        self.assertTrue(any(row.startswith("add-apt-repository") for row in commands))
+
+    def test_github_copy_that_fails_to_install_falls_back_to_the_ppa(self):
+        # ci_apt.sh tries each install three times; the fourth (from the PPA) succeeds.
+        result, commands = self.run_setup(3, "--compiler-only", github="ok")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        installs = [row for row in commands if row.startswith("apt-get ") and "g++-14" in row]
+        self.assertEqual(len(installs), 4)
+        self.assertTrue(all(".deb" in row for row in installs[:3]))
+        self.assertNotIn(".deb", installs[3])
+        self.assertTrue(any(row.startswith("add-apt-repository") for row in commands))
+
+    def test_ubuntu_24_never_asks_the_github_copy(self):
+        result, commands = self.run_setup(0, ubuntu="24.04", github="ok")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(any(row.startswith("curl ") for row in commands))
 
     def test_missing_headers_stop_before_downloads(self):
         for args in ((), ("--compiler-only",)):
