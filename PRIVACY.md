@@ -188,12 +188,12 @@ Your IP address and other players:
   - saves, the built game, downloaded tools and shader caches;
   - forza.log, the game's log of the last session (at most 100 MB: from 50 MB it continues in a new file and keeps the first part as forza.1.log), and forza.previous.log (with forza.previous.1.log) from the session before;
   - shader_share.json, which records the shader entries already sent;
-  - live_identity.txt, which holds your XUID, gamertag, friends key and signing key;
   - after you sign in to the website in the launcher's window: web-account, that window's cookies, site storage and cache (see "The launcher's window onto the website");
   - with "This PC": the local server's data in live_server, including its server.log and its player and friends records;
   - with "Continue a Xenia Canary save": a copy of that save in a xenia-<XUID> folder;
   - with Forza Motorsport 4 circuits imported: the converted circuits in fm4-tracks, their database in mods/.fm4-track-<circuit>, and your lap times and best-lap ghosts in fm4-tracks/laps.
-- In the Flatpak, both folders are inside ~/.var/app/io.github.dyotson.ForzaHorizon1ReImagined.
+- Your online identity, live_identity.txt, which holds your XUID, gamertag, friends key and signing key. The game writes it in Documents\forza\4D5309C9 (Windows) or ~/.local/share/forza/4D5309C9 (Linux), wherever the game data folder is.
+- In the Flatpak, all of these folders are inside ~/.var/app/io.github.dyotson.ForzaHorizon1ReImagined.
 - Uninstalling keeps all of these files. Delete the folders yourself to remove them.
 - forza.log (and its other copies) can record your LAN IP address, your public IP address (on a server you connect to directly), the server's address, your country and language settings, other players' LAN IP addresses, the first two numbers of their public IP addresses (from 0.2.4; older versions wrote them whole), their gamertags and XUIDs, and the chat messages you send and receive. Check it before you attach it to a public issue.
 - Keep live_identity.txt private. Its signing key (and, for older versions, its friends key) is the secret that proves to the server that your friends list is yours.

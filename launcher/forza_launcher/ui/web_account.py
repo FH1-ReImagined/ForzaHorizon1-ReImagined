@@ -6,7 +6,8 @@ workers.Task threads, the card's status and buttons in workers.Probe.
 
 The status is asked only after this launcher made a link (cfg.web_account["linked"]), when the
 card is first shown in a session and after each change: a player who never links sends nothing."""
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QMessageBox, QPushButton, QVBoxLayout, QWidget
 
 from .. import shader_share, web_account
@@ -44,8 +45,11 @@ def make_view(site, parent):
 
 
 SIGN_IN = "Sign in or create an account"
-NO_IDENTITY = ("Play the game online on the public server once first: the launcher signs with the "
-               "game's key, which the game makes at its first online start.")
+NO_IDENTITY = ("Start the game once with the Public server picked first: that makes the game's key, "
+               "which the launcher signs with. Then upload one speed trap: in game, drive through any "
+               "speed trap camera.")
+OTHER_SERVER = ("Linking works with the Public server: the website knows only the games that play on "
+                "it. Pick it, start the game once and upload one speed trap.")
 
 
 class LinkDialog(QDialog):
@@ -71,6 +75,7 @@ class LinkDialog(QDialog):
         lay = QVBoxLayout(self)
         lay.setSpacing(12)
         self.text = label("Asking forza.dyotson.dev for a link...")
+        self.text.setTextFormat(Qt.PlainText)   # may hold the service's own words
         lay.addWidget(self.text)
         if self.web is not None:
             self.web.hide()
@@ -82,6 +87,7 @@ class LinkDialog(QDialog):
         self.note.hide()
         lay.addWidget(self.note)
         self.code = label("", "help")
+        self.code.setTextFormat(Qt.PlainText)
         self.code.hide()
         lay.addWidget(self.code)
         buttons = QHBoxLayout()
@@ -249,8 +255,11 @@ class LinkDialog(QDialog):
 
 
 class WebAccountCard(QWidget):
-    """The status row and its buttons. `changed` after a link, an unlink or a sign-out."""
+    """The status row and its buttons. `changed` after a link, an unlink or a sign-out. Shown for
+    every server; on another one (show_server) it says linking works with the Public server, and
+    its button sends `use_public`."""
     changed = Signal()
+    use_public = Signal()
 
     def __init__(self, cfg, parent=None, base=web_account.SERVICE):
         super().__init__(parent)
@@ -264,7 +273,18 @@ class WebAccountCard(QWidget):
                             "features for players need a linked game. You confirm every link here, so nobody "
                             "can link your game without you.", "help"))
         self.status = label("Not linked." if not self.state()["linked"] else "Linked to a website account.")
+        self.status.setTextFormat(Qt.PlainText)   # may hold the service's own words
         lay.addWidget(self.status)
+        self.public_note = label(OTHER_SERVER, "help")
+        lay.addWidget(self.public_note)
+        self.public_button = QPushButton("Use the Public server")
+        self.public_button.setToolTip("Play then uses the Public server (Servers)")
+        self.public_button.clicked.connect(lambda: self.use_public.emit())
+        public_row = QHBoxLayout()
+        public_row.addWidget(self.public_button)
+        public_row.addStretch(1)
+        lay.addLayout(public_row)
+        self.show_server("public")
         row = QHBoxLayout()
         row.setSpacing(12)
         self.link_button = QPushButton(SIGN_IN)
@@ -288,6 +308,12 @@ class WebAccountCard(QWidget):
 
     def state(self):
         return self.cfg.d.setdefault("web_account", {"linked": False})
+
+    def show_server(self, mode):
+        """cfg.online["mode"]: off the Public server, the note and its button show."""
+        other = mode != "public"
+        self.public_note.setVisible(other)
+        self.public_button.setVisible(other)
 
     def _buttons(self, busy=False):
         linked = bool(self.state()["linked"])

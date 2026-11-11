@@ -1,0 +1,79 @@
+# Keeps the project's GitHub copy of the toolchain PPA's Ubuntu 22.04 packages: g++-14 and what
+# "apt-get install g++-14" pulls with it (launcher/packaging/ci_toolchain_debs.txt), plus the source
+# packages they were built from (the GPL wants the source next to the binaries). They live in the
+# pre-release ci-toolchain-jammy-gcc14, which is never the latest release. release.yml's sdk-linux
+# job (ci_linux_sdk_setup.sh) installs g++-14 from there first and only then asks Launchpad, which
+# can be unreachable for hours; it checks every file against ci_toolchain_sha256sums.txt.
+#
+# Every file is checked against the PPA's signed index (InRelease, signed by the PPA's key) before
+# it is added. Files are only ever added: a file the release already holds with other bytes stops
+# the run and is named in its log. When the PPA has files ci_toolchain_sha256sums.txt doesn't pin
+# yet, they are added and the run fails with the lines to pin (a pull request adds them).
+#
+# Weekly and by hand. A run whose release already holds every pinned file doesn't ask Launchpad.
+name: ci-toolchain-mirror
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 6 * * 3"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-toolchain-mirror
+  cancel-in-progress: false
+
+env:
+  TAG: ci-toolchain-jammy-gcc14
+
+jobs:
+  mirror:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      # Creates the pre-release and uploads its files; nothing else in the repository has this.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Test the mirror helper
+        run: python3 -m unittest launcher/test_ci_toolchain_mirror.py
+      - id: status
+        name: Does the release already hold every pinned file?
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 0: complete, 10: files to add; anything else (a release file that differs) fails here.
+          status=0
+          python3 launcher/packaging/ci_toolchain_mirror.py status "$GITHUB_REPOSITORY" "$TAG" || status=$?
+          case "$status" in
+            0) echo "complete=true" >> "$GITHUB_OUTPUT" ;;
+            10) ;;
+            *) exit "$status" ;;
+          esac
+      - if: steps.status.outputs.complete != 'true'
+        name: Download the packages and their source, checked against the PPA's signed index
+        run: python3 launcher/packaging/ci_toolchain_mirror.py fetch "$RUNNER_TEMP/toolchain"
+      - if: steps.status.outputs.complete != 'true'
+        name: Add them to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 launcher/packaging/ci_toolchain_mirror.py upload "$RUNNER_TEMP/toolchain" "$GITHUB_REPOSITORY" "$TAG"
+      - if: steps.status.outputs.complete != 'true'
+        name: Files ci_toolchain_sha256sums.txt doesn't pin yet
+        run: |
+          unpinned="$RUNNER_TEMP/toolchain/UNPINNED"
+          [ -s "$unpinned" ] || exit 0
+          {
+            echo "### Add these lines to launcher/packaging/ci_toolchain_sha256sums.txt"
+            echo
+            echo '```'
+            cat "$unpinned"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$unpinned"
+          echo "::error::The release has files that ci_toolchain_sha256sums.txt doesn't pin; CI won't use them until it does (lines above and in the run summary)."
+          exit 1

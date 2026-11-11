@@ -1,13 +1,18 @@
 """Servers (#587): pick the Forza Live server Play uses, from the main server's signed list, This PC
 or an address added by hand. Each server's players online, ping and whether it is up come from its
 status page, asked off the GUI thread when the page opens and every 30 seconds while it stays open
-(server_list.py)."""
+(server_list.py).
+
+Test connection checks the selected server the way the game reaches it (connection_test.py): its name,
+its status page and the game's UDP traffic, and says what to fix. A banner (offline_notice.py) says
+when Play is Offline because "Online features" was turned off, with "Go online"."""
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QHeaderView, QLineEdit, QPushButton,
                                QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
-from .. import server_list
+from .. import connection_test, server_list
+from .offline_notice import OfflineNotice
 from .pages import scroll_page
 from .widgets import card, label
 from .workers import Probe
@@ -23,10 +28,13 @@ OFFLINE = "(offline)"   # the Offline row's address: no server (cfg.online mode 
 class ServersPage(QWidget):
     changed = Signal()   # cfg.online changed (a server picked, added or removed): save it
 
-    def __init__(self, cfg, window, fetch=None, ping_all=None):
+    def __init__(self, cfg, window, fetch=None, ping_all=None, test=None):
         super().__init__()
         self.cfg, self.window = cfg, window
         self._fetch, self._ping_all = fetch, ping_all  # None: server_list's (looked up at each check)
+        self._test = test       # None: connection_test.run
+        self._tester = None     # the connection test running, if any
+        self.tested = None      # connection_test.Result of the last test (tests)
         self.listed = []        # [Server] of the last list that checked out
         self.statuses = {}      # address -> Status of the last check
         self.list_note = ""
@@ -38,6 +46,9 @@ class ServersPage(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         sc, lay = scroll_page("Servers", LEAD)
         outer.addWidget(sc)
+        self.offline_notice = OfflineNotice(cfg)
+        self.offline_notice.went_online.connect(self._went_online)
+        lay.addWidget(self.offline_notice)
 
         frame, cl = card()
         self.table = QTableWidget(0, len(COLUMNS))
@@ -71,6 +82,11 @@ class ServersPage(QWidget):
         self.remove_button = QPushButton("Remove")
         self.remove_button.clicked.connect(self.remove_selected)
         row.addWidget(self.remove_button)
+        self.test_button = QPushButton("Test connection")
+        self.test_button.setToolTip("Checks that this PC reaches the selected server the way the game "
+                                    "does, and what to fix if it doesn't")
+        self.test_button.clicked.connect(self.test_selected)
+        row.addWidget(self.test_button)
         row.addStretch()
         self.check_button = QPushButton("Check servers")
         self.check_button.clicked.connect(self.check_now)
@@ -78,6 +94,15 @@ class ServersPage(QWidget):
         cl.addLayout(row)
         self.details = label("", "muted")
         cl.addWidget(self.details)
+        self.test_result = label("", "")
+        self.test_result.setTextFormat(Qt.PlainText)
+        self.test_result.hide()
+        cl.addWidget(self.test_result)
+        self.test_fix = label("", "help")
+        self.test_fix.setTextFormat(Qt.PlainText)
+        self.test_fix.hide()
+        cl.addWidget(self.test_fix)
+        self._test_address = None   # the server test_result is about
         self.note = label("", "muted")
         cl.addWidget(self.note)
         lay.addWidget(frame)
@@ -163,6 +188,51 @@ class ServersPage(QWidget):
         self._probe.result.connect(self._checked)
         self._probe.start()
 
+    # ---- testing the connection --------------------------------------------------------------
+    def testable(self, s) -> bool:
+        """A server with an address: not This PC (it starts with the game) or Offline."""
+        return s is not None and s.kind not in ("local", "offline")
+
+    def test_selected(self):
+        """Test connection: the selected server's name, status page and UDP, off the GUI thread."""
+        s = self.current_server()
+        if not self.testable(s) or self._tester is not None:
+            return
+        address = s.address
+        test = self._test or connection_test.run
+        self._test_address = address
+        self.test_button.setEnabled(False)
+        self._show_test(f"Testing the connection to {s.name}…", "", None)
+        self._tester = Probe(lambda: test(address), "connection test", self)
+        self._tester.result.connect(self._tested)
+        self._tester.start()
+
+    def _tested(self, result):
+        self._tester = None
+        self.tested = result
+        if result is None:   # raised (logged)
+            self._show_test("Could not test the connection. The launcher log has the details.", "", False)
+        else:
+            headline, fix = connection_test.message(result)
+            self._show_test(headline, fix, result.kind == connection_test.REACHABLE)
+        self._selected()
+
+    def _show_test(self, headline, fix, ok):
+        """The test's result under the server's details; ok None while it runs."""
+        self.test_result.setText(headline)
+        self.test_result.setStyleSheet("" if ok is None else f"color: {theme.OK if ok else theme.ERR};")
+        self.test_fix.setText(fix)
+        self.test_result.setVisible(bool(headline))
+        self.test_fix.setVisible(bool(fix))
+
+    def _went_online(self):
+        """The banner's Go online: Play uses the Public server, saved by the window."""
+        self.changed.emit()
+        self.fill()
+        self._say("Online features are on again: Play now uses the Public server.")
+        if self.isVisible():
+            self.refresh()
+
     def _checked(self, result):
         self._probe = None
         self.checks += 1
@@ -179,6 +249,7 @@ class ServersPage(QWidget):
 
     # ---- the table ---------------------------------------------------------------------------
     def fill(self):
+        self.offline_notice.refresh()
         keep = self._current()
         offline = self.cfg.online.get("mode") == "offline"
         chosen = OFFLINE if offline else server_list.chosen(self.cfg)
@@ -250,6 +321,10 @@ class ServersPage(QWidget):
         # The server Play uses stays listed: pick another one before removing it.
         self.remove_button.setEnabled(bool(s and s.kind == "added" and s.address != server_list.chosen(self.cfg)))
         self.use_button.setEnabled(s is not None)
+        self.test_button.setEnabled(self.testable(s) and self._tester is None)
+        if s is None or s.address != self._test_address:   # a result is about the server it tested
+            self._test_address = None
+            self._show_test("", "", None)
         if s is None:
             self.details.setText("")
             return
