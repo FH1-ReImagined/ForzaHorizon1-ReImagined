@@ -294,6 +294,47 @@ class UploadTests(unittest.TestCase):
             self.upload(FakeGh(prerelease=False), {"a.deb": b"a"})
 
 
+class SumsTests(unittest.TestCase):
+    """sums: the GCC 14 build's files (ci-toolchain-gcc.yml) before the upload."""
+    def sums(self, files, pins, repin=False):
+        with tempfile.TemporaryDirectory() as tmp:
+            out, pins_file = Path(tmp) / "upload", Path(tmp) / "pins"
+            out.mkdir()
+            (out / "nested").mkdir()  # folders are not release files
+            for name, data in files.items():
+                (out / name).write_bytes(data)
+            pins_file.write_text(mirror.format_sums(pins))
+            with mock.patch.object(mirror, "PINS", pins_file):
+                mirror.cmd_sums(out, repin)
+            return ((out / mirror.SUMS).read_text(), (out / "UNPINNED").read_text())
+
+    def test_sums_list_every_file_and_the_unpinned_ones(self):
+        tar = "gcc-14.3.0-jammy-x86_64.tar.xz"
+        files = {tar: b"gcc", "gcc-14.3.0.tar.xz": b"src"}
+        pins = {"gcc-14.3.0.tar.xz": hashlib.sha256(b"src").hexdigest()}
+        sums, unpinned = self.sums(files, pins)
+        self.assertEqual(mirror.parse_sums(sums),
+                         {name: hashlib.sha256(data).hexdigest() for name, data in files.items()})
+        self.assertEqual(mirror.parse_sums(unpinned), {tar: hashlib.sha256(b"gcc").hexdigest()})
+
+    def test_a_build_that_differs_from_its_pin_stops(self):
+        tar = "gcc-14.3.0-jammy-x86_64.tar.xz"
+        with self.assertRaises(SystemExit) as raised:
+            self.sums({tar: b"rebuilt"}, {tar: hashlib.sha256(b"pinned").hexdigest()})
+        self.assertIn(tar, str(raised.exception))
+
+    def test_repin_lists_the_new_bytes_for_a_pull_request(self):
+        tar = "gcc-14.3.0-jammy-x86_64.tar.xz"
+        sums, unpinned = self.sums({tar: b"rebuilt"}, {tar: hashlib.sha256(b"pinned").hexdigest()},
+                                   repin=True)
+        self.assertEqual(mirror.parse_sums(unpinned), {tar: hashlib.sha256(b"rebuilt").hexdigest()})
+        self.assertEqual(mirror.parse_sums(sums), {tar: hashlib.sha256(b"rebuilt").hexdigest()})
+
+    def test_a_name_github_would_change_stops(self):
+        with self.assertRaises(SystemExit):
+            self.sums({"g++-14.tar.xz": b"x"}, {})
+
+
 class StatusTests(unittest.TestCase):
     def status(self, fake, pins, manifest):
         with tempfile.TemporaryDirectory() as tmp:

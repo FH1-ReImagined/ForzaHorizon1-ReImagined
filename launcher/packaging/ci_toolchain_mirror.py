@@ -5,6 +5,10 @@ Ubuntu 22.04 packages, which ci_linux_sdk_setup.sh installs g++-14 from before i
                                                   file, 10 when it lacks some, 1 when one differs
   ci_toolchain_mirror.py fetch OUT                download the packages in ci_toolchain_debs.txt and their
                                                   source packages, checked against the PPA's signed index
+  ci_toolchain_mirror.py sums OUT [--repin]       write OUT/SHA256SUMS for the files a build left in OUT
+                                                  (ci-toolchain-gcc.yml: GCC 14 built from GNU's sources)
+                                                  and stop when one differs from its pin (--repin: list
+                                                  it in OUT/UNPINNED instead)
   ci_toolchain_mirror.py upload OUT REPO TAG      add OUT's files to the release REPO/TAG
 
 fetch trusts nothing but the PPA's signing key: it checks InRelease's signature with gpgv, the
@@ -65,6 +69,8 @@ Licenses: GCC is free software under the GNU General Public License version 3; i
 libraries (libgcc, libstdc++, libgomp, libatomic, libitm) add the GCC Runtime Library Exception, \
 libquadmath is under the GNU Lesser General Public License 2.1 and the sanitizer runtimes under \
 their LLVM/MIT terms. Each package carries its license in /usr/share/doc/<package>/copyright.
+
+gcc-14.3.0-jammy-x86_64.tar.xz is GCC 14.3.0 built from GNU's release tarball for Ubuntu 22.04 by launcher/packaging/build_gcc14_jammy.sh in the repository (ci-toolchain-gcc.yml runs it here); CI uses it first. Its source is here too: gcc-14.3.0.tar.xz with GNU's signature (.sig) and the GMP, MPFR, MPC, isl and gettext tarballs that GCC's contrib/download_prerequisites fetched for it.
 
 Corresponding source: this release also holds the complete Debian source packages these binaries \
 were built from (.dsc, .orig.tar.* and .debian.tar.* files). GitHub doesn't keep + and ~ in file \
@@ -332,7 +338,10 @@ def cmd_fetch(out):
                         index(work, hashes, "main/source/Sources.xz"))
     found = {asset_name(name): sha256 for name, (_, sha256, _) in files.items()}
     conflicts, unpinned = compare_pins(found, pins)
-    if conflicts:
+    if conflicts and repin:
+        print("Not the pinned bytes (--repin: they go up as a new pin):\n  " + "\n  ".join(conflicts))
+        unpinned.update({name: found[name] for name in found if name in pins and pins[name] != found[name]})
+    elif conflicts:
         raise SystemExit("The PPA's signed index and ci_toolchain_sha256sums.txt disagree; "
                          "nothing was downloaded:\n  " + "\n  ".join(conflicts))
     for name, (path, sha256, size) in sorted(files.items()):
@@ -342,6 +351,33 @@ def cmd_fetch(out):
     (out / "UNPINNED").write_text(format_sums(unpinned))
     print(f"{len(files)} files verified against the PPA's signed index"
           + (f"; {len(unpinned)} not in ci_toolchain_sha256sums.txt yet" if unpinned else ""))
+
+
+def cmd_sums(out, repin=False):
+    """SHA256SUMS and UNPINNED for the files in OUT (not its folders). A pinned file with other
+    bytes means the build didn't reproduce the pinned one: nothing may be uploaded, unless repin
+    (the build changed on purpose, or 22.04's compiler did): then it goes to UNPINNED, for a pull
+    request that replaces the pin. The release itself still never gets other bytes for a name."""
+    pins = parse_sums(PINS.read_text()) if PINS.exists() else {}
+    found = {}
+    for path in sorted(out.iterdir()):
+        if path.is_file() and path.name not in (SUMS, "UNPINNED"):
+            if asset_name(path.name) != path.name:
+                raise SystemExit(f"{path.name}: GitHub would rename it")
+            found[path.name] = sha256_file(path)
+    if not found:
+        raise SystemExit(f"{out} has no files")
+    conflicts, unpinned = compare_pins(found, pins)
+    if conflicts and repin:
+        print("Not the pinned bytes (--repin: they go up as a new pin):\n  " + "\n  ".join(conflicts))
+        unpinned.update({name: found[name] for name in found if name in pins and pins[name] != found[name]})
+    elif conflicts:
+        raise SystemExit("This build differs from ci_toolchain_sha256sums.txt (not the pinned bytes; "
+                         "nothing is uploaded):\n  " + "\n  ".join(conflicts))
+    (out / SUMS).write_text(format_sums(found))
+    (out / "UNPINNED").write_text(format_sums(unpinned))
+    print(f"{len(found)} files" + (f"; {len(unpinned)} not in ci_toolchain_sha256sums.txt yet"
+                                   if unpinned else ", all pinned"))
 
 
 def gh(*args, check=True):
@@ -421,14 +457,14 @@ def cmd_upload(out, repo, tag, target):
                 continue
             actual = asset_sha256(repo, tag, assets[name], work)
             if actual != sha256:
-                conflicts.append(f"{name}: the release has {actual}, the PPA's copy is {sha256}")
+                conflicts.append(f"{name}: the release has {actual}, this run's copy is {sha256}")
         # The release's SHA256SUMS lists every file it holds, older package versions too.
         listed = {}
         if SUMS in assets:
             gh("release", "download", tag, "--repo", repo, "--pattern", SUMS, "--dir", str(work),
                "--clobber")
             listed = parse_sums((work / SUMS).read_text())
-        conflicts += [f"{SUMS}: {name} is listed as {listed[name]}, the PPA's copy is {sha256}"
+        conflicts += [f"{SUMS}: {name} is listed as {listed[name]}, this run's copy is {sha256}"
                       for name, sha256 in sorted(found.items())
                       if name in listed and listed[name] != sha256]
         if conflicts:
@@ -462,6 +498,9 @@ def main(argv=None):
     p.add_argument("tag")
     p = sub.add_parser("fetch")
     p.add_argument("out", type=Path)
+    p = sub.add_parser("sums")
+    p.add_argument("out", type=Path)
+    p.add_argument("--repin", action="store_true")
     p = sub.add_parser("upload")
     p.add_argument("out", type=Path)
     p.add_argument("repo")
@@ -472,6 +511,8 @@ def main(argv=None):
         return cmd_status(a.repo, a.tag)
     if a.cmd == "fetch":
         cmd_fetch(a.out)
+    elif a.cmd == "sums":
+        cmd_sums(a.out, a.repin)
     else:
         cmd_upload(a.out, a.repo, a.tag, a.target)
     return 0
