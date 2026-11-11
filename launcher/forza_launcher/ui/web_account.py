@@ -6,8 +6,8 @@ workers.Task threads, the card's status and buttons in workers.Probe.
 
 The status is asked only after this launcher made a link (cfg.web_account["linked"]), when the
 card is first shown in a session and after each change: a player who never links sends nothing."""
-from PySide6.QtCore import Qt, QUrl, Signal
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QMessageBox, QPushButton, QVBoxLayout, QWidget
 
 from .. import shader_share, web_account
@@ -59,7 +59,9 @@ class LinkDialog(QDialog):
     The page is in the launcher's own window (web_view.py) where Qt WebEngine is there: the player
     signs in or makes their account there with Discord, GitHub or an emailed code, clicks Link on
     the page, and confirms under it. Elsewhere, after "Use my browser instead" or when the window
-    stops, it opens in the player's browser as before. The code for another device is always shown."""
+    stops, it opens in the player's browser as before. The code for another device is always shown,
+    with Copy link, until the account is claimed; when the browser did not open, the link itself is
+    shown too (#815)."""
 
     def __init__(self, identity, parent=None, base=web_account.SERVICE, browser=False):
         super().__init__(parent)
@@ -84,6 +86,7 @@ class LinkDialog(QDialog):
             lay.addWidget(self.web, 1)
             self._fit()
         self.note = label("", "help")
+        self.note.setTextFormat(Qt.PlainText)   # may hold a link the browser did not open
         self.note.hide()
         lay.addWidget(self.note)
         self.code = label("", "help")
@@ -98,11 +101,16 @@ class LinkDialog(QDialog):
         self.browser_button.hide()
         self.browser_button.clicked.connect(lambda: self._to_browser())
         buttons.addWidget(self.browser_button)
+        self.copy_button = QPushButton("Copy link")
+        self.copy_button.setToolTip("Copies the link, to open it in any browser")
+        self.copy_button.hide()
+        self.copy_button.clicked.connect(self._copy)
+        buttons.addWidget(self.copy_button)
         buttons.addStretch(1)
         self.link_button = QPushButton("Link")
         self.not_me = QPushButton("Not me")
         self.close_button = QPushButton("Cancel")
-        for b in (self.browser_button, self.link_button, self.not_me, self.close_button):
+        for b in (self.browser_button, self.copy_button, self.link_button, self.not_me, self.close_button):
             b.setAutoDefault(False)
         for b in (self.link_button, self.not_me, self.close_button):
             buttons.addWidget(b)
@@ -138,8 +146,14 @@ class LinkDialog(QDialog):
         self.link_button.hide()
         self.not_me.hide()
         self.browser_button.hide()
+        self.copy_button.hide()
         self.close_button.setText("Close")
         self.close_button.show()
+
+    def _copy(self):
+        if self.request is not None:
+            QGuiApplication.clipboard().setText(self.request["url"])
+            self.copy_button.setText("Copied")
 
     # start -> show the page (here or in the browser) -> wait
     def _start_call(self, task):
@@ -152,6 +166,7 @@ class LinkDialog(QDialog):
         self.code.setText(f"On another device, open {web_account.SITE}, sign in and enter the code "
                           f"{self.request['code']}. It works for 10 minutes.")
         self.code.show()
+        self.copy_button.show()
         if self.web is not None:
             self.web.load(self.request["url"])
             self.web.show()
@@ -175,8 +190,10 @@ class LinkDialog(QDialog):
         if self.request is None or self.claimed is not None:
             return
         opened = web_view.open_in_browser(self.request["url"])
+        # the link stays at hand (Copy link): a browser can start and still not show it (#815)
         text = ("Your browser opened forza.dyotson.dev. Sign in there and click Link." if opened else
-                "Open forza.dyotson.dev/account.html in your browser, sign in and enter the code below.")
+                "Your browser did not open. Open this link in any browser, sign in and click Link: "
+                f"{self.request['url']}")
         self.text.setText((why + " " if why else "") + text + " Then come back here to confirm.")
 
     def _web_failed(self, why):
@@ -206,6 +223,7 @@ class LinkDialog(QDialog):
             self.code.hide()
             self.note.hide()
             self.browser_button.hide()
+            self.copy_button.hide()
             self.close_button.hide()
             self.link_button.show()
             self.not_me.show()
