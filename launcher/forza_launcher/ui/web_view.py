@@ -26,10 +26,9 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from PySide6.QtCore import QUrl, Signal
-from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QHBoxLayout, QInputDialog, QLineEdit, QPushButton, QVBoxLayout, QWidget
 
-from .. import paths
+from .. import browser, paths
 
 # Where the site's provider sign-in sends the player (allauth's Discord and GitHub apps).
 PROVIDER_HOSTS = ("discord.com", "github.com")
@@ -151,8 +150,15 @@ def _release_all():
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
-def open_in_browser(url):
-    return QDesktopServices.openUrl(QUrl(url) if isinstance(url, str) else url)
+def open_in_browser(url) -> bool:
+    """The player's browser (browser.open_url, #815): False when it could not be opened."""
+    return browser.open_url(url)
+
+
+def not_opened(url) -> str:
+    """The notice for a link the browser did not take, with the link to open by hand."""
+    text = url if isinstance(url, str) else url.toString()
+    return f"Your browser did not open. Open this link in any browser: {text}"
 
 
 _built = None
@@ -173,7 +179,9 @@ def _classes():
     Page_ = QWebEnginePage
 
     class Page(QWebEnginePage):
-        """The navigation allow-list (decide()), new windows to the browser, nothing granted."""
+        """The navigation allow-list (decide()), new windows to the browser, nothing granted.
+        `unopened` with the link when the browser did not take it."""
+        unopened = Signal(str)
 
         def __init__(self, profile, site, parent=None):
             super().__init__(profile, parent)
@@ -198,18 +206,22 @@ def _classes():
             where = decide(text, main_frame, kind == Page_.NavigationType.NavigationTypeLinkClicked,
                            self.url().toString(), self.site)
             if where == BROWSER:
-                open_in_browser(url)
+                self._browse(url)
             return where == VIEW
+
+        def _browse(self, url):
+            if not open_in_browser(url):
+                self.unopened.emit(url.toString())
 
         def _new_window(self, request):
             # target=_blank and window.open: the player's browser, for any secure address
             url = request.requestedUrl()
             if url.scheme() in ("https", "http", "mailto"):
-                open_in_browser(url)
+                self._browse(url)
 
     class SignInView(QWidget):
         """The address line (with Back and Reload) over the page. `failed` when the page's process
-        ends, `notice` for a security key's prompts."""
+        ends, `notice` for a security key's prompts and a link the browser did not open."""
         failed = Signal(str)
         notice = Signal(str)
 
@@ -250,6 +262,7 @@ def _classes():
             self.reload.clicked.connect(self.view.reload)
             self.view.urlChanged.connect(self._shown)
             self.page.renderProcessTerminated.connect(self._ended)
+            self.page.unopened.connect(lambda url: self.notice.emit(not_opened(url)))
             if hasattr(self.page, "webAuthUxRequested"):      # Qt 6.7+
                 self.page.webAuthUxRequested.connect(self._webauth_started)
             self._shown(QUrl())
