@@ -199,6 +199,16 @@ jobs:
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src tools/test_live_signing.cpp -o "$RUNNER_TEMP/live-signing-test"
           "$RUNNER_TEMP/live-signing-test"
       - if: runner.os == 'Linux'
+        name: Signing in to the Forza Live server
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/live_signin_test.cpp -o "$RUNNER_TEMP/live-signin-test"
+          "$RUNNER_TEMP/live-signin-test"
+      - if: runner.os == 'Linux'
+        name: Checked identity file write
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/identity_file_test.cpp -o "$RUNNER_TEMP/identity-file-test"
+          "$RUNNER_TEMP/identity-file-test"
+      - if: runner.os == 'Linux'
         name: Effective startup performance settings
         run: |
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/performance_settings_test.cpp -o "$RUNNER_TEMP/performance-settings-test"

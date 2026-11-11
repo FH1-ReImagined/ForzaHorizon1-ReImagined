@@ -47,6 +47,7 @@
 #include "live.h"
 #include "live_auth.h"
 #include "live_connection.h"
+#include "live_signin.h"
 #include "live_tcp.h"
 #include "../platform/socket.h"
 
@@ -708,6 +709,11 @@ class VNet {
         record = kept;
       } else if (!live_id_) {
         return false;
+      } else if (signin_held_ && (type == kFriend || type == kChat)) {
+        // Back from a pause or an error 1, not welcomed again yet: the server may hold no
+        // session for us, or not yet the proof of our key, and answers a FRIEND message then
+        // with "Friends are off: this XUID's friends belong to another installation".
+        return false;
       }
     }
     SendLive(server_, type, record.empty() ? body : record);
@@ -823,7 +829,11 @@ class VNet {
       // Give the server a moment, so the game sees its Live address from the start.
       std::unique_lock<std::mutex> lock(mutex_);
       cv_.wait_for(lock, std::chrono::seconds(3), [this] { return live_id_ != 0; });
-      if (!live_id_) {
+      if (!live_id_ && server_heard_) {
+        // It answered, with an error (logged above): not a firewall.
+        REXLOG_WARN("FORZA_LIVE: {} has not let this game in yet (the server error above says "
+                    "why); still trying", ServerName());
+      } else if (!live_id_) {
         REXLOG_WARN("FORZA_LIVE: no answer from {} yet; still trying", ServerName());
       }
     }
@@ -1130,6 +1140,7 @@ class VNet {
         rejoining_ = true;  // log the welcome even when the server kept our id
         std::lock_guard<std::mutex> lock(mutex_);
         last_welcome_ = now;  // not "lost the server": the time away was ours
+        signin_held_ = true;  // no LIST before the server welcomes us again
       }
       if (!resolved && now >= next_resolve) {
         resolved = ResolveServer();
@@ -1167,10 +1178,6 @@ class VNet {
               ServerName(), IpString(to.ip), to.port);
         }
       }
-      if (resolved && now >= next_list && forza::LiveSignin()) {
-        next_list = now + std::chrono::seconds(3);
-        SendLive(server_, kList, {});
-      }
       if (resolved && now >= next_hello) {
         SendHello();
         SendPresence();
@@ -1180,6 +1187,33 @@ class VNet {
         if (live_id_ && now - last_welcome_ > std::chrono::seconds(20)) {
           REXLOG_WARN("FORZA_LIVE: lost the server {}; reconnecting", ServerName());
           last_welcome_ = now;
+        }
+      }
+      // After the HELLO, and only once the server welcomed us (live_signin.h): a LIST from an
+      // address it holds no session for is answered with error 1, "not registered", which
+      // almost every log showed at the start and players blamed for not getting online.
+      if (resolved && now >= next_list && forza::LiveSignin()) {
+        bool signed_in;
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          signed_in = forza::live_signin::MaySendSignedIn(live_id_, signin_held_,
+                                                          last_welcome_received_, now);
+        }
+        if (signed_in) {
+          next_list = now + std::chrono::seconds(3);
+          SendLive(server_, kList, {});
+        }
+      }
+      if (resolved) {
+        bool warn;
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          warn = resign_.ShouldWarn(now);
+        }
+        if (warn) {
+          REXLOG_WARN("FORZA_LIVE: {} asked this game to sign in again and has not welcomed it "
+                      "back in {} s; online stays unavailable until it does",
+                      ServerName(), forza::live_signin::kResignGrace.count());
         }
       }
       std::vector<std::pair<Endpoint, std::vector<uint8_t>>> punches;
@@ -1308,6 +1342,8 @@ class VNet {
           public_ep_ = {public_ip, public_port};
           last_welcome_ = Clock::now();
           last_welcome_received_ = last_welcome_;
+          signin_held_ = false;
+          resign_.Welcomed();
           cv_.notify_all();
         }
         if (rejoining_.exchange(false) || changed) {
@@ -1321,13 +1357,39 @@ class VNet {
       }
       case kError: {
         if (!from_server || n < 3) return;
-        const size_t size = std::min<size_t>(Load16(p + 1), n - 3);
-        static std::atomic<int> logged{0};
-        if (logged.fetch_add(1) < 20) {
-          REXLOG_WARN("FORZA_LIVE: server error {}: {}", p[0],
-                      std::string(reinterpret_cast<const char*>(p + 3), size));
+        const uint8_t code = p[0];
+        const std::string detail(reinterpret_cast<const char*>(p + 3),
+                                 std::min<size_t>(Load16(p + 1), n - 3));
+        bool log, last;
+        std::string notice;
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          // Lines are counted per code: a flood of one (error 1 after a server restart, a
+          // refused HELLO each second) never hides another, such as a kick or a ban.
+          log = server_errors_.Take(code, last);
+          if (code == 1) {
+            // "Not registered": the server restarted, or dropped us after a pause or 30 s
+            // without a HELLO. The HELLO below signs in again; LiveLoop warns if no WELCOME
+            // follows, and holds LIST until one does.
+            resign_.Asked(Clock::now());
+            signin_held_ = true;
+          }
+          if (forza::live_signin::IsRefusal(code) && !noticed_[code]) {
+            noticed_[code] = true;  // on screen once per code and session
+            notice = forza::live_signin::NoticeText(code);
+          }
         }
-        if (p[0] == 1) SendHello();  // "not registered": the server restarted
+        if (log) {
+          const std::string text = forza::live_signin::ErrorText(code, ServerName(), detail);
+          const char* more = last ? " (further lines for this error are not logged)" : "";
+          if (code == 1) {
+            REXLOG_INFO("FORZA_LIVE: {} (error 1){}", text, more);
+          } else {
+            REXLOG_WARN("FORZA_LIVE: server error {}: {}{}", code, text, more);
+          }
+        }
+        if (!notice.empty()) forza::LiveOnlineNotice(notice);
+        if (code == 1) SendHello();
         return;
       }
       case kForward: {
@@ -1588,6 +1650,13 @@ class VNet {
   std::atomic<double> resumed_{0};  // seconds the machine slept (LiveResumed), 0: none
   std::atomic<bool> rejoining_{false};  // back after a stop or a sleep, not welcomed yet
   std::atomic<bool> server_heard_{false};  // any datagram from the server so far
+  // Sign-in (live_signin.h), under mutex_: no LIST until a WELCOME after a pause, a sleep or
+  // an error 1; an error 1 without a WELCOME soon after; log lines per error code; refusals
+  // already shown on screen.
+  bool signin_held_ = false;
+  forza::live_signin::Resign resign_;
+  forza::live_signin::ErrorLog server_errors_;
+  bool noticed_[6] = {};
   std::unordered_map<uint32_t, LivePeer> live_peers_;
   std::unordered_map<uint32_t, uint32_t> live_id_by_vip_;
   // The volunteer relay the server offered (#516): where, our ticket, the players it reaches.
