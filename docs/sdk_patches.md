@@ -650,3 +650,39 @@ each cvar turns its part off, or `FORZA_VK_DYNAMIC_CONSTANTS=0`, `FORZA_VK_BINDI
 `FORZA_VK_TEXTURE_SET_REUSE=0`). With the split every memo is used on the recorder thread only. Measurements: -7.4 % of
 the command processor's time a draw; with the split, 123.6 to 153.5 fps uncapped in the benchmark on eight cores and
 131.5 to 153.0 on six ([perf.md](perf.md)).
+
+## ReIGlue 0510: fetch opcodes the GPU does not define, execs past the end of the microcode (#808)
+
+On the converted FM4 circuit Suzuka the game stopped 10-20 s into lap 1, on the command processor's thread:
+`IssueDraw -> Shader::AnalyzeUcode -> GatherTextureFetchInformation -> ParsedTextureFetchInstruction::Disassemble ->
+strlen(NULL)`. `ParseTextureFetchInstruction` has no case for a fetch opcode the GPU does not define (2-15, 20-23,
+27-31) and left the instruction's name null, which the disassembler appended. 0510 parses such a fetch as one that
+does nothing (no result, no texture binding, skipped by the translators) and disassembles it as `tfetch_opcode_N`;
+the other name tables (texture and anisotropic filters, the vertex fetch's data format) print a number for a value
+they have no name for. `tests/shader_disasm_test.cpp` in ReIGlue covers each case.
+
+Where the fetch came from: not an FM4 shader value. With the fix and `--dump_shaders`, no shader had such an
+opcode inside its microcode; three pixel shaders of 105 and 144 dwords had control flow that runs instruction 3720,
+and the analysis read the memory after the shader's copy of the microcode, where one of those "fetches" had an
+undefined opcode. 0510 also skips instructions past the end of the microcode (in the analysis and in translation,
+with a warning once per shader: `an exec runs instruction N, past the end of the microcode`).
+
+Those shaders are FM4 track shaders loaded from the wrong place. Matching the microcode dumped in a Suzuka run
+against the converted track's `.fxobj` files: 18 of its pixel shaders, each the second pass's of its effect
+(`DIFF_SPEC_1`, `DIFF_1_HQ`, `BARR_SHAD_DIFF_SPEC_1`, `BARR_SHAD_DIFF_1`, `DIFF_CLR_SPEC_OPAC_REFL_4`,
+`TREE_DIFF_OPAC_DIRLIGHT_2_2SD` and others), were loaded from their own physical part, but at the first pass's
+microcode offset and with its length. Where the
+first pass has literal constants (offset 0x40) and the second has none (offset 0), the GPU gets 64 bytes into the
+second shader, so its "control flow" is instruction words (the crash); where only the lengths differ the shader is
+cut short or runs on into the next one. In the guest memory of a running game, the address in the shader load
+packet is the second shader's physical part plus 0x40. The `.fxobj` files are FM4's own layout (the converter,
+`tools/fm4_shaders.py`, only patches microcode words; each blob's own header holds the right offset and length).
+FH1's own track effects also have second passes of another length than the first (195 of 197 files), and none of
+their shaders ran past its end in these runs, so what makes the game take the first pass's values for FM4's
+effects is still open (#808 keeps it). Until then those
+passes draw from the wrong microcode, without stopping the game.
+
+Checked (Linux, TU4 build of main 0ec811b6 with the FM4 cars mod, RX 9060 XT, RADV, 30 fps, the dev autopilot on
+`tools/fm4_line.py` lines): with the plugin of the current pin the crash came 9 s into lap 1, as in the three runs
+before; with 0510, Suzuka two full laps (4:07.49, 4:05.82) and Laguna Seca one (3:45.29), no crash; FH1's free roam
+in Colorado drives as before.
