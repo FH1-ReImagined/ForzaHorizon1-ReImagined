@@ -46,8 +46,13 @@ def legacy_data_home() -> Path:
 
 
 def game_default_data_home() -> Path:
-    """Where the game keeps saves, DLC and its shader cache when it is given no --user_data_root:
-    the SDK's user folder, Documents (the known folder, which OneDrive may have moved) + forza."""
+    """Where the game keeps saves, DLC and its shader cache when it is given no --user_data_root,
+    and its online identity (live_identity.txt) always, whatever folder the launcher names: the
+    SDK's user folder + forza. Windows: Documents (the known folder, which OneDrive may have moved).
+    Linux: $XDG_DATA_HOME, else ~/.local/share (rex::filesystem::GetUserFolder), so a player with
+    their own data folder still has the identity in ~/.local/share/forza (issue #815)."""
+    if not IS_WINDOWS:
+        return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "forza"
     if IS_WINDOWS:
         try:
             buf = ctypes.c_wchar_p()

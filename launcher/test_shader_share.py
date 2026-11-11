@@ -340,5 +340,37 @@ class DownloadTests(Base):
             self.assertEqual(shader_prebuild.write_files(self.cfg, None, self.plan, log=lambda *_: None), {"n": 1})
 
 
+class IdentityFolderTests(unittest.TestCase):
+    """The game keeps live_identity.txt in the SDK's user folder whatever --user_data_root says
+    (identity.cpp DataDir): on Linux $XDG_DATA_HOME/forza/4D5309C9, else ~/.local/share/... (#815)."""
+
+    def write_identity(self, folder):
+        folder.mkdir(parents=True)
+        (folder / "live_identity.txt").write_text(f"xuid={XUID}\nfriends_key={KEY}\nsigning_seed={SEED}\n")
+
+    @unittest.skipIf(sys.platform == "win32", "the Linux folders")
+    def test_found_with_a_data_folder_of_your_own(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            cfg = Config(tmp / "launcher.json")
+            cfg.advanced["data_root"] = str(tmp / "mnt" / "Games" / "ForzaGame")
+            self.write_identity(tmp / "xdg" / "forza" / shader_share.TITLE_ID)
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": str(tmp / "xdg")}):
+                self.assertIn(tmp / "xdg" / "forza" / shader_share.TITLE_ID, shader_share.identity_dirs(cfg))
+                self.assertEqual(shader_share.read_identity(shader_share.identity_dirs(cfg)), (XUID, KEY, SEED))
+
+    @unittest.skipIf(sys.platform == "win32", "the Linux folders")
+    def test_found_in_local_share_without_xdg_data_home(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            cfg = Config(tmp / "launcher.json")
+            cfg.advanced["data_root"] = str(tmp / "elsewhere")
+            self.write_identity(tmp / "home" / ".local" / "share" / "forza" / shader_share.TITLE_ID)
+            env = {k: v for k, v in os.environ.items() if k != "XDG_DATA_HOME"}
+            with mock.patch.dict(os.environ, env, clear=True), \
+                    mock.patch.object(Path, "home", return_value=tmp / "home"):
+                self.assertEqual(shader_share.read_identity(shader_share.identity_dirs(cfg)), (XUID, KEY, SEED))
+
+
 if __name__ == "__main__":
     unittest.main()
