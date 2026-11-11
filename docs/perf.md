@@ -3749,3 +3749,62 @@ bits of a color source are not masked) and the depth copies themselves. Pictures
 noon, two spots, both settings) show the same shadows and scene; the result is the same by
 construction. AMD and Intel drivers have stencil export, so fix 1 changes nothing there; fix 2 is
 NVIDIA only, like 0071.
+
+## The GTX 1650 Ti's GPU frame after #770, and two transfer cuts that do not pay (#640, 2026-11-11)
+
+**The frame now.** The laptop above (GTX 1650 Ti 4 GB, i5-10300H, 8 GB, Windows 11), main
+7156c95 built by the launcher (ReIGlue pin 5408d20, as #770 left it), the launcher's settings for it
+(the 540p scene, AMD FSR 1, 60 fps, Vulkan), warm caches, `--fh1_gpu_profile=5`. Two benchmark
+runs (the measured minute) and a 3-minute free-roam drive at noon, ms of GPU time a frame:
+
+| Work | Benchmark (2 runs) | Free roam |
+| --- | --- | --- |
+| Guest draws | 8.14, 7.92 | 7.96 |
+| Transfers to depth from depth | 1.98, 2.00 | 1.89 |
+| Texture loads | 1.90, 1.94 | 1.88 |
+| Resolves (to the EDRAM buffer, then to guest memory) | 0.87 + 0.83, 0.87 + 0.84 | 0.87 + 0.83 |
+| Transfers to depth from color | 0.72, 0.72 | 0.73 |
+| Transfers between color targets | 0.46, 0.46 | 0.44 |
+| Uploads | 0.39, 0.41 | 0.27 |
+| Color clears, transfers to color from depth, the swap, depth clears | 0.19, 0.07, 0.07, 0.04 | 0.20, 0.08, 0.07, 0.05 |
+| **All** | **15.68, 15.54** | **15.28** |
+
+The benchmark: 58.4 fps without the profile, 57.4 and 58.6 with it. Transfers are still the largest
+cost after the guest's draws: 3.5 ms a frame, about 25 a frame to depth. The test without any
+stencil bit draws in the section above (wrong in general) puts the bit draws that are left at about
+1.1 ms of the transfers from depth and 0.5 ms of those from color: the depth target at EDRAM tile 720
+(kD24S8) has stencil in it, and 0461 can skip only bits that are set nowhere in the source.
+
+**A test hook (ReIGlue 0480).** `FORZA_TEST_NO_STENCIL_EXPORT=1` leaves
+`VK_EXT_shader_stencil_export` off, so an AMD or Intel GPU takes the NVIDIA transfer path (the
+stencil in one draw per bit) and a change to it can be checked on Linux: the render tests'
+pictures with it match those without it within the run-to-run noise on an RX 9060 XT (RADV).
+
+**Cut 1, not kept: transfers whose result is known.** Counted on that RX 9060 XT with the hook, a
+render-test session (title, free roam, cockpit, photo mode, a race start), about 96 000 transfers
+to depth a minute:
+- 56% copy tiles back to the depth target they were last copied from, which has not been written
+  since. But the target in between had always drawn into them (depth or stencil writes), so none
+  could be skipped.
+- 4.7% come from a source that holds only a resolve clear's value where they read, and could be a
+  clear. They are small ones (about 0.003 ms each): not worth the bookkeeping.
+- None of the transfers to depth from color copy back unchanged data, and the color sources that
+  had been resolve-cleared were cleared elsewhere than the tiles transferred.
+
+**Cut 2, not kept: stencil bit draws only over the tiles with the bit.** A compute pass listed,
+for each bit, the destination's tiles whose source tile has it, and each bit's draw went
+indirect over that list (depth sources, and k_8_8_8_8 color sources, whose stencil is their red
+byte). The pictures were unchanged (Linux, with the hook), but on the GTX 1650 Ti, one profiled
+benchmark run each way: transfers to depth from depth 1.97 -> 2.09 ms, from color 0.72 -> 0.74 ms
+(the GPU frame 15.30 -> 15.90 ms). FH1's stencil, where it is set, is set in most tiles, so the
+lists leave almost every tile in, and their pass and the many small quads cost more than they
+save. At the 60 fps cap, three alternating runs each way: 59.2 fps [58.1-59.8] off against 56.9
+[53.4-59.4] on. (The exact stencil of k_2_10_10_10 and k_2_10_10_10_FLOAT sources gave wrong
+pictures and was left out.) The code is on ReIGlue's branch `exp/640-stencil-tile-lists`.
+
+**Next.** The stencil bit draws (about 1.6 ms) need a way to write the stencil other than one draw
+per bit: for a one-sample destination (about half of these transfers: the scene depth and the
+shadow map going back to 1x) a compute pass could write the stencil bytes to a buffer and copy them
+into the image's stencil aspect, which Vulkan allows for single-sample images. Then the texture
+loads (1.9 ms; the 1024x1024 k_24_8 shadow map loaded 4 times a frame is 0.52 ms of it) and the
+resolves (1.7 ms in 88 a frame, about 10 us each, mostly fixed cost).
