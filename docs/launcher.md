@@ -1143,7 +1143,9 @@ valid for the schema, warnings, the first-run / existing-settings / player-choic
      next to `~/llvm/bin/clang`, so every clang of the job (CMake's, `build_rexglue_sdk.sh`'s and the
      test compiles in `release.yml`) uses it with no flags of its own. It puts `CI_CXX_HEADERS`,
      `CI_CLANG_GCC_FLAGS` and `LD_LIBRARY_PATH=~/gcc-14/lib64` in `$GITHUB_ENV`: programs built in the
-     job and run there need GCC 14's libstdc++ (22.04's lacks `GLIBCXX_3.4.31` and newer). `g++`, `cc`
+     job and run there need GCC 14's libstdc++ (22.04's lacks `GLIBCXX_3.4.31` and newer).
+     `$GITHUB_ENV` only reaches later steps, so the same exports go to `~/gcc-14/.fh1-env` too: a step
+     that runs `--compiler-only` and then its own tests (the SDK cache-hit path) sources it. `g++`, `cc`
      and `c++` stay Ubuntu's (the OpenXR loader is built with them, as before).
   2. The PPA's g++-14 packages from the same release (`ci-toolchain-mirror.yml`, `ci_toolchain_debs.txt`).
   3. The `ubuntu-toolchain-r/test` PPA itself, then Launchpad's file links.

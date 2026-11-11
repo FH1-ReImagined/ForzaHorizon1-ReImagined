@@ -443,6 +443,9 @@ jobs:
           # CI_CXX_HEADERS: set by an earlier ci_linux_sdk_setup.sh in this job when it used ~/gcc-14.
           if [ ! -d "${CI_CXX_HEADERS:-/usr/include/c++/14}" ]; then
             launcher/packaging/ci_linux_sdk_setup.sh --compiler-only
+            # Its GITHUB_ENV lines reach the later steps only. This step's tests run with
+            # ~/gcc-14's libstdc++ too: 22.04's lacks GLIBCXX_3.4.31 and newer.
+            if [ -f "$HOME/gcc-14/.fh1-env" ]; then . "$HOME/gcc-14/.fh1-env"; fi
           fi
           if [ ! -x "$HOME/cmake/bin/cmake" ]; then
             python3 launcher/packaging/ci_fetch.py cmake-linux "$HOME/cmake" --strip 1

@@ -154,6 +154,18 @@ fi
             env_file = root / "github-env"
             self.github_env = dict(line.split("=", 1) for line in env_file.read_text().splitlines()
                                    ) if env_file.exists() else {}
+            # What the step that ran the script gets by sourcing ~/gcc-14/.fh1-env (release.yml
+            # does after --compiler-only), twice, onto an LD_LIBRARY_PATH that was already set.
+            self.step_env = {}
+            step_file = self.gcc_home / ".fh1-env"
+            if step_file.exists():
+                names = ("CI_GCC_HOME", "CI_CXX_HEADERS", "CI_CLANG_GCC_FLAGS", "LD_LIBRARY_PATH")
+                shown = subprocess.run(
+                    ["bash", "-c", '. "$1"; . "$1"; for n in ' + " ".join(names)
+                     + '; do printf "%s=%s\\n" "$n" "${!n}"; done', "bash", str(step_file)],
+                    env={"PATH": os.environ["PATH"], "LD_LIBRARY_PATH": "/before"},
+                    text=True, capture_output=True, check=True)
+                self.step_env = dict(line.split("=", 1) for line in shown.stdout.splitlines())
             return result, log.read_text().splitlines()
 
     def test_ubuntu_24_uses_the_archive_and_never_launchpad(self):
@@ -349,6 +361,9 @@ fi
             self.assertEqual(self.github_env["CI_CXX_HEADERS"], f"{self.gcc_home}/include/c++/14.3.0")
             self.assertEqual(self.github_env["CI_CLANG_GCC_FLAGS"], f"--gcc-install-dir={install_dir}")
             self.assertEqual(self.github_env["LD_LIBRARY_PATH"], f"{self.gcc_home}/lib64")
+            # The calling step's own commands get the same, with lib64 put first only once.
+            self.assertEqual(self.step_env, dict(self.github_env, CI_GCC_HOME=str(self.gcc_home),
+                                                 LD_LIBRARY_PATH=f"{self.gcc_home}/lib64:/before"))
             self.assertEqual(sum(row.startswith("python3 ") for row in commands), 0 if args else 3)
 
     def test_gcc_tarball_full_setup_keeps_the_build_packages(self):
@@ -366,6 +381,7 @@ fi
         self.assertFalse(self.gcc_home.exists())
         self.assertEqual(self.cfg, {})
         self.assertEqual(self.github_env, {})
+        self.assertEqual(self.step_env, {})
         # The PPA's g++-14 instead.
         self.assertTrue(any(row.startswith("add-apt-repository") for row in commands))
         self.assertTrue(any(row.startswith("apt-get ") and row.endswith("install -y g++-14")
@@ -401,6 +417,7 @@ fi
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.gcc_downloads(commands), [])
         self.assertIn("clang++.cfg", self.cfg)
+        self.assertEqual(self.step_env["LD_LIBRARY_PATH"], f"{self.gcc_home}/lib64:/before")
 
     def test_ubuntu_24_never_uses_the_gcc_tarball(self):
         result, commands = self.run_setup(0, ubuntu="24.04", gcc="ok")
@@ -428,6 +445,17 @@ fi
                       if line.startswith("GCC_SHA256="))
         self.assertEqual(pins["gcc-14.3.0.tar.xz"], source)
         self.assertIn(GCC_TARBALL, pins)
+
+    def test_compiler_only_steps_load_the_gcc_variables_themselves(self):
+        # GITHUB_ENV reaches only later steps; a step that runs --compiler-only and then its own
+        # tests sources ~/gcc-14/.fh1-env right after (the SDK cache-hit path, release.yml).
+        workflow = (Path(__file__).parent.parent / ".github/workflows/release.yml").read_text()
+        lines = [line.strip() for line in workflow.splitlines() if not line.strip().startswith("#")]
+        calls = [i for i, line in enumerate(lines) if line.endswith("ci_linux_sdk_setup.sh --compiler-only")]
+        self.assertTrue(calls)
+        for i in calls:
+            self.assertEqual(lines[i + 1],
+                             'if [ -f "$HOME/gcc-14/.fh1-env" ]; then . "$HOME/gcc-14/.fh1-env"; fi')
 
     def test_missing_headers_stop_before_downloads(self):
         for args in ((), ("--compiler-only",)):

@@ -160,7 +160,8 @@ github_gcc() {
 # here and run during the job (tests, the SDK's build-time tools) need GCC_HOME's libstdc++ at run
 # time: 22.04's is GCC 12's, which lacks GLIBCXX_3.4.31 and newer. The overlay doesn't ship it (the
 # player's system libstdc++ is used, as with the PPA's g++-14), and no RUNPATH points at GCC_HOME.
-# The variables go to $GITHUB_ENV for the job's later steps.
+# The variables go to $GITHUB_ENV for the job's later steps, and to GCC_HOME/.fh1-env for the step
+# that ran this script, which GITHUB_ENV doesn't reach: release.yml sources it after --compiler-only.
 use_gcc_home() {
     local flags="--gcc-install-dir=$GCC_INSTALL_DIR"
     printf '%s\n' "$flags" > "$GCC_HOME/clang.cfg"
@@ -178,6 +179,13 @@ use_gcc_home() {
             echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
         } >> "$GITHUB_ENV"
     fi
+    {
+        printf 'export CI_GCC_HOME=%q CI_CXX_HEADERS=%q CI_CLANG_GCC_FLAGS=%q\n' \
+            "$GCC_HOME" "$GCC_HEADERS" "$flags"
+        printf 'case ":${LD_LIBRARY_PATH:-}:" in *:%q:*) ;; ' "$GCC_HOME/lib64"
+        printf '*) export LD_LIBRARY_PATH=%q"${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;; esac\n' \
+            "$GCC_HOME/lib64"
+    } > "$GCC_HOME/.fh1-env"
     echo "Using GCC 14 from $GCC_HOME ($flags)" >&2
 }
 # Last resort when both PPA hosts are down: Launchpad's file links for the exact packages.
