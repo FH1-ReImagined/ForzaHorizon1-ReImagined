@@ -74,9 +74,15 @@ wrong picture:
   parts sized by their pointer fields and laid out 16-byte aligned). FH2's
   `PVS::CPVSModelInstanceDynamic3DData` is 76 bytes (16-bit routes and a pad byte), FH1's 56:
   582 files carry one (crowds, animated scenes, placed models) and FH1 read their other parts
-  20 bytes off and faulted. The tool rewrites the block FH1's size and moves the rest. Animated
-  scenes (type 5, 27 files) still fault after the load and are left out of the zones
-  (`FH2FF_PGEO_DROP` lists the types left out).
+  20 bytes off and faulted. The tool rewrites the block FH1's size and moves the rest to keep
+  its 16-byte alignment. An animated scene (type 5: the fairgrounds' rides, fireworks, stage
+  lights) is laid out as Colorado's 202 are: its name is followed directly (4-byte aligned) by
+  its geometry references (each the file number of an animated object, type 4, with its Granny
+  animation) and its 28-byte `CAnimatedSceneData`; only its 128-byte object instances start
+  16-byte aligned. Moved to the next 16 bytes, the 8 scenes with the block lost their reference
+  (the Ferris wheel's 14 became 0) and FH1 faulted in their update (lr 82ED8CE4, 82ED67B0): the
+  references and data move with the name now, and every scene is in (`FH2FF_PGEO_DROP=5` leaves
+  them out, a test switch).
 - **Road network.** FH1's map looks the tag name `oneway` up and uses the result unchecked (TU4
   sub_82D98D20); F&F's table has `oneway_forward` and `traffic_density_name`, renamed to FH1's.
   Traffic asks for more names the same way (a fault at sub_82D9C8E0 once it spawned), so the
@@ -162,6 +168,8 @@ a save for every run, the dev autopilot:
 - a closed road driven 1.3 km past the edge of the zones: no reset;
 - a closure in Nice: the barrier line and cones across the road are gone;
 - with the world's races and arenas in the database (208 rows): F&F loads and drives, 150 s;
+- animated scenes in: 5 minutes along the spawn's road (where a build with them faulted at 27 s
+  before the fix), and the Nice fairground drawn with its rides moving (the SkyMaster's arms);
 - the minimap draws the formerly closed roads; the full map (Start, Map) shows FH2's art under
   the roads, aligned;
 - with the streaming pool and the launcher's switches (the two 0s): F&F 200 s with traffic and a
@@ -178,14 +186,6 @@ archive member the same.
 
 ## Not done yet
 
-- Animated scenes (procedural type 5: fairgrounds, fireworks). What matches FH1's: their layout
-  (the PDB's `CAnimatedSceneData` and 128-byte `CAnimatedObjectInstance`, as in Colorado's 202
-  scene files; a scene's geometry ref is the file number of a type 4 object), and the type 4
-  objects' embedded Granny files (version 7, type tag 0x80000033 in both games) and their
-  `CAnimatedData` values (Colorado's fireworks hold the same ones). Yet with scenes in, FH1
-  faults in their update (lr 82ED8CE4, a null list read after the random pick sub_82DBE490);
-  clearing the objects' `m_PlayRandomAnimations` only moved the fault (lr 82ED67B0, after
-  sub_82F12608). The difference is still to find.
 - F&F's own audio; its game modes (events, the map's icons are Colorado's).
 - FH2's far east. FH1 streams the zones round a point it clamps near x = 8.2 km: a start at
   x 9.1 to 9.4 km (zones 2422 to 2535) had zone 2250 (x 8.25 km) made live and nothing else, the

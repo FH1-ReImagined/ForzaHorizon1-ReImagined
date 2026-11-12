@@ -81,9 +81,9 @@ SOUND_BANKS = (5, 6)       # FMOD event and bank files of FH2's audio project: n
 # no pad): FH1 read F&F's 20 bytes off and faulted.
 DYN_FH2, DYN_FH1 = 76, 56
 ANIMATED_SCENE = 5
-# Types left out of the zones: AnimatedScene still faults after the load when converted (its own
-# data differs from FH1's; the PDB's CProceduralAnimatedScene structs are the way to convert it).
-PGEO_DROP = {int(k) for k in os.environ.get("FH2FF_PGEO_DROP", str(ANIMATED_SCENE)).split(",") if k}
+# Procedural types left out of the zones (a test switch, FH2FF_PGEO_DROP=5,...): none now. Animated
+# scenes faulted until convert_pgeo kept their references with their name.
+PGEO_DROP = {int(k) for k in os.environ.get("FH2FF_PGEO_DROP", "").split(",") if k}
 
 # The collision object types F&F places to close roads (CollObjs.xml PhysicsType), taken out where
 # FH2 has no such object at the same place.
@@ -243,7 +243,12 @@ def pgeo_routes(d):
 def convert_pgeo(d, routes):
     """F&F's procedural geometry file as FH1's: the dynamic 3D data block made FH1's size (route
     numbers mapped to bytes), the rest moved to keep its 16-byte alignment, m_FileSize set.
-    Unchanged without the block."""
+    Unchanged without the block.
+
+    An animated scene's name is followed directly (4-byte aligned) by its texture and geometry
+    references and its 28-byte CAnimatedSceneData, as in Colorado's scenes; only its object
+    instances start 16-byte aligned. Those move with the name (moving them to the next 16 bytes
+    lost the geometry reference: the scene drew, and faulted on, object 0)."""
     if d[:4] != b"OEGP" or not struct.unpack_from(">I", d, 0x58)[0]:
         return d
     if struct.unpack_from(">I", d, 0x48)[0] != len(d):
@@ -252,11 +257,16 @@ def convert_pgeo(d, routes):
     n = min(dyn[36], 19)
     ids = struct.unpack_from(f">{n}H", dyn, 38)
     new = dyn[:36] + bytes([n]) + bytes(routes.get(r, 0) for r in ids) + bytes(19 - n)
-    name_len = struct.unpack_from(">I", d, 0x3C)[0]
+    name_len, ntex, ngeo = struct.unpack_from(">3I", d, 0x3C)
     old_name = 0x60 + DYN_FH2
-    old_rest = (old_name + name_len + 15) & ~15
-    new_rest = (0x60 + DYN_FH1 + name_len + 15) & ~15
+    head = name_len
+    if struct.unpack_from(">I", d, 0x30)[0] == ANIMATED_SCENE:
+        head = ((name_len + 3) & ~3) + 8 * ntex + 8 * ngeo + 28
+    old_rest = (old_name + head + 15) & ~15
+    new_rest = (0x60 + DYN_FH1 + head + 15) & ~15
     out = bytearray(d[:0x60] + new + d[old_name:old_name + name_len])
+    if head > name_len:   # a scene: the name's padding zeroed, its references and data after it
+        out += bytes(((name_len + 3) & ~3) - name_len) + d[old_name + ((name_len + 3) & ~3):old_name + head]
     out += bytes(new_rest - len(out))
     out += d[old_rest:]
     struct.pack_into(">I", out, 0x48, len(out))

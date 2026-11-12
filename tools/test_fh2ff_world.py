@@ -118,6 +118,26 @@ class ProceduralGeometry(unittest.TestCase):
         self.assertEqual(out[rest_at:], b"REST" * 8)
         self.assertEqual(out[:0x48], d[:0x48])
 
+    def test_an_animated_scene_keeps_its_references(self):
+        # the name, then (4-byte aligned) a geometry reference and the 28-byte scene data; the
+        # object instances 16-byte aligned after them
+        name = b"Anim_instances(0)387_0\x00"
+        refs_and_data = struct.pack(">2I", 14, 0) + struct.pack(">7I", 1, 0, 0, 0, 0, 0, 0)
+        d = bytearray(pgeo(kind=ff.ANIMATED_SCENE, name=name)[:0x60 + 76])
+        struct.pack_into(">I", d, 0x44, 1)              # one geometry
+        d += name + b"\x38" + refs_and_data            # one byte of padding to 4 (garbage)
+        while len(d) % 16:
+            d += b"\xEE"
+        d += b"INST" * 8
+        struct.pack_into(">I", d, 0x48, len(d))
+        out = ff.convert_pgeo(bytes(d), {2381: 1})
+        at = 0x98 + len(name)
+        self.assertEqual(out[0x98:at], name)
+        self.assertEqual(out[at:at + 1], b"\x00")       # the padding zeroed
+        self.assertEqual(out[at + 1:at + 1 + len(refs_and_data)], refs_and_data)
+        self.assertEqual(out[(at + 1 + len(refs_and_data) + 15) & ~15:], b"INST" * 8)
+        self.assertEqual(struct.unpack_from(">I", out, 0x48)[0], len(out))
+
     def test_without_block_unchanged(self):
         d = pgeo(kind=2, dyn=False)
         self.assertIs(ff.convert_pgeo(d, {}), d)
