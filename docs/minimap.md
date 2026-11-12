@@ -10,9 +10,14 @@ menu. The full map and pause-menu map preview retain their normal orientation.
 VR cockpit/head-pose mode, loading, rewind and paused gameplay use the native map.
 The player's arrow and GPS route still use the original map geometry.
 
+The map turns about the car, which stays where the stock map draws it (below the
+map's centre) at every camera angle (#816). FH1 centres its map camera on a ground
+point ahead of the car; the hook reads that offset back after the game's map camera
+update and turns it with the map, instead of turning the map about the point ahead.
+
 The main-loop view submission publishes a bounded heading snapshot no older than 250 ms.
 Only the gameplay HUD map record borrows it at the native map-render pass. The
-map camera's heading and matrices are restored afterward; no vehicle direction or
+map camera's ground point, heading and matrices are restored afterward; no vehicle direction or
 gameplay camera is changed. Disabling the setting rebuilds the native geometry.
 
 Validation so far: heading math/concurrent snapshot tests, native adapter fixtures,
