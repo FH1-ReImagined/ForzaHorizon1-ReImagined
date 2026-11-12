@@ -38,7 +38,7 @@ import collections
 from contextlib import ExitStack
 import math
 import os
-from pathlib import Path, PureWindowsPath
+from pathlib import Path
 import re
 import shutil
 import sqlite3
@@ -112,22 +112,10 @@ SILENT_TILE = b"""<?xml version="1.0" encoding="utf-8"?>
 
 # ---- archives ----
 
-def data_offset(info, fh):
-    """A member's data offset: FH1's and FH2's track archives have no local headers, the 0x1123
-    extra field of the central directory gives it (as fm4_track_mod.member_data reads it)."""
-    ex, p = info.extra, 0
-    while p + 4 <= len(ex):
-        tag, ln = struct.unpack("<HH", ex[p:p + 4])
-        if tag == 0x1123 and ln >= 4:
-            return struct.unpack("<I", ex[p + 4:p + 8])[0]
-        p += 4 + ln
-    fh.seek(info.header_offset)
-    h = fh.read(30)
-    n, m = struct.unpack("<HH", h[26:30])
-    return info.header_offset + 30 + n + m
-
-
 class Archive:
+    """A track archive opened for reading; close() (or a with block) closes it and removes the
+    folder member_data decompresses into."""
+
     def __init__(self, path):
         self.path = path
         self.zf = zipfile.ZipFile(path)
@@ -142,13 +130,19 @@ class Archive:
         return fm4_track_mod.member_data(self.path, self.zf, info, self.fh, self.tmp)
 
     def raw(self, info):
-        self.fh.seek(data_offset(info, self.fh))
+        self.fh.seek(fm4_track_mod.data_offset(info, self.fh))
         return self.fh.read(info.compress_size)
 
     def close(self):
         self.fh.close()
         self.zf.close()
         shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
 
 
 class TrackZipWriter:
@@ -256,14 +250,20 @@ def convert_pgeo(d, routes):
 
 def closures(ff_xml, fh2_xml):
     """F&F's road closures in its Ribbon_00/CollObjs.xml: the CLOSURES objects FH2 has not at the
-    same place (to the metre). Returns (the file with each of them moved to y = -5000, under the
+    same place (an object of the same type within a metre). Returns (the file with each of them moved to y = -5000, under the
     world, every object kept in its place in the list; their (x, y, z))."""
     def objs(s):
         return [(m.start(4), m.end(4), m.group(2), float(m.group(3)), float(m.group(4)), float(m.group(5)))
                 for m in re.finditer(r'<Obj(\d+) PhysicsType="([^"]+)" GraphicsName="[^"]*">\s*'
                                      r'<Pos x="([-\d.e]+)" y="([-\d.e]+)" z="([-\d.e]+)"', s)]
-    fh2_at = {(t.lower(), round(x), round(z)) for _, _, t, x, y, z in objs(fh2_xml)}
-    gone = [o for o in objs(ff_xml) if CLOSURES.search(o[2]) and (o[2].lower(), round(o[3]), round(o[5])) not in fh2_at]
+    fh2_at = collections.defaultdict(list)
+    for _, _, t, x, y, z in objs(fh2_xml):
+        fh2_at[(t.lower(), round(x), round(z))].append((x, z))
+
+    def in_fh2(t, x, z):
+        return any(math.hypot(ox - x, oz - z) < 1.0 for dx in (-1, 0, 1) for dz in (-1, 0, 1)
+                   for ox, oz in fh2_at.get((t.lower(), round(x) + dx, round(z) + dz), ()))
+    gone = [o for o in objs(ff_xml) if CLOSURES.search(o[2]) and not in_fh2(o[2], o[3], o[5])]
     out, at = [], 0
     for a, b, *_ in sorted(gone):
         out.append(ff_xml[at:a])
@@ -285,28 +285,38 @@ class World:
         if self.P["version"] != fm4_pvs.FH2_VERSION:
             raise ValueError(f"layout version {self.P['version']}: {fm4_pvs.FH2_VERSION} expected")
         self.zip = Archive(os.path.join(root, "bin.zip"))
-        with open(os.path.join(rb, "FilenameMap_00.dat"), "rb") as f:
-            self.names = read_filename_map(f.read())
-        self.entry = {n.lower(): i for i, n in enumerate(self.names)}
-        if len(self.names) != len(self.zip.infos) or any(len(v) != 1 for v in self.zip.by_base.values()):
-            raise ValueError("the archive's members and the filename map are not one to one by name")
-        self.info_of = [self.zip.by_base[n.lower()][0] for n in self.names]
-        order, self.fh1_map = fh1_names([i.filename for i in self.zip.infos])
-        place = {p.lower(): k for k, p in enumerate(order)}
-        self.vol = [place[i.filename.replace("\\", "/").lower()] for i in self.info_of]  # F&F's entry -> FH1's
-        prefix = self.P["prefix"].lower()
-        self.model_entry = {}
-        for m in range(len(self.P["models"])):
-            e = self.entry.get(f"{prefix}.{m:05d}.rmb.bin")
-            if e is not None:
-                self.model_entry[m] = e
-        self.zone_infos = sorted((i for i in self.zip.infos if i.filename.lower().endswith(".pvsz")),
-                                 key=lambda i: i.filename.lower())
+        try:
+            with open(os.path.join(rb, "FilenameMap_00.dat"), "rb") as f:
+                self.names = read_filename_map(f.read())
+            self.entry = {n.lower(): i for i, n in enumerate(self.names)}
+            if len(self.names) != len(self.zip.infos) or any(len(v) != 1 for v in self.zip.by_base.values()):
+                raise ValueError("the archive's members and the filename map are not one to one by name")
+            self.info_of = [self.zip.by_base[n.lower()][0] for n in self.names]
+            order, self.fh1_map = fh1_names([i.filename for i in self.zip.infos])
+            place = {p.lower(): k for k, p in enumerate(order)}
+            self.vol = [place[i.filename.replace("\\", "/").lower()] for i in self.info_of]  # F&F's entry -> FH1's
+            prefix = self.P["prefix"].lower()
+            self.model_entry = {}
+            for m in range(len(self.P["models"])):
+                e = self.entry.get(f"{prefix}.{m:05d}.rmb.bin")
+                if e is not None:
+                    self.model_entry[m] = e
+            self.zone_infos = sorted((i for i in self.zip.infos if i.filename.lower().endswith(".pvsz")),
+                                     key=lambda i: i.filename.lower())
+        except BaseException:
+            self.zip.close()
+            raise
         self.report = collections.Counter()
         self.drop = set()
         self._zone_data = None
         self._kinds = {}
         self._routes = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.zip.close()
 
     def zones(self):
         if self._zone_data is None:
@@ -316,6 +326,9 @@ class World:
             c = fm4_pvs.read_cell(r, self.P["g2"], self.P["version"])
             if r.p != len(data):
                 raise ValueError(f"{info.filename}: read {r.p} of {len(data)} bytes")
+            if not len(c["instances"]) == len(c["drawn"]) == len(c["placements"]):
+                raise ValueError(f"{info.filename}: {len(c['instances'])} instances, {len(c['drawn'])} "
+                                 f"drawn flags and {len(c['placements'])} placements: not one to one")
             yield info, c
 
     def kind(self, entry):
@@ -336,7 +349,7 @@ class World:
                 if i.filename.lower().endswith(".pgeo"):
                     used |= set(pgeo_routes(self.zip.read(i)))
             ids = sorted(used - {0})
-            if len(ids) > 254:
+            if len(ids) > 255:
                 raise ValueError(f"{len(ids)} route numbers: more than a byte holds")
             self._routes = {0: 0}
             self._routes.update({r: k + 1 for k, r in enumerate(ids)})
@@ -573,6 +586,15 @@ def map_background(fh1_disc, fh2_disc, mod, tmp):
 
 # ---- build ----
 
+RESERVED = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))}
+
+
+def reserved_name(part):
+    """A Windows device name (CON, NUL, COM1...), with or without an extension. PurePath's
+    is_reserved() did this; Python 3.15 removed it."""
+    return part.split(".")[0].rstrip(" ").lower() in RESERVED
+
+
 def copy_member(zip_path, prefix, out_dir, tmp, lower=True):
     """Every member under prefix (case ignored) of a disc archive, into out_dir."""
     root = Path(out_dir).resolve()
@@ -585,7 +607,7 @@ def copy_member(zip_path, prefix, out_dir, tmp, lower=True):
             rel = name[len(prefix):]
             parts = (rel.lower() if lower else rel).split("/")
             if any(part in ("", ".", "..") or ":" in part or
-                   part.rstrip(" .") != part or PureWindowsPath(part).is_reserved()
+                   part.rstrip(" .") != part or reserved_name(part)
                    for part in parts):
                 raise ValueError(f"Unsafe archive member: {info.filename!r}")
             dst = root.joinpath(*parts)
@@ -761,7 +783,10 @@ def _build_into(ff_disc, fh1_disc, update_zip, out, fh2_disc):
         db = sqlite3.connect(db_path)
         resources.callback(db.close)
         cols = [r[1] for r in db.execute("PRAGMA table_info(Environments)")]
-        row = dict(zip(cols, db.execute("SELECT * FROM Environments WHERE MediaName='Colorado' ORDER BY Id LIMIT 1").fetchone()))
+        colorado_row = db.execute("SELECT * FROM Environments WHERE MediaName='Colorado' ORDER BY Id LIMIT 1").fetchone()
+        if colorado_row is None:
+            raise ValueError(f"{update_zip}: its gamedb.slt has no Colorado environment (not FH1's title update?)")
+        row = dict(zip(cols, colorado_row))
         row.update(Id=ENVIRONMENT, MediaName=NAME, ShowOnMap=0)
         db.execute(f"INSERT OR REPLACE INTO Environments ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
                    [row[c] for c in cols])
@@ -784,7 +809,11 @@ def _build_into(ff_disc, fh1_disc, update_zip, out, fh2_disc):
 
 
 def check(ff_disc):
-    w = World(os.path.join(ff_disc, "media", "tracks", NAME))
+    with World(os.path.join(ff_disc, "media", "tracks", NAME)) as w:
+        return _check(w)
+
+
+def _check(w):
     P = w.P
     print(f"{NAME}: layout version {P['version']}, {len(P['instances'])} instances, {len(P['models'])} models "
           f"({len(w.model_entry)} with a file), {len(P['textures'])} textures, {len(w.zone_infos)} zones, {len(w.names)} files")
@@ -806,7 +835,6 @@ def check(ff_disc):
         print(f"  {v:7d}  {k}")
     print(f"layout: version {back['version']}, {len(zones)} zones of which {whole} read back whole; "
           f"{len(routes) - 1} route numbers; {pgeo} procedural geometry files with dynamic data")
-    w.zip.close()
     return whole == len(zones)
 
 
@@ -815,6 +843,9 @@ def main(argv):
     fh2 = None
     if "--fh2" in args:
         k = args.index("--fh2")
+        if k + 1 >= len(args):
+            print(__doc__)
+            return 2
         fh2 = args[k + 1]
         del args[k:k + 2]
     if len(args) == 5 and args[0] == "build":

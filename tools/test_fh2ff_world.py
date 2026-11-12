@@ -205,6 +205,15 @@ class Closures(unittest.TestCase):
         self.assertIn('y="5.000000" z="21.000000"', out)        # not a closure: kept
         self.assertIn('<Pos x="-7.250000" y="-5000.000000" z="8.000000"/>', out)
 
+    def test_fh2s_object_across_a_metre_edge_stays(self):
+        mine = "<CollObjs>\n" + collobj(0, "gen_obj_trafficcone_medium.0.rmb", 10.51, 5, 20.49) + "</CollObjs>\n"
+        theirs = "<CollObjs>\n" + collobj(0, "gen_obj_trafficcone_medium.0.rmb", 10.49, 5, 20.51) + "</CollObjs>\n"
+        out, gone = ff.closures(mine, theirs)
+        self.assertEqual(gone, [])
+        self.assertEqual(out, mine)
+        far = "<CollObjs>\n" + collobj(0, "gen_obj_trafficcone_medium.0.rmb", 11.6, 5, 20.5) + "</CollObjs>\n"
+        self.assertEqual(len(ff.closures(mine, far)[1]), 1)
+
 
 def net(ways, nodes, keys, values):
     """A road network dict as fm4_routes.read_nav gives it: ways as ([node indexes], {key: value})."""
@@ -249,6 +258,31 @@ class RoadNetwork(unittest.TestCase):
         self.assertEqual(len(line.splitlines()), 7)
         with self.assertRaises(ValueError):
             ff.spawn_of(n, lambda x, z: False)
+
+
+class Guards(unittest.TestCase):
+    def test_reserved_names(self):
+        for n in ("CON", "nul", "com1.txt", "LPT9.xml", "aux "):
+            self.assertTrue(ff.reserved_name(n), n)
+        for n in ("console.xml", "com10", "null", "thing.xml"):
+            self.assertFalse(ff.reserved_name(n), n)
+
+    def test_bare_fh2_prints_the_usage(self):
+        self.assertEqual(ff.main(["fh2ff_world.py", "build", "a", "b", "c", "d", "--fh2"]), 2)
+
+    def test_zone_lists_must_be_one_to_one(self):
+        w = ff.World.__new__(ff.World)
+        w.P = {"g2": 0, "version": 51}
+        cell = fm4_pvs.Writer()
+        for vec in ([7], [], [], [], [], [1]):        # instances, models, textures, flags, files, drawn
+            cell.u32(len(vec))
+            for v in vec:
+                cell.u32(v) if vec == [7] else cell.u8(v)
+        cell.u32(0)                                    # no placements for the one instance
+        info = zipfile.ZipInfo("__R00Z00000.pvsz")
+        w._zone_data = [(info, bytes(cell.b))]
+        with self.assertRaisesRegex(ValueError, "not one to one"):
+            list(w.zones())
 
 
 class Archive(unittest.TestCase):
@@ -303,7 +337,7 @@ class OutputSafety(unittest.TestCase):
 
     def test_missing_disc_preserves_both_outputs(self):
         with tempfile.TemporaryDirectory() as d:
-            root = Path(d)
+            root = Path(d).resolve()   # the same spelling build() uses (8.3 names on Windows)
             self.populate(root, "previous")
             with self.assertRaises(FileNotFoundError):
                 ff.build(root / "missing", root, root / "media.zip", root)
@@ -311,7 +345,7 @@ class OutputSafety(unittest.TestCase):
 
     def test_publish_rolls_back_if_second_install_fails(self):
         with tempfile.TemporaryDirectory() as d:
-            root = Path(d)
+            root = Path(d).resolve()   # the same spelling build() uses (8.3 names on Windows)
             self.populate(root, "previous")
             real_rename = Path.rename
 
@@ -333,7 +367,7 @@ class OutputSafety(unittest.TestCase):
 
     def test_archive_copies_nested_member(self):
         with tempfile.TemporaryDirectory() as d:
-            root = Path(d)
+            root = Path(d).resolve()   # the same spelling build() uses (8.3 names on Windows)
             archive = root / "test.zip"
             with zipfile.ZipFile(archive, "w") as z:
                 z.writestr("TRACKS/Colorado/Nested/Thing.xml", b"valid")
@@ -343,7 +377,7 @@ class OutputSafety(unittest.TestCase):
 
     def test_archive_rejects_non_relative_components_before_writing(self):
         with tempfile.TemporaryDirectory() as d:
-            root = Path(d)
+            root = Path(d).resolve()   # the same spelling build() uses (8.3 names on Windows)
             archive = root / "test.zip"
             for relative in ("../marker", "/marker", "C:marker", "nested/.. /marker", "NUL"):
                 with self.subTest(relative=relative):
