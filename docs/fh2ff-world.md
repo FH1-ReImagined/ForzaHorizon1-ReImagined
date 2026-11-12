@@ -178,12 +178,14 @@ archive member the same.
 
 ## Not done yet
 
-- Animated scenes (procedural type 5: fairgrounds, fireworks). Their own layout is FH1's (the PDB's
-  `CAnimatedSceneData` and 128-byte `CAnimatedObjectInstance`, as in Colorado's 202 scene files; a
-  scene's geometry ref is the file number of a type 4 object). Two faults: FH1 reads the type 4
-  object's `CAnimatedData`+0x4C as a count of random animations and +0x50 as their list, where FH2
-  has `m_PlayRandomAnimations` and two material counts (a null list: lr 82ED8CE4); with that
-  cleared, the next fault is in the animation data itself (lr 82ED67B0, after sub_82F12608).
+- Animated scenes (procedural type 5: fairgrounds, fireworks). What matches FH1's: their layout
+  (the PDB's `CAnimatedSceneData` and 128-byte `CAnimatedObjectInstance`, as in Colorado's 202
+  scene files; a scene's geometry ref is the file number of a type 4 object), and the type 4
+  objects' embedded Granny files (version 7, type tag 0x80000033 in both games) and their
+  `CAnimatedData` values (Colorado's fireworks hold the same ones). Yet with scenes in, FH1
+  faults in their update (lr 82ED8CE4, a null list read after the random pick sub_82DBE490);
+  clearing the objects' `m_PlayRandomAnimations` only moved the fault (lr 82ED67B0, after
+  sub_82F12608). The difference is still to find.
 - F&F's own audio; its game modes (events, the map's icons are Colorado's).
 - FH2's far east. FH1 streams the zones round a point it clamps near x = 8.2 km: a start at
   x 9.1 to 9.4 km (zones 2422 to 2535) had zone 2250 (x 8.25 km) made live and nothing else, the
