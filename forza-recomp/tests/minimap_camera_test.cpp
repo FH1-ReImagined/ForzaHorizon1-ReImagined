@@ -9,14 +9,15 @@
 #include "../src/platform/minimap_heading.h"
 #include "../src/platform/xr.h"
 #include <array>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 namespace {
 std::array<uint8_t, 0x20000> memory{};
 bool active_vr = false;
 unsigned reads = 0, calls = 0, protection_queries = 0;
-float drawn_x = 0, drawn_z = 0;
-void Check(bool ok) { if (!ok) std::abort(); }
+float drawn_x = 0, drawn_z = 0, pivot_x = 0, pivot_z = 0;
+void Check(bool ok, int line = __builtin_LINE()) { if (!ok) { std::fprintf(stderr, "line %d\n", line); std::abort(); } }
 constexpr uint32_t service = 0x101000, entries = 0x102000, record = 0x103000,
     map = 0x104000, camera = 0x105000, world = 0x107000;
 }
@@ -54,6 +55,7 @@ auto FixtureResolve(uint32_t address) -> decltype(ResolveIndirectFunction(addres
 #define page_size FixturePageSize
 #define ResolveIndirectFunction FixtureResolve
 #define FORZA_NATIVE_PAUSE 1
+#define FORZA_MINIMAP_CAMERA_FIXTURE 1
 #include "../src/hooks/minimap_camera.cpp"
 #undef GuestPtr
 #undef QueryProtect
@@ -70,9 +72,21 @@ void Rebuild(PPCContext& ctx, uint8_t* base) {
   if (ctx.r3.u32 == camera) {
     drawn_x = forza::camera::ReadFloat(At(camera + 0x20));
     drawn_z = forza::camera::ReadFloat(At(camera + 0x28));
+    pivot_x = forza::camera::ReadFloat(At(camera + 0x10));
+    pivot_z = forza::camera::ReadFloat(At(camera + 0x18));
     std::fill_n(At(camera + 0x50), 256, uint8_t(0x55));
   } else Check(ctx.r3.u32 == map && ctx.r4.u32 == camera);
   ctx.r3.u64 = 0x12345678;
+}
+void StoreFloat(uint32_t address, float value) { Store(address, std::bit_cast<uint32_t>(value)); }
+float LoadFloat(uint32_t address) { return forza::camera::ReadFloat(At(address)); }
+// What 82584FC0 leaves behind for a car at (10, 20) heading north (+z): the camera rows
+// built on the car (82DA2388), then the ground point moved 100 m ahead of it.
+void NativeUpdate() {
+  StoreFloat(camera + 0x10, 10); StoreFloat(camera + 0x18, 120);
+  StoreFloat(camera + 0x20, 0); StoreFloat(camera + 0x28, 1); StoreFloat(camera + 0x38, 500);
+  StoreFloat(camera + 0x70, 0); StoreFloat(camera + 0x74, -0.9397f); StoreFloat(camera + 0x78, 0.3420f);
+  StoreFloat(camera + 0x80, 10); StoreFloat(camera + 0x84, 469.85f); StoreFloat(camera + 0x88, 20 - 500 * 0.3420f);
 }
 void Setup() {
   memory.fill(0); active_vr = false; calls = 0;
@@ -81,6 +95,7 @@ void Setup() {
   Store(entries, record); Store(record + 0x20, map); Store(record + 0x24, camera);
   At(record + 0x1C)[0] = 1; Store(map + 4, 0x106000);
   Store(camera + 0x28, std::bit_cast<uint32_t>(1.f));
+  forza::minimap::look_ahead.Publish(0, {});
   At(world + 0x0D)[0] = 1; Store(world + 0x28, std::bit_cast<uint32_t>(1.f));
   forza::camera::camera_world.store(world);
   std::array<float, 16> east{1,0,1,0, 0,1,0,0, 0,0,0,0, 0,0,0,1};
@@ -125,6 +140,34 @@ int main() {
     { MapScope scope(ctx, memory.data()); } Check(!calls);
     ctx.r4.u64 = 0;
   }
+  // #816: the camera update's offset ahead of the car turns with the map, about the car.
+  using forza::minimap::CameraUpdate;
+  Setup(); forza_minimap_camera = false; reads = 0;
+  { CameraUpdate update(memory.data()); Check(!reads); NativeUpdate(); } // disabled is inert
+  Check(!forza::minimap::look_ahead.Read(camera));
+  // Turned on from the menu with the car parked: a full update rewrites the bytes already there.
+  forza_minimap_camera = true;
+  { CameraUpdate update(memory.data()); NativeUpdate(); }
+  auto offset = forza::minimap::look_ahead.Read(camera);
+  Check(offset && std::fabs(offset->forward - 100) < 0.01f && std::fabs(offset->right) < 0.01f);
+  // The map pass leaves the camera built on its ground point; an update that stops before
+  // rebuilding it on the car keeps the offset from the last full update instead of measuring 0.
+  StoreFloat(camera + 0x88, 120 - 500 * 0.3420f);
+  { CameraUpdate update(memory.data()); }
+  offset = forza::minimap::look_ahead.Read(camera);
+  Check(offset && std::fabs(offset->forward - 100) < 0.01f && std::fabs(offset->right) < 0.01f);
+  { CameraUpdate update(memory.data()); NativeUpdate(); }
+  offset = forza::minimap::look_ahead.Read(camera);
+  Check(offset && std::fabs(offset->forward - 100) < 0.01f && std::fabs(offset->right) < 0.01f);
+  std::copy_n(At(camera), saved.size(), saved.begin());
+  calls = 0;
+  { MapScope scope(ctx, memory.data()); Check(calls == 2 && drawn_x == 1 && drawn_z == 0); }
+  // Looking east, the ground point is 100 m east of the car instead of 100 m north of it.
+  Check(std::fabs(pivot_x - 110) < 0.01f && std::fabs(pivot_z - 20) < 0.01f);
+  Check(!std::memcmp(At(camera), saved.data(), saved.size())); // native ground point restored
+  Check(LoadFloat(camera + 0x10) == 10 && LoadFloat(camera + 0x18) == 120);
+  { MapScope scope(ctx, memory.data()); StoreFloat(camera + 0x10, 5); }
+  Check(LoadFloat(camera + 0x10) == 5); // a newer native ground point wins
   Setup(); forza_minimap_camera = true;
   { MapScope scope(ctx, memory.data()); At(camera + 0x50)[0] = 0x77; }
   Check(At(camera + 0x50)[0] == 0x77); // a newer native write wins

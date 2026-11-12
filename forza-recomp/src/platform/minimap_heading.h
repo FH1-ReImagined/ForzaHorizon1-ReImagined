@@ -16,6 +16,63 @@ inline std::optional<Heading> CameraHeading(const std::array<float, 16>& view) {
   if (!std::isfinite(length) || length < 0.0001f) return {};
   return Heading{x / length, z / length};
 }
+// The stock HUD map does not pivot on the car. Its camera update (TU4 82584FC0) moves the
+// map camera's ground point ahead of the car, so the car sits below the map's centre (#816).
+// That offset, in the frame of the heading the native map was built with: forward along the
+// heading, right along (heading.z, -heading.x), the map camera's own right axis (82DA2388).
+struct LookAhead { float forward, right; };
+struct Ground { float x, z; }; // a point on the map's ground plane
+inline std::optional<Heading> Flat(float x, float z) {
+  const float length = std::hypot(x, z);
+  if (!std::isfinite(length) || length < 0.0001f) return {};
+  return Heading{x / length, z / length};
+}
+inline std::optional<LookAhead> MeasureLookAhead(Ground pivot, Ground car, Heading native) {
+  const float dx = pivot.x - car.x, dz = pivot.z - car.z;
+  const LookAhead offset{dx * native.x + dz * native.z, dx * native.z - dz * native.x};
+  if (!std::isfinite(offset.forward) || !std::isfinite(offset.right)) return {};
+  return offset;
+}
+// The ground point of a map turned from `native` to `heading` that keeps the car where the
+// stock map draws it: the same offset from the car, turned with the map.
+inline Ground TurnPivot(Ground pivot, Heading native, Heading heading, LookAhead offset) {
+  const float car_x = pivot.x - offset.forward * native.x - offset.right * native.z;
+  const float car_z = pivot.z - offset.forward * native.z + offset.right * native.x;
+  return {car_x + offset.forward * heading.x + offset.right * heading.z,
+          car_z + offset.forward * heading.z - offset.right * heading.x};
+}
+// The camera update builds the map camera around the car before it moves the ground point
+// (82DA2388: world row 3 = car - height * row 2), so the car is read back from those rows.
+inline std::optional<Ground> CarFromMapCamera(const std::array<float, 16>& world, float height) {
+  const Ground car{world[12] + height * world[8], world[14] + height * world[10]};
+  if (!std::isfinite(car.x) || !std::isfinite(car.z)) return {};
+  return car;
+}
+// The newest offset per map camera, written on the game thread and read by the map pass.
+class LookAheadMailbox {
+ public:
+  void Publish(uint32_t camera, LookAhead offset) {
+    sequence_.fetch_add(1, std::memory_order_acq_rel);
+    camera_.store(camera, std::memory_order_relaxed);
+    vector_.store(uint64_t(std::bit_cast<uint32_t>(offset.forward)) << 32 |
+        std::bit_cast<uint32_t>(offset.right), std::memory_order_relaxed);
+    sequence_.fetch_add(1, std::memory_order_release);
+  }
+  std::optional<LookAhead> Read(uint32_t camera) const {
+    const auto before = sequence_.load(std::memory_order_acquire);
+    if (before & 1) return {};
+    const auto owner = camera_.load(std::memory_order_relaxed);
+    const auto vector = vector_.load(std::memory_order_relaxed);
+    std::atomic_thread_fence(std::memory_order_acquire);
+    if (before != sequence_.load(std::memory_order_acquire) || !camera || owner != camera) return {};
+    return LookAhead{std::bit_cast<float>(uint32_t(vector >> 32)),
+                     std::bit_cast<float>(uint32_t(vector))};
+  }
+ private:
+  std::atomic<uint32_t> sequence_{0}, camera_{0};
+  std::atomic<uint64_t> vector_{0};
+};
+inline LookAheadMailbox look_ahead;
 inline uint64_t NowMs() {
   return uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::steady_clock::now().time_since_epoch()).count());
