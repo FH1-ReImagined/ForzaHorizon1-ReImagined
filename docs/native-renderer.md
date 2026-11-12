@@ -184,7 +184,8 @@ in this build) changes two things:
    - **Identity:** the SDK build (its version and the size and checksum of the GPU plugin's own
      file, which the translator is compiled into) and the translator configuration the game logs
      at start (device features, render target path, MSAA choices, draw resolution and raster
-     scales, the cvars the translator reads). A pack is used only when both are exactly the
+     scales, the cvars the translator reads, and the FM4 shadow test variables when they are
+     set). A pack is used only when both are exactly the
      game's: another plugin binary (an update, a local rebuild), GPU, driver feature set or
      graphics setting looks for another file. Four of the warm-up's pairs, chosen at random, are
      translated again at each start and compared byte for byte (about 0.5 ms each), against a

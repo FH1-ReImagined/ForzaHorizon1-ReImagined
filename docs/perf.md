@@ -4275,7 +4275,7 @@ import and the translations), and the whole warm-up.
   different): refused at three of three starts ("differs from this build's translation"). With the checked pairs
   at fixed positions instead of random ones, that forged pack had been used twice.
 
-**Play** (the benchmark race, `--frame_rate=240`, from the same cache copy):
+**Play** (the benchmark race, `--frame_rate=240`, from the same cache copy; C is the earlier 0600 of the first session):
 
 | Run | fps (A main / C M1) | 1% low | p99 ms | Shaders translated in play | Pipelines created in play |
 | --- | --- | --- | --- | --- | --- |
