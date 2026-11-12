@@ -268,6 +268,9 @@ echo "SDK CMake helpers: $OVERLAY/lib/cmake/rexglue/rexglue_helpers.cmake"
 plugin_new="$OVERLAY/lib/.librexgpu-xenos.new"
 cp "$built" "$plugin_new"
 mv -f "$plugin_new" "$OVERLAY/lib/librexgpu-xenos.so"
+python3 "$ROOT/launcher/forza_launcher/native_scene_marker.py" \
+    "$SRC/out/linux-amd64/Release/fh1-native-scene.json" "$built" \
+    "$OVERLAY/lib/librexgpu-xenos.so" "$OVERLAY/lib/fh1-native-scene.json"
 echo "patched plugin: $OVERLAY/lib/librexgpu-xenos.so"
 # Keep this outside the nightly's symlinked share tree.
 if [ -f "$SRC/out/linux-amd64/Release/SMAA-LICENSE.txt" ]; then

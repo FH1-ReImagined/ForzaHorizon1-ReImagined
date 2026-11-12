@@ -1406,6 +1406,10 @@ def stage_runtime(opts: Options, rep: Reporter, bdir: Path, sdk: Path) -> Path:
             shutil.copy2(capabilities, rt / capabilities.name)
         else:
             (rt / "fh1-native-dlss.json").unlink(missing_ok=True)
+        from . import native_scene_marker
+        native_scene_marker.stage(sdk / "bin" / native_scene_marker.NAME,
+                                  sdk / "bin" / "rexgpu-xenos.dll", rt / "rexgpu-xenos.dll",
+                                  rt / native_scene_marker.NAME)
         return rt
     modules = ["forza_XMediaFacade_default", "forza_SpeechFacade_default"]
     for name in ["forza"] + modules:
@@ -1424,11 +1428,21 @@ def stage_runtime(opts: Options, rep: Reporter, bdir: Path, sdk: Path) -> Path:
         shutil.copy2(loader.resolve(), tmp)
         os.replace(tmp, rt / loader.name)
     # the plugin comes out of the SDK's build tree, whose runpath points into that tree
+    from . import native_scene_marker
+    scene_before_rpath = (native_scene_marker._sha256(rt / "librexgpu-xenos.so")
+                          if (sdk / "lib" / native_scene_marker.NAME).is_file() else None)
     script = rt / ".rpath.cmake"
     script.write_text(f'file(RPATH_SET FILE "{(rt / "librexgpu-xenos.so").as_posix()}" NEW_RPATH "$ORIGIN")\n')
     cmake = shutil.which("cmake") or str(build_env.downloaded_paths(opts.root)["cmake"])
-    subprocess.run([cmake, "-P", str(script)], capture_output=True, env=cleanenv.clean_environment())
+    rpath_result = subprocess.run([cmake, "-P", str(script)], capture_output=True,
+                                  env=cleanenv.clean_environment())
     script.unlink(missing_ok=True)
+    if rpath_result.returncode == 0 and scene_before_rpath is not None:
+        native_scene_marker.stage(sdk / "lib" / native_scene_marker.NAME,
+                                  sdk / "lib" / "librexgpu-xenos.so", rt / "librexgpu-xenos.so",
+                                  rt / native_scene_marker.NAME, pre_rpath_sha256=scene_before_rpath)
+    else:
+        (rt / native_scene_marker.NAME).unlink(missing_ok=True)
     return rt
 
 

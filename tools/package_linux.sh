@@ -29,6 +29,7 @@ cp "$BUILD/forza" "$DIST/"
 cp "$BUILD/forza-telemetry.json" "$DIST/"
 for module in "${MODULES[@]}"; do cp "$BUILD/$module" "$DIST/"; done
 cp -L "$SDK/lib/librexruntime.so" "$SDK/lib/librexgpu-xenos.so" "$DIST/"
+scene_before_rpath="$(sha256sum "$DIST/librexgpu-xenos.so" | cut -d' ' -f1)"
 # The OpenXR loader for the VR setting, when the overlay has one (docs/vr.md, "Packaging").
 [ -f "$SDK/lib/libopenxr_loader.so.1" ] && cp -L "$SDK/lib/libopenxr_loader.so.1" "$DIST/"
 # The plugin comes out of the SDK's build tree, whose runpath points into that tree.
@@ -40,6 +41,10 @@ else
     cmake -P "$rpath_script"
     rm -f "$rpath_script"
 fi
+python3 "$ROOT/launcher/forza_launcher/native_scene_marker.py" \
+    "$SDK/lib/fh1-native-scene.json" "$SDK/lib/librexgpu-xenos.so" \
+    "$DIST/librexgpu-xenos.so" "$DIST/fh1-native-scene.json" \
+    --pre-rpath-sha256 "$scene_before_rpath"
 cp "$ROOT/tools/xcontent_extract.py" "$ROOT/tools/xiso_extract.py" "$ROOT/tools/install_dlc.py" "$DIST/"
 # The Forza Live server: its entry point and the forza_live package (no tests).
 cp "$ROOT/server/forza_live_server.py" "$DIST/server/"
