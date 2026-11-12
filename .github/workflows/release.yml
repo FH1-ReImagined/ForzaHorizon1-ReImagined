@@ -95,6 +95,8 @@ jobs:
         run: python -m unittest discover -s tools -p 'test_fm4_pvs.py' -v
       - name: Resource hook audit tests (synthetic images)
         run: python -m unittest discover -s tools -p 'test_resource_data_hooks.py' -v
+      - name: FM4 circuits' road lines and edges (decals; synthetic models, no game files, #648)
+        run: python -m unittest discover -s tools -p 'test_fm4_decals.py' -v
       - name: Thumbnail and photo sync renewal contracts (no game)
         shell: bash
         run: |
