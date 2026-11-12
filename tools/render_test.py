@@ -112,6 +112,31 @@ def disjoint(a, b):
         raise ValueError(f"paths must not overlap: {a} and {b}")
 
 
+# The SDK reads its settings from forza.toml next to the executable, and the launcher writes the
+# player's there (world detail, ambient occlusion, the Forza Live server): in a build folder the
+# player plays from, it changed every free roam scene and brought Forza Live's messages into
+# them. The game runs from a folder of the build's own files without it (logs/ is the SDK's).
+STAGE_SKIP = {"forza.toml", "logs"}
+
+
+def stage_build(build, dest):
+    """A new folder with hard links (copies on another file system) of the build folder's files,
+    except forza.toml, for the game to run from. Folders and symlinks are left out: the game
+    loads its plugin from its own folder and gets every other path on the command line."""
+    build = Path(build).resolve()
+    dest.mkdir()
+    for p in sorted(build.iterdir()):
+        if p.name in STAGE_SKIP or p.is_symlink() or not p.is_file():
+            continue
+        try:
+            os.link(p, dest / p.name)
+        except OSError:
+            shutil.copy2(p, dest / p.name)
+    if not (dest / "forza").is_file():
+        raise ValueError(f"no forza executable in {build}")
+    return dest
+
+
 def profile_source(path):
     source = plain_path(path)
     if source.name != TITLE:
@@ -309,6 +334,7 @@ class Session:
         (work / "cache").mkdir(parents=True, exist_ok=True)
         (work / "xdg-cache").mkdir(parents=True, exist_ok=True)
         os.mkfifo(d / "in.fifo")
+        game = stage_build(self.args.build, d / "game")
         env = {k: v for k, v in os.environ.items()
                if k not in ("FORZA_SERVER", "FORZA_NET", "FORZA_AUTOPRESS", "FORZA_SCREENSHOT_BURST")}
         env.update({
@@ -324,16 +350,16 @@ class Session:
             "FORZA_SCREENSHOT_BURST": f"{self.burst}:1",
             # frames.csv grows while frames are presented: the hang watch reads its size.
             "RECOMP_PERF": "1", "RECOMP_PERF_SCENE": "render_test", "RECOMP_PERF_CSV": str(d / "frames.csv"),
-            "LD_LIBRARY_PATH": f"{self.args.sdk}/lib:{self.args.build}",
+            "LD_LIBRARY_PATH": f"{self.args.sdk}/lib:{game}",
         })
-        cmd = [str(self.args.build / "forza"),
+        cmd = [str(game / "forza"),
                f"--game_data_root={self.args.game_data}", f"--update_data_root={self.args.update_data}",
                f"--user_data_root={ud}", f"--cache_root={work / 'cache'}",
                f"--log_file={d / 'forza.log'}", "--log_level=info",
                *self.cfg["game"]["args"], *self.args.extra]
         (d / "command.txt").write_text(" ".join(cmd) + "\n")
         with open(d / "run.out", "wb") as out:
-            self.proc = subprocess.Popen(cmd, cwd=self.args.build, env=env, stdin=subprocess.DEVNULL,
+            self.proc = subprocess.Popen(cmd, cwd=game, env=env, stdin=subprocess.DEVNULL,
                                          stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
         (d / "pid").write_text(f"{self.proc.pid}\n")
         for _ in range(100):

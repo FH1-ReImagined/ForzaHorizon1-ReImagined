@@ -82,7 +82,12 @@ The game is `forza-recomp/out/build/linux-tu4` (`--build DIR`) with the SDK of `
 overlay the run scripts use (`--sdk DIR`) and the game data in `extracted/game` and
 `extracted/tu4` (`--game-data`, `--update-data`). Every run gets scratch XDG folders and a fresh
 copy of the stored save as its only `--user_data_root`, so the player's settings, saves and
-Mesa shader cache are never read or written. The game's shader cache and Mesa's are kept
+Mesa shader cache are never read or written. The SDK reads its settings from `forza.toml`
+next to the executable, and the launcher writes the player's there when they play from that
+build folder (world detail, ambient occlusion, the Forza Live server): so the game runs from
+`game/` in its run folder, hard links of the build folder's files without `forza.toml`. Before
+that, such a file changed every free roam scene and brought Forza Live's messages and photo
+mode's Big Shot line into them. The game's shader cache and Mesa's are kept
 between runs in `~/.cache/forza-render-tests` (`--work DIR` or `FORZA_RENDER_WORK`), and the
 first run on a machine is slower. The game runs offline with `--audio_mute` and
 `REX_AUDIO_FAIL_OPEN=all`, in a 1280x720 window at 60 fps, with the fixed settings of
