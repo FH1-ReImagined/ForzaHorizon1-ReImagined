@@ -21,8 +21,10 @@ are Infineon 5-6's grey road, Indianapolis 7's pale sand and Top Gear 3's orange
 2. `tools/fm4_pvs.py convert MOD FH1_DISC LOOSE` converts the mod's layouts (ribbons):
    - each PVS from FM4's version 27 to FH1's 50, split into 100 m hex zones (`.hex`,
      `__RnnZnnnnn.pvsz`, `FilenameMap_nn.dat`, `PVSZLookup_nn.dat`); big models go into every
-     zone their extent reaches, and each zone also takes the large pieces (25 m and over)
-     of the FM4 visibility cell that best matches its centre (`FM4_PVS_VISIBLE*`);
+     zone their extent reaches, each zone also takes the large pieces (25 m and over) of the
+     FM4 visibility cell that best matches its centre (`FM4_PVS_VISIBLE*`), and then what its
+     six neighbours hold, as FH1 draws the camera's zone alone (`FM4_PVS_ZONE_REACH`, "Zones
+     that hold what is seen from them" below);
    - texture records (FM4's atlas flag 8 and projected-lightmap flag 0x10 dropped), shader
      names, instance flags (high half 0x083F, FM4's low 16 bits, bit 28 dropped);
    - the sky dome as an object of every zone; one padding zone-table entry that sizes FH1's
@@ -61,7 +63,7 @@ are Infineon 5-6's grey road, Indianapolis 7's pale sand and Top Gear 3's orange
 | `FORZA_PVS_TRACE=FILE` | every read of the PVS reader (layout work) |
 
 Converter test switches: `FM4_PVS_FLAGS`, `FM4_PVS_FLAGMASK`, `FM4_PVS_SHADERS`,
-`FM4_PVS_PROJLM`, `FM4_PVS_SKY`, `FM4_PVS_SHADER_PATCHES`, `FM4_PVS_LIGHTMAPS`, `FM4_PVS_HEX`,
+`FM4_PVS_PROJLM`, `FM4_PVS_SKY`, `FM4_PVS_SHADER_PATCHES`, `FM4_PVS_LIGHTMAPS`, `FM4_PVS_HEX`, `FM4_PVS_ZONE_REACH`,
 `FM4_PVS_EXTENT`, `FM4_PVS_VISIBLE`, `FM4_PVS_VISIBLE_NEAR`, `FM4_PVS_VISIBLE_CELLS`, `FM4_PVS_VISIBLE_SIZE`,
 `FM4_PVS_TOD`, `FM4_PVS_TRACKSETTINGS`, `FM4_PVS_TRACKSETTINGS_FM4`, `FM4_SHADERS_LIGHTMAP`,
 `FM4_SHADERS_LIGHTMAP_COLOURS`, `FM4_SHADERS_SHADOW_COLOUR`, `FM4_SHADERS_SHADOW_CLIP`, `FM4_SHADERS_TINTS`, `FM4_PVS_PASS_GROUPS`, `FM4_PVS_PASS_GROUP_DROP`, `FM4_PVS_GROUND`, `FM4_PVS_GROUND_SCALE`, `FM4_PVS_GROUND_BELOW`, `FM4_PVS_GROUND_MODEL`, `FM4_PVS_GROUND_LAYER`, `FM4_PVS_GROUND_AT`, `FM4_PVS_STREAM_MARGIN`,
@@ -1162,6 +1164,73 @@ Not done:
   network.
 - The map screen and GPS routes on a circuit were not looked at; the map's picture and pins
   are Colorado's.
+
+## Zones that hold what is seen from them (#824)
+
+A reported Le Mans session at 200-330 km/h: the scenery appeared as the car drove, and
+stretches filled in as it passed. FH1 draws the camera's zone alone. Colorado's zones are
+visibility sets (1434 zones, 640 instances in the median one, each instance in 16.5 zones on
+average), where the converter's hex zone held only its own instances (those whose extent
+reaches it, plus 100 m) and the large pieces of one FM4 visibility cell: Le Mans had 3.7 zones
+an instance, and along
+the lap's line small trackside pieces showed only 120 m ahead at the median (p10 58 m), about
+1.5 s at those speeds (offline, from that conversion's zones and the circuit's lap.txt; in the
+session's log the archive thread read 15 to 200 files a second at speed and the pool never ran
+dry, so streaming was not the limit).
+
+- What a zone holds (`FM4_PVS_ZONE_REACH`): `neighbours` (the default) makes each zone its own
+  instances and then those of its six neighbouring hexes (`HexGrid.neighbours`), so a zone holds
+  everything within 200 m of its centre (the seven hexes' inradius) and its neighbours' large
+  pieces; `own` is the old zoning, and converts byte for byte as before (Suzuka's bin.zip, same
+  hash). The same offline count along Le Mans's line: 100% of the pieces within 150 m of the
+  car in the camera's zone (66% before), 86% within 300 m (38%); small pieces 200 m ahead at
+  p10, 280 m at the median.
+- The cost is in the streaming pool: FH1 streams the camera's zone and the six around it, so a
+  zone's need (`stream_blocks`) is now the files of the hexes two rings out.
+  `fm4_stream_blocks.txt` stays under the hook's cap: a layout whose zones with their whole
+  neighbours would need more than 65536 blocks with the 1.25 margin (`MAX_STREAM_BLOCKS`,
+  `kMaxBlocks` in hooks/fm4_track.cpp) takes the neighbours' instances within 200 m, then 150 m
+  of the zone's centre (`NEIGHBOUR_NEAR`), else its own alone; the converter's line for the
+  layout says which. The file itself is never more than 65536 (with a warning when the margin
+  does not fit: Crown Jewel's and Mugello's other layouts already needed more with their own
+  zones, as before).
+- The padding zone (`FM4_PVS_POOL_ZONES`) follows the largest zone: Le Mans 522 -> 1269
+  instances, so FH1's live instance and placement pools are 3 x (4 x 1269 + 128) = 15612.
+
+All 24 circuits of Disc 1 converted both ways from the disc (`tools/fm4_track_mod.py` and
+`fm4_pvs.py convert` as the launcher runs them). Ribbon_00 is the layout free roam loads; the
+blocks are the file's (the largest of all layouts, with the margin):
+
+| Circuit | Zones | Instances a zone, average | Largest zone | Blocks asked | Ribbon_00's zones |
+|---|---|---|---|---|---|
+| Alps | 238 | 40 -> 54 | 294 -> 471 | 63721 -> 65193 | neighbours within 150 m |
+| AmalfiGP | 4312 | 7 -> 14 | 446 -> 1168 | 34183 -> 42838 | neighbours |
+| Autopark | 1026 | 39 -> 129 | 556 -> 1234 | 53935 -> 65250 | neighbours |
+| Catalunya | 120 | 132 -> 503 | 776 -> 2068 | 43160 -> 59249 | neighbours |
+| CrownJewel | 378 | 40 -> 134 | 390 -> 1086 | 65536 -> 65536 | neighbours |
+| FujimiKaido | 875 | 28 -> 109 | 629 -> 1086 | 29456 -> 44818 | neighbours |
+| Hockenheim | 144 | 122 -> 232 | 666 -> 1336 | 50149 -> 63223 | neighbours within 200 m |
+| Indi | 153 | 170 -> 258 | 638 -> 944 | 57284 -> 64314 | neighbours within 200 m |
+| Infin | 130 | 90 -> 306 | 495 -> 1135 | 46395 -> 60444 | neighbours |
+| LagunaSeca | 224 | 89 -> 326 | 710 -> 1672 | 33731 -> 47393 | neighbours |
+| LeMans | 805 | 48 -> 176 | 522 -> 1269 | 38151 -> 52033 | neighbours |
+| MapleValley | 176 | 63 -> 219 | 272 -> 750 | 26550 -> 37914 | neighbours |
+| Motegi | 324 | 95 -> 134 | 734 -> 1177 | 54349 -> 65473 | neighbours within 200 m |
+| Mugello | 208 | 111 -> 111 | 591 -> 591 | 65536 -> 65536 | own (fallback) |
+| Nurburgring | 2226 | 72 -> 242 | 752 -> 1898 | 37925 -> 48999 | neighbours |
+| NurburgringF1 | 361 | 66 -> 66 | 452 -> 452 | 63121 -> 63546 | own (fallback) |
+| RoadAmerica | 169 | 124 -> 534 | 409 -> 1343 | 24326 -> 39501 | neighbours |
+| RoadAtlanta | 154 | 100 -> 385 | 464 -> 1432 | 27958 -> 46280 | neighbours |
+| Sebring | 315 | 84 -> 329 | 698 -> 1938 | 35953 -> 56659 | neighbours |
+| Silverstone | 304 | 100 -> 288 | 457 -> 1013 | 51266 -> 64071 | neighbours |
+| SunsetInfield | 120 | 198 -> 198 | 555 -> 555 | 62469 -> 64318 | own (fallback) |
+| Suzuka | 209 | 72 -> 249 | 504 -> 1158 | 43280 -> 60124 | neighbours |
+| TopGear | 242 | 110 -> 261 | 408 -> 724 | 36390 -> 47226 | neighbours |
+| Tsukuba | 176 | 40 -> 147 | 737 -> 1531 | 44238 -> 49423 | neighbours |
+
+To check in the game: frame time and draw count over a Le Mans lap at speed, and how far ahead
+the scenery appears. A circuit imported before this change keeps its old zones until it is
+imported again.
 
 ## Open
 

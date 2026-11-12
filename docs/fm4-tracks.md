@@ -76,7 +76,8 @@ tab appears once a circuit is imported.
 Works:
 
 - Free driving on the circuit: its buildings, stands, crowds, road and kerbs, and its collision
-  (walls and the ground).
+  (walls and the ground). A circuit imported with an earlier launcher loads its scenery only a
+  short way ahead of the car, so at speed it appears as you drive: import it again.
 - Timed laps with sectors, the best-lap ghost and the laps page.
 - The circuit's road on the minimap, from FM4's AI line. A circuit imported with an earlier
   launcher has none: import it again.
