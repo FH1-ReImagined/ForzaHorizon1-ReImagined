@@ -1,7 +1,9 @@
 # Cross build for ARM64 Linux (aarch64-linux-gnu) with clang and lld from an x86-64 Linux host,
-# against an aarch64 sysroot (docs/arm64_linux.md). Used for the game and for ReIGlue:
-#   cmake -S forza-recomp -B forza-recomp/out/build/linux-arm64 -G Ninja \
-#       -DCMAKE_TOOLCHAIN_FILE=tools/cmake/linux-aarch64-clang.cmake \
+# against an aarch64 sysroot (docs/arm64_linux.md). Used for the game and for ReIGlue. CMake
+# resolves a relative toolchain path against the build folder, so pass it absolute; from the
+# game's checkout:
+#   cmake -S forza-recomp -B forza-recomp/out/build/linux-arm64-cross -G Ninja \
+#       -DCMAKE_TOOLCHAIN_FILE="$PWD/tools/cmake/linux-aarch64-clang.cmake" \
 #       -DFORZA_AARCH64_SYSROOT=/path/to/sysroot ...
 # The sysroot needs the same development packages as a native build (the SDK's CI list).
 # A cross build compiles the generated code a native codegen run made (CMAKE_CROSSCOMPILING).

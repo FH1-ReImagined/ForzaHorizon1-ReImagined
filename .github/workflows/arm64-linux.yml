@@ -1,0 +1,109 @@
+# ARM64 Linux (#788 step 1, docs/arm64_linux.md): the pinned ReIGlue built natively on GitHub's
+# ubuntu-24.04-arm runners, then the game's host sources compiled against it for aarch64. No game
+# files or generated game code. ReIGlue's own build-linux-aarch64 job runs the SDK's tests (the
+# PPC instruction tests and FMA cases on NEON, the 16 and 64 KB page layouts) on its PRs.
+name: arm64-linux
+
+on:
+  pull_request:
+    paths:
+      - "forza-recomp/src/**"
+      - "forza-recomp/cmake/**"
+      - "forza-recomp/CMakeLists.txt"
+      - "tools/build_rexglue_sdk.sh"
+      - "tools/cmake/**"
+      - ".github/workflows/arm64-linux.yml"
+  push:
+    branches: [main]
+    paths:
+      - "forza-recomp/src/**"
+      - "forza-recomp/cmake/**"
+      - "forza-recomp/CMakeLists.txt"
+      - "tools/build_rexglue_sdk.sh"
+      - "tools/cmake/**"
+      - ".github/workflows/arm64-linux.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arm64-linux-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  host-check:
+    name: ARM64 Linux SDK and host sources
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 150
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      SDK: ${{ github.workspace }}/out/reiglue-arm64
+      REXSDK_SRC: ${{ github.workspace }}/out/reiglue-src
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install clang 20 and the build packages
+        run: |
+          test "$(uname -m)" = aarch64
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg lsb-release
+          wget -q https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 20
+          # The packages ReIGlue's ARM64 job installs, and g++-14's C++23 library (as the x86-64
+          # PR build on 24.04 uses).
+          sudo apt-get install -y clang-20 lld-20 g++-14 cmake ninja-build build-essential git \
+            libgtk-3-dev libx11-xcb-dev libxss-dev libvulkan-dev \
+            libwayland-dev libwayland-bin wayland-protocols libxkbcommon-dev libdecor-0-dev \
+            libasound2-dev libpulse-dev libpipewire-0.3-dev
+          rm -f llvm.sh
+          {
+            uname -m
+            clang++-20 --version | head -1
+            cmake --version | head -1
+          } | tee "$RUNNER_TEMP/toolchain.txt"
+
+      - name: Cache the installed SDK
+        id: sdk-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: out/reiglue-arm64
+          # The pin is in build_rexglue_sdk.sh: a new pin (or a change here) builds the SDK again.
+          key: reiglue-linux-arm64-v1-${{ hashFiles('tools/build_rexglue_sdk.sh', '.github/workflows/arm64-linux.yml') }}
+
+      - name: Build and install the pinned SDK (ReIGlue)
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        run: |
+          tools/build_rexglue_sdk.sh --source-only
+          cd "$REXSDK_SRC"
+          cmake --preset linux-arm64 \
+            -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20 \
+            -DCMAKE_CONFIGURATION_TYPES=Release -DCMAKE_DEFAULT_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$SDK"
+          cmake --build out/build/linux-arm64 --config Release --target install --parallel "$(nproc)"
+
+      - name: Check the installed SDK
+        run: |
+          for binary in bin/rexglue lib/librexruntime.so lib/librexgpu-xenos.so; do
+            file -L "$SDK/$binary" | tee /dev/stderr | grep -q "ARM aarch64"
+            echo "PASS: aarch64 $binary"
+          done
+          "$SDK/bin/rexglue" --version
+
+      - name: Compile the host sources (disc and TU4)
+        run: |
+          for tu in 0 4; do
+            cmake -S tools/cmake/linux-host-check -B "out/host-check-$tu" -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++-20 \
+              -DCMAKE_PREFIX_PATH="$SDK" -Drexglue_DIR="$SDK/lib/cmake/rexglue" \
+              -DFORZA_TITLE_UPDATE="$tu" -DFORZA_NATIVE_PAUSE=ON
+            cmake --build "out/host-check-$tu" --target forza_host_check --parallel "$(nproc)"
+            echo "PASS: host sources, FORZA_TITLE_UPDATE=$tu"
+          done
