@@ -70,6 +70,10 @@ wrong picture:
   with the car blown out white at any hour. Without the five elements FH1's has not
   (`CarGlowScale`, `Particles`, `TintColor`, `ToneMapHighBumperExposure`, `ToneMapHoodExposure`)
   and marked 64, it lights right (found by laying F&F's files over Colorado's one set at a time).
+- **Collision surfaces.** F&F's surface table is FH1's 68 and four more (RallyGrass, Dirt2,
+  Dirt3, RallyGravel). Only RallyGravel (71) is used: 2,263 triangles in 58 cells, past the end of
+  FH1's table. Each extra surface becomes FH1's of its name without "Rally" and a trailing number
+  (71 Gravel, 68 Grass, 69 and 70 Dirt), in the cells that use one.
 - **Spawn.** F&F streams 1,132 zones on the western 66 x 50 of FH2's 104 x 50 hex grid (FH2:
   2,798). Outside every zone FH1 draws from the nearest one, which sees the place from afar: a
   spawn there had the road under the car invisible. The spawn is the start of the longest
@@ -116,7 +120,6 @@ archive member the same.
 - The launcher's import (this is the tool only).
 - Animated scenes (procedural type 5); the PDB's `CProceduralAnimatedScene` structs.
 - F&F's own audio; its game modes (events, the map's icons are Colorado's).
-- Traffic and AI on F&F's roads; collision surfaces 68 to 71 (F&F's RallyGrass, Dirt2, Dirt3,
-  RallyGravel), past the end of FH1's table.
+- Traffic and AI on F&F's roads.
 - The rest of FH2's map (the zones F&F cut away come from FH2's own world).
 - NVIDIA and Intel GPUs, Linux, macOS, ReGPU.

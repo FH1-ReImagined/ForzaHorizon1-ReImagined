@@ -554,6 +554,51 @@ def fh1_tile_name(member):
     return f"{m.group(1).lower()}-{m.group(3)}-{m.group(2)}.xds" if m else None
 
 
+def surface_names(physics_zip, tmp):
+    """The surface list of a game's physics.zip surfaceTypes.xml (a triangle's surface is its
+    number in it)."""
+    with zipfile.ZipFile(physics_zip) as z, open(physics_zip, "rb") as fh:
+        info = next(i for i in z.infolist() if i.filename.replace("\\", "/").lower() == "surfacetypes.xml")
+        xml = fm4_track_mod.member_data(physics_zip, z, info, fh, tmp).decode("utf-8", "replace")
+    return re.findall(r'<SurfaceType value="([^"]+)"', xml.split("</SurfaceTypesList>")[0])
+
+
+def surface_map(ff_names, fh1_names):
+    """{F&F's surface number: FH1's} for each surface whose number differs. F&F's first 68 are
+    FH1's; its four more (RallyGrass, Dirt2, Dirt3, RallyGravel) are past the end of FH1's
+    table: each becomes FH1's surface of its name without "Rally" and a trailing number."""
+    at = {n.lower(): i for i, n in enumerate(fh1_names)}
+    out = {}
+    for i, n in enumerate(ff_names):
+        j = at.get(n.lower())
+        if j is None:
+            j = at.get(re.sub(r"\d+$", "", re.sub(r"(?i)^rally", "", n)).lower())
+        if j is None:
+            raise ValueError(f"F&F's surface {n} ({i}) has no FH1 counterpart")
+        if j != i:
+            out[i] = j
+    return out
+
+
+def remap_fiz(d, surfaces):
+    """A collision cell file (.fiz: a 0x20 header, then FH1's cell, see fm4_col.py) with each
+    triangle's surface (flags 0xTTMM8000, MM) remapped. Unchanged if none is."""
+    if d[:4] != b"fiz " or len(d) < 0x30:
+        return d
+    nv, nt, hs, toff = struct.unpack_from(">4I", d, 0x20)
+    if hs != 0x90 or toff != hs + 16 * nv or 0x20 + toff + 32 * nt > len(d):
+        raise ValueError("a collision cell not in FH1's layout")
+    out = None
+    for k in range(nt):
+        at = 0x20 + toff + 32 * k
+        m = d[at + 1]
+        if m in surfaces:
+            if out is None:
+                out = bytearray(d)
+            out[at + 1] = surfaces[m]
+    return d if out is None else bytes(out)
+
+
 TRACK_SETTINGS_66 = ("CarGlowScale", "Particles", "TintColor", "ToneMapHighBumperExposure", "ToneMapHoodExposure")
 
 
@@ -732,6 +777,9 @@ def _build_into(ff_disc, fh1_disc, update_zip, out, fh2_disc):
         resources.callback(w.zip.close)
         collobjs = w.remove_closures(fh2_world) if fh2_world else None
         layout, zones, hexd, fmap, lookup = w.convert()
+        surfaces = surface_map(surface_names(os.path.join(ff_disc, "media", "physics.zip"), tmp),
+                               surface_names(os.path.join(fh1_disc, "media", "physics.zip"), tmp))
+        print("collision surfaces FH1 lacks:", surfaces)
         routes = w.route_map()
         for d, _, files in os.walk(src):
             rel = os.path.relpath(d, src)
@@ -765,6 +813,14 @@ def _build_into(ff_disc, fh1_disc, update_zip, out, fh2_disc):
                 else:
                     wr.add(info.filename, c)
                     w.report["procedural geometry files with dynamic data converted"] += 1
+            elif low.endswith(".fiz") and surfaces:
+                d = w.zip.read(info)
+                c = remap_fiz(d, surfaces)
+                if c is d:
+                    wr.add_raw(info.filename, info, w.zip.raw(info))
+                else:
+                    wr.add(info.filename, c)
+                    w.report["collision cells with surfaces FH1 lacks, remapped"] += 1
             elif low.endswith(".soundscape"):
                 wr.add(info.filename, SILENT_TILE)
                 w.report["soundscapes written silent"] += 1

@@ -287,6 +287,39 @@ class Lighting(unittest.TestCase):
             self.assertEqual(os.listdir(os.path.join(out, "colourgradingmaps")), ["amalfi.dds"])
 
 
+def fiz(surfaces):
+    """A collision cell file: the 0x20 header, then FH1's cell with one vertex and a triangle a
+    surface."""
+    nv, nt = 1, len(surfaces)
+    cell = bytearray(struct.pack(">4I", nv, nt, 0x90, 0x90 + 16 * nv) + bytes(0x90 - 16))
+    cell += struct.pack(">fffI", 1.0, 2.0, 3.0, 0)
+    for s in surfaces:
+        cell += struct.pack(">IIIIfffI", 0x0E008000 | s << 16, 0x90, 0x90, 0x90, 0.0, 1.0, 0.0, 0)
+    head = b"fiz " + struct.pack(">IIII", 1, len(cell), 0, 0) + bytes(12)
+    return head + bytes(cell) + b"tail"
+
+
+class Surfaces(unittest.TestCase):
+    FH1 = ["Asphalt", "Dirt", "Grass", "Gravel"]
+    FF = FH1 + ["RallyGrass", "Dirt2", "Dirt3", "RallyGravel"]
+
+    def test_map_by_name(self):
+        self.assertEqual(ff.surface_map(self.FF, self.FH1), {4: 2, 5: 1, 6: 1, 7: 3})
+        with self.assertRaises(ValueError):
+            ff.surface_map(self.FF + ["Lava"], self.FH1)
+
+    def test_cells_remapped(self):
+        d = fiz([0, 7, 2, 4])
+        out = ff.remap_fiz(d, {7: 3, 4: 2})
+        flags = [struct.unpack_from(">I", out, 0x20 + 0xA0 + 32 * k)[0] for k in range(4)]
+        self.assertEqual([(f >> 16) & 0xFF for f in flags], [0, 3, 2, 2])
+        self.assertEqual([f & 0xFF00FFFF for f in flags], [0x0E008000] * 4)
+        self.assertEqual(len(out), len(d))
+        self.assertTrue(out.endswith(b"tail"))
+        same = fiz([0, 1])
+        self.assertIs(ff.remap_fiz(same, {7: 3}), same)
+
+
 class Guards(unittest.TestCase):
     def test_reserved_names(self):
         for n in ("CON", "nul", "com1.txt", "LPT9.xml", "aux "):
