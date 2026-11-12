@@ -306,6 +306,13 @@ class CircuitStateTests(unittest.TestCase):
         self.assertEqual(result.removed, ('Alps',))
         self.assertEqual(self.states(), norm(*FH1_STATE, circuit('Suzuka')))
 
+    def test_the_rally_expansion_stays_and_a_circuit_matches_its_key_in_any_case(self):
+        rally = ('ColoradoDirt', LOCATION, b'D'*600, 2)
+        raw = container(body(class_state(*FH1_STATE, rally, circuit('TopGear'), circuit('Suzuka'))), 9000)
+        result = self.trim(raw, keep='topgear')
+        self.assertEqual(result.removed, ('Suzuka',))
+        self.assertEqual(self.states(), norm(*FH1_STATE, rally, circuit('TopGear')))
+
     def test_a_profile_the_game_cut_in_a_circuit_state_is_made_whole_again(self):
         full = body(class_state(*FH1_STATE, circuit('Suzuka'), circuit('TopGear', 3000)))
         raw = container(full, 3500)  # ends inside TopGear's state

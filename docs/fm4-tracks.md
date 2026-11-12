@@ -54,11 +54,12 @@ A start on a circuit:
   Colorado**): there is no car choice on a circuit yet.
 
 The game keeps a circuit's free-roam progress (its gas stations, flyers and discovered roads) in
-your profile, which has a fixed size: four circuits filled it and stopped the game right after
-the title screen. So before every start the launcher takes the other circuits' progress out of
-your profile again, after a backup, and keeps only Colorado's and the circuit you start. Your
+your profile, which has a fixed size: four circuits (three after the Rally expansion) filled it,
+and the game then stopped right after the title screen, in Colorado and on the circuits alike.
+So before every start the launcher takes the other circuits' progress out of your profile again,
+after a backup, and keeps only Colorado's, the Rally expansion's and the circuit you start. Your
 laps are not in the profile and stay. A profile that was already filled this way is repaired at
-the next start (its damaged copy stays in **Library > Saves**).
+the next start, with a message on the Play page (its damaged copy stays in **Library > Saves**).
 
 ## Time attack and your laps
 

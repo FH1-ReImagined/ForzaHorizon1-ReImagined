@@ -369,6 +369,8 @@ def _replace(profile, raw, edited, label, cancelled, progress):
 # screen. A played Colorado and three circuits fit; the fourth circuit does not. So before each
 # start the launcher takes the circuits' states out again (after a backup), keeping only the one
 # of the circuit being started, and gives a file the game already cut its readable form back.
+# FH1's own free-roam locations (TU4's Environments: Colorado, and ColoradoDirt from the Rally
+# expansion; the rest are test and menu scenes that keep no location state)
 FH1_LOCATIONS = frozenset(('Colorado', 'ColoradoDirt'))
 LOCATION_STATE = 'CHorizonLocationState'
 STATE_TRAILER = struct.pack('>II', 2, 0)
