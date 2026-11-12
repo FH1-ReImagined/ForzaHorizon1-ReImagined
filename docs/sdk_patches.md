@@ -736,13 +736,13 @@ in Colorado drives as before.
 ## ReIGlue 0530: the world AO's stencil request leaves the first shadow pass its textures (#823)
 
 With Ambient occlusion on (patch 0350), single frames showed the near ground, the road and everything close dark
-below a hard straight line, the far scenery lit; the next frame was normal. In a scripted race at the owner's
-settings (144 fps, render scale 2, FSR 3 balanced at 1080p, Ultra world detail, Softer shadows, AO High) that was
+below a hard straight line, the far scenery lit; the next frame was normal. In a scripted race at 144 fps, render scale 2,
+FSR 3 balanced at 1080p, Ultra world detail, Softer shadows and AO High, that was
 5-19 frames in every 7,520 captured, and none with AO off.
 
 0350 loads the depth pre-pass stencil's 8-bit view through fetch constant 31 from inside the frame's first
-`ApplyShadows` draw, after that draw's own texture request. When a memory watch had fired between the two (the
-game's CPU writes into watched texture memory many times a frame in a race), the borrowed request found
+`ApplyShadows` draw, after that draw's own texture request. When a memory watch had fired between the two (a
+watch callback runs on the guest CPU thread that wrote the memory, so it can come at any point of a draw), the borrowed request found
 `texture_became_outdated_`, ran `ResetTextureBindings()` (every binding cleared) and resolved only constant 31. The
 draw then bound null views for its tf0 (the scene depth) and tf1 (the nearest cascade's shadow map), so that one
 pass, the nearest cascade, wrote shadow over everything it covers: the straight line is the cascade's far edge.
@@ -774,5 +774,6 @@ live, AO High against Off cost the same (pin 147.5 against 151.9 fps, 0530 148.5
 the standing car's camera drifts, so the spread is a few fps).
 In `tools/render_test.py`'s six scenes (render scale 1) the darkening AO High adds over Off is the same with 0530
 as with the pin (race start: 1.6-1.7 against 1.5-1.6 of 255 on average, 5 % of the pixels by 8 or more, the
-contact shadow under the car among them), and the check gives the same results with both (the five scenes after
-the title differ from the 2026-11-02 baselines with either plugin, AO Off or High).
+contact shadow under the car among them), and the check fails the same way with both: freeroam_dawn, freeroam_midday and
+photo_mode differ from the 2026-11-02 baselines with either plugin, AO Off or High, and cockpit and race_start
+sit at their thresholds (the baselines need recording again).
