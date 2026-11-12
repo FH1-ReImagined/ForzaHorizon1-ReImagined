@@ -42,6 +42,11 @@ class Value:
 
 def fields(body):
     """Parse the bounded prefix completely; retain the unknown trailing bytes unchanged."""
+    return _fields(body)[0]
+
+
+def _fields(body):
+    """fields(body) and the offset where the field section ends."""
     position, total, found = 0, 0, {}
 
     def take(count):
@@ -95,7 +100,7 @@ def fields(body):
     tutorial = car_challenge_tutorial(body, position)
     if tutorial is not None:
         values[CAR_CHALLENGE_TUTORIAL] = tutorial
-    return values
+    return values, position
 
 
 def car_challenge_tutorial(body, start=0):
@@ -329,22 +334,211 @@ def apply(document, changes, cancelled=lambda: False, progress=lambda *_: None):
         edited = encode(document, changes)
         if edited == raw:
             return EditResult(None, document)
-        backup = saves._create(profile, 'Before profile edit', 'before-edit', cancelled, progress, 10)
+        backup = _replace(profile, raw, edited, 'Before profile edit', cancelled, progress)
+        return EditResult(backup, decode(profile, edited, ((document.aes_key, document.mac_key),)))
+
+
+def _replace(profile, raw, edited, label, cancelled, progress):
+    """Back the save up, then put `edited` in place of ForzaProfile if it still holds `raw`."""
+    backup = saves._create(profile, label, 'before-edit', cancelled, progress, 10)
+    saves._check(cancelled)
+    if _read(profile) != raw:
+        raise saves.SaveError('The save changed during backup. Reload it before editing.')
+    path = saves._inside(profile.folder/'ForzaProfile/ForzaProfile', profile.root)
+    temporary = path.with_name('.profile-edit-'+uuid.uuid4().hex)
+    try:
+        with temporary.open('xb') as writer:
+            writer.write(edited)
+            writer.flush()
+            os.fsync(writer.fileno())
         saves._check(cancelled)
         if _read(profile) != raw:
-            raise saves.SaveError('The save changed during backup. Reload it before editing.')
-        path = saves._inside(profile.folder/'ForzaProfile/ForzaProfile', profile.root)
-        temporary = path.with_name('.profile-edit-'+uuid.uuid4().hex)
+            raise saves.SaveError('The save changed before applying the edit. Reload it first.')
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    return backup
+
+
+# FM4 circuits in the profile (#850). A start on an imported FM4 circuit (#648) makes the game
+# keep a CHorizonLocationState for that circuit in ForzaProfile (its gas stations, flyers, barn
+# finds and road discovery, about 8 KB), next to Colorado's. ForzaProfile is a fixed container
+# (51,200 bytes of stream in a 51,208-byte file): the game's writer cuts what does not fit without
+# an error, the cut file fails its integrity check and the next start stops right after the title
+# screen. A played Colorado and three circuits fit; the fourth circuit does not. So before each
+# start the launcher takes the circuits' states out again (after a backup), keeping only the one
+# of the circuit being started, and gives a file the game already cut its readable form back.
+FH1_LOCATIONS = frozenset(('Colorado', 'ColoradoDirt'))
+LOCATION_STATE = 'CHorizonLocationState'
+STATE_TRAILER = struct.pack('>II', 2, 0)
+# Top-level entries whose names sort after the circuits' (the game writes them by name), with
+# their data in a profile that has not played them: what a cut through a circuit's state loses.
+LOST_DEFAULTS = {'TradingPaintChallenge': ('CSkillsFreeRoamChallengeState', 1, b'\0'*5),
+                 'WindFarmToNWCableCarStationBeaumontDaytime': ('CBasicChallengeState', 1, b'\0')}
+DAMAGED = ('Your save\'s profile (ForzaProfile) does not pass the game\'s integrity check, so the game '
+           'may close right after the title screen. In Library > Saves, restore a backup from before '
+           'it happened (Your backups, then Restore selected).')
+
+
+@dataclass(frozen=True)
+class CircuitTrim:
+    removed: tuple          # names of the circuits' states taken out
+    repaired: bool          # the file was cut at its container and is readable again
+    backup: saves.Snapshot | None
+    warning: str = ''       # nothing was changed; the player should know this
+
+    def note(self):
+        if self.warning:
+            return self.warning
+        if self.repaired:
+            return ('Repaired your save: the FM4 circuits had filled its profile, which stopped the game '
+                    'after the title screen. A backup of the damaged save is in Library > Saves.')
+        return ''
+
+
+def _states(body, salvaged=False):
+    """The top-level class-serialised entries after the field section.
+
+    Returns (start, lead, entries, rest, cut): entries are (name, class, version, data); rest is
+    what follows the last entry. In a `salvaged` body (the readable start of a profile the game
+    cut) cut is the (name, class) of the entry the end cuts through, as far as it is there, or
+    ('', '') after the last entry; otherwise it is None and a short body is an error."""
+    _values, start = _fields(body)
+    lead, count = struct.unpack_from('>II', body, start) if start + 8 <= len(body) else (0, 0)
+    if start + 8 > len(body) or count > 10000:
+        raise saves.SaveError('Unsupported profile class state.')
+    position, entries = start + 8, []
+
+    def text(at):
+        size = struct.unpack_from('>I', body, at)[0]
+        if not 0 < size <= 256:
+            raise saves.SaveError('Unsupported profile class state.')
+        if at + 4 + size > len(body):
+            raise struct.error('cut')
         try:
-            with temporary.open('xb') as writer:
-                writer.write(edited)
-                writer.flush()
-                os.fsync(writer.fileno())
-            saves._check(cancelled)
-            if _read(profile) != raw:
-                raise saves.SaveError('The save changed before applying the edit. Reload it first.')
-            os.replace(temporary, path)
-        finally:
-            if temporary.exists():
-                temporary.unlink()
-        return EditResult(backup, decode(profile, edited, ((document.aes_key, document.mac_key),)))
+            return body[at+4:at+4+size].decode('ascii'), at + 4 + size
+        except UnicodeError as exc:
+            raise saves.SaveError('Unsupported profile class state.') from exc
+
+    for _ in range(count):
+        name = cls = ''
+        try:
+            name, at = text(position)
+            cls, at = text(at)
+            version, size = struct.unpack_from('>II', body, at)
+            if at + 8 + size > len(body):
+                raise struct.error('cut')
+        except struct.error as exc:
+            if not salvaged:
+                raise saves.SaveError('The profile has a truncated class state.') from exc
+            return start, lead, entries, b'', (name, cls)
+        entries.append((name, cls, version, body[at+8:at+8+size]))
+        position = at + 8 + size
+    rest = body[position:]
+    if salvaged:
+        return start, lead, entries, b'', ('', '')
+    return start, lead, entries, rest, None
+
+
+def _salvage(raw, keys):
+    """A profile the game cut at its container: (body, aes, mac) of what is left, or None."""
+    used = struct.unpack_from('>I', raw, 4)[0] if len(raw) >= 76 and raw[:4] == b'cmss' else 0
+    if used != len(raw) - 8:
+        return None  # not at its container: damaged some other way
+    payload = raw[40:8+used]
+    length = reduce(operator.xor, struct.unpack_from('>5I', payload))
+    cipher = payload[20:20+(len(payload)-20)//16*16]
+    if not len(cipher) < length <= MAX_PROFILE:
+        return None
+    for aes_key, mac_key in keys:
+        ecb = _aes_tools().aes_decrypt(aes_key, cipher, cbc=False)
+        body = bytes(a ^ b for a, b in zip(ecb, payload[4:20]+cipher[:-16]))
+        try:
+            _fields(body)
+        except saves.SaveError:
+            continue
+        return body, aes_key, mac_key
+    return None
+
+
+def _seal(raw, body, aes_key, mac_key):
+    """`body` encrypted and signed into a container the size of `raw`, with raw's IV."""
+    iv = raw[44:60]
+    seed = struct.pack('>I', len(body) ^ reduce(operator.xor, struct.unpack('>4I', iv))) + iv
+    payload = seed + _encrypt_cbc(aes_key, body + b'\xbb'*(-len(body) % 16), iv)
+    sealed = b'cmss' + struct.pack('>I', len(payload)+32) + hmac.digest(mac_key, payload, 'sha256') + payload
+    if len(sealed) > len(raw):
+        raise saves.SaveError('The profile does not fit its file.')
+    sealed += b'\0' * (len(raw) - len(sealed))
+    if decode(None, sealed, ((aes_key, mac_key),)).body != body:
+        raise saves.SaveError('The rebuilt profile did not pass verification.')
+    return sealed
+
+
+def trimmed_states(body, keep='', salvaged=False):
+    """`body` without the FM4 circuits' location states (but `keep`'s); a `salvaged` (cut) one
+    made whole again. Returns (new body, removed names, repaired) or None when nothing changes."""
+    start, lead, entries, rest, cut = _states(body, salvaged)
+    removed = tuple(n for n, c, _v, _d in entries
+                    if c == LOCATION_STATE and n not in FH1_LOCATIONS and n.lower() != keep.lower())
+    if cut is not None:
+        name, cls = cut
+        # the cut must fall in a circuit's state (dropped whole) or after the last entry
+        if (name or cls) and (cls != LOCATION_STATE or name in FH1_LOCATIONS):
+            raise saves.SaveError('The profile was cut inside a part the launcher cannot rebuild.')
+        if name:
+            removed += (name,)
+        rest = STATE_TRAILER
+    elif not removed:
+        return None
+    kept = [e for e in entries if e[0] not in removed]
+    if cut is not None:
+        names = {e[0] for e in kept}
+        kept += [(n, c, v, d) for n, (c, v, d) in LOST_DEFAULTS.items() if n not in names]
+    kept.sort(key=lambda e: e[0].encode())
+    out = bytearray(body[:start] + struct.pack('>II', lead, len(kept)))
+    for name, cls, version, data in kept:
+        for text in (name, cls):
+            out += struct.pack('>I', len(text)) + text.encode('ascii')
+        out += struct.pack('>II', version, len(data)) + data
+    return bytes(out + rest), removed, cut is not None
+
+
+def trim_circuit_states(cfg, profile, keep='', cancelled=lambda: False, progress=lambda *_: None):
+    """Before a start: take the FM4 circuits' location states out of ForzaProfile (#850).
+
+    `keep` is the circuit being started (its state stays). Returns a CircuitTrim, or None when
+    the save needs nothing (or there is no profile, or no game files to read its keys from)."""
+    with saves.locked(profile):
+        saves._recover(profile)
+        try:
+            raw = _read(profile)
+        except FileNotFoundError:
+            return None
+        try:
+            keys = _keys(cfg)
+        except saves.SaveError:
+            return None
+        saves._check(cancelled)
+        salvaged = None
+        try:
+            document = decode(profile, raw, keys)
+            body, aes_key, mac_key = document.body, document.aes_key, document.mac_key
+        except saves.SaveError:
+            salvaged = _salvage(raw, keys)
+            if salvaged is None:
+                return CircuitTrim((), False, None, DAMAGED)
+            body, aes_key, mac_key = salvaged
+        try:
+            change = trimmed_states(body, keep, salvaged is not None)
+        except (saves.SaveError, struct.error):
+            # a readable profile in a layout this does not know is left alone
+            return None if salvaged is None else CircuitTrim((), False, None, DAMAGED)
+        if change is None:
+            return None
+        new_body, removed, repaired = change
+        edited = _seal(raw, new_body, aes_key, mac_key)
+        label = 'Before repairing the profile' if repaired else 'Before removing FM4 circuit data'
+        backup = _replace(profile, raw, edited, label, cancelled, progress)
+        return CircuitTrim(removed, repaired, backup)

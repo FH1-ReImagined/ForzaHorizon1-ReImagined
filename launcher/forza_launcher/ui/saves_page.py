@@ -1,13 +1,14 @@
 """Save management with all directory scans and file copies off the GUI thread."""
 from copy import deepcopy
 from datetime import datetime
+import struct
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
                                QMessageBox, QProgressBar, QPushButton, QSpinBox,
                                QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
-from .. import saves
+from .. import paths, save_editor, saves
 from ..fetch import Cancelled
 from ..installer import InstallError
 from .pages import open_folder, scroll_page
@@ -352,9 +353,27 @@ class SavesPage(QWidget):
 
         def prepare(task):
             if automatic:
-                return saves.create(profile, kind='automatic', keep=keep, cancelled=task.cancelled,
-                                    progress=self._copy_progress(task))
-            saves.recover(profile)
+                saves.create(profile, kind='automatic', keep=keep, cancelled=task.cancelled,
+                             progress=self._copy_progress(task))
+            else:
+                saves.recover(profile)
+            # the FM4 circuits' states out of the profile before it overflows (#850)
+            try:
+                return save_editor.trim_circuit_states(
+                    self.cfg, profile, getattr(plan, 'fm4_track', '') or '', task.cancelled,
+                    self._copy_progress(task))
+            except saves.Cancelled:
+                raise
+            except (saves.SaveError, OSError, ValueError, struct.error) as exc:
+                paths.log_error('check the save profile before the start', exc)
+                return None
 
-        self._run('Backing up saves…' if automatic else 'Checking saves…', prepare, lambda _: launch(),
+        def complete(trim):
+            note = trim.note() if trim is not None else ''
+            if note:  # before the start, so a start error still shows over it
+                self.message.setText(note)
+                self.window.play.show_message(note, True, keep=True)
+            launch()
+
+        self._run('Backing up saves…' if automatic else 'Checking saves…', prepare, complete,
                   abort_on_cancel=True)

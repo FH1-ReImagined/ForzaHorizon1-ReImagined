@@ -124,6 +124,29 @@ class SaveUITests(unittest.TestCase):
         self.assertEqual(launched, [True])
         self.assertIn('Disk full', self.win.play.warn.text())
 
+    def test_start_takes_fm4_circuit_states_out_and_still_starts_on_a_damaged_save(self):
+        from forza_launcher import save_editor
+        calls, launched = [], []
+        def trim(cfg, profile, keep, cancelled, progress):
+            calls.append((profile, keep))
+            return result
+        plan = SimpleNamespace(save_profile=self.profile, fm4_track='suzuka')
+        for result in (save_editor.CircuitTrim((), False, None, save_editor.DAMAGED),
+                       save_editor.CircuitTrim(('Alps',), True, None)):
+            with patch.object(save_editor, 'trim_circuit_states', side_effect=trim):
+                self.page.before_launch(plan, lambda: launched.append(True))
+                self.wait_done()
+            self.assertEqual(self.win.play.warn.text(), result.note())
+        self.assertEqual(calls, [(self.profile, 'suzuka')]*2)
+        self.assertEqual(launched, [True, True])
+        # a failure while checking the profile is logged and does not stop the start
+        with patch.object(save_editor, 'trim_circuit_states', side_effect=saves.SaveError('busy')), \
+                patch('forza_launcher.paths.log_error') as logged:
+            self.page.before_launch(SimpleNamespace(save_profile=self.profile), lambda: launched.append(True))
+            self.wait_done()
+        self.assertEqual(launched, [True]*3)
+        logged.assert_called_once()
+
     def test_cancel_and_close_wait_for_worker_and_never_launch(self):
         gate, started = threading.Event(), threading.Event()
         launched = []

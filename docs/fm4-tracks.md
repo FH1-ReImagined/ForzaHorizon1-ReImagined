@@ -53,6 +53,13 @@ A start on a circuit:
 - uses the car you last drove in Colorado. Choose it there first (play with **FH1's
   Colorado**): there is no car choice on a circuit yet.
 
+The game keeps a circuit's free-roam progress (its gas stations, flyers and discovered roads) in
+your profile, which has a fixed size: four circuits filled it and stopped the game right after
+the title screen. So before every start the launcher takes the other circuits' progress out of
+your profile again, after a backup, and keeps only Colorado's and the circuit you start. Your
+laps are not in the profile and stay. A profile that was already filled this way is repaired at
+the next start (its damaged copy stays in **Library > Saves**).
+
 ## Time attack and your laps
 
 Cross the start line to start a timed lap. The game's own HUD shows:

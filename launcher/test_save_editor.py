@@ -230,4 +230,132 @@ class EditorTests(unittest.TestCase):
         self.assertEqual(self.file.read_bytes(), b'written by another process')
 
 
+def entry(name, cls, data, version=1):
+    return b''.join(struct.pack('>I', len(t))+t.encode() for t in (name, cls))+struct.pack('>II', version, len(data))+data
+
+
+LOCATION = editor.LOCATION_STATE
+
+
+def class_state(*entries):
+    """The top-level class state after the fields: a lead word, the entries by name, a trailer."""
+    entries = sorted(entries, key=lambda e: e[0])
+    return struct.pack('>II', 2, len(entries))+b''.join(entry(*e) for e in entries)+editor.STATE_TRAILER
+
+
+FH1_STATE = (('Colorado', LOCATION, b'C'*900, 2), ('Player0', 'CPlayerState', b'P'*51, 13),
+             ('TradingPaintChallenge', 'CSkillsFreeRoamChallengeState', b'\1'*5),
+             ('WindFarmToNWCableCarStationBeaumontDaytime', 'CBasicChallengeState', b'\1'))
+
+
+def norm(*entries):
+    return sorted((e[0], e[1], e[2], e[3] if len(e) > 3 else 1) for e in entries)
+
+
+def circuit(name, size=800):
+    return (name, LOCATION, bytes([len(name)])*size, 2)
+
+
+def container(data, capacity):
+    """What the game writes: the stream signed and encrypted, cut at a fixed container like the
+    game's 51,200-byte ForzaProfile when it is too long (#850)."""
+    whole = profile_bytes(data)[:-len(b'untouched file capacity')]
+    if len(whole) <= capacity+8:
+        return whole+b'\0'*(capacity+8-len(whole))
+    cut = bytearray(whole[:capacity+8])
+    struct.pack_into('>I', cut, 4, capacity)
+    return bytes(cut)
+
+
+class CircuitStateTests(unittest.TestCase):
+    """FM4 circuits' location states fill the fixed ForzaProfile container (#850)."""
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        root = Path(self.temp.name).resolve()
+        self.profile = saves.Profile(root, root/'data', 'local', 'Fixture')
+        self.file = self.profile.folder/'ForzaProfile/ForzaProfile'
+        self.file.parent.mkdir(parents=True)
+        patcher = patch.object(editor, '_keys', return_value=((bytes(16), bytes(32)), KEYS))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def trim(self, raw, keep=''):
+        self.file.write_bytes(raw)
+        return editor.trim_circuit_states(None, self.profile, keep)
+
+    def states(self):
+        document = editor.decode(self.profile, self.file.read_bytes(), (KEYS,))
+        return [(n, c, d, v) for n, c, v, d in editor._states(document.body)[2]]
+
+    def test_circuit_states_leave_the_profile_after_a_backup_but_the_one_being_started(self):
+        raw = container(body(class_state(*FH1_STATE, circuit('Suzuka'), circuit('Alps'))), 8000)
+        result = self.trim(raw)
+        self.assertEqual(result.removed, ('Alps', 'Suzuka'))
+        self.assertFalse(result.repaired)
+        self.assertEqual(result.note(), '')
+        self.assertEqual((result.backup.path/'save/ForzaProfile/ForzaProfile').read_bytes(), raw)
+        self.assertEqual(self.states(), norm(*FH1_STATE))
+        after = self.file.read_bytes()
+        self.assertEqual(len(after), len(raw))
+        self.assertEqual(editor.decode(self.profile, after, (KEYS,)).body,
+                         body(class_state(*FH1_STATE)))
+        self.assertIsNone(self.trim(after))  # nothing left to take out: no backup, no write
+        self.assertEqual(len(saves.snapshots(self.profile)[0]), 1)
+        result = self.trim(raw, keep='suzuka')
+        self.assertEqual(result.removed, ('Alps',))
+        self.assertEqual(self.states(), norm(*FH1_STATE, circuit('Suzuka')))
+
+    def test_a_profile_the_game_cut_in_a_circuit_state_is_made_whole_again(self):
+        full = body(class_state(*FH1_STATE, circuit('Suzuka'), circuit('TopGear', 3000)))
+        raw = container(full, 3500)  # ends inside TopGear's state
+        with self.assertRaises(saves.SaveError): editor.decode(self.profile, raw, (KEYS,))
+        result = self.trim(raw)
+        self.assertTrue(result.repaired)
+        self.assertEqual(result.removed, ('Suzuka', 'TopGear'))
+        self.assertIn('Repaired your save', result.note())
+        self.assertEqual(result.backup.label, 'Before repairing the profile')
+        self.assertEqual((result.backup.path/'save/ForzaProfile/ForzaProfile').read_bytes(), raw)
+        # what came after the cut comes back as a profile that has not played it
+        defaults = [(n, c, d, v) for n, (c, v, d) in editor.LOST_DEFAULTS.items()]
+        self.assertEqual(self.states(), norm(*FH1_STATE[:2], *defaults))
+        self.assertEqual(editor.decode(self.profile, self.file.read_bytes(), (KEYS,)).values['Main/Credits'].value, 500)
+
+    def test_cuts_it_cannot_rebuild_and_other_damage_only_warn(self):
+        big = (('Player0', 'CPlayerState', b'P'*3000, 13),) + FH1_STATE[2:]
+        cases = {'cut in an FH1 entry': container(body(class_state(FH1_STATE[0], circuit('Alps'), *big)), 2500),
+                 'wrong signature': bytes(bytearray(profile_bytes(body(class_state(*FH1_STATE))))[:-200]
+                                          + b'\0'*200)}
+        tampered = bytearray(container(body(class_state(*FH1_STATE, circuit('Alps'))), 8000))
+        short = bytearray(tampered)
+        struct.pack_into('>I', short, 4, struct.unpack_from('>I', short, 4)[0]-16)
+        cases['short of its length, not at its container'] = bytes(short)
+        tampered[100] ^= 1
+        cases['tampered'] = bytes(tampered)
+        for name, raw in cases.items():
+            with self.subTest(name):
+                result = self.trim(raw)
+                self.assertEqual(result.note(), editor.DAMAGED)
+                self.assertIsNone(result.backup)
+                self.assertEqual(self.file.read_bytes(), raw)
+        self.assertEqual(saves.snapshots(self.profile), ([], 0))
+
+    def test_unfamiliar_layouts_missing_files_and_missing_keys_are_left_alone(self):
+        raw = profile_bytes()  # readable, but its class state is not the game's
+        self.assertIsNone(self.trim(raw))
+        self.assertEqual(self.file.read_bytes(), raw)
+        self.file.unlink()
+        self.assertIsNone(editor.trim_circuit_states(None, self.profile))
+        self.file.write_bytes(raw)
+        with patch.object(editor, '_keys', side_effect=saves.SaveError('Choose your FH1 game files')):
+            self.assertIsNone(self.trim(container(body(class_state(*FH1_STATE, circuit('Alps'))), 8000)))
+        self.assertEqual(saves.snapshots(self.profile), ([], 0))
+
+    def test_game_lock_blocks_the_trim(self):
+        self.file.write_bytes(container(body(class_state(*FH1_STATE, circuit('Alps'))), 8000))
+        with saves.locked(self.profile):
+            with self.assertRaises(saves.SaveError):
+                editor.trim_circuit_states(None, self.profile)
+
+
 if __name__ == '__main__': unittest.main()
