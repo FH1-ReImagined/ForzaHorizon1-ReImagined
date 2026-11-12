@@ -277,6 +277,28 @@ class PhysdefTests(unittest.TestCase):
         self.assertGreater(r["half_extents"][0], 1.3)
 
 
+class ManifestTests(unittest.TestCase):
+    def test_the_version_is_what_made_the_import(self):
+        # #853: the launcher's version (and commit from source), not a fixed "1"
+        try:
+            import tomllib
+        except ImportError:
+            self.skipTest("no tomllib")
+        m = tomllib.loads(fm4_cars.mod_manifest(12, True, '0.1.0 (abc1234) "x"'))
+        self.assertEqual(m["name"], "FM4 cars")
+        self.assertEqual(m["version"], '0.1.0 (abc1234) "x"')
+        self.assertIn("12 Forza Motorsport 4 cars", m["description"])
+        self.assertIn("and DLC", m["description"])
+        self.assertEqual(tomllib.loads(fm4_cars.mod_manifest(1, False, None))["version"], "1")
+
+    def test_on_its_own_the_script_names_its_commit(self):
+        done = mock.Mock(returncode=0, stdout="abc1234\n")
+        with mock.patch.object(fm4_cars.subprocess, "run", return_value=done):
+            self.assertEqual(fm4_cars.source_version(), "source abc1234")
+        with mock.patch.object(fm4_cars.subprocess, "run", side_effect=OSError("no git")):
+            self.assertEqual(fm4_cars.source_version(), "1")
+
+
 class StringTableTests(unittest.TestCase):
     def table(self):
         t = fm4_cars.StringTable()

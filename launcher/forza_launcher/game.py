@@ -111,16 +111,23 @@ def game_version(game: GameInstall | None) -> str:
         m = re.search(r"Built from commit (\w+)", text)
         if m:
             return "build " + m.group(1)
-    if paths.in_checkout():
-        try:
-            out = subprocess.run(["git", "-C", str(paths.REPO_ROOT), "rev-parse", "--short", "HEAD"],
-                                 capture_output=True, text=True, timeout=5,
-                                 env=cleanenv.clean_environment())
-            if out.returncode == 0 and out.stdout.strip():
-                return "source build " + out.stdout.strip()
-        except (OSError, subprocess.SubprocessError):
-            pass
+    commit = source_commit()
+    if commit:
+        return "source build " + commit
     return "unknown build"
+
+
+def source_commit() -> str:
+    """The checkout's short commit when the launcher runs from source, else ""."""
+    if not paths.in_checkout():
+        return ""
+    try:
+        out = subprocess.run(["git", "-C", str(paths.REPO_ROOT), "rev-parse", "--short", "HEAD"],
+                             capture_output=True, text=True, timeout=5,
+                             env=cleanenv.clean_environment())
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return out.stdout.strip() if out.returncode == 0 else ""
 
 
 def installed_dlc(cfg: Config) -> int:
