@@ -1014,6 +1014,10 @@ def _update_root(cfg):
     from .config import render_toml
     install, _ = game_module.find_game(cfg)
     update = game_module.update_data_root(cfg, install, render_toml(cfg)) if install else None
+    if not update or not update.is_dir():
+        # With no managed update directory, Play leaves the root unset and the TU4
+        # game defaults to a sibling of its game-data directory.
+        update = Path(os.path.abspath(cfg.game_files())).parent / "tu4"
     extra = game_module.split_args(cfg.advanced.get("extra_args", ""))
     for i, arg in enumerate(extra):
         if arg.startswith("--update_data_root="):

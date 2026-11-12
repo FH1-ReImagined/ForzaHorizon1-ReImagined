@@ -129,6 +129,43 @@ DISC2 = {"default.xex": xex(fm4cars.FM4_TITLE), "media/x.bin": b"x",
          "content/0000000000000000/4d530910/00000002/4d53091000000001": b"pack"}
 
 
+class UpdateRootTests(unittest.TestCase):
+    def test_source_build_default_and_explicit_precedence(self):
+        from forza_launcher import game
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = Config(root / "launcher.json")
+            cfg.d["game_root"] = str(root / "game")
+            runtime = root / "runtime"
+            install = game.GameInstall(runtime, runtime / game.EXE)
+            sibling = root / "tu4"
+            sibling.mkdir()
+            (sibling / "media.zip").write_bytes(b"tu4")
+            with patch.object(game, "find_game", return_value=(install, [])):
+                self.assertEqual(fm4cars._update_root(cfg), sibling)
+                cfg.d["game_root"] = str(root / "unused" / ".." / "game")
+                self.assertEqual(fm4cars._update_root(cfg), sibling)
+                (sibling / "media.zip").unlink()
+                self.assertIsNone(fm4cars._update_root(cfg))
+                (sibling / "media.zip").write_bytes(b"tu4")
+
+                managed = runtime / "update"
+                managed.mkdir(parents=True)
+                self.assertIsNone(fm4cars._update_root(cfg))  # Play selects this empty directory
+                (managed / "media.zip").write_bytes(b"managed")
+                self.assertEqual(fm4cars._update_root(cfg), managed)
+
+                explicit = root / "explicit update"
+                explicit.mkdir()
+                (explicit / "media.zip").write_bytes(b"explicit")
+                for arg in (f'"--update_data_root={explicit}"', f'--update_data_root "{explicit}"'):
+                    cfg.advanced["extra_args"] = arg
+                    self.assertEqual(fm4cars._update_root(cfg), explicit)
+                (explicit / "media.zip").unlink()
+                self.assertIsNone(fm4cars._update_root(cfg))
+
+
 class FakeConverter:
     runs = []
 
