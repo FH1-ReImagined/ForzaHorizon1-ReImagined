@@ -554,6 +554,58 @@ def fh1_tile_name(member):
     return f"{m.group(1).lower()}-{m.group(3)}-{m.group(2)}.xds" if m else None
 
 
+TRACK_SETTINGS_66 = ("CarGlowScale", "Particles", "TintColor", "ToneMapHighBumperExposure", "ToneMapHoodExposure")
+
+
+def track_settings_64(xml):
+    """F&F's TrackSettings.xml (version 66) as FH1's version 64: the five elements FH1's has not
+    taken out. FH1 given version 66 lit the world black with the car blown out white at any hour;
+    as 64, F&F's own lighting files draw it right (and so did Colorado's settings with them)."""
+    if '<TrackSettings Version="64">' in xml:
+        return xml
+    if '<TrackSettings Version="66">' not in xml:
+        raise ValueError("TrackSettings.xml: version 66 expected")
+    xml = xml.replace('<TrackSettings Version="66">', '<TrackSettings Version="64">')
+    for tag in TRACK_SETTINGS_66:
+        xml = re.sub(r"[ \t]*<%s\b[^>]*/>[ \t]*\r?\n" % tag, "", xml)
+        xml = re.sub(r"[ \t]*<%s\b[^>]*>.*?</%s>[ \t]*\r?\n" % (tag, tag), "", xml, flags=re.S)
+    return xml
+
+
+def hold_time_of_day(ribbon_dir):
+    """The ribbon's own time-of-day curves held at fm4_pvs.TOD's minutes (13:00), as FM4's circuits'."""
+    for name in fm4_pvs.TOD_FILES:
+        path = os.path.join(ribbon_dir, name)
+        if not os.path.exists(path):
+            continue
+        with open(path, encoding="utf-8", errors="replace") as f:
+            xml = f.read()
+        if fm4_pvs.TOD not in ("off", "keep") and "<TOD" in xml:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(fm4_pvs.hold_time_of_day(xml, float(fm4_pvs.TOD)))
+
+
+def missing_grading_maps(ff_post, fh1_post, out_dir, tmp):
+    """The colour grading maps F&F's post-processing names that FH1's dynamicpost.zip has not
+    (amalfi.dds), as mod files."""
+    with zipfile.ZipFile(fh1_post) as z:
+        have = {i.filename.replace("\\", "/").lower() for i in z.infolist()}
+    n = 0
+    dst_dir = os.path.join(out_dir, "colourgradingmaps")
+    with zipfile.ZipFile(ff_post) as z, open(ff_post, "rb") as fh:
+        for i in z.infolist():
+            name = i.filename.replace("\\", "/").lower()
+            base = name[len("colourgradingmaps/"):]
+            if (not name.startswith("colourgradingmaps/") or not base.endswith(".dds") or name in have
+                    or not re.fullmatch(r"[a-z0-9_ ]+\.dds", base) or reserved_name(base)):
+                continue
+            os.makedirs(dst_dir, exist_ok=True)
+            with open(os.path.join(dst_dir, base), "wb") as f:
+                f.write(fm4_track_mod.member_data(ff_post, z, i, fh, tmp))
+            n += 1
+    return n
+
+
 def map_background(fh1_disc, fh2_disc, mod, tmp):
     """The full map's background: FH2's art (the same world coordinates as F&F's; F&F's own tiles
     are FH2's western ones darkened outside its area, its others a developer map), under FH1's
@@ -756,14 +808,18 @@ def _build_into(ff_disc, fh1_disc, update_zip, out, fh2_disc):
                 shutil.copyfile(os.path.join(audio_src, n), os.path.join(audio_dst, n))
         shutil.copyfile(os.path.join(audio_src, "Ribbon_00", "ColoradoRibbon_00.xml"),
                         os.path.join(audio_dst, "ribbon_00", f"{NAME}ribbon_00.xml".lower()))
-        # lighting: Colorado's, the time of day held as FM4's circuits get it. With F&F's own the
-        # scene is black and the car blown out at any hour.
-        for f in ("ColorGradingLookup.dds", "ColorGradingLookup_Night.dds", "TrackSettings.xml",
-                  os.path.join("Ribbon_00", "PostProcessingZones_Safe.xml")):
-            shutil.copyfile(os.path.join(colorado, f), os.path.join(out_track, f))
-        fm4_pvs.write_time_of_day(fh1_disc, rb)
-        copy_member(os.path.join(fh1_disc, "media", "dynamicpost.zip"), "tracks/colorado/",
-                    os.path.join(mod, "media", "dynamicpost", "tracks", NAME.lower()), tmp)
+        # lighting: F&F's own (grading lookups, post-processing zones and templates, time of day
+        # held as FM4's circuits get it), with its track settings as FH1's version
+        ts = os.path.join(out_track, "TrackSettings.xml")
+        with open(ts, "rb") as f:
+            settings = f.read().decode("utf-8", "replace")
+        with open(ts, "w", encoding="utf-8", newline="") as f:
+            f.write(track_settings_64(settings))
+        hold_time_of_day(rb)
+        ff_post = os.path.join(ff_disc, "media", "dynamicpost.zip")
+        copy_member(ff_post, f"tracks/{NAME.lower()}/", os.path.join(mod, "media", "dynamicpost", "tracks", NAME.lower()), tmp)
+        print("grading maps FH1 lacks:", missing_grading_maps(ff_post, os.path.join(fh1_disc, "media", "dynamicpost.zip"),
+                                                               os.path.join(mod, "media", "dynamicpost"), tmp))
         # two files every FH1 ribbon has and this one lacks
         ribbon = os.path.join(colorado, "Ribbon_00")
         have = {n.lower() for n in os.listdir(rb)}

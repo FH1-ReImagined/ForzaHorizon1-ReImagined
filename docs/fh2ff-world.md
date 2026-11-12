@@ -64,9 +64,12 @@ wrong picture:
 - **Audio.** F&F's sound banks are FH2's FMOD project and its soundscapes name them by number:
   a ribbon file naming a missing bank ended the load. The zones' sound bank entries are left out,
   the soundscapes written silent, and Colorado's audio stands in, as for FM4's circuits.
-- **Lighting.** With F&F's own track settings, grading lookups, post-processing zones and
-  time-of-day curves the scene is black and the car blown out white at any hour. Colorado's
-  stand in, the time of day held as for FM4's circuits (`fm4_pvs.write_time_of_day`).
+- **Lighting.** F&F's own: its grading lookups, post-processing zones and templates (and the one
+  grading map they name that FH1 has not, `amalfi.dds`), its time-of-day curves held as for FM4's
+  circuits. Its `TrackSettings.xml` is version 66, FH1's 64: given 66, FH1 lit the world black
+  with the car blown out white at any hour. Without the five elements FH1's has not
+  (`CarGlowScale`, `Particles`, `TintColor`, `ToneMapHighBumperExposure`, `ToneMapHoodExposure`)
+  and marked 64, it lights right (found by laying F&F's files over Colorado's one set at a time).
 - **Spawn.** F&F streams 1,132 zones on the western 66 x 50 of FH2's 104 x 50 hex grid (FH2:
   2,798). Outside every zone FH1 draws from the nearest one, which sees the place from afar: a
   spawn there had the road under the car invisible. The spawn is the start of the longest
@@ -112,7 +115,7 @@ archive member the same.
 
 - The launcher's import (this is the tool only).
 - Animated scenes (procedural type 5); the PDB's `CProceduralAnimatedScene` structs.
-- F&F's own audio and lighting; its game modes (events, the map's icons are Colorado's).
+- F&F's own audio; its game modes (events, the map's icons are Colorado's).
 - Traffic and AI on F&F's roads; collision surfaces 68 to 71 (F&F's RallyGrass, Dirt2, Dirt3,
   RallyGravel), past the end of FH1's table.
 - The rest of FH2's map (the zones F&F cut away come from FH2's own world).

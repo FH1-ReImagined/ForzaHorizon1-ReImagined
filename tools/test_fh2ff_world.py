@@ -260,6 +260,33 @@ class RoadNetwork(unittest.TestCase):
             ff.spawn_of(n, lambda x, z: False)
 
 
+class Lighting(unittest.TestCase):
+    def test_track_settings_as_64(self):
+        v66 = ('<TrackSettings Version="66">\r\n  <SkyboxIndex value="1"/>\r\n  <CarGlowScale value="2.0"/>\r\n'
+               '  <TintColor r="1" g="1" b="1"/>\r\n  <Particles>\r\n    <A value="1"/>\r\n  </Particles>\r\n'
+               '  <ToneMapHoodExposure value="1"/>\r\n  <ToneMapHighBumperExposure value="1"/>\r\n'
+               '  <WorldClear r="0.026"/>\r\n</TrackSettings>\r\n')
+        v64 = ff.track_settings_64(v66)
+        self.assertEqual(v64, '<TrackSettings Version="64">\r\n  <SkyboxIndex value="1"/>\r\n'
+                              '  <WorldClear r="0.026"/>\r\n</TrackSettings>\r\n')
+        self.assertEqual(ff.track_settings_64(v64), v64)
+        with self.assertRaises(ValueError):
+            ff.track_settings_64('<TrackSettings Version="70">')
+
+    def test_missing_grading_maps(self):
+        with tempfile.TemporaryDirectory() as d:
+            mine, theirs = os.path.join(d, "ff.zip"), os.path.join(d, "fh1.zip")
+            with zipfile.ZipFile(mine, "w") as z:
+                z.writestr("ColourGradingMaps/Amalfi.dds", b"amalfi")
+                z.writestr("ColourGradingMaps/Night.dds", b"night")
+                z.writestr("ColourGradingMaps/../evil.dds", b"no")
+            with zipfile.ZipFile(theirs, "w") as z:
+                z.writestr("ColourGradingMaps/Night.dds", b"fh1 night")
+            out = os.path.join(d, "out")
+            self.assertEqual(ff.missing_grading_maps(mine, theirs, out, d), 1)
+            self.assertEqual(os.listdir(os.path.join(out, "colourgradingmaps")), ["amalfi.dds"])
+
+
 class Guards(unittest.TestCase):
     def test_reserved_names(self):
         for n in ("CON", "nul", "com1.txt", "LPT9.xml", "aux "):
