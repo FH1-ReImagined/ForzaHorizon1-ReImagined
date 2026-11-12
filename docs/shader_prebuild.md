@@ -593,18 +593,27 @@ game must be built and use Vulkan.
    cache root of the launch plan: `--cache_root`, else `<user data root>/cache`).
 3. Start the game with the launch plan plus `--shader_prebuild_only=true` and follow its
    `SHADER_WARMUP` lines (`shader_warmup.Monitor`): the progress bar fills once per pipeline
-   cache (twice with split rendering). Cancel terminates the game.
+   cache (twice with split rendering). Cancel terminates the game. This run also writes the
+   **shader pack** (ReIGlue 0600, the native renderer's M1, [native-renderer.md](native-renderer.md#m1-shaders-translated-at-build-time)):
+   the SPIR-V of every stored and listed shader it translated, for this GPU and these settings,
+   in `shaders/translated/<title>.<key>.vk.xspv` of each pipeline cache (about 22 MB for the
+   list). Later starts take their shaders from it instead of translating them; the game uses a
+   pack only when its own build wrote it for its exact configuration. Advanced > *Keep
+   translated shaders* (`vulkan_shader_pack`) off: no pack.
 4. Write a stamp (`launcher.json` beside the files): launcher version, list SHA-1, GPU
    plugin size and time, the arguments that choose the stores (`--gpu_backend`,
    `--render_target_path_vulkan`, `--fh1_upscaler`, `--fh1_scene_720p_native_hud`,
-   `--fh1_native_scene_scale`, `--fh1_output_width/height`, `--resolution_scale`) and the
-   driver cache files (`shaders/local/*.vkpc`, named after the GPU and driver).
+   `--fh1_native_scene_scale`, `--fh1_output_width/height`, `--resolution_scale`), the
+   driver cache files (`shaders/local/*.vkpc`, named after the GPU and driver), whether the
+   pack was on and the packs this run wrote.
 
-The card shows Optional, Done (pipelines and time), or Recommended with the reason: the
-graphics settings changed, the launcher or the game (plugin) was updated, or the driver
-changed (the SDK deletes the driver cache file of an earlier driver of the same GPU, so the
-stamp's files are gone). Every start imports the list anyway; the step only moves the
-compile out of play and the first start.
+The card shows Optional, Done (pipelines, "their shaders translated" when the pack is there,
+and time), or Recommended with the reason: the graphics settings changed, the launcher or the
+game (plugin) was updated, the driver changed (the SDK deletes the driver cache file of an
+earlier driver of the same GPU, so the stamp's files are gone), the translated shaders were
+deleted, or the pack setting was off at the last prebuild and is on now. Every start imports
+the list anyway; the step only moves the compile out of play and the first start, and the
+translation out of every start.
 
 The step refuses to run when `--user_data_root` or `--cache_root` is given twice (the
 launcher's own plus one in Advanced > extra arguments): the game then ignores its path

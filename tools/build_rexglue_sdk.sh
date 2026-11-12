@@ -74,11 +74,13 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # and 0510: shader analysis skips undefined fetch opcodes and execs past the microcode's end (#808),
 # and 0500-0502: the guest views right on 16 and 64 KB pages, MAP_FIXED_NOREPLACE, ARM64 CI (#788),
 # and identical Vulkan driver cache blobs stored once (ReIGlue #53; the cache file format moves to v3).
-# and 0530: the world AO's stencil request no longer leaves the first shadow pass with null textures (#823).
+# and 0530: the world AO's stencil request no longer leaves the first shadow pass with null textures (#823),
+# and 0570-0600: the PM4 trace and rexglue-shaders (build options, off), the start's shader
+# translations on several threads, and the shader pack Prebuild shaders writes (native renderer M0, M1).
 # A reviewed full commit can be pinned before a maintainer publishes a tag.
 # When a tag is supplied, its target must still match this immutable commit.
 REIGLUE_TAG=
-REIGLUE_COMMIT=ff03a0f4ff8cea7faf2df1d3240c79e023113522  # ReIGlue main (0450-0452, 0470-0471, 0480, 0490, 0500-0502, 0510, #53) and 0530 (#823)
+REIGLUE_COMMIT=99e17e2c3b21da374c9ac86ad3a20b0de46db698  # ReIGlue main: to 0530 and 0570-0600 (#57)
 REIGLUE_URL="${REIGLUE_URL:-https://github.com/FH1-ReImagined/ReIGlue}"
 NIGHTLY="${REXSDK_NIGHTLY:-$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64}"
 SRC="${REXSDK_SRC:-$HOME/rexglue-sdk-src-forza/sdk}"

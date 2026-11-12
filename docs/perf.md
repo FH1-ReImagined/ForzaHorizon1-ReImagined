@@ -4184,3 +4184,107 @@ follow what is in view, not the build, and the verify run above found no cache h
 **Not merged.** 0540 is kept on a ReIGlue branch (`perf/0540-binding-lookups`) as a reference. The recorder's
 next candidates from the same profile are structural, not lookups: skipping the draw-state work for register
 groups the decoder saw unchanged (#607 item 2) and the recorder's idle time at each frame start (item 5).
+
+## Native renderer baselines (M0, 2026-11-12)
+
+The numbers the native renderer's milestones are measured against ([native-renderer.md](native-renderer.md)), on the
+test PC (Ryzen 7 7800X3D, 8 cores, RX 9060 XT, RADV, Mesa 26.2.1): main `8d4831bf` with ReIGlue `ff03a0f`, the build
+folder without its `forza.toml` (the game's defaults), 1280x720 window, render scale 1, no upscaler, world AO off,
+a copy of the TU4 test save, a scratch user data folder, audio muted, no other game running and the benchmark lock
+held for each timed run. CPU is each thread's run time (schedstat) over the measured window, in ms a frame.
+
+**Benchmark** (the built-in race, `--frame_rate=240`, the race's own 60 s window):
+
+| Run | fps | 1% low | p99 ms | All threads | Command processor (decoder) | GPU recorder | Vulkan submission |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 170.7 | 99.3 | 8.38 | 18.2 | 2.61 | 4.59 | 1.76 |
+| 2 | 178.1 | 108.8 | 7.81 | 18.0 | 2.63 | 4.50 | 1.80 |
+| 3 | 182.0 | 127.9 | 7.14 | 17.7 | 2.60 | 4.36 | 1.75 |
+| 4 | 167.8 | 116.6 | 7.59 | 18.8 | 2.75 | 4.80 | 1.88 |
+| Mean | **174.6** (sd 6.5) | 113.2 | 7.73 | 18.2 | 2.65 | 4.56 | 1.80 |
+
+**GPU** (`--fh1_gpu_profile=10`, two more benchmark runs at 170.3 and 161.7 fps, the 10 s windows 2-6, ms a frame):
+busy 4.80 and 4.83; the guest draws (render passes) 2.60 and 2.63; render target transfers 0.80 and 0.80; loads of
+textures (mostly resolved targets) 0.65 and 0.65; resolves 0.64 and 0.64; uploads 0.09. The draws are 54% of the GPU's
+busy time; transfers, resolves and their reloads 44%, the share a renderer without EDRAM aims at.
+
+**Free roam** (the save's spawn point, the car standing, 60 s from 90 s after the start):
+
+| Run | Frame rate | fps | p99 ms | Draws | All threads | Command processor (decoder) | GPU recorder | Vulkan submission |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 30-1 | 30 | 30.0 | 33.9 | 3,289 | 20.3 | 1.90 | 3.53 | 1.57 |
+| 30-2 | 30 | 30.0 | 33.8 | 3,436 | 21.0 | 1.97 | 3.60 | 1.60 |
+| 240-1 | 240 | 233.8 (at the cap) | 6.32 | 3,373 | 14.0 | 1.81 | 3.39 | 1.53 |
+| 240-2 | 240 | 234.2 (at the cap) | 6.30 | 3,396 | 14.2 | 1.79 | 3.44 | 1.52 |
+
+At 30 fps the game's own threads take more per frame (the audio mixer and the workers run per second, not per frame).
+
+**What the command processor reads** (the D3D and PM4 traces, `FORZA_D3D_TRACE` with ReIGlue 0570, 30 fps, 1,800
+frames each; counted, not timed):
+
+| | Dwords a frame | Packets a frame | Draw packets | Written by D3D | Foreign lists with SET_CONSTANT | Other foreign lists |
+| --- | --- | --- | --- | --- | --- | --- |
+| Benchmark race | 1,308,537 | 122,886 | 4,889 | 51.7% dw, 28.3% pk, 37.6% draws | 24.1%, 41.4%, 26.8% | 24.2%, 30.2%, 35.6% |
+| Free roam | 855,324 | 82,984 | 3,514 | 47.4%, 28.0%, 36.5% | 23.5%, 37.2%, 24.3% | 29.0%, 34.7%, 39.2% |
+
+RunCommandBuffer (`sub_824469B0`) launches the foreign lists: 1,258 of 1,273 runs a frame in the race (735 with
+SET_CONSTANT, 523 without), 720 of 735 in free roam; the other 15 a frame are `sub_8249F310`'s game-recorded buffers
+(675 dwords). So every class of foreign list enters through the two functions the native layer replaces.
+
+**Shaders:** the game's own SPIR-V (`--dump_shaders`, the race above: 501 translations) is byte-identical to
+`rexglue-shaders translate` with the configuration line from the same log. The shipped prebuild list's 2,156 pairs
+translate in 0.78 s on one thread, identical twice; the game's 6,359 shader blobs, one modification each, in 1.9 s.
+
+**Render test:** baselines recorded on this build (`tools/render_test.py record`, three sessions, kept on the test PC)
+and a check against them: 6/6 scenes pass (title 0.0091, free roam midday 0.0001, dawn 0.0016, cockpit 0.0001,
+photo mode 0.0059, race start 0.0029 dssim). Sessions 2 and 3 of the recording are the same picture (0.0000 at noon);
+session 1 caught another moment of the free roam scenes (0.0172 at noon), so the recorded noise is over the tolerance
+in four scenes although each check takes the closest frames.
+
+## Native renderer M1: shaders translated at build time (2026-11-12)
+
+ReIGlue 0590 (the start's translations on several threads) and 0600 (the shader pack the Prebuild shaders run
+writes; [native-renderer.md](native-renderer.md#m1-shaders-translated-at-build-time)), against main's plugin, on the
+same PC and setup as the M0 baselines above (main's game build, no `forza.toml`, benchmark lock held, no other game
+running). Every run starts from its own copy of one cache root: the shipped prebuild list's files (launcher step 1-2),
+then one prebuild-only run of the M1 plugin (which wrote the pack) and one start to the title (warm driver and Mesa
+caches). The warm-up then translates 1,496 pairs (the list's 1,489 for this cache and 7 stored ones) and creates
+2,254 pipelines. Times are from the log: "SHADER_WARMUP: Vulkan begin" to the first pipeline (the stores, the list
+import and the translations), and the whole warm-up.
+
+| Warm start, 3 runs each (interleaved) | Translation | Begin to first pipeline | Shader warm-up |
+| --- | --- | --- | --- |
+| A: main (one thread) | | 631, 632, 660 ms | 664, 667, 699 ms (and 660, 671, 680 in the benchmark runs) |
+| D: M1, pack off, one thread (`--vulkan_shader_translation_threads=1`) | 554, 567, 574 ms | 588, 596, 603 ms | 618, 627, 636 ms |
+| B: M1, pack off (`--vulkan_shader_pack=false`), 6 threads | 109, 111, 111 ms | 139, 140, 147 ms | 169, 175, 177 ms |
+| C: M1 with the pack (an earlier 0600: 1,489 from it, 7 translated) | 44, 46, 46 ms | 73, 75, 75 ms | 104, 107, 110 ms (and 105, 106, 107) |
+| Second session, A: main | | 627, 635, 657 ms | 659, 667, 689 ms |
+| Second session, C: M1 as committed (all 1,496 from the pack) | 48, 50, 55 ms | 77, 79, 88 ms | 109, 113, 121 ms |
+
+- The pack: 22.1 MB for 1,496 translations (1,036 distinct modules, 63.9 MB of SPIR-V). The prebuild-only run
+  translated them in 115-126 ms on 6 threads and wrote the pack in 57-59 ms.
+- C's translation step reads the GPU plugin's file for the pack's identity (once a process), reads the 22 MB,
+  checks four random pairs by translating them again (together 10-18 ms), then decodes the modules and makes the
+  shader modules on 6 threads; the 30 ms before it are the stores and the list import, unchanged.
+- `rexglue-shaders check-pack --plugin` over the pack the game wrote, with the configuration line of the same log:
+  all 1,496 translations byte-identical to a fresh translation, bindings included.
+- Fallback, each from a copy of the same cache, to the title: no pack ("none for this configuration", 140 ms of
+  translation); another configuration's pack (render scale 2) under this configuration's name ("written by another
+  build or for another configuration"); a truncated pack ("damaged"); one damaged module ("translating it", the
+  other 1,495 from the pack); a forged pack (this plugin's identity, render scale 2 SPIR-V, 979 of 1,496 modules
+  different): refused at three of three starts ("differs from this build's translation"). With the checked pairs
+  at fixed positions instead of random ones, that forged pack had been used twice.
+
+**Play** (the benchmark race, `--frame_rate=240`, from the same cache copy; C is the earlier 0600 of the first session):
+
+| Run | fps (A main / C M1) | 1% low | p99 ms | Shaders translated in play | Pipelines created in play |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 187.7 / 184.2 | 125.2 / 129.6 | 7.19 / 7.19 | 0 / 0 | 12 / 12 |
+| 2 | 191.2 / 179.8 | 130.1 / 126.1 | 7.02 / 7.34 | 0 / 0 | 12 / 12 |
+| 3 | 166.6 / 198.2 | 106.7 / 127.5 | 8.10 / 7.07 | 0 / 0 | 12 / 12 |
+| Mean | 181.8 / 187.4 | 120.7 / 127.7 | 7.44 / 7.20 | | |
+
+The list covers every shader of the race, so play translated nothing with either plugin, and the gain is at start
+only, as expected: a pair the warm-up does not need is not in the pack either (the pack is the warm-up of the
+prebuild run). Frames over 33 ms (loading): 11, 12, 11 and 13, 12, 16.
+

@@ -26,6 +26,7 @@
 // compares pointers. Other players' cars online (kind 2) and CPU drivers never match.
 // tu_address_map: TU4 addresses
 
+#include "../debug/d3d_trace.h"
 #include "../platform/cockpit_gauges.h"
 #include "../platform/guest_addr.h"
 #include "../platform/guest_memory.h"
@@ -145,6 +146,7 @@ extern "C" REX_FUNC(DrawCarModel) {
 
 // r3 = the shader constant shadow the model is drawn with, r4 = the model.
 extern "C" REX_FUNC(DrawModelNow) {
+  FORZA_D3D_TRACE_SCOPE(DrawModelNow);  // RunCommandBuffer in the D3D trace
   if (!drawing_cockpit) {
     OriginalDrawModelNow(ctx, base);
     return;
