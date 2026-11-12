@@ -116,6 +116,22 @@ class HelperTests(unittest.TestCase):
             for line in r.stdout.split():
                 self.assertTrue(Path(line).is_relative_to(real), line)
 
+    def test_stage_build_leaves_the_players_settings_out(self):
+        # The launcher writes the player's forza.toml next to the executable, where the SDK reads it.
+        with tempfile.TemporaryDirectory() as t:
+            build = Path(t) / "build"
+            (build / "texcompress").mkdir(parents=True)
+            for name in ("forza", "librexgpu-xenos.so", "forza.toml"):
+                (build / name).write_text(name)
+            if os.name != "nt":
+                (build / "update").symlink_to(build / "texcompress")
+            game = rt.stage_build(build, Path(t) / "game")
+            self.assertEqual(sorted(p.name for p in game.iterdir()), ["forza", "librexgpu-xenos.so"])
+            self.assertEqual((game / "forza").read_text(), "forza")
+            (build / "forza").unlink()
+            with self.assertRaises(ValueError):
+                rt.stage_build(build, Path(t) / "game2")
+
     def test_scenes_file(self):
         cfg = rt.load_cfg()
         captured = {s.split()[1] for sess in cfg["session"] for s in sess["steps"]
