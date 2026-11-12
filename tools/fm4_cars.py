@@ -1026,6 +1026,19 @@ def check_import(fh1, mod, package=None):
     return problems
 
 
+# A traffic car's cut-down EngineTuning: its live (uncommented) exhaust, intake or engine ambient
+# slot names a Traffic_*_HT.xml (a few low loops only) or an NA_*_HT.xml (the NA.fsb placeholder).
+# FH1 keeps such a copy for some FM4 cars it cut as traffic cars (the 2006 Focus ST, the 2011 A4,
+# Spark and Volt, the 2009 xD), their real slots commented out or gone (#840).
+_COMMENT = re.compile(rb"<!--.*?-->", re.S)
+_TRAFFIC_SLOT = re.compile(rb'(?i)"(?:Traffic|NA)_(?:[^"]*_)?(?:Exh|Int|EngAmb)_HT\.xml"')
+
+
+def traffic_tuning(data):
+    """True when an EngineTuning file (bytes) is a traffic car's placeholder (_TRAFFIC_SLOT)."""
+    return bool(_TRAFFIC_SLOT.search(_COMMENT.sub(b"", data)))
+
+
 def louder_engine(data, gain=ENGINE_GAIN):
     """An EngineTuning file (bytes) with its GlobalCarVolume curve's y values times gain (at
     most ENGINE_VOLUME_MAX); everything else is left as it is."""
@@ -1735,8 +1748,10 @@ class Converter:
         (CarModelTuning, EngineTuning) of most FM4 cars; what it lacks is taken from FM4's copy
         (its audio/cars archives, and a DLC pack's own tuning files and sound banks for its cars).
         The EngineTuning of an engine no FH1 car uses goes into the mod at FH1's level
-        (louder_engine, #712). A tuning or sound bank that no file given has raises ConvertError:
-        the game stops with its disc read error where it misses one (#776)."""
+        (louder_engine, #712): FH1's copy, else FM4's, and FM4's where FH1's is a traffic car's
+        placeholder and FM4's is not (traffic_tuning, #840). A tuning or sound bank that no file
+        given has raises ConvertError: the game stops with its disc read error where it misses
+        one (#776)."""
         self._audio_sources()
         wanted = [("cmt", car_name + "_CMT.xml")] + [("et", e + "_ET.xml") for e in engine_names]
         plan, hts = [], []
@@ -1749,10 +1764,17 @@ class Converter:
                 # FH1's level (ENGINE_GAIN), in the mod, which outranks every archive.
                 if engine in self._louder_done:
                     continue
-                src = fh_src or self._fm_audio[kind].get(fname.lower())
+                fm_src = self._fm_audio[kind].get(fname.lower())
+                src = fh_src or fm_src
                 if not src:
                     continue
                 data = Member(ZIPS.get(src[0]), src[0], src[1]).read()
+                if fh_src and fm_src and traffic_tuning(data):
+                    # FH1's copy is a cut traffic car's (#840): FM4's own, unless it is one too
+                    # (the electric Volt's), with FM4's harmonic tuning, all of it FH1's too
+                    fm_data = Member(ZIPS.get(fm_src[0]), fm_src[0], fm_src[1]).read()
+                    if not traffic_tuning(fm_data):
+                        data, fh_src = fm_data, None
                 plan.append(("louder", rel, louder_engine(data), None if fh_src else fname))
                 if fh_src:
                     continue  # FH1's tuning names FH1's harmonic tuning and banks
