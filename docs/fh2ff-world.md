@@ -119,8 +119,12 @@ wrong picture:
   their developer name (F&F's string ids are not in FH1's tables). Their route files take FH1's names: an arena's edge
   `Arena_NN` is `route_boundary_NN`, a race gets `post_race_location_NN` (from F&F's
   `end_position_NN`, else its start places), and every facing is a unit vector (F&F's are 2 to 4
-  long). F&F's AI lines (`aiopenworld.zip`, OWTM version 2 in segments; FH1 reads version 1) are
-  not converted: AI racers have no line on these routes.
+  long). Their AI lines (`aiopenworld.zip`'s `RouteNNNN.owt`) are OWTM version 2: a table of
+  segments (first waypoint, the next segment, the other at a branch, the count) over 48-byte
+  waypoints (position, the vector across the road, -0.5, 0.5, the racing line). FH1 reads
+  version 1, one line: the tool follows the main chain from the first segment (looped when it
+  comes back to it) into `media/aiopenworld/anthem/ribbon_00/route_NNN.owt` in the mod (F&F: 86
+  lines, 24 looped; the largest step between points 19 m).
 - **Spawn.** F&F streams 1,132 zones on the western 66 x 50 of FH2's 104 x 50 hex grid (FH2:
   2,798). Outside every zone FH1 draws from the nearest one, which sees the place from afar: a
   spawn there had the road under the car invisible. The spawn is the start of the longest
@@ -188,6 +192,6 @@ archive member the same.
   the TU4 image to look through) or the world moved 3 km west (every placement, the hex grid,
   the collision cells and index, the road network, the ribbon's XML) is the next step.
 - F&F's places in FH2's world (its airfield, docks): one world or the other for now.
-- Races and arenas in a lobby (their data is in: see above); the AI lines (OWTM version 2); the
-  routes' own names (FH1 shows the developer's).
+- Races and arenas in a lobby, and AI racers on the converted lines (the data is in: see above);
+  the routes' own names (FH1 shows the developer's); a route's branches (its main line only).
 - NVIDIA and Intel GPUs, Linux, macOS, ReGPU.

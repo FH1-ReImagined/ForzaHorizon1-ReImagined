@@ -639,6 +639,64 @@ def add_world_routes(db, rows):
     return dict(counts)
 
 
+NONE = 0xDEADBEEF
+
+
+def owt2_line(d):
+    """An FH2 AI line (OWTM version 2) as FH1's (version 1, fm4_routes.owt's points): ([(position,
+    the vector across the road, the racing line)], looped).
+
+    Version 2: the magic, 2 and 8 bytes; the segment count at 0x10; from 0x20 a 32-byte entry a
+    segment (its first waypoint, the next segment, the other one at a branch, DEADBEEF for none,
+    its waypoint count, its successors, 1, CAFEFEED); then 48-byte waypoints (position, the vector
+    across, then -0.5, 0.5, the racing line, 0) and the magic again. FH1's line is one: the main
+    chain from segment 0, looped when it comes back to it."""
+    if d[:4] != b"OWTM" or struct.unpack_from(">I", d, 4)[0] != 2:
+        raise ValueError("not an OWTM version 2 file")
+    n = struct.unpack_from(">I", d, 0x10)[0]
+    base = 0x20 + 32 * n
+    total = (len(d) - base - 16) // 48
+    if not n or total <= 0 or base + 48 * total + 16 != len(d):
+        raise ValueError("an OWTM version 2 file of an unexpected size")
+    segs = [struct.unpack_from(">8I", d, 0x20 + 32 * k) for k in range(n)]
+    pts, seen, k, looped = [], set(), 0, False
+    while k != NONE and k < n and k not in seen:
+        seen.add(k)
+        first, nxt, count = segs[k][0], segs[k][1], segs[k][4]
+        if first + count > total:
+            raise ValueError("an OWTM version 2 segment past the waypoints")
+        for i in range(first, first + count):
+            w = struct.unpack_from(">12f", d, base + 48 * i)
+            pts.append((w[0:3], w[4:7], w[10]))
+        looped = nxt == 0
+        k = nxt
+    return pts, looped
+
+
+def ai_lines(zip_path, route_ids, out_dir):
+    """The world's AI lines for its routes (aiopenworld.zip's <world>/Ribbon_00/RouteNNNN.owt) as
+    FH1's route_NNN.owt in out_dir (the mod's aiopenworld folder, laid over FH1's archive). A
+    line that does not read is left out. Returns the counts."""
+    counts = collections.Counter()
+    if not os.path.isfile(zip_path):
+        return dict(counts)
+    with Archive(zip_path) as z:
+        for info in z.infos:
+            m = re.fullmatch(r"(?i)[^/]+/ribbon_00/route(\d+)\.owt", info.filename.replace("\\", "/"))
+            if not m or int(m.group(1)) not in route_ids:
+                continue
+            try:
+                pts, looped = owt2_line(z.read(info))
+            except ValueError:
+                counts["not read"] += 1
+                continue
+            os.makedirs(out_dir, exist_ok=True)
+            with open(os.path.join(out_dir, f"route_{int(m.group(1)):03d}.owt"), "wb") as f:
+                f.write(fm4_routes.owt(pts, looped))
+            counts["looped" if looped else "point to point"] += 1
+    return dict(counts)
+
+
 STREAM_CAP = 65536   # the game's cap on streaming blocks (hooks/fm4_track.cpp kMaxBlocks)
 LANE = 2.0   # metres right of a road's centre line: the middle of its right-hand lane
 
@@ -1116,6 +1174,8 @@ def _build_into(ff_disc, fh1_disc, update_zip, out, fh2_disc):
                 with open(path, "w", encoding="utf-8", newline="") as f:
                     f.write(new)
         print("races and arenas (Tracks rows by configuration):", add_world_routes(db, routes))
+        print("AI lines:", ai_lines(os.path.join(ff_disc, "media", "aiopenworld.zip"), {r["RouteId"] for r in routes},
+                                    os.path.join(mod, "media", "aiopenworld", NAME.lower(), "ribbon_00")))
         db.commit()
         gamemodes = os.path.join(mod, "media", "gamemodes", NAME.lower())
         count = copy_member(os.path.join(fh1_disc, "media", "gamemodes.zip"), "colorado/", gamemodes, tmp)

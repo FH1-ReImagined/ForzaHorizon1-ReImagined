@@ -326,6 +326,40 @@ class Routes(unittest.TestCase):
         self.assertEqual(root.find("NamedTransforms/NamedTransform[@name='post_race_location_00']/Transform")
                          .get("pos.x"), "5")       # no end position: the start place
 
+    @staticmethod
+    def owt2(segments, points):
+        """An OWTM version 2 file: segments as (first, next, count), points as x positions."""
+        b = b"OWTM" + struct.pack(">3I", 2, 0, 0) + struct.pack(">4I", len(segments), 0, 0, 0)
+        for first, nxt, count in segments:
+            b += struct.pack(">8I", first, nxt, ff.NONE, ff.NONE, count, 1, 1, 0xCAFEFEED)
+        for x in points:
+            b += struct.pack(">12f", x, 1.0, 2.0, 0.0, 0.0, 0.0, 6.0, 0.0, -0.5, 0.5, x / 100.0, 0.0)
+        return b + b"OWTM" + struct.pack(">3I", 2, 0, 0)
+
+    def test_ai_line_version_2(self):
+        # two segments in a loop, a branch segment off it (not in the main chain)
+        d = self.owt2([(0, 1, 2), (2, 0, 2), (4, ff.NONE, 1)], [0, 2, 4, 6, 50])
+        pts, looped = ff.owt2_line(d)
+        self.assertTrue(looped)
+        self.assertEqual([p[0][0] for p in pts], [0, 2, 4, 6])
+        self.assertEqual(pts[1][:2], ((2.0, 1.0, 2.0), (0.0, 0.0, 6.0)))
+        self.assertAlmostEqual(pts[1][2], 0.02, places=6)   # the racing line (float32)
+        pts, looped = ff.owt2_line(self.owt2([(0, ff.NONE, 3)], [0, 2, 4]))
+        self.assertFalse(looped)
+        back, back_looped = fm4_routes.read_owt(fm4_routes.owt(pts, looped))
+        self.assertEqual((len(back), back_looped), (3, False))
+        with self.assertRaises(ValueError):
+            ff.owt2_line(d[:-20])
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "aiopenworld.zip")
+            with zipfile.ZipFile(src, "w") as z:
+                z.writestr("anthem/Ribbon_00/Route12.owt", d)
+                z.writestr("anthem/Ribbon_00/Route13.owt", d)      # no Tracks row: left out
+                z.writestr("anthem/Ribbon_00/Route3001.owt", b"OWTM" + b"\0" * 40)   # does not read
+            out = os.path.join(tmp, "out")
+            self.assertEqual(ff.ai_lines(src, {12, 3001}, out), {"looped": 1, "not read": 1})
+            self.assertEqual(os.listdir(out), ["route_012.owt"])
+
     def test_rows_with_a_route_file(self):
         import sqlite3
         with tempfile.TemporaryDirectory() as tmp:
