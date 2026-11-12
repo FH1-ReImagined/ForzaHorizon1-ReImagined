@@ -295,6 +295,7 @@ class CircuitStateTests(unittest.TestCase):
         self.assertFalse(result.repaired)
         self.assertEqual(result.note(), '')
         self.assertEqual((result.backup.path/'save/ForzaProfile/ForzaProfile').read_bytes(), raw)
+        self.assertEqual(result.backup.kind, 'automatic')  # rotated: a trim can come with every start
         self.assertEqual(self.states(), norm(*FH1_STATE))
         after = self.file.read_bytes()
         self.assertEqual(len(after), len(raw))
@@ -322,15 +323,29 @@ class CircuitStateTests(unittest.TestCase):
         self.assertEqual(result.removed, ('Suzuka', 'TopGear'))
         self.assertIn('Repaired your save', result.note())
         self.assertEqual(result.backup.label, 'Before repairing the profile')
+        self.assertEqual(result.backup.kind, 'before-edit')  # the damaged copy is never rotated away
         self.assertEqual((result.backup.path/'save/ForzaProfile/ForzaProfile').read_bytes(), raw)
         # what came after the cut comes back as a profile that has not played it
         defaults = [(n, c, d, v) for n, (c, v, d) in editor.LOST_DEFAULTS.items()]
         self.assertEqual(self.states(), norm(*FH1_STATE[:2], *defaults))
         self.assertEqual(editor.decode(self.profile, self.file.read_bytes(), (KEYS,)).values['Main/Credits'].value, 500)
 
+    def test_the_start_backup_is_not_copied_again_for_the_trim(self):
+        raw = container(body(class_state(*FH1_STATE, circuit('Suzuka'))), 8000)
+        self.file.write_bytes(raw)
+        started = saves.create(self.profile, kind='automatic', keep=3)
+        result = editor.trim_circuit_states(None, self.profile, keep_automatic=3)
+        self.assertEqual(result.removed, ('Suzuka',))
+        self.assertEqual(result.backup.path, started.path)
+        self.assertEqual(len(saves.snapshots(self.profile)[0]), 1)
+
     def test_cuts_it_cannot_rebuild_and_other_damage_only_warn(self):
         big = (('Player0', 'CPlayerState', b'P'*3000, 13),) + FH1_STATE[2:]
+        sponsor = ('SponsorshipState', 'CSponsorshipState', b'S'*871)
+        before = body(class_state(*FH1_STATE, circuit('Silverstone', 3000), sponsor))
         cases = {'cut in an FH1 entry': container(body(class_state(FH1_STATE[0], circuit('Alps'), *big)), 2500),
+                 # a circuit that sorts before FH1 entries the cut lost (SponsorshipState)
+                 'cut in a circuit before FH1 entries': container(before, 3000),
                  'wrong signature': bytes(bytearray(profile_bytes(body(class_state(*FH1_STATE))))[:-200]
                                           + b'\0'*200)}
         tampered = bytearray(container(body(class_state(*FH1_STATE, circuit('Alps'))), 8000))

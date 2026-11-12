@@ -338,9 +338,9 @@ def apply(document, changes, cancelled=lambda: False, progress=lambda *_: None):
         return EditResult(backup, decode(profile, edited, ((document.aes_key, document.mac_key),)))
 
 
-def _replace(profile, raw, edited, label, cancelled, progress):
+def _replace(profile, raw, edited, label, cancelled, progress, kind='before-edit', keep=10):
     """Back the save up, then put `edited` in place of ForzaProfile if it still holds `raw`."""
-    backup = saves._create(profile, label, 'before-edit', cancelled, progress, 10)
+    backup = saves._create(profile, label, kind, cancelled, progress, keep)
     saves._check(cancelled)
     if _read(profile) != raw:
         raise saves.SaveError('The save changed during backup. Reload it before editing.')
@@ -378,6 +378,10 @@ STATE_TRAILER = struct.pack('>II', 2, 0)
 # their data in a profile that has not played them: what a cut through a circuit's state loses.
 LOST_DEFAULTS = {'TradingPaintChallenge': ('CSkillsFreeRoamChallengeState', 1, b'\0'*5),
                  'WindFarmToNWCableCarStationBeaumontDaytime': ('CBasicChallengeState', 1, b'\0')}
+# The last, by name, of FH1's own top-level entries that are not in LOST_DEFAULTS: a cut that comes
+# before it (in a circuit that sorts earlier, such as Silverstone) lost real progress like the
+# SponsorshipState, so that profile is only warned about, never rebuilt without it.
+LAST_REBUILT_ENTRY = 'SteelworksToKHOutpostNighttime'
 DAMAGED = ('Your save\'s profile (ForzaProfile) does not pass the game\'s integrity check, so the game '
            'may close right after the title screen. In Library > Saves, restore a backup from before '
            'it happened (Your backups, then Restore selected).')
@@ -489,6 +493,11 @@ def trimmed_states(body, keep='', salvaged=False):
         # the cut must fall in a circuit's state (dropped whole) or after the last entry
         if (name or cls) and (cls != LOCATION_STATE or name in FH1_LOCATIONS):
             raise saves.SaveError('The profile was cut inside a part the launcher cannot rebuild.')
+        # all after the cut is gone: only circuits and LOST_DEFAULTS may sort there (the cut entry
+        # sorts after the last whole one when even its name was cut)
+        reached = name or (entries[-1][0] if entries else '')
+        if reached.encode() < LAST_REBUILT_ENTRY.encode():
+            raise saves.SaveError('The profile was cut before parts the launcher cannot rebuild.')
         if name:
             removed += (name,)
         rest = STATE_TRAILER
@@ -507,11 +516,15 @@ def trimmed_states(body, keep='', salvaged=False):
     return bytes(out + rest), removed, cut is not None
 
 
-def trim_circuit_states(cfg, profile, keep='', cancelled=lambda: False, progress=lambda *_: None):
+def trim_circuit_states(cfg, profile, keep='', cancelled=lambda: False, progress=lambda *_: None,
+                        keep_automatic=10):
     """Before a start: take the FM4 circuits' location states out of ForzaProfile (#850).
 
     `keep` is the circuit being started (its state stays). Returns a CircuitTrim, or None when
-    the save needs nothing (or there is no profile, or no game files to read its keys from)."""
+    the save needs nothing (or there is no profile, or no game files to read its keys from).
+    A plain trim is backed up as an automatic backup (the same as the one the start just made,
+    so no second copy, and rotated like the others: a trim can come with every start); a repair
+    keeps its damaged copy as a before-edit backup, which is never rotated away."""
     with saves.locked(profile):
         saves._recover(profile)
         try:
@@ -541,6 +554,9 @@ def trim_circuit_states(cfg, profile, keep='', cancelled=lambda: False, progress
             return None
         new_body, removed, repaired = change
         edited = _seal(raw, new_body, aes_key, mac_key)
-        label = 'Before repairing the profile' if repaired else 'Before removing FM4 circuit data'
-        backup = _replace(profile, raw, edited, label, cancelled, progress)
+        if repaired:
+            backup = _replace(profile, raw, edited, 'Before repairing the profile', cancelled, progress)
+        else:
+            backup = _replace(profile, raw, edited, 'Before removing FM4 circuit data', cancelled,
+                              progress, 'automatic', keep_automatic)
         return CircuitTrim(removed, repaired, backup)

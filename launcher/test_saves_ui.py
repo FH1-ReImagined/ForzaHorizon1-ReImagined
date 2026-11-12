@@ -127,8 +127,8 @@ class SaveUITests(unittest.TestCase):
     def test_start_takes_fm4_circuit_states_out_and_still_starts_on_a_damaged_save(self):
         from forza_launcher import save_editor
         calls, launched = [], []
-        def trim(cfg, profile, keep, cancelled, progress):
-            calls.append((profile, keep))
+        def trim(cfg, profile, keep, cancelled, progress, keep_automatic):
+            calls.append((profile, keep, keep_automatic))
             return result
         plan = SimpleNamespace(save_profile=self.profile, fm4_track='suzuka')
         for result in (save_editor.CircuitTrim((), False, None, save_editor.DAMAGED),
@@ -137,7 +137,8 @@ class SaveUITests(unittest.TestCase):
                 self.page.before_launch(plan, lambda: launched.append(True))
                 self.wait_done()
             self.assertEqual(self.win.play.warn.text(), result.note())
-        self.assertEqual(calls, [(self.profile, 'suzuka')]*2)
+        keep = self.page.cfg.d['save_manager']['keep_automatic']
+        self.assertEqual(calls, [(self.profile, 'suzuka', keep)]*2)
         self.assertEqual(launched, [True, True])
         # a failure while checking the profile is logged and does not stop the start
         with patch.object(save_editor, 'trim_circuit_states', side_effect=saves.SaveError('busy')), \

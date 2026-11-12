@@ -361,7 +361,7 @@ class SavesPage(QWidget):
             try:
                 return save_editor.trim_circuit_states(
                     self.cfg, profile, getattr(plan, 'fm4_track', '') or '', task.cancelled,
-                    self._copy_progress(task))
+                    self._copy_progress(task), keep_automatic=keep)
             except saves.Cancelled:
                 raise
             except (saves.SaveError, OSError, ValueError, struct.error) as exc:
