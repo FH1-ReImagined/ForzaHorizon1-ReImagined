@@ -1640,8 +1640,9 @@ def fix_pass_groups(data):
 # other group's place the load faults as it does with bit 28 (Suzuka's lines as transparent,
 # Infineon's road detail as opaque): the GPU reads at an address nothing has patched
 # (physical 0x20000000, the end of memory). So the buffer's own blend state has to agree
-# with the flag (it does on every decal model of FM4's Disc 1): a model where it does not is
-# left undrawn rather than risked. The mirror and cube map groups stay where they are, unused.
+# with the flag, set before each of its draws (it does on every decal model of FM4's Disc 1):
+# a model where it does not, or where the scan cannot tell, is left undrawn rather than
+# risked. The mirror and cube map groups stay where they are, unused.
 # FM4_PVS_DECALS=0 leaves the decals undrawn, as before.
 DECALS = os.environ.get("FM4_PVS_DECALS", "1") == "1"
 DECAL_GROUPS = frozenset(range(2, 21, 3))
@@ -1651,6 +1652,7 @@ DECAL_SLOT = {0x4: 12, 0x2: 13}
 if os.environ.get("FM4_PVS_DECAL_BLENDED", "1") != "1":
     del DECAL_SLOT[0x2]
 NO_BLEND = 0x00010001  # RB_BLENDCONTROL0 (register 0x2201): source one, destination zero
+PM4_DRAWS = frozenset((0x22, 0x36))  # type-3 opcodes (bits 8-14): DRAW_INDX, DRAW_INDX_2
 # RB_DEPTHCONTROL (register 0x2200) of a decal buffer drawn in the opaque pass, the bits
 # cleared and the bits set: FM4's 0x082082E3 tests the depth without writing it, a state for
 # a pass that comes after the road. In FH1's opaque pass the road may come after its lines,
@@ -1668,12 +1670,41 @@ DECAL_DEPTHS = {"1": (0, 0x00000004), "0": (0, 0), "stencil": (0x00700700, 0x007
 DECAL_DEPTH = DECAL_DEPTHS.get(os.environ.get("FM4_PVS_DECAL_DEPTH", "1"), DECAL_DEPTHS["1"])
 
 
-def decal_group_to(data, slot=12):
-    """The model file of a decal model with its main pass's decal group (14) in the place of
-    group slot (12 opaque, 13 transparent), and for 12 that group's buffer writing the depth
-    (DECAL_DEPTH); None for any other model, for one whose buffer blends in the
-    opaque pass or does not in the transparent one, and for one whose header or buffer is not
-    laid out as expected."""
+def _pm4_type3_registers(buf, at, w):
+    """The registers the type-3 packet at offset at of buf writes, as the command processor
+    reads it: SET_CONSTANT and LOAD_ALU_CONSTANT (from memory) of registers (the kind word's
+    bits 16-23 4: from 0x2000 + its low 11 bits), SET_CONSTANT2 and SET_SHADER_CONSTANTS (from
+    the word's low 16 bits), REG_RMW and COND_WRITE to a register; every register for an
+    INDIRECT_BUFFER (a buffer not read here) or one of these too short for its words. An
+    empty range for the others."""
+    op, n = (w >> 8) & 0x7F, (w >> 16) & 0x3FFF       # n + 1 data words
+    d = struct.unpack_from(f">{n + 1}I", buf, at + 4)
+    every = range(0x10000)
+    if op == 0x2D:                                     # SET_CONSTANT: kind, values
+        kind, size = d[0], n
+    elif op == 0x2F:                                   # LOAD_ALU_CONSTANT: address, kind, size
+        if n < 2:
+            return every
+        kind, size = d[1], d[2] & 0xFFF
+    elif op in (0x55, 0x56):                           # SET_CONSTANT2, SET_SHADER_CONSTANTS
+        return range(d[0] & 0xFFFF, (d[0] & 0xFFFF) + n)
+    elif op == 0x21:                                   # REG_RMW: register, and, or
+        return range(d[0] & 0x1FFF, (d[0] & 0x1FFF) + 1)
+    elif op == 0x45:                                   # COND_WRITE: ..., register, value
+        if n < 5:
+            return every
+        return range(0) if d[0] & 0x100 else range(d[4], d[4] + 1)  # bit 8: to memory
+    elif op in (0x37, 0x3F):                           # INDIRECT_BUFFER_PFD, INDIRECT_BUFFER
+        return every
+    else:
+        return range(0)
+    first = 0x2000 + (kind & 0x7FF)
+    return range(first, first + size) if (kind >> 16) & 0xFF == 4 else range(0)
+
+
+def decal_model(data):
+    """(the .fx header's place, the header, the 21 pass groups) of a decal model's file: its
+    groups parse, group 14 is filled, and no group but DECAL_GROUPS; None for any other."""
     k = data.rfind(b".fx")
     if k < 0:
         return None
@@ -1689,6 +1720,23 @@ def decal_group_to(data, slot=12):
     filled = [i for i, x in enumerate(g) if x[2] or any(x[3])]
     if 14 not in filled or not set(filled) <= DECAL_GROUPS:
         return None
+    return p, head, g
+
+
+def decal_group_to(data, slot=12):
+    """The model file of a decal model with its main pass's decal group (14) in the place of
+    group slot (12 opaque, 13 transparent), and for 12 that group's buffer writing the depth
+    (DECAL_DEPTH). None for any other model, and for a decal model whose buffer is not the
+    pass's: an RB_BLENDCONTROL0 write of it blends in the opaque pass or does not in the
+    transparent one, a draw comes before any (it would take the state the buffer drawn before
+    it left), or RB_BLENDCONTROL0 or RB_DEPTHCONTROL is written in a way the scan does not
+    read (a type-0 packet to one register, a type-3 packet). Also None for either slot when
+    the buffer has no RB_DEPTHCONTROL write, although only slot 12 patches it, and when the
+    header or the buffer is not laid out as expected."""
+    m = decal_model(data)
+    if m is None:
+        return None
+    p, head, g = m
     # the areas after the groups (the layout above insert_fetch_constant, and its checks)
     pop = [x for x in g if any(x[3])]
     if sum(x[3][0] for x in pop) != head[3] or sum(x[3][2] for x in pop) != head[5]:
@@ -1709,14 +1757,27 @@ def decal_group_to(data, slot=12):
     depth_at, blends = [], set()
     for at, w in packets:
         reg, count = w & 0x7FFF, ((w >> 16) & 0x3FFF) + 1
-        if w >> 30 or w & 0x8000:
+        if w >> 30 == 3:
+            if (w >> 8) & 0x7F in PM4_DRAWS:
+                if not blends:
+                    return None
+            else:
+                regs = _pm4_type3_registers(buf, at, w)
+                if 0x2200 in regs or 0x2201 in regs:
+                    return None
+            continue
+        if w >> 30:                                    # type 1 (registers below 0x800), type 2
+            continue
+        if w & 0x8000:                                 # every value to register reg
+            if reg in (0x2200, 0x2201):
+                return None
             continue
         if reg <= 0x2200 < reg + count:
             depth_at.append(at + 4 + 4 * (0x2200 - reg))
         if reg <= 0x2201 < reg + count:
             blends.add(struct.unpack_from(">I", buf, at + 4 + 4 * (0x2201 - reg))[0] != NO_BLEND)
-    # every draw of the buffer has to be of the pass's kind: none blends in the opaque one,
-    # all blend in the transparent one
+    # every draw of the buffer has to be of the pass's kind, by a blend write before it: none
+    # blends in the opaque one, all blend in the transparent one
     if not depth_at or blends != {slot == 13}:
         return None
     if slot == 12:
@@ -1730,8 +1791,8 @@ def decal_group_to(data, slot=12):
 def draw_decals(converted, bin_dir):
     """Has FH1 draw the decal models (see DECALS): each one's file in the track's bin folder
     gets its decal group in the place its instances are flagged for (over every ribbon of its
-    prefix). A decal model flagged both ways or neither, or whose buffer's blend state is not
-    the flag's, is left undrawn. The numbers of models drawn and left."""
+    prefix). A decal model (decal_model) flagged both ways or neither, or that decal_group_to
+    does not move for its flag, is left undrawn. The numbers of models drawn and left."""
     if not DECALS or FLAGS != "map":
         return 0, 0
     asked = {}
@@ -1745,13 +1806,13 @@ def draw_decals(converted, bin_dir):
             continue
         with open(path, "rb") as f:
             data = f.read()
-        outs = {slot: decal_group_to(data, slot) for slot in (12, 13)}
-        out = outs.get(DECAL_SLOT.get(next(iter(bits)))) if len(bits) == 1 else None
+        slot = DECAL_SLOT.get(next(iter(bits))) if len(bits) == 1 else None
+        out = decal_group_to(data, slot) if slot else None
         if out is not None:
             with open(path, "wb") as f:
                 f.write(out)
             done += 1
-        elif any(x is not None for x in outs.values()):
+        elif decal_model(data) is not None:
             left += 1
     return done, left
 
@@ -1841,7 +1902,8 @@ def convert_mod(mod, fh1_disc, loose):
     n_decals, n_left = draw_decals(converted, bin_dir)
     if n_decals or n_left:
         print(f"{track}: {n_decals} decal models (road lines, road edges) drawn in FH1's opaque and transparent passes"
-              + (f"; {n_left} left undrawn (flagged both ways, or their blend state is not their flag's)" if n_left else ""))
+              + (f"; {n_left} left undrawn (flagged both ways or neither, or their buffer's state or layout"
+                 " is not as their flag needs)" if n_left else ""))
     need = max(stream_blocks(c[2], c[4], c[5], bin_dir) for c in converted) if converted else 0
     order = archive_order(files + [zn for c in converted for zn in c[6]])
     index = {p: i for i, p in enumerate(order)}

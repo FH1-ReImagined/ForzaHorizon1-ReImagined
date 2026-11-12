@@ -1008,10 +1008,16 @@ Suzuka's road had no lines.
   groups keep their order, which the areas after them follow; the file keeps its size and
   nothing else in it moves. Groups 5, 8, 11 and 17 stay where they are (FH1 does not run them
   for these instances). A model is moved only if its buffer's own state is the pass's (no
-  draw of it blends for 12, every draw blends for 13: RB_BLENDCONTROL0) and its header's three
-  area sizes are the groups' sums, as `insert_fetch_constant` checks them; any other is left
-  undrawn and counted in the converter's line. On the 24 circuits the checks leave none of
-  the 6037 out (with and without them the same models moved, to the same bytes); and on
+  draw of it blends for 12, every draw blends for 13: RB_BLENDCONTROL0, written before the
+  buffer's first draw, which would otherwise take the state the buffer before it left), the
+  buffer writes RB_DEPTHCONTROL (for 13 too, though only 12 changes it) and writes neither
+  register in a way the scan does not read (a type-0 packet to one register, a type-3
+  packet such as SET_CONSTANT), and its header's three area sizes are the groups' sums, as
+  `insert_fetch_constant` checks them; any other decal model is left undrawn and counted in
+  the converter's line. On the 24 circuits the checks leave none of the 6037 out (with and
+  without them the same models moved, to the same bytes; the same for the stricter draw and
+  packet checks, on every model file for both slots: every draw of group 14, 7733, follows a
+  blend write, and no such packet writes either register); and on
   Suzuka's own files (`tools/test_fm4_decals.py` with `FM4_DISC` set) areas A and C stay byte
   for byte, the buffers change in their RB_DEPTHCONTROL words alone, and every area C fixup
   lands in a fetch constant write or a draw.
