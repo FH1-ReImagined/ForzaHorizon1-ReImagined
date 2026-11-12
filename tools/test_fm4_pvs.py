@@ -190,5 +190,69 @@ class StreamPool(unittest.TestCase):
         self.assertEqual(fm4_pvs.MAX_STREAM_BLOCKS, 65536)
 
 
+class GroundCopyInTheReach(unittest.TestCase):
+    """The ground's model copy (FM4_PVS_GROUND_LAYER=A, B or copy) is in every zone before its
+    file is written: the reach's fit check counts the size of the file it copies (#831)."""
+
+    def setUp(self):
+        for name, value in (("VISIBLE", False), ("SKY", False), ("GROUND", True),
+                            ("GROUND_LAYER", "copy"), ("STREAM_MARGIN", 1.0)):
+            p = mock.patch.object(fm4_pvs, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def convert(self, d, reach, cap=None):
+        """Small pieces (64 bytes each) and a 64 KB terrain piece, the ground's source, in d;
+        the reach chosen for a pool of cap blocks; the blocks the zones need once the copy is
+        written, and those they needed with the copy left out (as before #831)."""
+        rnd = random.Random(831)
+        points = [(rnd.uniform(0, 1200), rnd.uniform(0, 900)) for _ in range(400)]
+        F = synthetic_ribbon(points)
+        F["shaders"] = ["track\\terr_blnd_spec_a"]
+        F["models"].append({"extent": [60.0, 1.0, 60.0, 0.0], "textures": [], "shaders": [0],
+                            "matrix": [0.0] * 12 + [1150.0, 0.0, -850.0, 1.0]})
+        F["instances"].append({"pos": (0.0, 0.0, 0.0), "rot": [0x3C00, 0, 0, 0, 0x3C00, 0, 0, 0, 0xBC00],
+                               "model": len(points), "idx": 0, "u12": 0xFFFFFFFF, "flags": 0,
+                               "lod": 0, "v16": 0, "u32": 0})
+        F["cells"][0]["instances"].append(len(points))
+        files = [f"t.{m:05d}.rmb.bin" for m in range(len(F["models"]))]
+        for name in os.listdir(d):
+            os.remove(os.path.join(d, name))
+        for k, f in enumerate(files):
+            with open(os.path.join(d, f), "wb") as out:
+                out.write(b"\0" * (64 if k < len(points) else 64 * 1024))
+        fits = cap and (lambda zones, grid: fm4_pvs.fits_stream_pool(
+            fm4_pvs.stream_blocks(F, zones, grid, d)))
+        with mock.patch.object(fm4_pvs, "ZONE_REACH", reach), \
+                mock.patch.object(fm4_pvs, "GROUND_COPIES", {}), \
+                mock.patch.object(fm4_pvs, "MAX_STREAM_BLOCKS", cap or fm4_pvs.MAX_STREAM_BLOCKS):
+            P, zones, grid = fm4_pvs.convert(F, files, fits)
+            self.assertEqual(list(fm4_pvs.GROUND_COPIES), [f"t.{len(points) + 1:05d}.rmb.bin"])
+            pending = fm4_pvs.stream_blocks(F, zones, grid, d)
+            with mock.patch.dict(fm4_pvs.GROUND_COPIES, clear=True):
+                left_out = fm4_pvs.stream_blocks(F, zones, grid, d)
+            fm4_pvs.write_ground_copies(d)
+        written = fm4_pvs.stream_blocks(F, zones, grid, d)
+        self.assertEqual(pending, written)
+        return P["zone_reach"], written, left_out
+
+    def test_the_chosen_reach_fits_once_the_copy_is_written(self):
+        with tempfile.TemporaryDirectory() as d:
+            reach, full, full_left_out = self.convert(d, "neighbours")
+            self.assertEqual(reach, "their own and their neighbours' instances")
+            _, own, _ = self.convert(d, "own")
+            # The copy is most of a zone's blocks. Counted as nothing (before #831), the whole
+            # neighbours' reach fitted any pool their own instances alone fit, and needed far
+            # more blocks once the copy was written.
+            self.assertLessEqual(full_left_out, own)
+            self.assertGreater(full, full_left_out + 32)
+            for cap in range(own, full):
+                reach, need, _ = self.convert(d, "neighbours", cap)
+                self.assertLessEqual(need, cap, reach)
+                self.assertNotEqual(reach, "their own and their neighbours' instances")
+            reach, need, _ = self.convert(d, "neighbours", full)
+            self.assertEqual(reach, "their own and their neighbours' instances")
+
+
 if __name__ == "__main__":
     unittest.main()

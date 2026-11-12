@@ -1075,8 +1075,16 @@ def stream_blocks(F, cells, grid, bin_dir):
     size = {}
     def file_size(m):
         if m not in size:
-            p = os.path.join(bin_dir, m if isinstance(m, str) else f"{F['prefix']}.{m:05d}.rmb.bin")
-            size[m] = os.path.getsize(p) if os.path.exists(p) else 0
+            name = m if isinstance(m, str) else f"{F['prefix']}.{m:05d}.rmb.bin"
+            p = os.path.join(bin_dir, name)
+            if os.path.exists(p):
+                size[m] = os.path.getsize(p)
+            elif name in GROUND_COPIES:
+                # The ground's model copy (see GROUND_LAYER), in the zones before its file is
+                # written: the size of the file it is a copy of (the renames keep the length).
+                size[m] = file_size(GROUND_COPIES[name][0])
+            else:
+                size[m] = 0
         return size[m]
 
     def zone_files(cell):  # the models' files and, with ZONE_TEXTURES, the textures' own files
@@ -1138,6 +1146,18 @@ def ground_model_copy(F, P, files, model, reach):
         files.append(dst)
     GROUND_COPIES[dst] = (src, renames)
     return new
+
+
+def write_ground_copies(bin_dir):
+    """The files of GROUND_COPIES, in the track's bin folder."""
+    for dst, (src, renames) in GROUND_COPIES.items():
+        with open(os.path.join(bin_dir, src), "rb") as f:
+            data = f.read()
+        for a, b in renames:  # the shader names in the model's material table
+            data = data.replace(a, b)
+        os.makedirs(os.path.dirname(os.path.join(bin_dir, dst)), exist_ok=True)
+        with open(os.path.join(bin_dir, dst), "wb") as f:
+            f.write(data)
 
 
 def ground_instance(F, used):
@@ -1909,12 +1929,7 @@ def convert_mod(mod, fh1_disc, loose):
     n_lmuv = lightmap_uv_copies(converted, files, bin_dir, rect_done)
     if n_lmuv:
         print(f"{track}: {n_lmuv} models drawn with lightmap-identity shader copies ({len(LMUV_COPIES)} shaders)")
-    for dst, (src, renames) in GROUND_COPIES.items():
-        data = open(os.path.join(bin_dir, src), "rb").read()
-        for a, b in renames:  # the shader names in the model's material table
-            data = data.replace(a, b)
-        os.makedirs(os.path.dirname(os.path.join(bin_dir, dst)), exist_ok=True)
-        open(os.path.join(bin_dir, dst), "wb").write(data)
+    write_ground_copies(bin_dir)
     n_decals, n_left = draw_decals(converted, bin_dir)
     if n_decals or n_left:
         print(f"{track}: {n_decals} decal models (road lines, road edges) drawn in FH1's opaque and transparent passes"
