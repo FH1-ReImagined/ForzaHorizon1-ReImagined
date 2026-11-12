@@ -3905,3 +3905,98 @@ shadow map going back to 1x) a compute pass could write the stencil bytes to a b
 into the image's stencil aspect, which Vulkan allows for single-sample images. Then the texture
 loads (1.9 ms; the 1024x1024 k_24_8 shadow map loaded 4 times a frame is 0.52 ms of it) and the
 resolves (1.7 ms in 88 a frame, about 10 us each, mostly fixed cost).
+
+## Pipelines the driver was given twice (#607, 2026-11-11)
+
+**The question.** Reviewing ReIGlue #53 (the driver cache file stores a blob shared by several
+descriptions once) found at least 324 pipeline descriptions whose NVIDIA driver blobs were byte for
+byte the same as another's. If those were the same pipeline, the SDK compiled each of them again:
+stutter on first play and a bigger cache.
+
+**What the blobs say.** On this PC (RX 9060 XT, RADV) the same holds: a first built-in benchmark
+stores 405 descriptions with 311 distinct driver blobs. But an identical blob does not mean an
+identical pipeline. RADV (and, by the same numbers, NVIDIA) keeps the compiled shaders in its cache
+data, not the fixed-function state, so descriptions that differ only in depth test, stencil,
+winding or depth format get the same blob. A diagnostic build (not merged) logged, for every
+pipeline created, a key of everything `vkCreateGraphicsPipelines` is given (the SPIR-V by hash,
+every state structure, the layout, the attachment formats). Cold caches, with another game running
+(counts, not timings):
+
+| | First benchmark | First free-roam drive |
+| --- | --- | --- |
+| Descriptions created | 396 | 404 |
+| Distinct creation info as given | 371 | 372 |
+| ... after writing ignored state one way (0520) | 361 | 368 |
+| ... also leaving out cull mode, winding, depth and stencil state | 323 | 332 |
+| Distinct (vertex, pixel) SPIR-V pairs | 272 | 288 |
+
+What differs inside each group of descriptions with the same creation info:
+- **The guest shader hash, nothing else** (18 of the 19 benchmark groups, 23 of 24 in free roam):
+  the microcode is the same except one word of the three after the last instruction
+  (`0x4E4Axxxx`, then `d9f68398 e5d6f0df`, which the translator never reads). The SPIR-V is the
+  same, so the pipeline is.
+- **The depth format** (one group): D24S8 and D24FS8 are both `D32_SFLOAT_S8_UINT` on the host.
+- After canonicalisation, 10 (benchmark) and 4 (free roam) more groups: **the alpha blend factors of
+  attachments whose write mask has no alpha**. The stencil-of-a-culled-face and winding rules
+  merged nothing more in these runs (FH1's winding changes come with the stencil test on).
+
+The next 38 (benchmark) and 36 (free roam) merges would need the depth, stencil, cull and winding
+state to be dynamic (`VK_EXT_extended_dynamic_state`): the same shaders with other fixed-function
+state. They are cheap already: in the diagnostic's driver times, such a pipeline took 0.10 ms
+(median; 0.09 to 0.12 ms over three runs, p90 5 to 7 ms) against 14 to 21 ms for one with new shader
+code, because the driver finds its compiled shaders. 39 of them took 165 ms of a 9.8 s first
+benchmark. Not done: it changes every draw's state setting for about 2% of the driver time.
+
+**ReIGlue 0520.** Descriptions whose creation info is the same, after the ignored state is written
+one way (the blend of channels a write mask leaves out, the factors of min and max blending, the
+stencil operations of a culled face, the winding without culling, stencil test or a shader reading
+`gl_FrontFacing`), share one pipeline. That rewriting is only for the comparison: the pipeline is
+created with the first description's own creation info, so the driver cache entries stored before
+0520 stay valid. A second creation of the same key waits for the first. The
+key compares the SPIR-V (XXH3-128 of each translation's code), so a shader variant or guest shader
+that translates the same is merged without having to prove which modification bits matter.
+Duplicates built one after the other were cheap (median 0.1 ms) but two built at once both compiled:
+38 duplicates took 304 ms of that 9.8 s benchmark.
+
+**Measured** (BENCH_LOCK, 60 fps cap, 1280x720, the golden TU4 save; cold: empty game and Mesa
+caches; warm: the restart on that cache; `driver time` is the frame cost CSV's background pipeline
+time). Clean runs only: the third benchmark round and one free-roam pair ran with another game
+started during the lock and are left out (the second clean A drive started at a load of 11, just
+after another game had ended).
+
+| Run | 46ae834 (A) | 0520 (B) |
+| --- | --- | --- |
+| Benchmark cold: pipelines built | 404, 408 | 367 + 34 shared, 372 + 37 shared |
+| Benchmark cold: driver time | 3.9 s, 3.8 s | 3.7 s, 3.8 s |
+| Benchmark cold: fps, 1% low, p99 | 60.0 / 49.8 / 18.4 ms, 60.0 / 47.1 / 19.0 ms | 60.0 / 48.8 / 18.6 ms, 60.0 / 45.9 / 19.5 ms |
+| Benchmark cold: frames held for pipelines, draws skipped | 92, 2203; 90, 2029 | 89, 2230; 99, 2026 |
+| Benchmark warm: warm-up | 404 in 174 ms, 411 in 180 ms | 403 (36 shared) in 172 ms, 409 (37 shared) in 172 ms |
+| Benchmark warm: fps, 1% low | 60.0 / 51.8, 60.0 / 51.9 | 60.0 / 49.7, 60.0 / 48.9 |
+| Free roam cold, 120 s drive: pipelines built | 385, 389 | 355 + 30 shared, 353 + 33 shared, 358 + 33 shared |
+| Free roam cold: driver time; 1% low | 3.6 s, 4.1 s; 44.0, 38.8 | 3.6 s, 3.6 s, 3.4 s; 46.2, 40.3, 45.6 |
+| Driver cache file after the cold benchmark | 3.09 MB (405 entries), 3.18 MB (418) | 3.17 MB (375 entries for 411), 3.17 MB (374 for 413) |
+
+So on RADV 0520 removes about 9% of the pipelines (and their objects and driver cache entries) and
+nothing measurable in time: the duplicates were already cheap, the cache file was already
+deduplicated by #53, and the 1% low moves within its run-to-run spread (39 to 52 over all the benchmark runs, contended ones included).
+
+**Upgrading.** The first launch after the update, on a cache that 46ae834 made: a warm benchmark
+of 0520 (30 fps cap, another game running, load 9) created 366 pipelines from stored driver data,
+compiled 0 and rebuilt 0 stale entries, gave 39 descriptions another's pipeline, and warmed up in
+186 ms (46ae834 on its own cache, without the other game: 174 and 180 ms). The driver is given
+each description's own creation info, so every entry stored before 0520 still matches it. The
+measurements above ran an earlier build of 0520 that also gave the driver the rewritten state; on
+RADV that made no difference either (the same run with it: 366 from stored data, 0 compiled, 0
+stale, 184 ms), as RADV's entries hold the shaders and not that state.
+
+**The picture.** `tools/render_test.py`: baselines recorded with A (two runs), checked with B: 6 of 6
+scenes pass (title, free roam at noon and dawn, cockpit, photo mode, a race start), each closer to
+the baseline than A's own two runs were to each other (photo mode dssim 0.0100 against A's 0.0560,
+free roam at noon 0.0017 against 0.0457). B's run gave 48 descriptions another's pipeline (461
+built). The final 0520 (the driver given each description's own state) passes 6 of 6 too, photo
+mode at 0.0072 and free roam at noon at 0.0034, with 52 descriptions given another's pipeline.
+
+**Next.** An NVIDIA measurement (#53's review counted 575 against 251 reused on a restart there):
+whether its duplicates are as cheap as RADV's, and how many of its 324 identical blobs 0520
+merges. The microcode trailer could also be left out of the shader hash, which would translate each
+such shader once, but the hash is the key of every stored description.
