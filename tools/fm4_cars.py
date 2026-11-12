@@ -1749,8 +1749,9 @@ class Converter:
         (its audio/cars archives, and a DLC pack's own tuning files and sound banks for its cars).
         The EngineTuning of an engine no FH1 car uses goes into the mod at FH1's level
         (louder_engine, #712): FH1's copy, else FM4's, and FM4's where FH1's is a traffic car's
-        placeholder and FM4's is not (traffic_tuning, #840). A tuning or sound bank that no file given has raises ConvertError:
-        the game stops with its disc read error where it misses one (#776)."""
+        placeholder and FM4's is not (traffic_tuning, #840). A tuning or sound bank that no file
+        given has raises ConvertError: the game stops with its disc read error where it misses
+        one (#776)."""
         self._audio_sources()
         wanted = [("cmt", car_name + "_CMT.xml")] + [("et", e + "_ET.xml") for e in engine_names]
         plan, hts = [], []

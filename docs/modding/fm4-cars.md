@@ -446,7 +446,8 @@ Checked with `tools/fm4_cars.py convert` on the six cars that use these engines 
 the Ka, the xD, the Spark, the Volt, the A4): the four tunings are FM4's (the Focus ST's
 `10N2_SRT10_j_EngAmb_HT.xml`, `5T1_A200_Int_HT.xml`, `5T1_S40_Exh_HT.xml`), the Volt's and the
 other engines' the same as before, no harmonic tuning file or bank added, and `check` finds
-nothing missing. Not yet heard in the game.
+nothing missing. Over all 381 cars of the discs, `audio_plan` before and after this fix differs
+only in those four tunings. Not yet heard in the game.
 
 An import made before this fix keeps the traffic tunings until FM4 cars are imported again (the
 right files come only from FM4's discs). Its `.reimagined-fm4-cars.json` has no
