@@ -80,6 +80,8 @@ Works:
 - The circuit's road on the minimap, from FM4's AI line. A circuit imported with an earlier
   launcher has none: import it again.
 - All 24 circuits of Disc 1 convert and load. Suzuka is the most tested one.
+- The road's painted lines and edges and the rubber on it (FM4 draws them over the road, as
+  decals). A circuit imported with an earlier launcher has none: import it again.
 
 Not yet:
 
