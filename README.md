@@ -254,7 +254,7 @@ Shader prebuild and the shader-cache fixes shipped in 0.1.28. Further CPU saving
 
 For developers. Players should use the launcher.
 
-Linux configure and the pinned SDK are in [`docs/PROJECT.md`](docs/PROJECT.md). Title Update 4 is in [`docs/dlc.md`](docs/dlc.md). The Windows cross-compile is `tools/build_windows.sh` ([`docs/launcher.md`](docs/launcher.md)). macOS is [`docs/macos.md`](docs/macos.md). Android is only a study so far, with no build: [`docs/android-port.md`](docs/android-port.md). A source tree launches with `tools/play.sh` ([`docs/playing.md`](docs/playing.md)).
+Linux configure and the pinned SDK are in [`docs/PROJECT.md`](docs/PROJECT.md). Title Update 4 is in [`docs/dlc.md`](docs/dlc.md). The Windows cross-compile is `tools/build_windows.sh` ([`docs/launcher.md`](docs/launcher.md)). macOS is [`docs/macos.md`](docs/macos.md), ARM64 Linux [`docs/arm64_linux.md`](docs/arm64_linux.md). Android is only a study so far, with no build: [`docs/android-port.md`](docs/android-port.md). A source tree launches with `tools/play.sh` ([`docs/playing.md`](docs/playing.md)).
 
 ## Playing
 

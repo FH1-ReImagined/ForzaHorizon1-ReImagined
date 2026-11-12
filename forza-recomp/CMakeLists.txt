@@ -42,6 +42,10 @@ if(APPLE)
     else()
         set(_forza_sdk_platform mac-amd64)
     endif()
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
+    # ARM64 Linux (docs/arm64_linux.md): no nightly or overlay exists for it, so the build
+    # takes a complete ReIGlue install (CMAKE_PREFIX_PATH, FORZA_REXGLUE, FORZA_XENOS_PLUGIN).
+    set(_forza_sdk_platform linux-arm64)
 else()
     set(_forza_sdk_platform linux-amd64)
 endif()

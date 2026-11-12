@@ -2,6 +2,12 @@ cmake_minimum_required(VERSION 3.25)
 project(guest_fma_check LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+# FORZA_GUEST_FMA is an x86-64 experiment (SSE/AVX flags, MXCSR): on ARM64 the generated code's
+# fused ops are always fused (docs/arm64_linux.md), and this check has nothing to compare.
+if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+    message(STATUS "guest_fma_check: x86-64 only, skipped on ${CMAKE_SYSTEM_PROCESSOR}")
+    return()
+endif()
 
 # No game data or SDK needed. Use the production CMake function and CPU guard.
 add_library(reference OBJECT math.cpp)

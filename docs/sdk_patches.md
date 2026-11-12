@@ -697,6 +697,30 @@ bits the source does not have); with the hook AMD's and Intel's drivers take tha
 checked, and its pictures compared, on Linux. Unset, nothing changes. What it was used for is in
 [perf.md](perf.md#the-gtx-1650-tis-gpu-frame-after-770-and-two-transfer-cuts-that-do-not-pay-640-2026-11-11).
 
+## ReIGlue 0500-0502: ARM64 Linux, 16 and 64 KB pages (#788)
+
+The first step of the Android study (#788): ARM64 Linux in CI, and the one correctness bug the study
+found for ARM64 Linux and Android.
+
+- **0500.** The 0xE0000000 view starts 4 KB into physical memory. The runtime mapped it rounded down
+  wherever `getpagesize()` was over 4 KB, but the compiled guest accesses added the 0x1000 back only
+  on macOS ARM64. On a Linux or Android kernel with 16 or 64 KB pages (Asahi, Android 15+ devices and
+  the 16 KB x86-64 emulator images, 64 KB server kernels) every access at 0xE0000000 and up would have
+  landed 4 KB off. Now every ARM64 build (any OS) and every Android build (any CPU) maps the views at
+  64 KB granularity whatever the page size, and its code adds the offset (`REX_PHYSICAL_VIEW_ROUNDED`;
+  the codegen templates repeat the condition, and a `static_assert` at the end of the PCH checks it).
+  A build whose code disagrees with the host's page size refuses to start with a message. The x86-64
+  code is unchanged: the regenerated TU4 code preprocesses identically, and sample objects (TUs 0, 10,
+  89, 150) are byte-identical. A unit test forces 4, 16 and 64 KB granularity.
+- **0501.** Linux maps the guest views with `MAP_FIXED_NOREPLACE`, so a view never replaces something
+  already mapped at its address (more likely in an Android app process).
+- **0502.** ReIGlue's `build-linux-aarch64` workflow runs the SDK's tests on every PR on GitHub's
+  `ubuntu-24.04-arm` runners: the unit tests, the 16/64 KB view tests and the PPC instruction tests with
+  the FMA cases, which run recompiled code on NEON. The PPC test binutils (VMX128) run there under
+  qemu-user.
+
+Building the game for ARM64 Linux: [arm64_linux.md](arm64_linux.md).
+
 ## ReIGlue 0510: fetch opcodes the GPU does not define, execs past the end of the microcode (#808)
 
 On the converted FM4 circuit Suzuka the game stopped 10-20 s into lap 1, on the command processor's thread:
