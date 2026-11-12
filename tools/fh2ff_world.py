@@ -35,8 +35,10 @@ To run it (dev), with the game's own launch arguments and environment:
 docs/fh2ff-world.md has what is converted and why, and what is not done yet.
 """
 import collections
+from contextlib import ExitStack
 import math
 import os
+from pathlib import Path, PureWindowsPath
 import re
 import shutil
 import sqlite3
@@ -573,34 +575,87 @@ def map_background(fh1_disc, fh2_disc, mod, tmp):
 
 def copy_member(zip_path, prefix, out_dir, tmp, lower=True):
     """Every member under prefix (case ignored) of a disc archive, into out_dir."""
-    z = zipfile.ZipFile(zip_path)
+    root = Path(out_dir).resolve()
     n = 0
-    with open(zip_path, "rb") as fh:
+    with zipfile.ZipFile(zip_path) as z, open(zip_path, "rb") as fh:
         for info in z.infolist():
             name = info.filename.replace("\\", "/")
             if info.is_dir() or not name.lower().startswith(prefix.lower()):
                 continue
             rel = name[len(prefix):]
-            dst = os.path.join(out_dir, *(rel.lower() if lower else rel).split("/"))
-            os.makedirs(os.path.dirname(dst), exist_ok=True)
-            with open(dst, "wb") as f:
-                f.write(fm4_track_mod.member_data(zip_path, z, info, fh, tmp))
+            parts = (rel.lower() if lower else rel).split("/")
+            if any(part in ("", ".", "..") or ":" in part or
+                   part.rstrip(" .") != part or PureWindowsPath(part).is_reserved()
+                   for part in parts):
+                raise ValueError(f"Unsafe archive member: {info.filename!r}")
+            dst = root.joinpath(*parts)
+            if not dst.resolve().is_relative_to(root):
+                raise ValueError(f"Unsafe archive member: {info.filename!r}")
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes(fm4_track_mod.member_data(zip_path, z, info, fh, tmp))
             n += 1
     return n
 
 
 def build(ff_disc, fh1_disc, update_zip, out, fh2_disc=None):
+    out = Path(out).resolve()
+    out.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".fh2ff-build-", dir=out) as work:
+        stage = Path(work)
+        _build_into(ff_disc, fh1_disc, update_zip, stage, fh2_disc)
+        paths = (Path("fm4-tracks") / NAME.lower(), Path("mods") / MOD)
+        for path in paths:
+            if not (stage / path).is_dir():
+                raise ValueError(f"Conversion did not produce {path}")
+        _publish(stage, out, paths)
+    total = sum(os.path.getsize(os.path.join(d, f)) for d, _, fs in os.walk(out) for f in fs)
+    print(f"written: {out} ({total / 1e6:.0f} MB)")
+
+
+def _publish(stage, out, paths):
+    # Serialize replacement of the pair. Keep backups outside the staging directory so
+    # they survive if a filesystem error also prevents rollback.
+    lock = out / ".fh2ff-publish"
+    lock.mkdir()
+    backups, installed = [], []
+    try:
+        for path in paths:
+            dst = out / path
+            if dst.parent.is_symlink() or dst.parent.resolve() != dst.parent:
+                raise ValueError(f"Unsafe output directory: {dst.parent}")
+            dst.parent.mkdir(exist_ok=True)
+            if os.path.lexists(dst):
+                backup = lock / path.parent.name
+                dst.rename(backup)
+                backups.append((backup, dst))
+        for path in paths:
+            dst = out / path
+            (stage / path).rename(dst)
+            installed.append((dst, stage / path))
+    except BaseException:
+        try:
+            for dst, source in reversed(installed):
+                dst.rename(source)
+            for backup, dst in reversed(backups):
+                backup.rename(dst)
+            lock.rmdir()
+        except OSError as error:
+            raise RuntimeError(f"Could not restore the previous import; recovery files are in {lock}") from error
+        raise
+    shutil.rmtree(lock)
+
+
+def _build_into(ff_disc, fh1_disc, update_zip, out, fh2_disc):
     src = os.path.join(ff_disc, "media", "tracks", NAME)
     fh2_world = os.path.join(fh2_disc, "media", "tracks", NAME) if fh2_disc else None
     track_dir = os.path.join(out, "fm4-tracks", NAME.lower())
     mod = os.path.join(out, "mods", MOD)
-    for p in (track_dir, mod):
-        if os.path.exists(p):
-            shutil.rmtree(p)
     out_track = os.path.join(track_dir, "media", "tracks", NAME)
     tmp = tempfile.mkdtemp(prefix="fh2ff-")
+    resources = ExitStack()
     try:
         w = World(src)
+        resources.callback(w.zip.close)
         collobjs = w.remove_closures(fh2_world) if fh2_world else None
         layout, zones, hexd, fmap, lookup = w.convert()
         routes = w.route_map()
@@ -623,6 +678,7 @@ def build(ff_disc, fh1_disc, update_zip, out, fh2_disc=None):
         # the archive: the zones converted, the procedural geometry with dynamic data converted, the
         # soundscapes silent, every other member copied as it is
         wr = TrackZipWriter(os.path.join(out_track, "bin.zip"))
+        resources.callback(wr.f.close)
         for info in w.zip.infos:
             low = info.filename.lower()
             if info.filename in zones:
@@ -641,7 +697,6 @@ def build(ff_disc, fh1_disc, update_zip, out, fh2_disc=None):
             else:
                 wr.add_raw(info.filename, info, w.zip.raw(info))
         start, size, count = wr.close()
-        w.zip.close()
         for k, v in sorted(w.report.items()):
             print(f"  {v:7d}  {k}")
         with open(os.path.join(fh1_disc, "media", "zipmanifest.xml"), "rb") as f:
@@ -696,6 +751,7 @@ def build(ff_disc, fh1_disc, update_zip, out, fh2_disc=None):
                 shutil.copyfile(os.path.join(ribbon, found), os.path.join(rb, ours))
         # the database and the game modes
         zf, info = fm4_track_mod.find_member(update_zip, "db/gamedb.slt")
+        resources.callback(zf.close)
         with open(update_zip, "rb") as fh:
             data = fm4_track_mod.member_data(update_zip, zf, info, fh, tmp)
         db_path = os.path.join(mod, "media", "db", "gamedb.slt")
@@ -703,6 +759,7 @@ def build(ff_disc, fh1_disc, update_zip, out, fh2_disc=None):
         with open(db_path, "wb") as f:
             f.write(data)
         db = sqlite3.connect(db_path)
+        resources.callback(db.close)
         cols = [r[1] for r in db.execute("PRAGMA table_info(Environments)")]
         row = dict(zip(cols, db.execute("SELECT * FROM Environments WHERE MediaName='Colorado' ORDER BY Id LIMIT 1").fetchone()))
         row.update(Id=ENVIRONMENT, MediaName=NAME, ShowOnMap=0)
@@ -710,17 +767,20 @@ def build(ff_disc, fh1_disc, update_zip, out, fh2_disc=None):
                    [row[c] for c in cols])
         db.execute("UPDATE Tracks SET MediaName=?, EnvironmentId=?, RibbonIndex=0 WHERE id=?", (NAME, ENVIRONMENT, FREE_ROAM))
         db.commit()
-        db.close()
-        fm4_track_mod.copy_gamemodes(fh1_disc, update_zip, os.path.join(mod, "media", "gamemodes", NAME.lower()), tmp)
+        gamemodes = os.path.join(mod, "media", "gamemodes", NAME.lower())
+        count = copy_member(os.path.join(fh1_disc, "media", "gamemodes.zip"), "colorado/", gamemodes, tmp)
+        count += copy_member(update_zip, "gamemodes/colorado/", gamemodes, tmp)
+        print(f"{count} game mode files from Colorado")
         if fh2_disc:
             print("map background tiles:", map_background(fh1_disc, fh2_disc, mod, tmp))
         with open(os.path.join(mod, "mod.toml"), "w") as f:
             f.write('name = "Fast & Furious world (from your own copies)"\n'
                     'description = "Made from your own copies of the games: never share it."\n')
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-    total = sum(os.path.getsize(os.path.join(d, f)) for d, _, fs in os.walk(out) for f in fs)
-    print(f"written: {out} ({total / 1e6:.0f} MB)")
+        try:
+            resources.close()
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 def check(ff_disc):

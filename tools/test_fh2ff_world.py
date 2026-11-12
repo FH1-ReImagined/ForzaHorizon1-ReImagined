@@ -2,10 +2,12 @@
 Synthetic files (no game files); with FH2FF_DISC=<F&F's disc folder> set, F&F's own world is
 converted in memory too (RealWorld)."""
 import os
+from pathlib import Path
 import struct
 import sys
 import tempfile
 import unittest
+from unittest import mock
 import zipfile
 import zlib
 
@@ -282,6 +284,75 @@ class Archive(unittest.TestCase):
 class RealWorld(unittest.TestCase):
     def test_converts_whole(self):
         self.assertTrue(ff.check(os.environ["FH2FF_DISC"]))
+
+
+class OutputSafety(unittest.TestCase):
+    paths = (Path("fm4-tracks") / ff.NAME.lower(), Path("mods") / ff.MOD)
+
+    def populate(self, root, value):
+        for path in self.paths:
+            directory = root / path
+            directory.mkdir(parents=True)
+            (directory / "marker").write_text(value)
+
+    def assert_contents(self, root, value):
+        for path in self.paths:
+            self.assertEqual((root / path / "marker").read_text(), value)
+        self.assertFalse((root / ".fh2ff-publish").exists())
+        self.assertFalse(list(root.glob(".fh2ff-build-*")))
+
+    def test_missing_disc_preserves_both_outputs(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self.populate(root, "previous")
+            with self.assertRaises(FileNotFoundError):
+                ff.build(root / "missing", root, root / "media.zip", root)
+            self.assert_contents(root, "previous")
+
+    def test_publish_rolls_back_if_second_install_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self.populate(root, "previous")
+            real_rename = Path.rename
+
+            def rename(source, target):
+                if target == root / self.paths[1] and source.parent.name == "mods":
+                    raise OSError("second install failed")
+                return real_rename(source, target)
+
+            def convert(ff_disc, fh1_disc, update_zip, stage, fh2_disc):
+                self.populate(stage, "new")
+
+            with mock.patch.object(ff, "_build_into", side_effect=convert):
+                with mock.patch.object(Path, "rename", rename):
+                    with self.assertRaisesRegex(OSError, "second install failed"):
+                        ff.build(root, root, root / "media.zip", root)
+                self.assert_contents(root, "previous")
+                ff.build(root, root, root / "media.zip", root)
+            self.assert_contents(root, "new")
+
+    def test_archive_copies_nested_member(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            archive = root / "test.zip"
+            with zipfile.ZipFile(archive, "w") as z:
+                z.writestr("TRACKS/Colorado/Nested/Thing.xml", b"valid")
+            output = root / "output"
+            self.assertEqual(ff.copy_member(archive, "tracks/colorado/", output, root), 1)
+            self.assertEqual((output / "nested" / "thing.xml").read_bytes(), b"valid")
+
+    def test_archive_rejects_non_relative_components_before_writing(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            archive = root / "test.zip"
+            for relative in ("../marker", "/marker", "C:marker", "nested/.. /marker", "NUL"):
+                with self.subTest(relative=relative):
+                    with zipfile.ZipFile(archive, "w") as z:
+                        z.writestr("tracks/colorado/" + relative, b"rejected")
+                    output = root / "output"
+                    with self.assertRaisesRegex(ValueError, "Unsafe archive member"):
+                        ff.copy_member(archive, "tracks/colorado/", output, root)
+                    self.assertFalse(output.exists())
 
 
 if __name__ == "__main__":
