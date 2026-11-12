@@ -176,6 +176,8 @@ FAKE_GAME = textwrap.dedent('''
             f.write(f"[i] SHADER_WARMUP: Vulkan progress {done}/32\\n"); f.flush(); time.sleep(0.05)
         if MODE == "hang":
             time.sleep(60)
+        f.write("[i] Vulkan shader pack: wrote 4D5309C9.C310FCFD2876EF61.vk.xspv (1489 translations, "
+                "1029 distinct modules, 63.8 MB of SPIR-V in 22.1 MB) in 57 ms\\n")
         f.write("[i] Created 32 graphics pipelines from Vulkan storage (32 requested)\\n")
         f.write("[i] SHADER_WARMUP: Vulkan complete in 5 ms\\n")
         if MODE == "ok":
@@ -205,6 +207,7 @@ class RunGameTests(unittest.TestCase):
     def test_success_reports_progress_and_count(self):
         result, seen = self.run_fake("ok")
         self.assertEqual(result["pipelines"], 32)
+        self.assertEqual(result["translated"], 1489)
         self.assertTrue(seen and seen[-1][1] == 32 and seen[-1][2] == 1)
 
     def test_exit_without_the_done_line_fails(self):
@@ -261,6 +264,47 @@ class OfferAgainTests(unittest.TestCase):
             self.stamp(plan)
             self.assertEqual(shader_prebuild.status(plan)[0], "done")
         self.assertIn("updated", shader_prebuild.status(plan)[1])
+
+    def test_shader_pack(self):
+        """The pack the prebuild wrote (ReIGlue 0600): gone, or the setting turned on since, offers it again."""
+        plan = plan_in(self.tmp)
+        self.assertTrue(shader_prebuild.shader_pack_on(plan))
+        self.assertFalse(shader_prebuild.shader_pack_on(plan_in(self.tmp, "--vulkan_shader_pack=false")))
+        self.assertTrue(shader_prebuild.shader_pack_on(plan_in(self.tmp, "--vulkan_shader_pack=true")))
+        toml_off = plan_in(self.tmp)
+        toml_off.toml_text = "vulkan_shader_pack = false\n"
+        self.assertFalse(shader_prebuild.shader_pack_on(toml_off))
+        root = shader_prebuild.cache_root(plan)
+        old = root / "shaders" / "translated" / "4D5309C9.0000000000000001.vk.xspv"
+        new = root / "fh1-live-v1-1920x1080-2x2" / "scene" / "shaders" / "translated" / "4D5309C9.0000000000000002.vk.xspv"
+        for p in (old, new):
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(b"pack")
+        os.utime(old, (1000, 1000))
+        started = new.stat().st_mtime
+        self.assertEqual(shader_prebuild.pack_files(plan), [str(old.relative_to(root)), str(new.relative_to(root))])
+        self.assertEqual(shader_prebuild.pack_files(plan, started), [str(new.relative_to(root))])
+        local = root / "shaders" / "local"
+        local.mkdir(parents=True, exist_ok=True)
+        (local / "4D5309C9-00001002-000073DF-00800000-2026022820261018.vkpc").write_bytes(b"x")
+        shader_prebuild.write_stamp(plan, {"pipelines": 1500, "started": started}, {"pipelines": 1500})
+        self.assertEqual(shader_prebuild.read_stamp(plan)["packs"], [str(new.relative_to(root))])
+        state, text = shader_prebuild.status(plan)
+        self.assertEqual(state, "done")
+        self.assertIn("their shaders translated", text)
+        new.unlink()
+        self.assertEqual(shader_prebuild.status(plan), ("stale", "The translated shaders of the last prebuild were deleted."))
+        # Prebuilt with the setting off: nothing to miss then, but turning it on offers the prebuild again.
+        off = plan_in(self.tmp, "--vulkan_shader_pack=false")
+        shader_prebuild.write_stamp(off, {"pipelines": 1500, "started": started}, {"pipelines": 1500})
+        self.assertEqual(shader_prebuild.read_stamp(off)["packs"], [])
+        self.assertEqual(shader_prebuild.status(off)[0], "done")
+        self.assertNotIn("translated", shader_prebuild.status(off)[1])
+        self.assertEqual(shader_prebuild.status(plan)[0], "stale")
+        self.assertIn("turned on", shader_prebuild.status(plan)[1])
+        # A plugin that wrote no pack (another backend, an older build): nothing to offer.
+        shader_prebuild.write_stamp(plan, {"pipelines": 1500, "started": started + 100}, {"pipelines": 1500})
+        self.assertEqual(shader_prebuild.status(plan)[0], "done")
 
     def test_unavailable(self):
         self.assertEqual(shader_prebuild.status(plan_in(self.tmp, "--gpu_backend=d3d12"))[0], "unavailable")

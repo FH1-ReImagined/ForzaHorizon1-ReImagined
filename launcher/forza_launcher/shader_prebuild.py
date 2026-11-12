@@ -6,12 +6,15 @@ state, no game data). This step rebuilds the listed shaders from the player's ow
 (tools/pipeline_list.py), writes them and the list for the SDK to <cache root>/shaders/prebuild/
 (patch 0113 reads them at every start), then starts the game with --shader_prebuild_only: it builds
 every stored and listed pipeline into the driver's cache, reporting the usual SHADER_WARMUP progress,
-and exits before the game itself starts.
+and exits before the game itself starts. That run also writes the shader pack (ReIGlue 0600,
+<cache root>/shaders/translated/*.vk.xspv): the SPIR-V it translated for this GPU and these settings,
+which later starts take instead of translating again (the Advanced setting vulkan_shader_pack turns
+it off). The game uses a pack only when it was written by its own build for its exact configuration.
 
 It is offered again when the result no longer fits: another graphics driver (the driver cache files
 of the last prebuild are gone: the SDK deletes those of an earlier driver), another launcher, list or
 GPU plugin, or a graphics setting that selects other pipeline stores (split scene/HUD rendering,
-output size, render scale, render target path, API)."""
+output size, render scale, render target path, API), or the shader pack it wrote is gone."""
 import hashlib
 import json
 import os
@@ -25,6 +28,8 @@ from . import TITLE_ID, __version__, cleanenv, paths
 LIST_NAME = f"pipelines-{TITLE_ID}.json"
 STAMP_NAME = "launcher.json"
 DONE_LINE = "SHADER_PREBUILD: complete"
+PACK_SETTING = "vulkan_shader_pack"
+PACK_LINE = "Vulkan shader pack: wrote "
 # Arguments that choose which pipeline stores the game uses (and so what a prebuild built).
 STORE_ARGS = ("--gpu_backend", "--render_target_path_vulkan", "--fh1_upscaler",
               "--fh1_scene_720p_native_hud", "--fh1_native_scene_scale", "--fh1_output_width",
@@ -109,15 +114,43 @@ def store_key(plan) -> dict:
     return {name[2:]: _arg(plan.argv, name) for name in STORE_ARGS if _arg(plan.argv, name) is not None}
 
 
+def _toml_setting(plan, name):
+    from .config import parse_toml
+    try:
+        return parse_toml(getattr(plan, "toml_text", "") or "").get(name)
+    except ValueError:
+        return None
+
+
+def shader_pack_on(plan) -> bool:
+    """The game's vulkan_shader_pack for this plan: on unless the command line or forza.toml turns it off."""
+    value = _arg(plan.argv, "--" + PACK_SETTING)
+    if value is None:
+        value = _toml_setting(plan, PACK_SETTING)
+    if value is None or isinstance(value, bool):
+        return value is not False
+    return str(value).strip().lower() not in ("false", "0", "no", "off")
+
+
+def pack_files(plan, since=None) -> list:
+    """The shader packs under the cache root (the main cache's, and split rendering's two), relative to
+    it; since: only those written from that time on (a little slack for coarse file times)."""
+    root, out = cache_root(plan), []
+    for d in [root / "shaders" / "translated"] + sorted(root.glob("fh1-live-*/*/shaders/translated"))[:16]:
+        try:
+            for p in sorted(d.glob(f"{TITLE_ID}.*.vk.xspv")):
+                if since is None or p.stat().st_mtime >= since - 2.0:
+                    out.append(str(p.relative_to(root)))
+        except OSError:
+            continue
+    return out
+
+
 def uses_vulkan(plan) -> bool:
     """The Direct3D 12 backends (and ReGPU) are chosen in forza.toml, the command line can override it."""
     backend = _arg(plan.argv, "--gpu_backend")
     if backend is None:
-        from .config import parse_toml
-        try:
-            backend = parse_toml(getattr(plan, "toml_text", "") or "").get("gpu_backend")
-        except ValueError:
-            backend = None
+        backend = _toml_setting(plan, "gpu_backend")
     return (backend or "vulkan") == "vulkan"
 
 
@@ -199,7 +232,15 @@ def status(plan, build_problem_text="") -> tuple:
     root = cache_root(plan)
     if files and not any((root / f).is_file() for f in files):
         return "stale", "Your graphics driver changed since the last prebuild."
+    packs = [f for f in stamp.get("packs") or [] if (root / f).is_file()]
+    if shader_pack_on(plan) and stamp.get("packs") is not None:
+        # A prebuild of this launcher with the pack on lists what it wrote; with the pack off, none.
+        if not stamp.get("pack_on", True):
+            return "stale", "Prebuild again to keep the translated shaders (Advanced setting turned on)."
+        if stamp.get("packs") and not packs:
+            return "stale", "The translated shaders of the last prebuild were deleted."
     return "done", (f"{stamp.get('pipelines', 0):,} pipelines ready"
+                    + (", their shaders translated" if packs and shader_pack_on(plan) else "")
                     + (f", built in {stamp['seconds']:.0f} s" if stamp.get("seconds") else "") + ".")
 
 
@@ -320,14 +361,17 @@ def run_game(plan, progress=None, cancelled=None, log=print, poll=0.25) -> dict:
         raise PrebuildError("The game stopped before the prebuild finished"
                             + (f" (exit code {proc.returncode})" if proc.returncode else "")
                             + (": " + " / ".join(errors) if errors else "."))
-    created = 0
+    created = translated = 0
     for line in tail:
-        if "graphics pipelines from Vulkan storage" in line:
-            try:
+        try:
+            if "graphics pipelines from Vulkan storage" in line:
                 created += int(line.split("Created ", 1)[1].split(" ", 1)[0])
-            except (IndexError, ValueError):
-                pass
-    return {"seconds": seconds, "pipelines": created, "parts": part}
+            elif PACK_LINE in line:  # "... wrote <file> (1489 translations, ..."
+                translated += int(line.split(PACK_LINE, 1)[1].split("(", 1)[1].split(" ", 1)[0])
+        except (IndexError, ValueError):
+            pass
+    return {"seconds": seconds, "pipelines": created, "parts": part, "translated": translated,
+            "started": started_at}
 
 
 def _written_since(log_file, started_at, slack=2.0) -> bool:
@@ -363,9 +407,12 @@ def _log_tail(log_file, max_bytes=256 * 1024):
 
 
 def write_stamp(plan, result: dict, files: dict):
+    pack_on = shader_pack_on(plan)
     stamp = dict(identity(plan), driver=driver_files(plan), pipelines=result.get("pipelines", 0),
                  listed=files.get("pipelines", 0), shaders=files.get("shaders", 0),
-                 seconds=round(result.get("seconds", 0), 1), time=int(time.time()))
+                 seconds=round(result.get("seconds", 0), 1), time=int(time.time()), pack_on=pack_on,
+                 packs=pack_files(plan, result.get("started")) if pack_on else [],
+                 translated=result.get("translated", 0))
     d = prebuild_dir(plan)
     d.mkdir(parents=True, exist_ok=True)
     tmp = d / (STAMP_NAME + ".new")
@@ -403,4 +450,6 @@ def prebuild(cfg, game, status_cb=None, progress=None, cancelled=None, log=print
                      + (f" (part {part})" if part > 1 else ""))
     result = run_game(plan, game_progress, cancelled, log)
     write_stamp(plan, result, files)
+    if result.get("translated"):
+        log(f"Shader prebuild: {result['translated']:,} translated shaders kept for the next starts")
     return f"{result['pipelines']:,} pipelines built in {result['seconds']:.0f} s."

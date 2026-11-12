@@ -4240,3 +4240,51 @@ and a check against them: 6/6 scenes pass (title 0.0091, free roam midday 0.0001
 photo mode 0.0059, race start 0.0029 dssim). Sessions 2 and 3 of the recording are the same picture (0.0000 at noon);
 session 1 caught another moment of the free roam scenes (0.0172 at noon), so the recorded noise is over the tolerance
 in four scenes although each check takes the closest frames.
+
+## Native renderer M1: shaders translated at build time (2026-11-12)
+
+ReIGlue 0590 (the start's translations on several threads) and 0600 (the shader pack the Prebuild shaders run
+writes; [native-renderer.md](native-renderer.md#m1-shaders-translated-at-build-time)), against main's plugin, on the
+same PC and setup as the M0 baselines above (main's game build, no `forza.toml`, benchmark lock held, no other game
+running). Every run starts from its own copy of one cache root: the shipped prebuild list's files (launcher step 1-2),
+then one prebuild-only run of the M1 plugin (which wrote the pack) and one start to the title (warm driver and Mesa
+caches). The warm-up then translates 1,496 pairs (the list's 1,489 for this cache and 7 stored ones) and creates
+2,254 pipelines. Times are from the log: "SHADER_WARMUP: Vulkan begin" to the first pipeline (the stores, the list
+import and the translations), and the whole warm-up.
+
+| Warm start, 3 runs each (interleaved) | Translation | Begin to first pipeline | Shader warm-up |
+| --- | --- | --- | --- |
+| A: main (one thread) | | 631, 632, 660 ms | 664, 667, 699 ms (and 660, 671, 680 in the benchmark runs) |
+| D: M1, pack off, one thread (`--vulkan_shader_translation_threads=1`) | 554, 567, 574 ms | 588, 596, 603 ms | 618, 627, 636 ms |
+| B: M1, pack off (`--vulkan_shader_pack=false`), 6 threads | 109, 111, 111 ms | 139, 140, 147 ms | 169, 175, 177 ms |
+| C: M1 with the pack (an earlier 0600: 1,489 from it, 7 translated) | 44, 46, 46 ms | 73, 75, 75 ms | 104, 107, 110 ms (and 105, 106, 107) |
+| Second session, A: main | | 627, 635, 657 ms | 659, 667, 689 ms |
+| Second session, C: M1 as committed (all 1,496 from the pack) | 48, 50, 55 ms | 77, 79, 88 ms | 109, 113, 121 ms |
+
+- The pack: 22.1 MB for 1,496 translations (1,036 distinct modules, 63.9 MB of SPIR-V). The prebuild-only run
+  translated them in 115-126 ms on 6 threads and wrote the pack in 57-59 ms.
+- C's translation step reads the GPU plugin's file for the pack's identity (once a process), reads the 22 MB,
+  checks four random pairs by translating them again (together 10-18 ms), then decodes the modules and makes the
+  shader modules on 6 threads; the 30 ms before it are the stores and the list import, unchanged.
+- `rexglue-shaders check-pack --plugin` over the pack the game wrote, with the configuration line of the same log:
+  all 1,496 translations byte-identical to a fresh translation, bindings included.
+- Fallback, each from a copy of the same cache, to the title: no pack ("none for this configuration", 140 ms of
+  translation); another configuration's pack (render scale 2) under this configuration's name ("written by another
+  build or for another configuration"); a truncated pack ("damaged"); one damaged module ("translating it", the
+  other 1,495 from the pack); a forged pack (this plugin's identity, render scale 2 SPIR-V, 979 of 1,496 modules
+  different): refused at three of three starts ("differs from this build's translation"). With the checked pairs
+  at fixed positions instead of random ones, that forged pack had been used twice.
+
+**Play** (the benchmark race, `--frame_rate=240`, from the same cache copy):
+
+| Run | fps (A main / C M1) | 1% low | p99 ms | Shaders translated in play | Pipelines created in play |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 187.7 / 184.2 | 125.2 / 129.6 | 7.19 / 7.19 | 0 / 0 | 12 / 12 |
+| 2 | 191.2 / 179.8 | 130.1 / 126.1 | 7.02 / 7.34 | 0 / 0 | 12 / 12 |
+| 3 | 166.6 / 198.2 | 106.7 / 127.5 | 8.10 / 7.07 | 0 / 0 | 12 / 12 |
+| Mean | 181.8 / 187.4 | 120.7 / 127.7 | 7.44 / 7.20 | | |
+
+The list covers every shader of the race, so play translated nothing with either plugin, and the gain is at start
+only, as expected: a pair the warm-up does not need is not in the pack either (the pack is the warm-up of the
+prebuild run). Frames over 33 ms (loading): 11, 12, 11 and 13, 12, 16.
+

@@ -721,6 +721,10 @@ add("vulkan_store_pipeline_cache", "Keep compiled Vulkan pipelines", "Advanced",
     "the file may still compile again.", "GPU", restart=True)
 add("async_shader_compilation", "Compile shaders in the background", "Advanced", "bool", True,
     "", "GPU")
+add("vulkan_shader_pack", "Keep translated shaders", "Advanced", "bool", True,
+    "Prebuild shaders (Setup) also saves the shaders it translates for your GPU and settings, so "
+    "the game takes them at start instead of translating them again. Off: they are translated at "
+    "every start, as before. Vulkan.", "GPU", restart=True)
 add("gpu_wait_blocking", "Sleep while waiting for the GPU", "Advanced", "bool", True,
     "The render thread sleeps until the GPU is done instead of keeping a CPU core busy, which "
     "leaves more CPU and power to the game, above all on 4-core PCs and laptops. Turn it off "

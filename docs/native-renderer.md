@@ -150,7 +150,7 @@ more than 0.1 ms of render thread time; speed targets apply from M4.
 | Stage | What | Exit | Ships |
 | --- | --- | --- | --- |
 | M0 | Tools, baselines, inventory: the pass map and the groups of passes, the transfer list, the origin of every class of foreign command list, the bin mask meaning, the CPU readers | the pass map and groups exist for all scenes; every class of foreign list has a known writer; every transfer says whether its data is read; baselines recorded | no |
-| M1 | Build-time shaders (below) | pack SPIR-V byte-identical to a fresh translation; a stale pack ignored; warm start at most 0.1 s plus the pack read; render test passes, benchmark unchanged | **yes**, on its own: faster starts |
+| M1 | Build-time shaders (below; ReIGlue 0590, 0600) | pack SPIR-V byte-identical to a fresh translation; a stale pack ignored; warm start at most 0.1 s plus the pack read; render test passes, benchmark unchanged | **yes**, on its own: faster starts |
 | M2 | The host device in shadow mode: draw records built from the shadow state and the converted lists, compared field by field with the command processor's own state at each draw | 100% of draws match over a race, a free roam and the M0 scenes; record building at most 0.3 ms a frame on the render thread | no |
 | M3 | The first native group end to end: the shadow mask (clear, 11 cascade passes, blurs, the world pass's sampling), render scale above 1 and world AO included | compare mode in budget at dawn and in photo mode; render test passes; GPU zones not worse in two pairs on both machines | behind a switch |
 | M4 | Shadow maps, the depth pre-pass and the 3D scene (one 4x MSAA image, no tiles, model lists converted), the reflection cube, post-processing, the HUD and menus | on the 1650 Ti: transfers from 3.2 to at most 0.5 ms, loads and resolves from 3.6 to at most 1.5 ms; fps up beyond the noise; command processor CPU down at least 30% at 30 fps | opt-in |
@@ -166,24 +166,66 @@ needs 2,170 (shader, modification) translations for 2,831 pipelines **[M]**. The
 handles all of them offline: the list in 0.78 s and every blob in 1.9 s on one thread, no
 failure, every module valid, and byte-identical when translated twice **[M]**.
 
-Translation is 87-97% of every warm start's shader warm-up (0.22-0.86 s in players' and test logs,
-AMD and NVIDIA, Linux and Windows) because the warm-up translates serially before it creates the
-pipelines, which is a driver cache lookup by then **[M]**. So:
+Translation was 87-97% of every warm start's shader warm-up (0.22-0.86 s in players' and test
+logs, AMD and NVIDIA, Linux and Windows) because the warm-up translated serially before it
+created the pipelines, which is a driver cache lookup by then **[M]**. M1 (ReIGlue 0590 and 0600,
+in this build) changes two things:
 
-1. The warm-up translates on several threads (three thread-safety fixes in the shader and
-   pipeline cache code first).
-2. An SDK tool run in the launcher's build writes a per-configuration SPIR-V pack
-   (`<cache>/shaders/translated/<title>.<configuration>.xspv`) from the shipped list's pairs and
-   the player's own, keyed by the ReIGlue commit, the modification version and the translator
-   configuration. The pipeline cache takes modules from it in the warm-up and in play and
-   translates only what it misses. Like the prebuild files, the pack is made on the player's PC
-   from the player's own game files and is never shipped.
+1. **The warm-up translates on several threads** (0590, every player, nothing to set up). The
+   analysis and the translation objects stay on one thread (the shader's map, its memo and the
+   disassembly buffer are not thread-safe); the translations run on 3/4 of the logical
+   processors (`vulkan_shader_translation_threads`), each thread with its own translator; the
+   texture binding layouts are filled afterwards on one thread, in the same order as before.
+2. **The shader pack** (0600). The launcher's *Prebuild shaders* run (Setup, the game started
+   with `--shader_prebuild_only`) translates every pair of the stored and listed pipelines and
+   writes their SPIR-V and bindings to `<cache root>/shaders/translated/<title>.<key>.vk.xspv`
+   (with split rendering, one in each of the two caches). Every later start takes them from it
+   and translates only what it lacks; so does play, for a pair the warm-up did not need.
+   - **Identity:** the SDK build (its version and the size and checksum of the GPU plugin's own
+     file, which the translator is compiled into) and the translator configuration the game logs
+     at start (device features, render target path, MSAA choices, draw resolution and raster
+     scales, the cvars the translator reads). A pack is used only when both are exactly the
+     game's: another plugin binary (an update, a local rebuild), GPU, driver feature set or
+     graphics setting looks for another file. Four of the warm-up's pairs, chosen at random, are
+     translated again at each start and compared byte for byte (about 0.5 ms each), against a
+     translator that is not deterministic: a pack that differs is not used.
+   - **Damage:** the header, the index and each module carry checksums; a damaged pack is not
+     used, a damaged module is translated instead.
+   - **Size:** each distinct module once, its 32-bit words as LEB128: 22 MB for the 1,496 pairs
+     of the main cache with the list (64 MB of SPIR-V, 1,036 distinct modules). Writing a pack removes
+     the title's packs of other builds; this build's packs for other settings stay, the newest
+     three.
+   - **Off:** Advanced > *Keep translated shaders* (`vulkan_shader_pack=false`): nothing read or
+     written, the warm-up translates at every start (still on several threads).
+   - **Launcher:** the Prebuild shaders card is offered again when the pack it wrote is gone,
+     or when the setting was off then and is on now, besides the existing reasons (another
+     plugin, driver or setting).
+   - The pack is made on the player's PC from the player's own game files and is never shipped
+     or uploaded.
 3. No `spirv-opt -O`: it raises register use and makes one family of pixel shaders 36-53% slower
-   on RDNA4 **[M]**; a light SSA cleanup is neutral on the GPU and only saves pack size.
+   on RDNA4 **[M]**; a light SSA cleanup is neutral on the GPU and only saves pack size, so the
+   pack holds the translator's own SPIR-V.
 
-Expected: a warm start of about 0.05 s instead of 0.2-0.9 s, no translation on the command
-processor for known shaders, GPU time unchanged **[I]**. Listed shaders are already translated in
-today's warm-up, so the gain in play is only for pairs outside it.
+The SDK tool `rexglue-shaders` was planned to write the pack; the game writes it instead, in the
+Prebuild shaders run, because only the running game knows its exact configuration (the device's
+features come from Vulkan) and the launcher already runs that step again when the plugin, the
+driver or a setting changes. The tool reads and checks packs (`check-pack`, below), and can write
+one for tests.
+
+Measured on the test PC (M1 measurements in [perf.md](perf.md#native-renderer-m1-shaders-translated-at-build-time-2026-11-12)):
+
+| Warm start, the prebuild list (1,496 translations, 2,254 pipelines) | Translation | Shader warm-up |
+| --- | --- | --- |
+| main (one thread) | about 600 ms | 659-699 ms |
+| M1, pack off (6 threads) | 109-111 ms | 169-177 ms |
+| M1, with the pack | 48-55 ms (all from the pack) | 109-121 ms |
+
+In the benchmark race after a prebuild, play translated nothing with or without M1 (the list
+covers the race) and created the same 12 pipelines; the frame rate was the same within the noise
+(181.8 fps for main and 187.4 for M1, three runs each, spread 167-198) **[M]**.
+
+Listed shaders were already translated in the warm-up before M1, so play translates only pairs
+outside it, as before: the gain is at start. GPU time is unchanged (the SPIR-V is the same bytes).
 
 ## Tools
 
@@ -238,6 +280,28 @@ rexglue-shaders translate --store all.xsh --defaults            # every stored s
 - `--dump_shaders=<dir>` now also works on Vulkan: the game writes every translation's SPIR-V
   (`shader_<hash>_<modification>.vk.bin.<vert|frag>`) before the module is made, to compare
   with the tool's output.
+
+The shader pack (patch 0600, M1):
+
+```sh
+# every pair of a pack the game wrote, translated again and compared, bindings included
+rexglue-shaders check-pack cache/shaders/translated/4D5309C9.<key>.vk.xspv \
+    --store cache/shaders/prebuild/4D5309C9.xsh --store cache/shaders/shareable/4D5309C9.xsh \
+    --config "<the log's SPIR-V translator configuration>"
+# a pack from the tool, for tests (--pack-config: a pack that claims another configuration)
+rexglue-shaders translate --store 4D5309C9.xsh --pairs pairs.txt --pack test.vk.xspv
+```
+
+- The game writes a pack with `--shader_prebuild_only=true` (the launcher's Prebuild shaders), or
+  at any start with `--vulkan_shader_pack_write=true`; `--vulkan_shader_pack=false` turns it off.
+- The log says what happened: `Vulkan shader pack: wrote ...`, `Vulkan shader warm-up: N
+  translations in X ms, M from the shader pack, K translated on T threads`, or why a pack was
+  not used (none for this configuration, another build or configuration, damaged, differs from
+  this build's translation).
+- `check-pack` takes a pack whose identity has the configuration given; with `--plugin <the
+  game's librexgpu-xenos.so>` the identity must be that plugin's too, as the game requires;
+  `--any-identity` checks the bytes of any pack. `translate --pack` writes a pack the game takes
+  only with `--plugin` (its plugin file) and the game's configuration.
 
 ## Baselines (2026-11-12)
 
