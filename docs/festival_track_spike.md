@@ -63,7 +63,7 @@ Converter test switches: `FM4_PVS_FLAGS`, `FM4_PVS_FLAGMASK`, `FM4_PVS_SHADERS`,
 `FM4_PVS_PROJLM`, `FM4_PVS_SKY`, `FM4_PVS_SHADER_PATCHES`, `FM4_PVS_LIGHTMAPS`, `FM4_PVS_HEX`,
 `FM4_PVS_EXTENT`, `FM4_PVS_VISIBLE`, `FM4_PVS_VISIBLE_NEAR`, `FM4_PVS_VISIBLE_CELLS`, `FM4_PVS_VISIBLE_SIZE`,
 `FM4_PVS_TOD`, `FM4_PVS_TRACKSETTINGS`, `FM4_PVS_TRACKSETTINGS_FM4`, `FM4_PVS_DECALS`,
-`FM4_PVS_DECAL_BLENDED`, `FM4_PVS_DECAL_BLENDED`, `FM4_PVS_DECAL_BLENDED`, `FM4_PVS_DECAL_BLENDED`, `FM4_PVS_DECAL_BLENDED`, `FM4_PVS_DECAL_DEPTH`, `FM4_SHADERS_LIGHTMAP`,
+`FM4_PVS_DECAL_BLENDED`, `FM4_PVS_DECAL_DEPTH`, `FM4_SHADERS_LIGHTMAP`,
 `FM4_SHADERS_LIGHTMAP_COLOURS`, `FM4_SHADERS_SHADOW_COLOUR`, `FM4_SHADERS_SHADOW_CLIP`, `FM4_SHADERS_TINTS`, `FM4_PVS_PASS_GROUPS`, `FM4_PVS_PASS_GROUP_DROP`, `FM4_PVS_GROUND`, `FM4_PVS_GROUND_SCALE`, `FM4_PVS_GROUND_BELOW`, `FM4_PVS_GROUND_MODEL`, `FM4_PVS_GROUND_LAYER`, `FM4_PVS_GROUND_AT`, `FM4_PVS_STREAM_MARGIN`,
 `FM4_COL_NORMALS`, `FM4_COL_WALL`, `FM4_COL_EDGES`, `FM4_COL_REMAP`, `FM4_COL_GRID`,
 `FM4_COL_SURFACE`, `FM4_COL_KEEP_DEGENERATE`; `FM4_DISC` (FM4's disc folder) for the
@@ -1005,8 +1005,14 @@ Suzuka's road had no lines.
   12 or 13, as its instances are flagged. The groups between are empty, so the populated
   groups keep their order, which the areas after them follow; the file keeps its size and
   nothing else in it moves. Groups 5, 8, 11 and 17 stay where they are (FH1 does not run them
-  for these instances). Checked on FM4's own files of Road Atlanta, Tsukuba and Infineon:
-  every decal model is moved, and after the groups only the depth words below change.
+  for these instances). A model is moved only if its buffer's own state is the pass's (no
+  draw of it blends for 12, every draw blends for 13: RB_BLENDCONTROL0) and its header's three
+  area sizes are the groups' sums, as `insert_fetch_constant` checks them; any other is left
+  undrawn and counted in the converter's line. On the 24 circuits the checks leave none of
+  the 6037 out (with and without them the same models moved, to the same bytes); and on
+  Suzuka's own files (`tools/test_fm4_decals.py` with `FM4_DISC` set) areas A and C stay byte
+  for byte, the buffers change in their RB_DEPTHCONTROL words alone, and every area C fixup
+  lands in a fetch constant write or a draw.
 - **The other place faults.** Suzuka's lines in group 13 with their instances flagged
   transparent, and Infineon's road detail in group 12 flagged opaque, stop the load as bit 28
   does: `Unhandled read fault at host 0x220000000` in the GPU command processor (guest
@@ -1016,29 +1022,43 @@ Suzuka's road had no lines.
   sets a mesh part's buffers up (sub_8248C200, sub_8248B2D8, sub_8248B5D0) only when a
   virtual call on the part (+0x14, with i) says yes. So the place follows FM4's flag, and a
   model flagged both ways (none on the disc) is left undrawn.
-- **Order in the opaque pass.** FM4's lines test the depth without writing it and draw only
-  where the stencil equals their reference (RB_DEPTHCONTROL 0x082082E3, stencil function
-  EQUAL): a state for a pass that comes after the road. FH1 draws its opaque pass in its own
-  order, and with that state Suzuka had lines along some stretches and none along others
-  (the approach to turn 1); whether the stencil test or the road painted over them was not
-  told apart. The moved buffer writes the depth and passes the stencil whatever it holds
-  (0x087087E7, what FM4's road buffers hold): with its polygon offset a line then stands
-  whether the road comes before or after it. `FM4_PVS_DECAL_DEPTH=0` keeps FM4's state. The
-  buffers moved to group 13 keep it too: the transparent pass comes after the road. Not the
-  cause: the instances' LOD distances (Colorado's 150, 250 and 500 m on them changed
-  nothing).
-- **Runs** (the 0.3.2 build, Windows, a Radeon RX 9070 XT with Vulkan, free roam on a copy of
-  a save, the dev autopilot on a line from FM4's AI line with `FORZA_AUTOPILOT_DELAY=6`, so
-  that it looks for the line once the car is placed): all 24 circuits converted and driven
-  for 60 s from the grid, 0.8 to 1 km each (Road America 0.4; Tsukuba's car stayed in its pit
-  lane, so Tsukuba was driven again for 125 s, 1.9 of its 2.1 km, past the lake): no fault,
-  lines and kerb paint on every one. Suzuka with the decals off and on, the same 85 s drive:
-  no lines and lines, 13648 and 13656 frames, 4224 and 4044 `ExecutePacketType0 overflow`
-  errors. A lap of Suzuka, 400 s: no fault. Infineon with PR 780's fixups, decals off and on:
-  0 of those errors both ways (152360 without 780). The flat grey and black stretches of road
-  at Crown Jewel and Hockenheim are there with the decals off too; the lines now show on them.
-- **Left.** FM4's decals in FH1's own decal pass (bit 28): the fault above. Decals in mirrors
-  and cube maps (groups 8 and 5 are not moved).
+- **Order in the opaque pass.** FM4's lines test the depth without writing it (RB_DEPTHCONTROL
+  0x082082E3; the stencil function is EQUAL), a state for a pass that comes after the road.
+  FH1 draws its opaque pass in its own order, and with that state Suzuka had lines along some
+  stretches and none along others (the approach to turn 1). The same 85 s of Suzuka four ways
+  (`FM4_PVS_DECAL_DEPTH=0`, `stencil`, `1`, `both`): FM4's state loses the lines along
+  stretches; passing the stencil always (0x087087E3) loses the same ones; writing the depth
+  (0x082082E7) keeps them all; both together (0x087087E7, the road's own state) look as the
+  depth write alone does. So a line drawn before its road was painted over by it, and the
+  moved buffer writes the depth: with its polygon offset the line then stands whichever comes
+  first. The stencil function stays FM4's. 0x082082E7 is also the state of FM4's own
+  `rdedg_*_zwrite` decals (184 models of the Nordschleife). The buffers moved to group 13 keep
+  FM4's state: the transparent pass comes after the road. Not the cause: the instances' LOD
+  distances (Colorado's 150, 250 and 500 m on them changed nothing).
+- **Runs** (the 0.3.2 build, Windows, a Radeon RX 9070 XT with Vulkan, free roam on a fresh
+  copy of a save for every run, the dev autopilot on a line from FM4's AI line with
+  `FORZA_AUTOPILOT_DELAY=6`, so that it looks for the line once the car is placed): all 24
+  circuits converted from this branch on `main` and driven for 60 s from the grid, 0.8 to
+  1 km each: no fault, lines, edges and kerb paint on every one, 6116 decal models drawn (the
+  disc's 6037 and the copies the lightmap steps make) and none left undrawn. Then a lap of Suzuka, 400 s:
+  no fault.
+  Before that, with the depth and the stencil state both changed (0x087087E7), the 24
+  circuits were driven the same way, a lap of Suzuka, and Suzuka with the decals off and on
+  for the same 85 s: no lines and lines, 13648 and 13656 frames. With #780 in `main` no run
+  logs an `ExecutePacketType0 overflow` (Infineon logged 152360 in a minute before it, Road
+  Atlanta 106128, with the decals or without). The flat grey stretches of road at Crown Jewel
+  and Hockenheim are there with the decals off too, and with #780: another matter; the lines
+  show on them.
+- **Left.** FM4's decals in FH1's own decal pass (a lead from the review of this change).
+  Colorado's own decal models (483 with a `*decal*` shader) have every instance at a high
+  half of 0x103F, bit 28 without bit 27, with bit 1 (transparent) and not bit 2, and their
+  files fill groups 2, 14 and 20 (5 too in 259 of the 400 read). `fh1_flags` gives 0x083F, so
+  the bit 28 that faulted was 0x183F beside bit 2, on models without groups 2 and 20. Bit 28
+  with 0x103F, and groups 2 and 20 filled from 14 and 17, may reach FH1's real decal pass and
+  make the slot rule and the depth write unnecessary: not tried. Decals in mirrors and cube
+  maps (groups 8 and 5 are not moved). The stencil function is FM4's EQUAL in both passes
+  (FH1's own decals hold ALWAYS): a decal drawn where the stencil is not its reference would
+  be dropped; none was seen missing on the circuits driven.
 
 ## Towards players: a plan
 
