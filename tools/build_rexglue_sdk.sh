@@ -71,11 +71,13 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # and 0470-0471: guest atomic sections and mfmsr without the global lock (#506),
 # and 0490: tile resolves on the fractional 1080p raster land at their 0.75 position (#785),
 # and 0480: FORZA_TEST_NO_STENCIL_EXPORT, a test hook that takes the stencil-export-free transfer path (#640),
-# and 0510: shader analysis skips undefined fetch opcodes and execs past the microcode's end (#808).
+# and 0510: shader analysis skips undefined fetch opcodes and execs past the microcode's end (#808),
+# and 0500-0502: the guest views right on 16 and 64 KB pages, MAP_FIXED_NOREPLACE, ARM64 CI (#788),
+# and identical Vulkan driver cache blobs stored once (ReIGlue #53; the cache file format moves to v3).
 # A reviewed full commit can be pinned before a maintainer publishes a tag.
 # When a tag is supplied, its target must still match this immutable commit.
 REIGLUE_TAG=
-REIGLUE_COMMIT=b6492bb9ed79a585202cb85a57dc30b85585d556  # ReIGlue main: 0450-0452 (#47), 0470-0471 (#48), 0480 (#51), 0490 (#49), 0510 (#52) merged, with #46
+REIGLUE_COMMIT=46ae834c42ba925bee62fd4b18a381ca7aee87b3  # ReIGlue main: 0450-0452, 0470-0471, 0480, 0490, 0500-0502 (#50), 0510, and the shared driver cache blobs (#53)
 REIGLUE_URL="${REIGLUE_URL:-https://github.com/FH1-ReImagined/ReIGlue}"
 NIGHTLY="${REXSDK_NIGHTLY:-$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64}"
 SRC="${REXSDK_SRC:-$HOME/rexglue-sdk-src-forza/sdk}"
