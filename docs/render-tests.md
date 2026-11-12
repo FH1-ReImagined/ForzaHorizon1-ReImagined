@@ -16,19 +16,21 @@ All scenes come from one session (`tools/render_tests/scenes.toml`): the title s
 after the boot, SINGLE PLAYER, free roam at the spawn point of the career save (the GoPro
 Millennia Masters sign-up), the cockpit camera, photo mode, then that race.
 
-| Scene | What it shows | Tolerance (dssim, changed) | Noise (dssim, changed) |
-|---|---|---|---|
-| `title` | PRESS START over the first shot of the attract sequence (compared at 1/8 size) | 0.015, 1 % | 0.0091, 0 % |
-| `freeroam_midday` | free roam, chase camera, 12:00 | 0.005, 0.5 % | 0.0016, 0.14 % |
-| `freeroam_dawn` | the same at 07:47 | 0.010, 1 % | 0.0079, 0.21 % |
-| `cockpit` | cockpit camera, 12:00 | 0.003, 0.5 % | 0.0004, 0.10 % |
-| `photo_mode` | photo mode's default camera, 12:00 | 0.016, 2.5 % | 0.0123, 1.89 % |
-| `race_start` | the race 15 s after the start, the player's car on the grid | 0.008, 1.2 % | 0.0043, 0.69 % |
+| Scene | What it shows | Tolerance (dssim, changed) | Noise, October (dssim, changed) | Noise, November |
+|---|---|---|---|---|
+| `title` | PRESS START over the first shot of the attract sequence (compared at 1/8 size) | 0.015, 1 % | 0.0091, 0 % | 0.0050, 0 % |
+| `freeroam_midday` | free roam, chase camera, 12:00 | 0.005, 0.5 % | 0.0016, 0.14 % | 0.0037, 0.29 % |
+| `freeroam_dawn` | the same at 07:47 | 0.010, 1 % | 0.0079, 0.21 % | 0.0074, 0.18 % |
+| `cockpit` | cockpit camera, 12:00 | 0.003, 0.5 % | 0.0004, 0.10 % | 0.0014, 0.10 % |
+| `photo_mode` | photo mode's default camera, 12:00 | 0.016, 2.5 % | 0.0123, 1.89 % | 0.0138, 1.81 % |
+| `race_start` | the race 15 s after the start, the player's car on the grid | 0.008, 1.2 % | 0.0043, 0.69 % | 0.0041, 0.51 % |
 
 Noise is the worst score of an unchanged build (October 2026, one Linux machine): each of six
 recorded runs against the other runs of its recording, and seven checks against three recorded
 runs (four of the unchanged build, three with the flags below that change nothing visible). None
-of these checks failed.
+of these checks failed. November 2026 (main at 14beb4ae, the same machine, 8 cores, so with the
+split command processor): three recorded runs against each other and four checks against them,
+one of them with the build of another folder at the same commit; none failed.
 
 What the tolerances catch (dssim of the scene; title, the two free roam scenes, cockpit, photo
 mode, race):
@@ -68,7 +70,13 @@ reuse the stored save: `tools/render_test.py record`.
 baseline (18 to 30 a scene, about 140 MB in all). Each run is also compared with the other
 two: that is the scene's run-to-run noise on this build and machine. It is printed and stored in
 `<scene>/baseline.json`, and a scene noisier than its tolerance says so. Record again after an
-intended rendering change, on the build that has it, and after a driver update.
+intended rendering change, on the build that has it, after a driver update, and after a
+default that changes when the game's frames reach the screen. The split command processor (on
+with 6 or more cores since November, #764) captures the title's attract camera a frame later
+and moves the free roam scenes by about 0.003 (dssim): against baselines recorded without it,
+free roam midday scored 0.0052 to 0.0069 of its 0.005 in each of six checks, and 0.0024 to
+0.0050 in three with `--gpu_split_command_processor=false`. The pictures are the same (the
+trees' leaves and the ridge line a pixel apart), so the baselines were recorded again.
 
 ## Running a check
 
