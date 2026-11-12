@@ -22,7 +22,6 @@ FH2's map art. The game then runs with
 --fm4_track_dir=OUT/fm4-tracks/anthem --forza_mods_dir=OUT/mods --forza_mods=fh2ff-anthem
 FORZA_INSECURE_FILES='zipmanifest.xml|\tracks\anthem\'
 FORZA_TRACK_SPAWN=<the line of OUT/fm4-tracks/anthem/spawn.txt>
-FORZA_TRACK_NO_TRAFFIC=1
 ```
 
 and free roam loads the world in place of Colorado (the mod puts free roam's Tracks row 317 on
@@ -59,6 +58,12 @@ wrong picture:
   (`FH2FF_PGEO_DROP` lists the types left out).
 - **Road network.** FH1's map looks the tag name `oneway` up and uses the result unchecked (TU4
   sub_82D98D20); F&F's table has `oneway_forward` and `traffic_density_name`, renamed to FH1's.
+  Traffic asks for more names the same way (a fault at sub_82D9C8E0 once it spawned), so the
+  table carries every name of Colorado's too. FH1 reads `traffic_density` as an id of
+  `AIOpenWorld.xml`'s densities (Colorado's are 2 to 17) and F&F names them: with the names no
+  traffic came. Each is FH1's id of the same kind of road: `none` 1 (empty), `b` and
+  `open_world` 2, `a` 3, `freeway` 4, `a_high` and `a_large` 5, `festival` 8, `dirt` 12,
+  `b_high` 14.
   F&F marks 192 roads out of its area `road_type=blocked`, which FH1's map does not draw; with
   `--fh2` each takes FH2's type on the same nodes (190 found; 2 become `b`).
 - **Audio.** F&F's sound banks are FH2's FMOD project and its soundscapes name them by number:
@@ -102,7 +107,8 @@ a save for every run, the dev autopilot:
 - the world loads in free roam and draws in daylight: the road, its lines, verges, guard rails,
   fences, walls, signs, buildings, trees, hills;
 - this tool's build: 5 minutes along about 4 km of road with 30 zones streamed in, no fault, then
-  the full map with the car in the right place; the prototype it was ported from, 5 minutes
+  the full map with the car in the right place; with traffic, 150 s and cars on the road ahead
+  and alongside, no fault; the prototype it was ported from, 5 minutes
   along 4.6 km with 34 zones;
 - a closed road driven 1.3 km past the edge of the zones: no reset;
 - a closure in Nice: the barrier line and cones across the road are gone;
@@ -120,6 +126,6 @@ archive member the same.
 - The launcher's import (this is the tool only).
 - Animated scenes (procedural type 5); the PDB's `CProceduralAnimatedScene` structs.
 - F&F's own audio; its game modes (events, the map's icons are Colorado's).
-- Traffic and AI on F&F's roads.
+- The free-roam drivers besides traffic (FH1 teleports two to 0, -1020, 0 on the load): not checked.
 - The rest of FH2's map (the zones F&F cut away come from FH2's own world).
 - NVIDIA and Intel GPUs, Linux, macOS, ReGPU.

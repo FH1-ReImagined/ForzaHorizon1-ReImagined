@@ -29,7 +29,7 @@ Usage:
 To run it (dev), with the game's own launch arguments and environment:
   --fm4_track_dir=OUT/fm4-tracks/anthem --forza_mods_dir=OUT/mods --forza_mods=fh2ff-anthem
   FORZA_INSECURE_FILES='zipmanifest.xml|\\tracks\\anthem\\'
-  FORZA_TRACK_SPAWN=<the line in spawn.txt>  FORZA_TRACK_NO_TRAFFIC=1
+  FORZA_TRACK_SPAWN=<the line in spawn.txt>  (traffic drives F&F's roads; FORZA_TRACK_NO_TRAFFIC=1 takes it away)
   FORZA_AUTOPILOT=<autopilot.txt>,1.0 FORZA_AUTOPILOT_DELAY=6  (drives it)
 
 docs/fh2ff-world.md has what is converted and why, and what is not done yet.
@@ -508,6 +508,45 @@ def fix_tags(net):
     net["keys"] = [renamed.get(k, k) for k in net["keys"]]
     if net["keys"] != sorted(set(net["keys"])):   # the game searches the table as a sorted one
         raise ValueError("the road network's tag names are not sorted after renaming")
+    # FH1's traffic asks for names F&F's table has not (the same unchecked lookup: a fault at
+    # sub_82D9C8E0 once traffic spawned): every name of Colorado's table is in it, unused.
+    table = sorted(set(net["keys"]) | set(COLORADO_TAG_NAMES))
+    at = {k: i for i, k in enumerate(table)}
+    net["tags"] = [(at[net["keys"][k]], v) for k, v in net["tags"]]
+    net["keys"] = table
+    density_ids(net)
+
+
+# The tag names of Colorado's road network (colorado.nav, FH1's disc).
+COLORADO_TAG_NAMES = ("ai_disabled", "allowedfordemo", "area_type", "deadend", "discovery_zone", "display_name",
+                      "first_time_flow_disabled", "grid_control", "iefestivaldrive", "ignore_turn_flags", "oneway",
+                      "road_type", "sat_nav_junction", "text", "traffic_density", "traffic_disabled", "uturn")
+
+
+# F&F's traffic densities by name, as FH1's ids in its AIOpenWorld.xml (freeroam, traffic): 1
+# empty, 2 B-road, 3 A-road and 5 a denser one, 4 freeway, 8 the festival's (none), 12 dirt, 14
+# B-road denser (Red Rock's). F&F's own list has the same ids; its road network names them.
+TRAFFIC_DENSITY = {"none": "1", "b": "2", "open_world": "2", "a": "3", "freeway": "4", "a_high": "5",
+                   "a_large": "5", "festival": "8", "dirt": "12", "b_high": "14"}
+
+
+def density_ids(net):
+    """FH1 reads a road's traffic_density as a number (Colorado's are 2 to 17); F&F's are names,
+    and with them no traffic came. Each becomes FH1's id (an unknown name: 1, empty). The value
+    table is rebuilt sorted, each string once, as the game searches it."""
+    keys, vals = net["keys"], net["values"]
+    if "traffic_density" not in keys:
+        return {}
+    td = keys.index("traffic_density")
+    new = [vals[v] if k != td else TRAFFIC_DENSITY.get(vals[v], vals[v] if vals[v].isdigit() else "1")
+           for k, v in net["tags"]]
+    table = sorted(set(new) | {s for s in vals if s not in TRAFFIC_DENSITY})
+    at = {s: i for i, s in enumerate(table)}
+    changed = collections.Counter(f"{vals[v]}>{new[i]}" for i, (k, v) in enumerate(net["tags"])
+                                  if k == td and vals[v] != new[i])
+    net["tags"] = [(k, at[s]) for (k, _), s in zip(net["tags"], new)]
+    net["values"] = table
+    return dict(changed)
 
 
 def retype_blocked(net, fh2_net):

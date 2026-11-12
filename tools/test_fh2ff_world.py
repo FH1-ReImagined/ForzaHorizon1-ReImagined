@@ -13,6 +13,7 @@ import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fm4_pvs  # noqa: E402
+import fm4_routes  # noqa: E402
 import fh2ff_world as ff  # noqa: E402
 
 TAIL32 = bytes(range(32))
@@ -242,11 +243,27 @@ class RoadNetwork(unittest.TestCase):
     def test_tag_names(self):
         n = net([], [], ["ai_disabled", "oneway_forward", "road_type", "traffic_density_name"], ["x"])
         ff.fix_tags(n)
-        self.assertEqual(n["keys"], ["ai_disabled", "oneway", "road_type", "traffic_density"])
+        self.assertEqual(n["keys"], sorted(ff.COLORADO_TAG_NAMES))
         bad = net([], [], ["a", "oneway_forward", "z"], ["x"])
         bad["keys"] = ["zz", "oneway_forward"]
         with self.assertRaises(ValueError):
             ff.fix_tags(bad)
+
+    def test_traffic_density_ids(self):
+        nodes = [(0, 0, 0), (10, 0, 0)]
+        n = net([([0, 1], {"road_type": "a", "traffic_density_name": "a_high"}),
+                 ([0, 1], {"road_type": "b", "traffic_density_name": "b"}),
+                 ([0, 1], {"road_type": "freeway", "traffic_density_name": "freeway"}),
+                 ([0, 1], {"profile_name": "x", "traffic_density_name": "made_up"})],
+                nodes, ["profile_name", "road_type", "traffic_density_name"],
+                ["a", "a_high", "b", "freeway", "made_up", "x"])
+        ff.fix_tags(n)
+        tags = [{n["keys"][k]: n["values"][v] for k, v in n["tags"][ft:ft + tc]} for _, _, tc, ft in n["ways"]]
+        self.assertEqual([t["traffic_density"] for t in tags], ["5", "2", "4", "1"])
+        self.assertEqual([t.get("road_type") for t in tags], ["a", "b", "freeway", None])
+        self.assertEqual(n["values"], sorted(set(n["values"])))
+        self.assertNotIn("a_high", n["values"])
+        fm4_routes.check_network(fm4_routes.write_nav(n))
 
     def test_spawn_on_the_longest_stretch_inside(self):
         nodes = [(x, 5, 0) for x in range(0, 1000, 100)] + [(0, 5, z) for z in range(0, 300, 100)]
