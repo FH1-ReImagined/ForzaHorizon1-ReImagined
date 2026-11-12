@@ -611,7 +611,7 @@ use SignPath if it covers Android. Under decision 1 the split is:
 - **What it cannot sign:** the player's APK. It holds game code built on the player's PC, and
   sending it to a signing service would upload that code to a third party, which the project
   does not do. The launcher would create a signing key on the player's PC, keep it with the
-  player's settings, and sign every rebuild with it [proposal, not decided].
+  player's settings, and sign every rebuild with it (decided 2026-11-12).
 
 To ask SignPath: whether the Open Source plan covers an Android key, and who holds it. A key in
 their HSM cannot be lost, but the identity of anything signed with it then depends on SignPath.
