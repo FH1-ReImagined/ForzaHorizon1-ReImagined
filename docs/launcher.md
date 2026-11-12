@@ -87,6 +87,33 @@ PyInstaller folder grows from 216 to 454 MB, 87 to 191 MB gzipped. On NVIDIA wit
 blank view is a known Qt WebEngine problem: `QTWEBENGINE_CHROMIUM_FLAGS=--disable-gpu` or **Use my
 browser instead**.
 
+**The sign-in window on Linux (#852).** Chromium's GPU code runs inside the launcher's own process,
+and where the system's EGL and Vulkan cannot start it aborts the whole launcher ("GLOzone not found
+for unknown", then `Aborted (core dumped)`). Up to v0.3.4 the .tar.gz carried Ubuntu 22.04's
+`libstdc++.so.6` (`GLIBCXX_3.4.30`) in `_internal`; newer Mesa (Arch, CachyOS, Fedora 44: Mesa 26)
+needs `GLIBCXX_3.4.32` or newer through `libSPIRV-Tools.so`, so EGL, the Vulkan drivers and VA-API
+failed to load and **Sign in or create an account** closed the launcher. Two changes:
+- `launcher/forza-launcher.spec` leaves `libstdc++.so.6`, `libgcc_s.so.1` and `libgbm.so.1` out of
+  the Linux build, so the system's own are used (22.04's `libgbm` also looks for the drivers in
+  Debian's folder only, and failed on Fedora). The bundle needs `GLIBCXX_3.4.29` and `GCC_4.0.0` at
+  most (`objdump -p` over `_internal`), which Ubuntu 22.04 has; the 0.3.4 bundle without the three
+  files was checked in an `ubuntu:22.04` container (the window, and a Qt WebEngine page drawn with
+  and without the GPU). The release job fails if one of them is bundled again. A system without
+  `libgbm.so.1` gets no Qt WebEngine, and the dialog opens the browser. The Flatpak is not
+  affected: it uses the runtime's libraries.
+- the first window of a session is tried in a launcher process of its own first (`web_view.start_mode`,
+  `forza-launcher --web-view-probe`): one off-the-record view, never on screen, must draw a red
+  page within 15 seconds (the launcher waits 20). If it fails, it is tried again with `QTWEBENGINE_CHROMIUM_FLAGS=--disable-gpu`
+  and `QT_QUICK_BACKEND=software` (with `--disable-gpu` alone the view stays black), and the launcher's
+  window then starts that way. If that fails too, the dialog opens the player's browser as with **Use
+  my browser instead**. Each failed try goes to `launcher.log` ("website account window check", with
+  the end of its output). The check takes about 1.5 seconds and runs once a session, on Linux only.
+  Tests: `launcher/test_web_account.py` (`StartCheck`, with fake probes; `RealWindow` runs the real one).
+
+Troubleshooting, Linux: on a .tar.gz from v0.3.4 or older whose sign-in window closes the launcher,
+rename `_internal/libstdc++.so.6` to `libstdc++.so.6.bak` in the extracted folder. On any version,
+`FORZA_NO_WEB_VIEW=1` skips the window and uses the browser.
+
 Discord status sharing is available under **Online > Online > Discord** (off by
 default). See [Discord Rich Presence](discord.md) for the one-time public application
 ID setup, supported activities, privacy and local IPC tests.
@@ -794,6 +821,8 @@ the GPU queries, `git rev-parse` and the archive update helper all use it, and `
 not affect what is loaded). Tests: `launcher/test_cleanenv.py` (frozen environments with the original set, unset and
 empty, every launch path). `tools/prerelease.sh --only launcher` also runs `git` and a fake game under a library
 path of broken `libz`/`libpcre2`/`libstdc++` and fails if either inherits it.
+Since #852 the Linux .tar.gz no longer carries `libstdc++.so.6` or `libgcc_s.so.1` at all (see "The
+sign-in window on Linux"), but the other libraries in `_internal` still make this necessary.
 
 ### When the game ends (#98)
 

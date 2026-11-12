@@ -9,6 +9,7 @@
   forza-launcher --build [--root DIR] [--jobs N] [--clean]   build the game without the window
   forza-launcher --version
   forza-launcher --vulkan-devices FILE   write this PC's Vulkan devices to FILE (the launcher runs it, #672)
+  forza-launcher --web-view-probe   check that the website account window can start (the launcher runs it, #852)
 """
 import runpy
 import sys
@@ -130,6 +131,9 @@ def main(argv=None):
     if argv[:1] == ["--vulkan-devices"]:
         from . import vulkan_probe
         return vulkan_probe.main(argv[1:])
+    if argv[:1] == ["--web-view-probe"]:
+        from .ui import web_view
+        return web_view.probe_main(argv[1:])
     if argv[:1] == ["--version"]:
         print(__version__)
         return 0
