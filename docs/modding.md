@@ -110,7 +110,7 @@ A save can keep parts a mod (or a save editor) put on a car after the mod is gon
 car's engine or clutch. The game used to close when it loaded such a car (exit code 134 after
 START on the title screen, #836). Now the car loads with its stock part in that slot, and
 `forza.log` names each one:
-`Car 1398: its Clutch part 3000 doesn't belong to its DrivetrainID 806: loaded with the stock part 806000 instead`.
+`Car 1398: its Clutch part 3000 doesn't belong to its DrivetrainID 806: loaded with the stock part 806000 instead (#836)`.
 To get a different part there, upgrade the car again in the game.
 
 ## For modders
