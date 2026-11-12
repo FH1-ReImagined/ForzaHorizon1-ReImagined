@@ -26,6 +26,7 @@
 //   FORZA_TRACK_NO_TRAFFIC 1
 //   FORZA_TRACK_SPAWN     spawn.txt
 // (a variable set to 0 turns its switch off), and the lap timer (fm4_lap_timer.cpp) times it from its lap.txt.
+// FORZA_TRACK_DIAG (fm4_track.cpp's diagnostics) is left as it is: off unless a developer sets it.
 #include "fm4_track_mount.h"
 #include "fm4_lap_timer.h"
 

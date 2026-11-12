@@ -49,7 +49,8 @@ are Infineon 5-6's grey road, Indianapolis 7's pale sand and Top Gear 3's orange
 | --- | --- |
 | `FORZA_INSECURE_FILES='zipmanifest.xml\|\tracks\<track>\'` | lets the changed manifest and the track's files open as plain files |
 | `FORZA_FM4_STX='<Track>\|LOOSE/<track>_stx_numbers.bin'` | FM4's static texture pack read as FH1's |
-| `FORZA_TRACK_SPAWN=x,y,z[,fx,fz]` | the player's teleports go there (facing fx,fz); FM4TRACK diagnostics on. Suzuka's grid: `605.6,598.5,-134.1,0.61,-0.79` (15 m behind FM4's first AI waypoint, `media/AI/Tracks/suzuka_00.geo`) |
+| `FORZA_TRACK_SPAWN=x,y,z[,fx,fz]` | the player's teleports go there (facing fx,fz); the game's fatal file errors (the ones its own check stops on, not the 997s of every overlapped read) and its dirty disc message logged. Suzuka's grid: `605.6,598.5,-134.1,0.61,-0.79` (15 m behind FM4's first AI waypoint, `media/AI/Tracks/suzuka_00.geo`) |
+| `FORZA_TRACK_DIAG=1` | the FM4TRACK diagnostics: zones made live, zone, texture and resource table checks, files streamed, the texture pack (off on a player's start on a circuit, #825) |
 | `FORZA_FM4_COL=1` | the collision manager reads every cell from the `.col` (no `.fiz` streaming) |
 | `FORZA_FM4_ZONE_POOL=n` | n x the live-instance and placement pools (not needed with the padding zone) |
 | `FORZA_TRACK_NO_TRAFFIC=1` | the other cars go far below the circuit |
