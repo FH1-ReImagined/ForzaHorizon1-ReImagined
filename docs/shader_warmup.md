@@ -90,25 +90,6 @@ holds the description and shader modification versions separately, so raising
 either one starts a new store; a store with the original header and the same
 versions is kept and converted.
 
-## Descriptions that share a pipeline
-
-Several descriptions can give the driver the same creation info: the same shader
-code (guest shaders that differ only in the three words after their last
-instruction translate to the same SPIR-V), the same state and the same
-attachment formats (D24S8 and D24FS8 depth are one host format). Since ReIGlue
-0520 they share one pipeline: it is created for the first of them, and the
-others wait for it instead of creating it again. Before the comparison, state
-Vulkan defines to have no effect is written one way (the blend of channels a
-write mask leaves out, the factors of min and max blending, the stencil
-operations of a culled face, the winding when nothing reads it); only for the
-comparison, so the pipeline is created with the first description's own
-state and the driver cache entries stored before 0520 stay valid. The warm-up
-line ends with how many of its pipelines were another description's, and the
-10 s `Pipelines:` line counts them as "descriptions given another's identical
-pipeline". The store still holds every description; only the first of a group
-has a driver cache entry. `vulkan_pipeline_share_identical = false` turns it
-off. Measurements: [perf.md](perf.md#pipelines-the-driver-was-given-twice-607-2026-11-11).
-
 ## Validation
 
 - Launcher unit/Qt tests cover bounded progress parsing, old and rotated logs,

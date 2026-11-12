@@ -4030,5 +4030,7 @@ over the whole run (the loading screens before the race), not in the race. The c
 and the 11 or 12 measured stalls are the first-play compiles of new shader code, which 0520 does not
 touch; the prebuilt shader list (#276) is what removes them.
 
-**Next.** The microcode trailer could be left out of the shader hash, which would translate each
-such shader once, but the hash is the key of every stored description.
+**Not merged.** As it saves no time on either GPU, 0520 was not taken into ReIGlue; the code stays on
+ReIGlue's branch `fh1-607-pipeline-share`. The microcode trailer could also be left out of the
+shader hash, which would translate each such shader once, but the hash is the key of every stored
+description.
