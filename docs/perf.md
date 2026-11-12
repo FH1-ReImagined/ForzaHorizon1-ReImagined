@@ -4123,8 +4123,8 @@ texture and sampler bindings, 1.29 ms of a 5.5 ms benchmark frame in wall-clock 
 "same as the previous draw" path the profile pointed at is mostly there already: 0443 keeps a draw's samplers and
 skips its texture request while nothing they read has changed, and 0444 finds a texture set with the same
 contents (still bound in 30-40 % of draws). What was left were lookups on the draws where something did change:
-hash map finds were about 8 % of the recorder's samples (texture keys 1.9 %, the dynamic constants set 1.8 %,
-texture views 1.4 %, samplers 0.8 %), and `GetSamplerParameters`, which decodes the whole fetch constant for its
+hash map finds were about 7-8 % of the recorder's samples, about 6 % of them on the binding path (texture keys 1.9 %,
+the dynamic constants set 1.8 %, texture views 1.4 %, samplers 0.8 %), and `GetSamplerParameters`, which decodes the whole fetch constant for its
 filterability check, 4.4 %.
 
 **ReIGlue 0540** (Vulkan, the recorder's thread):
@@ -4137,8 +4137,9 @@ filterability check, 4.4 %.
   is destroyed;
 - the float constants copied one run of used constants at a time instead of one constant at a time.
 
-`FORZA_VK_BINDING_VERIFY=1` recomputes every hit and logs a mismatch; `FORZA_VK_BINDING_STATS=1` logs the hits.
-In a benchmark with both: no mismatch; 93 % of the constants set's hits came from the four recent keys, 68 % of
+`FORZA_VK_BINDING_VERIFY=1` recomputes every hit of the constants set, sampler parameter and sampler caches and logs a
+mismatch (the view cache's hits are not checked: a texture's views are only ever added); `FORZA_VK_BINDING_STATS=1`
+logs the hits. In a benchmark with both: no mismatch; 93 % of the constants set's hits came from the four recent keys, 68 % of
 the sampler parameter calls and 99.8 % of the sampler lookups hit.
 
 **Method.** One game build (TU4, x86-64-v3) with ReIGlue `ff03a0f` (A) or 0540 on it (B), both plugins and
@@ -4159,23 +4160,26 @@ draws): the residual is what the change does at the same draws.
 | Free roam, A | 222.6 (227.3, 217.8) | | | 3,565 | 1.032 (1.034, 1.030) | 14.6 | 0 | 0 |
 | Free roam, B | 222.7 (228.7, 216.7) | | | 3,555 | 1.036 (1.036, 1.036) | 14.6 | +0.012 ms | +0.014 ms |
 
-(The benchmark's frame rates and 1% lows follow each race's draws: B's third race drew 5,208 a frame. A line fitted
-through these three A runs and the profile's five timing runs of the same build gives +0.015 ms for B's recorder.)
+(The benchmark's frame rates and 1% lows follow each race's draws: B's third race drew 5,208 a frame. With the profile's
+two earlier timing runs of A (same build, profiler off) added to A's fit, B's residuals are +0.004 ms for the recorder
+and -0.016 ms for the frame.)
 
 **Why nothing.** A CPU profile of B (1 ms samples, the benchmark, 4,760 draws a frame) against A's (4,556): the cached lookups do drop (the
 constants set's map lookup 0.094 -> 0.025 ms a frame, `GetView` out of the top 60, `UseSampler` 0.046 -> 0.031,
-`BindingInfoFromFetchConstant` 0.049 -> 0.034), but in the same run `UpdateBindings` grows 0.42 -> 0.53 ms and
-`memmove` 0.22 -> 0.35 ms. The lookups' time was cache misses on memory the draw then touches anyway (the
+`BindingInfoFromFetchConstant` 0.049 -> 0.034; `GetSamplerParameters` itself 0.067 -> 0.076 with its memo's compares), but in the same run `UpdateBindings` grows 0.42 -> 0.53 ms and
+`memmove` 0.22 -> 0.35 ms. The likely reading (no cache counters were taken): the lookups' time was cache misses on memory the draw then touches anyway (the
 texture, its descriptors, the upload buffer), so the misses move to the next touch; and the float constants'
-copy is bound by the writes into the upload buffer, not by the loop (one `memmove` call per run costs more than
-the inlined 16-byte copies did). The recorder's per-draw time is spread thin: no single lookup on this path is a
+copy is bound by the writes into the upload buffer, not by the loop (one `memmove` call per run seems to cost more
+than the inlined 16-byte copies did). The recorder's per-draw time is spread thin: no single lookup on this path is a
 cut on its own.
 
 **The picture.** `tools/render_test.py check` against the stored baselines, A, B, A, B: A 2 and 3 of 6 scenes,
-B 5 and 6 of 6. A's failures are the run's scene, not the picture: in both A runs the car rests at another pose at
-the spawn point or traffic is in view, which fails cockpit, both free roam scenes and photo mode together (as in
-the 0450-0452 render check above). Compared with each other, A and B differ no more than two runs of the same
-build do (free roam at noon: A-B 0.0129 dssim, B-B 0.0048, A-A 0.0534).
+B 5 and 6 of 6. A's failures are the run's scene, not the picture: in A's first run the car rests at another pose at
+the spawn point with a car in view, which fails cockpit, both free roam scenes and photo mode together (as in the
+0450-0452 render check above); in its second a drivatar and its name tag are in view at noon, and dawn and
+cockpit are just over their thresholds (0.0110 against 0.01, 0.0045 against 0.003). Compared with each other (free roam at noon): A's second run against either B
+run 0.0093 and 0.0129 dssim, A's first 0.056 and 0.063, B against B 0.0048, A against A 0.0534. The differences
+follow what is in view, not the build, and the verify run above found no cache hit that differs.
 
 **Not merged.** 0540 is kept on a ReIGlue branch (`perf/0540-binding-lookups`) as a reference. The recorder's
 next candidates from the same profile are structural, not lookups: skipping the draw-state work for register
