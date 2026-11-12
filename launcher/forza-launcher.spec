@@ -114,6 +114,14 @@ a.datas = [entry for entry in a.datas if not _webengine_unused(entry[0])]
 if sys.platform == "win32":
     a.binaries = [entry for entry in a.binaries
                   if Path(entry[0]).name.lower() not in {"icu.dll", "icuuc.dll", "icuin.dll"}]
+# Linux: the system's own C++ runtime and GBM, never the build machine's (#852). Once one libstdc++ is
+# loaded every later library shares it, and the system's Mesa (EGL, Vulkan drivers, VA-API) needs the
+# system's, newer one: with 22.04's in _internal, EGL and Vulkan failed to start and Qt WebEngine
+# aborted the launcher. 22.04's libgbm looks for the drivers in Debian's folder only. The bundle needs
+# GLIBCXX_3.4.29 and GCC_4.0.0 at most (22.04 has 3.4.30), and every Linux with a desktop has all three.
+LINUX_SYSTEM_LIBS = {"libstdc++.so.6", "libgcc_s.so.1", "libgbm.so.1"}
+if sys.platform.startswith("linux"):
+    a.binaries = [entry for entry in a.binaries if Path(entry[0]).name not in LINUX_SYSTEM_LIBS]
 pyz = PYZ(a.pure)
 # The Windows version resource (company, product, description, versions, original file name) of
 # forza-launcher.exe, generated from forza_launcher/_version.py (#482, #354). Windows only: the Linux

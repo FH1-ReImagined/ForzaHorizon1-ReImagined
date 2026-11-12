@@ -645,6 +645,10 @@ jobs:
           cd launcher
           pyinstaller --noconfirm forza-launcher.spec
           dist/forza-launcher/forza-launcher --version
+          # the system's own C++ runtime and GBM, never the runner's (#852, forza-launcher.spec)
+          for lib in libstdc++.so.6 libgcc_s.so.1 libgbm.so.1; do
+            if [ -e "dist/forza-launcher/_internal/$lib" ]; then echo "::error::$lib is bundled (#852)"; exit 1; fi
+          done
       - name: Smoke test the window
         timeout-minutes: 5
         run: |

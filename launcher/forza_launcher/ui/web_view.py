@@ -19,16 +19,23 @@ What the launcher allows the view:
 Qt WebEngine is optional: create() returns None where it is missing (a checkout with PySide6
 Essentials only, Windows on Arm) or FORZA_NO_WEB_VIEW is set, and the dialog uses the player's
 browser instead. It is imported only when the window opens, so a player who never signs in loads
-none of it."""
+none of it.
+
+On Linux the first window of a session is tried in a launcher process of its own first (start_mode,
+#852): Chromium's GPU code runs inside the launcher's process, and where the system's EGL and Vulkan
+cannot start it aborts the whole launcher. If that try fails, a second one runs without the GPU
+(software_environment); if that fails too, the dialog uses the player's browser."""
 import os
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from PySide6.QtCore import QUrl, Signal
 from PySide6.QtWidgets import QHBoxLayout, QInputDialog, QLineEdit, QPushButton, QVBoxLayout, QWidget
 
-from .. import browser, paths
+from .. import browser, cleanenv, paths
 
 # Where the site's provider sign-in sends the player (allauth's Discord and GitHub apps).
 PROVIDER_HOSTS = ("discord.com", "github.com")
@@ -124,10 +131,136 @@ def available():
     return True
 
 
+# The start-up check (#852): how Qt WebEngine starts in this session.
+GPU, SOFTWARE = "gpu", "software"
+PROBE_ARG = "--web-view-probe"
+PROBE_SECONDS = 20        # the parent's limit; the probe gives up by itself after PROBE_PAGE_SECONDS
+PROBE_PAGE_SECONDS = 15
+_mode = []                # the session's answer: [GPU], [SOFTWARE] or [None] (the browser)
+
+
+def software_environment(env):
+    """`env` with Qt WebEngine on the CPU: Chromium without its GPU code (--disable-gpu) and Qt
+    Quick's software renderer (the view is a Qt Quick scene; without it the page stays black)."""
+    env = dict(env)
+    flags = env.get("QTWEBENGINE_CHROMIUM_FLAGS", "").split()
+    if "--disable-gpu" not in flags:
+        flags.append("--disable-gpu")
+    env["QTWEBENGINE_CHROMIUM_FLAGS"] = " ".join(flags)
+    env["QT_QUICK_BACKEND"] = "software"
+    return env
+
+
+def probe_command():
+    """The launcher itself with PROBE_ARG: the frozen executable, or main.py beside forza_launcher/
+    (a checkout, the Flatpak)."""
+    if paths.FROZEN:
+        return [sys.executable, PROBE_ARG]
+    return [sys.executable, str(Path(__file__).resolve().parents[2] / "main.py"), PROBE_ARG]
+
+
+def probe(software=False, run=subprocess.run, timeout=PROBE_SECONDS):
+    """Whether a Qt WebEngine view shows a page in a process of its own (probe_main), with the
+    player's environment (software: software_environment). A failure goes to launcher.log with the
+    end of the probe's output."""
+    env = cleanenv.clean_environment()
+    if software:
+        env = software_environment(env)
+    what = "website account window check" + (" without the GPU" if software else "")
+    try:
+        r = run(probe_command(), env=env, timeout=timeout, stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
+    except subprocess.TimeoutExpired:
+        paths.log_error(f"{what}: no answer in {timeout} s")
+        return False
+    except OSError as e:
+        paths.log_error(what, e)
+        return False
+    if r.returncode == 0:
+        return True
+    tail = "\n".join((r.stdout or "").strip().splitlines()[-25:])
+    paths.log_error(f"{what}: exit {r.returncode}\n{tail}")
+    return False
+
+
+def start_mode(check=None, platform=None):
+    """GPU, SOFTWARE or None (the browser) for this session, decided once. Windows starts it in the
+    launcher directly (#852 is Linux-only: there the GPU code aborts the process)."""
+    if not _mode:
+        platform = platform or sys.platform
+        check = check or probe
+        if not platform.startswith("linux"):
+            mode = GPU
+        elif check(False):
+            mode = GPU
+        elif check(True):
+            mode = SOFTWARE
+        else:
+            mode = None
+        _mode.append(mode)
+    return _mode[0]
+
+
+def _checked_mode():
+    """start_mode with a wait cursor (the check takes a second or two)."""
+    if _mode:
+        return _mode[0]
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+    QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+    try:
+        return start_mode()
+    finally:
+        QApplication.restoreOverrideCursor()
+
+
+def probe_main(argv=()):
+    """The check's process (forza-launcher --web-view-probe): one view, never on screen, with an
+    off-the-record profile (nothing on disk), on a red page. 0 when the page is drawn red (or near
+    it: a forced dark mode), 1 when it is not (black: Qt Quick could not draw), 2 when it did not load
+    in time; where the GPU code cannot start, Chromium aborts this process instead of the launcher."""
+    from PySide6.QtCore import QCoreApplication, Qt, QTimer
+    from PySide6.QtWidgets import QApplication
+    QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
+    app = QApplication([sys.argv[0]] + list(argv))
+    from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
+    from PySide6.QtWebEngineWidgets import QWebEngineView
+    profile = QWebEngineProfile()          # no name: off the record
+    page = QWebEnginePage(profile)
+    view = QWebEngineView()
+    view.setPage(page)
+    view.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen)
+    view.resize(320, 240)
+    view.show()
+    result = [2]
+
+    def drawn():
+        colour = view.grab().toImage().pixelColor(view.width() // 2, view.height() // 2)
+        result[0] = 0 if colour.red() >= 128 and max(colour.green(), colour.blue()) < 96 else 1
+        if result[0]:
+            print(f"web view probe: the page was drawn {colour.name()}, not red", flush=True)
+        app.quit()
+
+    page.loadFinished.connect(lambda ok: QTimer.singleShot(1000, drawn) if ok else app.quit())
+    page.setHtml("<html><body style='margin:0;background:#ff0000'></body></html>")
+    QTimer.singleShot(PROBE_PAGE_SECONDS * 1000, app.quit)
+    app.exec()
+    view.close()
+    del view, page, profile
+    return result[0]
+
+
 def create(site, parent=None, storage=None):
-    """A SignInView, or None where Qt WebEngine is missing or does not start."""
+    """A SignInView, or None where Qt WebEngine is missing or does not start (start_mode)."""
     if not available():
         return None
+    mode = _checked_mode()
+    if mode is None:
+        return None
+    if mode == SOFTWARE:
+        # read by Qt WebEngine and Qt Quick when the first view starts
+        os.environ.update({k: v for k, v in software_environment(os.environ).items()
+                           if k in ("QTWEBENGINE_CHROMIUM_FLAGS", "QT_QUICK_BACKEND")})
     try:
         view = _classes()(site, parent, storage)
     except Exception as e:  # a broken Qt WebEngine install: the browser works instead
