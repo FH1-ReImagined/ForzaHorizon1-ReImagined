@@ -887,6 +887,7 @@ class StartCheck(unittest.TestCase):
         with mock.patch.object(wv, "available", return_value=True), \
                 mock.patch.object(wv, "_classes", return_value=View), \
                 mock.patch.object(wv, "_quit_hooked", True), \
+                mock.patch.object(wv.sys, "platform", "linux"), \
                 mock.patch.dict(os.environ, {"QTWEBENGINE_CHROMIUM_FLAGS": "", "QT_QUICK_BACKEND": ""}):
             with mock.patch.object(wv, "probe", return_value=False) as probe:
                 self.assertIsNone(wv.create("https://forza.dyotson.dev"))      # the browser then
