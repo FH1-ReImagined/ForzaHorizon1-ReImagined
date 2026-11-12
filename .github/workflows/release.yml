@@ -194,6 +194,11 @@ jobs:
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/club_garage_test.cpp -o "$RUNNER_TEMP/club-garage-test"
           "$RUNNER_TEMP/club-garage-test"
       - if: runner.os == 'Linux'
+        name: Garage cars with another car's part load with the stock part
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/car_part_fallback_test.cpp -o "$RUNNER_TEMP/car-part-fallback-test"
+          "$RUNNER_TEMP/car-part-fallback-test"
+      - if: runner.os == 'Linux'
         name: Title service request header and its nonblocking stream
         run: |
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src tools/test_lsp_request_header.cpp -o "$RUNNER_TEMP/lsp-request-header-test"

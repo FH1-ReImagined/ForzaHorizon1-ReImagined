@@ -124,6 +124,26 @@ Leaderboard screens, Windows and Steam Deck are not scripted: a hand run in the 
 
 ## Status log
 
+- 2026-11-12: **A garage car with another car's part loads with the stock part (#836).**
+  When a save's current car has a part from another car, START on the title screen ended
+  the game with exit code 134. A mod's database or a save edit had put the part there; the
+  official data has no such part. The car physics loader (TU4 `sub_82CB4500`, base
+  `sub_82BF4FB0`) builds each part's record with one of five creators. Each creator checks
+  the part's parent column (Ordinal, EngineID, MotorID, DrivetrainID, CarBodyID) against
+  the car's and leaves the record NULL when they differ. A NULL clutch is dereferenced in
+  `sub_82CAAB60` (lr `82CAAB8C`). `src/hooks/car_part_fallback.cpp` runs a creator again
+  when it made no record. It uses the expected parent's `IsStock=1` part, or -1 (no part,
+  an empty record) when that parent has none, as for a turbo on an engine without one. It
+  logs one warning per car and part. A record the creator made is left as it is. Measured on
+  the TU4 build with copies of golden-save-tu4, offline: with the Aventador's clutch set to
+  3000 (drivetrain 3's), the game reaches the main menu and free roam, and the car drives
+  at about 150 km/h. The same commit without the hook faults at START (NULL r3, lr
+  `82CAAB8C`). Mismatched brakes, camshaft, transmission and hood give one line each and
+  the car drives; without the hook that save faults at lr `82CAA648`. A foreign engine and
+  a foreign twin turbo load as the stock engine without a turbo (that engine has no stock
+  turbo), and the car drives. An intact save logs no fallback line, and its warnings match
+  the build without the hook. Pure logic: `forza-recomp/tests/car_part_fallback_test.cpp`.
+
 - 2026-10-23: **Internal heap stop in the NVIDIA-labelled crash #299.** Read-only
   disassembly identifies TU4 `sub_82423000` (base `sub_823F3048`) as the memory
   manager's allocation loop. When no allocator succeeds, it compares heap `+0x154`
