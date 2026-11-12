@@ -23,6 +23,8 @@ Usage:
   fm4_cars.py list    --fm4 FM4_DISC1 [--fm4-content DIR] [--fm4-dlc DIR] --fh1 GAME [--update TU]
   fm4_cars.py convert --fm4 FM4_DISC1 [--fm4-content DIR] [--fm4-dlc DIR] --fh1 GAME [--update TU]
                       [--dlc DIR] --out MOD_DIR (--cars A,B,... | --all)
+  fm4_cars.py check   --fh1 GAME [--update TU] --out MOD_DIR [--package PACKAGE_DIR]
+                      (what an installed import lacks that the game reads for its cars)
 
 FM4_DISC1 is the unpacked disc 1 (the folder with default.xex and Media); --fm4-content is a
 folder holding the unpacked disc 2 car packs (each with Media/DLCZips/*_pri_65.zip); --fm4-dlc
@@ -157,6 +159,7 @@ class PackWriter:
         self.f = None
         self.names = set()
         self.zips = []
+        self.loose = set()
 
     def _open(self):
         self.index += 1
@@ -190,6 +193,25 @@ class PackWriter:
         self.central.append(struct.pack("<IHHHHHHIIIHHHHHII", 0x02014B50, 10, 10, 0, method, 0, 0x21,
                                         crc, len(payload), size, len(name), 8, 0, 0, 0, 0, offset)
                             + name + struct.pack("<HHI", 0x1123, 4, data_at))
+
+    def add_loose(self, rel, src):
+        """A file the game reads only as a file, an engine sound bank (rel: "Media/audio/cars/
+        Engines/Soundbanks/LOD1/x.fsb"): copied from src into the folder of the current zip's
+        name, where FM4's and FH1's DLC packs keep theirs (BANKS_DIR, #776). Once per name."""
+        if rel.lower() in self.loose:
+            return False
+        if not self.zips:
+            self._open()
+        dest = os.path.join(self.folder, self.zips[-1][:-len(".zip")], *rel.split("/"))
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        with open(src, "rb") as f, open(dest, "wb") as g:
+            while True:
+                chunk = f.read(1 << 20)
+                if not chunk:
+                    break
+                g.write(chunk)
+        self.loose.add(rel.lower())
+        return True
 
     def close(self):
         if self.f is None:
@@ -256,6 +278,41 @@ PACK_CMT = re.compile(r"(?i)carmodeltuning_pri_\d+\.zip$")  # mounted at media/a
 PATCH = re.compile(r"(?i)^media/db/patch/(\d+)_merge\.slt$")
 PACK_AUDIO = {"cmt": "media/audio/cars/carmodeltuning/", "et": "media/audio/cars/engines/enginetuning/",
               "ht": "media/audio/cars/engines/harmonictuning/"}
+# Engine sound banks (.fsb). The game reads a bank as a file, never from a zip: the disc's are loose
+# files in this folder, and a DLC pack's are loose files in the folder of one of its zips' names
+# (Media/DLCZips/<zip name>/Media/audio/cars/Engines/Soundbanks/LOD1/...), which the game looks in
+# when that folder exists. A harmonic tuning file names its bank (<Soundbank name="...">); a bank
+# no file has stops the game with its disc read error (#776).
+BANKS_DIR = ("Media", "audio", "cars", "Engines", "Soundbanks")
+# Named by FH1's own NA_*_HT.xml placeholder tunings (24 of its cars, the Prius and the Leaf
+# among them), with no file in FH1 or FM4: the game never loads it.
+PLACEHOLDER_BANKS = {"na.fsb"}
+_BANK = re.compile(rb'<Soundbank\s+name="([^"]+)"')
+
+
+def bank_names(data):
+    """The sound banks a harmonic tuning file (bytes) names, with ".fsb" added where it has none
+    (FH1's 6N1_NSX_EngAmb_HT.xml names its bank without it)."""
+    out = []
+    for m in _BANK.findall(data):
+        name = m.decode("latin-1").strip()
+        out.append(name if "." in name else name + ".fsb")
+    return out
+
+
+def loose_banks(folder):
+    """{lower file name: (path, path under the Soundbanks folder)}: the .fsb files under folder
+    (a Soundbanks folder: LOD1/, Burbles/), or {} when there is none."""
+    out = {}
+    if not folder or not os.path.isdir(folder):
+        return out
+    for root, dirs, files in os.walk(folder):
+        dirs.sort()
+        for f in sorted(files):
+            if f.lower().endswith(".fsb"):
+                path = os.path.join(root, f)
+                out.setdefault(f.lower(), (path, os.path.relpath(path, folder).replace(os.sep, "/")))
+    return out
 
 
 def pack_folders(root):
@@ -541,6 +598,18 @@ class FM4:
                                 self._audio["cmt"][i.filename.lower()] = (path, i)
         return self._audio
 
+    def banks(self):
+        """{lower file name: (path, path under Soundbanks)}: FM4's engine sound banks, disc 1's
+        and those the packs hold loose next to their zips (BANKS_DIR), later packs over earlier
+        ones (#776)."""
+        if getattr(self, "_banks", None) is None:
+            self._banks = loose_banks(find_ci(self.media, *BANKS_DIR[1:]))
+            for dz in self.pack_dirs:
+                for d in sorted(os.listdir(dz)):
+                    if os.path.isdir(os.path.join(dz, d)):
+                        self._banks.update(loose_banks(find_ci(os.path.join(dz, d), *BANKS_DIR)))
+        return self._banks
+
     def logos(self):
         """Lowercase member name -> Member: the make logos in UI/Textures.zip (UI4/Logos/...)."""
         z = find_ci(self.media, "UI", "Textures.zip")
@@ -792,6 +861,182 @@ ENGINE_GAIN = 1.6
 ENGINE_VOLUME_MAX = 1.0
 _GCV = re.compile(rb"(<GlobalCarVolume\b.*?</GlobalCarVolume>)", re.S)
 _CURVE_Y = re.compile(rb'(\by[0-9]+=")([0-9.eE+-]+)(")')
+
+
+_TUNING_NAME = re.compile(r"(?i)^(\d*)([a-z]*)\d*_(.*)_([a-z]+)_HT\.xml$")
+
+
+def similar_tunings(name, candidates):
+    """candidates (harmonic tuning file names), the most like name first: those of the same part
+    (Exh, Int, EngAmb), then the same kind of engine (the first letter after the cylinder count:
+    N, T, S, R for rotary...), the same count, the same letters, the longest common start, the
+    shortest. 5T1_A200_1478_Exh_HT.xml: 5T1_A200_Exh_HT.xml first."""
+    m = _TUNING_NAME.match(name)
+    count, letters, _, part = m.groups() if m else ("", "", "", "")
+    low = name.lower()
+
+    def key(c):
+        n = _TUNING_NAME.match(c)
+        cc, cl, _, cp = n.groups() if n else ("", "", "", "")
+        common = len(os.path.commonprefix([low, c.lower()]))
+        return (cp.lower() != part.lower(), cl[:1].lower() != letters[:1].lower(), cc != count,
+                cl.lower() != letters.lower(), -common, len(c), c.lower())
+    return sorted((c for c in candidates if c.lower() != low), key=key)
+
+
+def _read_file(path):
+    with open(path, "rb") as f:
+        return f.read()
+
+
+def sound_fallbacks(fh1_media, package, mod=None):
+    """An import made before #776 left out the engine sound banks FH1 lacks (of a few FM4 DLC
+    cars: the 1986 Audi Sport quattro S1, the 1985 RX-7, the 787B), and the game stopped with its
+    disc read error where it needed one, at every start once such a car was the current one.
+    Without FM4's files at hand, each harmonic tuning file of the import (package: its folder;
+    mod: the mod's folder, whose copies the game reads first) whose bank FH1, the package and the
+    mod all lack gets FH1's most similar one (similar_tunings) whose banks FH1 has:
+    {its name: (FH1's file name, FH1's data)}. None when FH1's banks are not found (fh1_media:
+    FH1's media folder)."""
+    fh_banks = set(loose_banks(find_ci(fh1_media, *BANKS_DIR[1:])))
+    if not fh_banks:
+        return None
+    have, hts = set(), {}
+    dz = find_ci(package, "Media", "DLCZips") if package else None
+    try:
+        for f in sorted(os.listdir(dz)) if dz else []:
+            p = os.path.join(dz, f)
+            if os.path.isdir(p):
+                have |= set(loose_banks(find_ci(p, *BANKS_DIR)))
+            elif f.lower().endswith(".zip"):
+                z = ZIPS.get(p)
+                for i in z.infolist():
+                    low = i.filename.lower()
+                    if low.startswith(PACK_AUDIO["ht"]) and low.endswith(".xml") and "/" not in low[len(PACK_AUDIO["ht"]):]:
+                        hts[low[len(PACK_AUDIO["ht"]):]] = (i.filename[len(PACK_AUDIO["ht"]):], Member(z, p, i).read)
+        ht_dir = find_ci(mod, "media", "audio", "cars", "engines", "harmonictuning") if mod else None
+        for f in sorted(os.listdir(ht_dir)) if ht_dir else []:
+            path = os.path.join(ht_dir, f)
+            hts[f.lower()] = (f, lambda path=path: _read_file(path))
+        if mod:
+            have |= set(loose_banks(find_ci(mod, *BANKS_DIR)))
+        ok = fh_banks | have | PLACEHOLDER_BANKS
+        fh_zip = find_ci(fh1_media, "audio", "cars", "Engines", "HarmonicTuning.zip")
+        fh_ht = {}
+        if fh_zip:
+            z = ZIPS.get(fh_zip)
+            fh_ht = {i.filename: Member(z, fh_zip, i) for i in z.infolist() if not i.is_dir()}
+        lower_fh = {n.lower() for n in fh_ht}
+        out = {}
+        for low, (name, read) in sorted(hts.items()):
+            if low in lower_fh:
+                continue  # FH1's own copy is the one the game reads
+            if all(b.lower() in ok for b in bank_names(read())):
+                continue
+            for cand in similar_tunings(name, fh_ht):
+                data = fh_ht[cand].read()
+                banks = bank_names(data)
+                if banks and all(b.lower() in fh_banks for b in banks):  # a real bank, no placeholder
+                    out[name] = (cand, data)
+                    break
+        return out
+    finally:
+        ZIPS.close(*(r for r in (package, fh1_media) if r))
+
+
+def check_import(fh1, mod, package=None):
+    """What an installed import lacks that the game reads for one of its cars (#776): for every
+    car of the mod's database that FH1's database lacks, its model, its CarModelTuning, its
+    engines' rows and EngineTuning, the harmonic tuning those name and the sound banks that
+    names, each looked up where the game reads it (the mod first, then FH1's title update and
+    disc, then the package's zips; a bank only as a loose file: FH1's disc or the package's
+    folders). fh1: an FH1; mod, package: the folders. [(car, problem)], [] when complete."""
+    mod_files = {}
+    for root, _, files in os.walk(os.path.join(mod, "media")):
+        for f in files:
+            path = os.path.join(root, f)
+            mod_files[os.path.relpath(path, mod).replace(os.sep, "/").lower()] = lambda p=path: _read_file(p)
+    pack_files, banks = {}, set(loose_banks(find_ci(fh1.media, *BANKS_DIR[1:]))) | PLACEHOLDER_BANKS
+    dz = find_ci(package, "Media", "DLCZips") if package else None
+    for f in sorted(os.listdir(dz)) if dz else []:
+        p = os.path.join(dz, f)
+        if os.path.isdir(p):
+            banks |= set(loose_banks(find_ci(p, *BANKS_DIR)))
+        elif f.lower().endswith(".zip"):
+            z = ZIPS.get(p)
+            for i in z.infolist():
+                pack_files.setdefault(i.filename.lower(), Member(z, p, i).read)
+    fh_files = {}
+    for kind, rel in AUDIO_ZIPS.items():
+        z = find_ci(fh1.media, *rel.split("/"))
+        if z:
+            for i in ZIPS.get(z).infolist():
+                fh_files["media/%s/%s" % (rel[:-4].lower(), i.filename.lower())] = Member(ZIPS.get(z), z, i).read
+    if fh1.update:
+        z = ZIPS.get(fh1.update)
+        for i in z.infolist():
+            fh_files["media/" + i.filename.lower()] = Member(z, fh1.update, i).read
+
+    def find(rel):
+        rel = rel.lower()
+        return mod_files.get(rel) or fh_files.get(rel) or pack_files.get(rel)
+    db = sqlite3.connect("file:%s?mode=ro" % find_ci(mod, "media", "db", "gamedb.slt"), uri=True)
+    fh1db = fh1.db()
+    problems, done_ht = [], {}
+    try:
+        have = {r[0] for r in fh1db.execute("select Id from Data_Car")}
+        has_motors = bool(db.execute("select 1 from sqlite_master where name='List_UpgradeMotor'").fetchone()
+                          and db.execute("select 1 from sqlite_master where name='Data_Motor'").fetchone())
+        for cid, name in db.execute("select Id, MediaName from Data_Car order by Id"):
+            if cid in have:
+                continue
+            car = "%s (%d)" % (name, cid)
+            if not find("media/cars/%s/%s.carbin" % (name, name)):
+                problems.append((car, "no model media/cars/%s/%s.carbin" % (name, name)))
+            if not find(PACK_AUDIO["cmt"] + name + "_CMT.xml"):
+                problems.append((car, "no CarModelTuning %s_CMT.xml" % name))
+            engines = [r[0] for r in db.execute(
+                "select e.MediaName from List_UpgradeEngine u left join Data_Engine e on "
+                "e.EngineID=u.EngineID where u.Ordinal=?", (cid,))]
+            if not engines and has_motors:  # an electric car (the Tesla): its motor's tuning
+                engines = [r[0] for r in db.execute(
+                    "select m.MediaName from List_UpgradeMotor u left join Data_Motor m on "
+                    "m.MotorID=u.MotorID where u.Ordinal=?", (cid,))]
+            if not engines:
+                problems.append((car, "no engine or motor rows (List_UpgradeEngine, List_UpgradeMotor)"))
+            for engine in engines:
+                if engine is None:
+                    problems.append((car, "an engine or motor row names one its table lacks"))
+                    continue
+                read = find(PACK_AUDIO["et"] + engine + "_ET.xml")
+                if not read:
+                    problems.append((car, "no EngineTuning %s_ET.xml" % engine))
+                    continue
+                for ht in sorted(set(re.findall(r'"([^"]+_HT\.xml)"', read().decode("latin-1")))):
+                    if ht.lower() not in done_ht:
+                        hread = find(PACK_AUDIO["ht"] + ht)
+                        done_ht[ht.lower()] = (["no harmonic tuning %s" % ht] if not hread else
+                                               ["%s names the sound bank %s, which no file has" % (ht, b)
+                                                for b in bank_names(hread()) if b.lower() not in banks])
+                    problems += [(car, p) for p in done_ht[ht.lower()]]
+    finally:
+        db.close()
+        fh1db.close()
+        ZIPS.close(*(r for r in (package,) if r))
+    return problems
+
+
+# A traffic car's cut-down EngineTuning: its live (uncommented) exhaust, intake or engine ambient
+# slot names a Traffic_*_HT.xml (a few low loops only) or an NA_*_HT.xml (the NA.fsb placeholder).
+# FH1 keeps such a copy for some FM4 cars it cut as traffic cars (the 2006 Focus ST, the 2011 A4,
+# Spark and Volt, the 2009 xD), their real slots commented out or gone (#840).
+_COMMENT = re.compile(rb"<!--.*?-->", re.S)
+_TRAFFIC_SLOT = re.compile(rb'(?i)"(?:Traffic|NA)_(?:[^"]*_)?(?:Exh|Int|EngAmb)_HT\.xml"')
+
+
+def traffic_tuning(data):
+    """True when an EngineTuning file (bytes) is a traffic car's placeholder (_TRAFFIC_SLOT)."""
+    return bool(_TRAFFIC_SLOT.search(_COMMENT.sub(b"", data)))
 
 
 def louder_engine(data, gain=ENGINE_GAIN):
@@ -1473,12 +1718,7 @@ class Converter:
             return {}
         return {i.filename.lower(): (z, i) for i in ZIPS.get(z).infolist()}
 
-    def audio(self, car_name, engine_names, report):
-        """The car's engine sound set-up. FH1 has every FM4 sound bank and harmonic tuning
-        file, and the car and engine tuning (CarModelTuning, EngineTuning) of most FM4 cars;
-        what it lacks is taken from FM4's copy (its audio/cars archives, and a DLC pack's own
-        tuning files for its cars). The EngineTuning of
-        an engine no FH1 car uses goes into the mod at FH1's level (louder_engine, #712)."""
+    def _audio_sources(self):
         if not hasattr(self, "_fh_audio"):
             self._fh_audio = {k: self._audio_zip_names(self.fh1.media, v) for k, v in AUDIO_ZIPS.items()}
             self._fm_audio = {k: self._audio_zip_names(self.fm4.media, v) for k, v in AUDIO_ZIPS.items()}
@@ -1490,6 +1730,9 @@ class Converter:
                         pre = v[:-4].lower() + "/"
                         if i.filename.lower().startswith(pre):
                             self._fh_audio[k][i.filename.lower()[len(pre):]] = (self.fh1.update, i)
+            # FH1's own banks: the loose files of its disc (an FH1 DLC's may not stay installed)
+            self._fh_banks = set(loose_banks(find_ci(self.fh1.media, *BANKS_DIR[1:])))
+            self._fm_banks = self.fm4.banks()
         if not hasattr(self, "_fh1_engines"):
             # Engines an FH1 car uses (its own, or one it can swap to): their tuning is FH1's
             # and stays as it is; so do those of FH1's DLC cars, which may not be in this database.
@@ -1497,46 +1740,102 @@ class Converter:
                 "select distinct e.MediaName from List_UpgradeEngine u join Data_Engine e "
                 "on e.EngineID=u.EngineID")} | {n.lower() for n in FH1_DLC_CARS}
             self._louder_done = set()
+
+    def audio_plan(self, car_name, engine_names):
+        """What the car's engine sound needs that FH1 lacks, as a list of (what, path, data or
+        source file, name for the report), checked before anything is written: FH1 has every
+        FM4 disc car's sound banks and harmonic tuning, and the car and engine tuning
+        (CarModelTuning, EngineTuning) of most FM4 cars; what it lacks is taken from FM4's copy
+        (its audio/cars archives, and a DLC pack's own tuning files and sound banks for its cars).
+        The EngineTuning of an engine no FH1 car uses goes into the mod at FH1's level
+        (louder_engine, #712): FH1's copy, else FM4's, and FM4's where FH1's is a traffic car's
+        placeholder and FM4's is not (traffic_tuning, #840). A tuning or sound bank that no file
+        given has raises ConvertError: the game stops with its disc read error where it misses
+        one (#776)."""
+        self._audio_sources()
         wanted = [("cmt", car_name + "_CMT.xml")] + [("et", e + "_ET.xml") for e in engine_names]
-        added = []
+        plan, hts = [], []
         for kind, fname in wanted:
             rel = "media/%s/%s" % (AUDIO_ZIPS[kind][:-4].lower(), fname)
             engine = fname[:-len("_ET.xml")].lower() if kind == "et" else None
+            fh_src = self._fh_audio[kind].get(fname.lower())
             if kind == "et" and engine not in self._fh1_engines:
                 # An engine only FM4's cars have: its tuning (FH1's copy, else FM4's) with
                 # FH1's level (ENGINE_GAIN), in the mod, which outranks every archive.
                 if engine in self._louder_done:
                     continue
-                src = self._fh_audio[kind].get(fname.lower()) or self._fm_audio[kind].get(fname.lower())
+                fm_src = self._fm_audio[kind].get(fname.lower())
+                src = fh_src or fm_src
                 if not src:
                     continue
                 data = Member(ZIPS.get(src[0]), src[0], src[1]).read()
-                self.write(rel, louder_engine(data))
-                self._louder_done.add(engine)
-                report["louder"] = report.get("louder", 0) + 1
-                if fname.lower() in self._fh_audio[kind]:
-                    continue
-            elif fname.lower() in self._fh_audio[kind]:
+                if fh_src and fm_src and traffic_tuning(data):
+                    # FH1's copy is a cut traffic car's (#840): FM4's own, unless it is one too
+                    # (the electric Volt's), with FM4's harmonic tuning, all of it FH1's too
+                    fm_data = Member(ZIPS.get(fm_src[0]), fm_src[0], fm_src[1]).read()
+                    if not traffic_tuning(fm_data):
+                        data, fh_src = fm_data, None
+                plan.append(("louder", rel, louder_engine(data), None if fh_src else fname))
+                if fh_src:
+                    continue  # FH1's tuning names FH1's harmonic tuning and banks
+            elif fh_src:
                 continue
             else:
                 src = self._fm_audio[kind].get(fname.lower())
                 if not src:
                     continue
                 data = Member(ZIPS.get(src[0]), src[0], src[1]).read()
-                self.put(rel, data)
-            added.append(fname)
+                plan.append(("put", rel, data, fname))
             if kind == "et":
-                for ht in sorted(set(re.findall(r'"([^"]+_HT\.xml)"', data.decode("latin-1")))):
-                    if ht.lower() in self._fh_audio["ht"]:
-                        continue
-                    hsrc = self._fm_audio["ht"].get(ht.lower())
-                    if hsrc:
-                        self.put("media/audio/cars/engines/harmonictuning/" + ht,
-                                   Member(ZIPS.get(hsrc[0]), hsrc[0], hsrc[1]).read())
-                        added.append(ht)
-                    report.setdefault("audio_missing", []).append(ht) if not hsrc else None
+                hts += [h for h in sorted(set(re.findall(r'"([^"]+_HT\.xml)"', data.decode("latin-1"))))
+                        if h not in hts]
+        for ht in hts:
+            if ht.lower() in self._fh_audio["ht"]:
+                continue  # FH1's own, naming FH1's own banks
+            hsrc = self._fm_audio["ht"].get(ht.lower())
+            if not hsrc:
+                raise ConvertError("its engine's sound tuning %s is in none of the files given" % ht)
+            hdata = Member(ZIPS.get(hsrc[0]), hsrc[0], hsrc[1]).read()
+            plan.append(("put", "media/audio/cars/engines/harmonictuning/" + ht, hdata, ht))
+            for bank in bank_names(hdata):
+                low = bank.lower()
+                if low in self._fh_banks or low in PLACEHOLDER_BANKS:
+                    continue
+                bsrc = self._fm_banks.get(low)
+                if not bsrc:
+                    raise ConvertError("its engine sound bank %s is in none of the files given" % bank)
+                if not self.pack:
+                    raise ConvertError("its engine sound bank %s is not one of FH1's: the game reads it "
+                                       "only from a package (--package)" % bank)
+                plan.append(("bank", "/".join(BANKS_DIR) + "/" + bsrc[1], bsrc[0], os.path.basename(bsrc[0])))
+        return plan
+
+    def audio_apply(self, car_name, plan, report):
+        """audio_plan's files written: the tunings into the mod or the package, the banks loose
+        next to the package's current zip, the one holding this car's files."""
+        added = []
+        for what, rel, data, name in plan:
+            if what == "louder":
+                engine = rel.rsplit("/", 1)[1][:-len("_ET.xml")].lower()
+                if engine in self._louder_done:
+                    continue
+                self.write(rel, data)
+                self._louder_done.add(engine)
+                report["louder"] = report.get("louder", 0) + 1
+            elif what == "put":
+                self.put(rel, data)
+            elif not self.pack.add_loose(rel, data):
+                continue  # a bank another car brought already
+            else:
+                report["banks"] = report.get("banks", 0) + 1
+            if name:
+                added.append(name)
         if added:
             report.setdefault("audio", []).append((car_name, added))
+
+    def audio(self, car_name, engine_names, report):
+        """The car's engine sound set-up (audio_plan), written."""
+        self.audio_apply(car_name, self.audio_plan(car_name, engine_names), report)
 
     def convert_car(self, cid, name):
         self.load_donors()
@@ -1678,12 +1977,13 @@ class Converter:
             else:
                 log("converting %s (%d)" % (name, cid))
             try:
-                self.convert_car(cid, name)
-                row = [r for r in rows["Data_Car"] if r["Id"] == cid][0]
                 engines = [r[0] for r in self.fm4db.execute(
                     "select e.MediaName from List_UpgradeEngine u join Data_Engine e on "
                     "e.EngineID=u.EngineID where u.Ordinal=?", (cid,))]
-                self.audio(name, engines, report)
+                sound = self.audio_plan(name, engines)  # a car missing a sound file is left out first
+                self.convert_car(cid, name)
+                row = [r for r in rows["Data_Car"] if r["Id"] == cid][0]
+                self.audio_apply(name, sound, report)
                 wn = wheel_names.get(row["StockWheelID"])
                 if wn and not self.convert_wheel(wn):
                     log("  %s: no files for its wheel %s" % (name, wn))
@@ -1713,8 +2013,8 @@ class Converter:
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("cmd", choices=["list", "convert"])
-    ap.add_argument("--fm4", required=True)
+    ap.add_argument("cmd", choices=["list", "convert", "check"])
+    ap.add_argument("--fm4", help="FM4's unpacked disc 1 (list, convert)")
     ap.add_argument("--fm4-content")
     ap.add_argument("--fm4-dlc", help="a folder of unpacked FM4 DLC packages (each with Media/DLCZips)")
     ap.add_argument("--fh1", required=True)
@@ -1727,6 +2027,18 @@ def main(argv=None):
     ap.add_argument("--all", action="store_true")
     a = ap.parse_args(argv)
     try:
+        if a.cmd == "check":
+            if not a.out:
+                ap.error("check needs --out (the mod folder) and --package when there is one")
+            fh1 = FH1(a.fh1, a.update, a.dlc)
+            problems = check_import(fh1, a.out, a.package)
+            fh1.close()
+            for car, what in problems:
+                print("%s: %s" % (car, what))
+            print("%d problem(s)" % len(problems))
+            return 1 if problems else 0
+        if not a.fm4:
+            ap.error("--fm4 is required")
         fm4 = FM4(a.fm4, a.fm4_content, a.fm4_dlc)
         fh1 = FH1(a.fh1, a.update, a.dlc)
         if a.cmd == "list":
@@ -1760,6 +2072,8 @@ def main(argv=None):
             print("engine tunings at FH1's level: %d" % rep["louder"])
         for car, files in rep.get("audio", []):
             print("sound set-up from FM4 for %s: %s" % (car, ", ".join(files)))
+        if rep.get("banks"):
+            print("engine sound banks from FM4: %d" % rep["banks"])
         if rep.get("conflicts"):
             print("rows whose key FH1 uses differently (left out):", rep["conflicts"][:20])
         c.close()

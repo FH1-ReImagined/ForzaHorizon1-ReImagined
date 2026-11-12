@@ -2,13 +2,14 @@
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QRegularExpression, QTimer, Qt, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QIntValidator, QRegularExpressionValidator
+from PySide6.QtGui import QIntValidator, QRegularExpressionValidator
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog,
                                QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QLineEdit, QTabBar, QPlainTextEdit,
                                QMessageBox, QPushButton, QRadioButton, QScrollArea, QSlider, QStackedWidget,
                                QToolButton, QToolTip, QVBoxLayout, QWidget)
 
-from .. import PUBLIC_SERVER, display, dlss, fsr3, game, gamertag, gpu, power, regpu, schema, specs, vr
+from .. import (PUBLIC_SERVER, browser, display, dlss, fsr3, game, gamertag, gpu, power, regpu, schema, server_list,
+               specs, vr)
 from ..config import Config, render_toml, validate_extras
 from . import theme
 from .settings_search import SettingsSearch
@@ -219,7 +220,7 @@ def make_control(s: schema.Setting, value, on_change, note=None, monitor=0):
         w = Combo()
         w.setEditable(True)
         w.addItem(display.label(monitor), 0)
-        for v in (*schema.LOW_FRAME_RATES, 60, 75, 90, 100, 120, 144, 165, 180, 200, 240):
+        for v in schema.FRAME_RATE_PRESETS:
             w.addItem(f"{v} fps", v)
         w.lineEdit().setValidator(QRegularExpressionValidator(QRegularExpression(r"[1-9]\d{0,2}(?: fps)?")))
         w.setToolTip("Pick a rate or type your own (20, 30, 40, or 60 to 240), such as your display's "
@@ -832,7 +833,7 @@ class SettingsPage(QWidget):
         except OSError as e:
             QMessageBox.warning(self, "Texture packs", f"Could not create {folder}: {e}")
             return
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+        browser.open_url(QUrl.fromLocalFile(str(folder)))
 
     # --- graphics card (#52) --------------------------------------------------------
     def _gpu_block(self, lay):
@@ -1046,6 +1047,9 @@ class SettingsPage(QWidget):
                                  "Use this server")
         self.search.add("Add a server by address", "Servers", "Add a server", servers.address,
                         keywords="host port custom_server my own server community address")
+        self.search.add("Test connection", "Servers", "Servers", servers.test_button,
+                        keywords="can't get online not registered firewall VPN UDP blocked DNS reachable "
+                                 "connection problem sign in")
 
     def _show_server(self):
         mode = self.cfg.online["mode"]
@@ -1060,16 +1064,19 @@ class SettingsPage(QWidget):
         self.server_detail.setText(detail)
 
     def _web_account_block(self, lay):
-        """Online > Online > Website account (ui/web_account.py), for the public server only:
-        the website's accounts check keys the public server knows."""
+        """Online > Online > Website account (ui/web_account.py), shown for every server. The
+        website's accounts check keys the public server knows, so on another server the card says
+        so and offers to switch Play to the Public server."""
         from .web_account import WebAccountCard
         content = section_card(lay, "Website account")
         self.web_account_frame = content.parentWidget()
         self.web_account = WebAccountCard(self.cfg, self)
+        self.web_account.use_public.connect(self._use_public_server)
         content.addWidget(self.web_account)
         self._show_web_account(self.cfg.online["mode"])
-        self.search.add("Link to website account", "Online", "Website account", self.web_account.link_button,
-                        keywords="forza.dyotson.dev website account Discord GitHub link unlink sign out")
+        self.search.add("Sign in or create an account", "Online", "Website account", self.web_account.link_button,
+                        keywords="forza.dyotson.dev website account Discord GitHub email register sign in "
+                                 "link unlink sign out")
 
     def sync_server(self):
         """Show the server the Servers page picked (#587)."""
@@ -1078,9 +1085,16 @@ class SettingsPage(QWidget):
         self._show_web_account(self.cfg.online["mode"])
 
     def _show_web_account(self, mode):
-        frame = getattr(self, "web_account_frame", None)  # built after the server card
-        if frame is not None:
-            frame.setVisible(mode == "public")
+        card = getattr(self, "web_account", None)  # built after the server card
+        if card is not None:
+            card.show_server(mode)
+
+    def _use_public_server(self):
+        """The Website account card's "Use the Public server", as Servers' Use this server on the
+        main server: saved now, like a server picked there."""
+        server_list.choose(self.cfg, PUBLIC_SERVER)
+        self.sync_server()
+        self.flush()
 
     # Profile
     def _profile_block(self, lay):

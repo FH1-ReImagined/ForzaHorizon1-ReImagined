@@ -56,9 +56,9 @@ datas += collect_data_files("sdl2dll")
 hidden += ["sdl2dll"]
 
 # The title update step (a Python tool the frozen app runs itself with --run-script), Import FM4 cars
-# (fm4_*, carbin_dump, #648), Import FM4 tracks (fm4_track_mod, fm4_pvs and what it imports, #648), and the shader
+# (fm4_*, carbin_dump, #648), Import FM4 tracks (fm4_track_mod, fm4_pvs and what they import, #648), and the shader
 # prebuild (#226), which imports pipeline_list, fxobj_shaders, xxh3, lzx_delta and apply_title_update.
-for _tool in ("apply_title_update.py", "fm4_cars.py", "fm4_carbin.py", "fm4_physdef.py", "carbin_dump.py", "lzx_delta.py", "xdc_decode.py", "extract_map_points.py", "livery_codec.py", "pipeline_list.py", "fxobj_shaders.py", "xxh3.py", "native_menu_scene.py", "offline_cars_flow.py", "native_tuning_assets.py", "fm4_track_mod.py", "fm4_pvs.py", "fm4_col.py", "fm4_shaders.py", "fm4_spawn.py", "fm4_timing.py"):
+for _tool in ("apply_title_update.py", "fm4_cars.py", "fm4_carbin.py", "fm4_physdef.py", "carbin_dump.py", "lzx_delta.py", "xdc_decode.py", "extract_map_points.py", "livery_codec.py", "pipeline_list.py", "fxobj_shaders.py", "xxh3.py", "native_menu_scene.py", "offline_cars_flow.py", "native_tuning_assets.py", "fm4_track_mod.py", "fm4_pvs.py", "fm4_col.py", "fm4_shaders.py", "fm4_spawn.py", "fm4_timing.py", "fm4_routes.py"):
     if (repo / "tools" / _tool).is_file():
         datas.append((str(repo / "tools" / _tool), "tools"))
 datas.append((str(repo / "tools" / "native_menu" / "fh1_donors.json"), "tools/native_menu"))
@@ -80,15 +80,32 @@ a = Analysis(
     pathex=[str(root), str(repo / "tools")],
     datas=datas,
     binaries=collect_dynamic_libs("sdl2dll"),
-    hiddenimports=hidden + ["install_dlc", "xcontent_extract", "xiso_extract", "xdc_decode", "livery_codec", "tomllib", "pipeline_list",
+    hiddenimports=hidden + ["PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "install_dlc", "xcontent_extract", "xiso_extract", "xdc_decode", "livery_codec", "tomllib", "pipeline_list",
                             "fxobj_shaders", "xxh3", "lzx_delta", "apply_title_update", "offline_cars_flow", "extract_map_points",
                             "fm4_cars", "fm4_carbin", "fm4_physdef", "carbin_dump",
-                            "fm4_spawn", "fm4_timing", "fm4_track_mod", "fm4_pvs", "fm4_col", "fm4_shaders", "sqlite3", "argparse", "zlib"],
-    excludes=["tkinter", "unittest", "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets",
-              "PySide6.QtQml", "PySide6.QtQuick", "PySide6.Qt3DCore", "PySide6.QtMultimedia",
-              "PySide6.QtNetwork", "PySide6.QtPdf", "PySide6.QtSql", "PySide6.QtTest"],
+                            "fm4_spawn", "fm4_timing", "fm4_routes", "fm4_track_mod", "fm4_pvs", "fm4_col", "fm4_shaders", "sqlite3", "argparse", "zlib"],
+    # Qt WebEngine (PySide6_WebEngine in requirements-build.txt) is the website sign-in window,
+    # ui/web_view.py, which imports it only when the window opens; it needs QtNetwork and
+    # QtWebChannel. A build without it still works: the window then opens the player's browser.
+    excludes=["tkinter", "unittest", "PySide6.QtQml", "PySide6.QtQuick", "PySide6.Qt3DCore",
+              "PySide6.QtMultimedia", "PySide6.QtPdf", "PySide6.QtSql", "PySide6.QtTest"],
     noarchive=False,
 )
+
+
+def _webengine_unused(dest):
+    """Qt WebEngine files the launcher does not use: every locale but en-US (the launcher is in
+    English), the devtools and, on Windows, the .debug.pak files (about 120 MB)."""
+    p = Path(dest)
+    if "qtwebengine_locales" in p.parts:
+        return p.name != "en-US.pak"
+    return p.name.startswith("qtwebengine_devtools_resources") or p.name.endswith(".debug.pak")
+
+
+a.datas = [entry for entry in a.datas if not _webengine_unused(entry[0])]
+# On Linux, PyInstaller's Qt WebEngine hook also collects the NSS modules that libnss3 loads at run
+# time (libsoftokn3, libfreebl3, libfreeblpriv3, libnssckbi), which its dependency scan cannot see.
+
 # Recent Qt releases use Windows' ICU API. A tool on the build machine's PATH
 # (for example Poppler) can supply a different icuuc.dll with versioned exports.
 # Bundling it shadows the OS DLL and prevents QtCore from loading at startup.

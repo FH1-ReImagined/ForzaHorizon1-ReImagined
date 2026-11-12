@@ -651,6 +651,52 @@ each cvar turns its part off, or `FORZA_VK_DYNAMIC_CONSTANTS=0`, `FORZA_VK_BINDI
 the command processor's time a draw; with the split, 123.6 to 153.5 fps uncapped in the benchmark on eight cores and
 131.5 to 153.0 on six ([perf.md](perf.md)).
 
+## ReIGlue 0470-0471: guest atomics without the global lock (#506)
+
+Xbox 360 code wraps every `lwarx`/`stwcx.` (`ldarx`/`stdcx.`) loop in an interrupts-off section (`mtmsrd r13`
+before the load-reserve, `mtmsrd` of an earlier `mfmsr` after the store-conditional), and the generated code took
+the global critical region, the recursive mutex the kernel exports share, for each section and again for the `mfmsr`
+before it. In FH1 these are the game's reference counts, exchanges and compare-exchanges.
+
+- **0470** (`lock_free_reservations` in the codegen config, on): the code generator checks each section before it
+  emits the function. A section whose every path is one load-reserve and at most one store-conditional of the same
+  width to the same, unchanged address registers, with only register arithmetic, compares and forward branches
+  between them, and which is entered only through its `mtmsrd r13`, is one atomic read-modify-write: its
+  store-conditional is already a host compare-exchange, so it runs without the lock, as on the console, where the
+  section only keeps this CPU's interrupts out. TU4: 1069 of the executable's 1070 sections (all but the SList push,
+  `sub_8320EF20`), and all of the speech and XMedia facade modules' (27 and 368). The codegen log line
+  `Interrupts-off sections: N, M of them lock-free` counts them.
+- **0471**: `mfmsr` reads this thread's count of locked sections instead of taking the lock to read a global count
+  (while a thread holds the lock no other thread is in a section, so that count was always the reader's own).
+
+After Pinyon Shift's single-reservation sections and thread-local interrupt depth (ShiftGlue `07b2b2a` and
+`b13a1b5`), written for ReIGlue's code generator; credited in ReIGlue's NOTICE. Tests: ReIGlue's
+`reservation_sections_test.cpp` (the shapes FH1 uses convert; other loads and stores, mixed widths, changed address
+registers, calls, barriers, nested sections, loops, entries from outside and unknown switch targets keep the lock)
+and `seq_reservation_sections.s` (FH1's sections run, the SList push included); all 1588 PPC tests pass.
+
+Measured on main `583e05c` (ReIGlue `5408d20`) against the same with 0470-0471 (TU4, Linux, Ryzen 7 7800X3D,
+RX 9060 XT, RADV; built-in benchmark, 1280x720, uncapped, three alternating pairs each). A build with
+`-DREX_GUEST_LOCK_STATS` counts the sections: in the benchmark's measured minute, 6,378 `mfmsr` and 6,378 sections a frame (about 970,000 a second each), so about 12,800 lock acquisitions a
+frame before and none after (the SList push took it 5 times in the whole run).
+
+| | Before (fps, 1% low) | After (fps, 1% low) |
+| --- | --- | --- |
+| 6 cores (`taskset -c 0-5`) | 165.9 [164.3-168.1], 106.9 | **175.5** [170.0-181.0], 114.0 (+5.8 %; each run above its pair's) |
+| 8 cores | 167.9 [164.0-170.3], 112.1 | 169.7 [158.9-180.5], 113.8 (within the spread) |
+
+The 8-core rows leave out a first pair taken while another job loaded the machine (153.9 against 146.5 fps). On a
+30 fps session (boot, three minutes of free roam, the GoPro Millennia Masters race) the log had only the two error
+lines every run has (`ResolvePath(\Device)`, `XMsgStartIORequestEx`) and no `FORZA_STALL`. Not checked: Windows, the Steam Deck, four cores.
+
+## ReIGlue 0480: a test hook for the transfers of drivers without stencil export (#640)
+
+`FORZA_TEST_NO_STENCIL_EXPORT=1` (an environment variable, for testing) leaves `VK_EXT_shader_stencil_export` off. NVIDIA's
+driver lacks the extension, so its render target transfers to depth copy the stencil in one draw per bit (0461 skips the
+bits the source does not have); with the hook AMD's and Intel's drivers take that path too, so a change to it can be
+checked, and its pictures compared, on Linux. Unset, nothing changes. What it was used for is in
+[perf.md](perf.md#the-gtx-1650-tis-gpu-frame-after-770-and-two-transfer-cuts-that-do-not-pay-640-2026-11-11).
+
 ## ReIGlue 0500-0502: ARM64 Linux, 16 and 64 KB pages (#788)
 
 The first step of the Android study (#788): ARM64 Linux in CI, and the one correctness bug the study
@@ -674,3 +720,84 @@ found for ARM64 Linux and Android.
   qemu-user.
 
 Building the game for ARM64 Linux: [arm64_linux.md](arm64_linux.md).
+
+## ReIGlue 0510: fetch opcodes the GPU does not define, execs past the end of the microcode (#808)
+
+On the converted FM4 circuit Suzuka the game stopped 10-20 s into lap 1, on the command processor's thread:
+`IssueDraw -> Shader::AnalyzeUcode -> GatherTextureFetchInformation -> ParsedTextureFetchInstruction::Disassemble ->
+strlen(NULL)`. `ParseTextureFetchInstruction` has no case for a fetch opcode the GPU does not define (2-15, 20-23,
+27-31) and left the instruction's name null, which the disassembler appended. 0510 parses such a fetch as one that
+does nothing (no result, no texture binding, skipped by the translators) and disassembles it as `tfetch_opcode_N`;
+the other name tables (texture and anisotropic filters, the vertex fetch's data format) print a number for a value
+they have no name for. `tests/shader_disasm_test.cpp` in ReIGlue covers each case.
+
+Where the fetch came from: not an FM4 shader value. With the fix and `--dump_shaders`, no shader had such an
+opcode inside its microcode; three pixel shaders of 105 and 144 dwords had control flow that runs instruction 3720,
+and the analysis read the memory after the shader's copy of the microcode, where one of those "fetches" had an
+undefined opcode. 0510 also skips instructions past the end of the microcode (in the analysis and in translation,
+with a warning once per shader: `an exec runs instruction N, past the end of the microcode`).
+
+Those shaders are FM4 track shaders loaded from the wrong place. Matching the microcode dumped in a Suzuka run
+against the converted track's `.fxobj` files: 18 of its pixel shaders, each the second pass's of its effect
+(`DIFF_SPEC_1`, `DIFF_1_HQ`, `BARR_SHAD_DIFF_SPEC_1`, `BARR_SHAD_DIFF_1`, `DIFF_CLR_SPEC_OPAC_REFL_4`,
+`TREE_DIFF_OPAC_DIRLIGHT_2_2SD` and others), were loaded from their own physical part, but at the first pass's
+microcode offset and with its length. Where the
+first pass has literal constants (offset 0x40) and the second has none (offset 0), the GPU gets 64 bytes into the
+second shader, so its "control flow" is instruction words (the crash); where only the lengths differ the shader is
+cut short or runs on into the next one. In the guest memory of a running game, the address in the shader load
+packet is the second shader's physical part plus 0x40. The `.fxobj` files are FM4's own layout (the converter,
+`tools/fm4_shaders.py`, only patches microcode words; each blob's own header holds the right offset and length).
+FH1's own track effects also have second passes of another length than the first (195 of 197 files), and none of
+their shaders ran past its end in these runs, so what makes the game take the first pass's values for FM4's
+effects is still open (#808 keeps it). Until then those
+passes draw from the wrong microcode, without stopping the game.
+
+Checked (Linux, TU4 build of main 0ec811b6 with the FM4 cars mod, RX 9060 XT, RADV, 30 fps, the dev autopilot on
+`tools/fm4_line.py` lines): with the plugin of the current pin the crash came 9 s into lap 1, as in the three runs
+before; with 0510, Suzuka two full laps (4:07.49, 4:05.82) and Laguna Seca one (3:45.29), no crash; FH1's free roam
+in Colorado drives as before.
+
+## ReIGlue 0530: the world AO's stencil request leaves the first shadow pass its textures (#823)
+
+With Ambient occlusion on (patch 0350), single frames showed the near ground, the road and everything close dark
+below a hard straight line, the far scenery lit; the next frame was normal. In a scripted race at 144 fps, render scale 2,
+FSR 3 balanced at 1080p, Ultra world detail, Softer shadows and AO High, that was
+5-19 frames in every 7,520 captured, and none with AO off.
+
+0350 loads the depth pre-pass stencil's 8-bit view through fetch constant 31 from inside the frame's first
+`ApplyShadows` draw, after that draw's own texture request. When a memory watch had fired between the two (a
+watch callback runs on the guest CPU thread that wrote the memory, so it can come at any point of a draw), the borrowed request found
+`texture_became_outdated_`, ran `ResetTextureBindings()` (every binding cleared) and resolved only constant 31. The
+draw then bound null views for its tf0 (the scene depth) and tf1 (the nearest cascade's shadow map), so that one
+pass, the nearest cascade, wrote shadow over everything it covers: the straight line is the cascade's far edge.
+The later cascades were right, since each pass requests its own textures again. A per-frame log of the AO's inputs
+(the projection constants, the depth and stencil views, extents, formats, the shadow passes and the blur) showed
+the same projection, views and sizes on the flash frames as on the others; what differed was that the first
+shadow pass's tf0 and tf1 views had changed across the AO's request: 62 such frames in one run, and each of its 13
+flash frames came about 12 ms (the capture's delay) after one of them. Most of the others inside the capture
+bursts gave a smaller one-frame change, below the scan's threshold.
+
+0530 requests the draw's own textures again after the borrowed request (`fh1_world_ao.h`,
+`RequestThroughBorrowedFetch`; nothing is loaded again when nothing was reset) and takes the AO's depth view after
+it. `tools/test_world_ao.cpp` checks the sequence against a texture cache that resets its bindings on the borrowed
+request.
+
+Measured (TU4, Linux, RX 9060 XT, RADV; a scripted run kept out of the repository: boot on a copy of a TU4 save, the GoPro
+Millennia Masters race driven by `tools/autodrive.py`, 96-frame screenshot bursts every 3 s scanned for one-frame
+changes; each pair ran side by side, so the fps are two games' share of the GPU):
+
+| Run | Pin (`46ae834`): flash frames / 7,520 | race fps | 0530: flash frames / 7,520 | race fps |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 5 | 71.4 | 0 | 71.3 |
+| 2 | 9 | 71.4 | 0 | 72.1 |
+| 3 | 3 | 69.6 | 0 | 69.7 |
+
+With a lower threshold (a one-frame change of 10 instead of 25 of 255) the pin's runs had 9, 16 and 6 and 0530's
+still none. The occlusion itself is unchanged: alone on the machine, uncapped at the free roam spawn and switched
+live, AO High against Off cost the same (pin 147.5 against 151.9 fps, 0530 148.5 against 155.3, two sessions each;
+the standing car's camera drifts, so the spread is a few fps).
+In `tools/render_test.py`'s six scenes (render scale 1) the darkening AO High adds over Off is the same with 0530
+as with the pin (race start: 1.6-1.7 against 1.5-1.6 of 255 on average, 5 % of the pixels by 8 or more, the
+contact shadow under the car among them), and the check fails the same way with both: freeroam_dawn, freeroam_midday and
+photo_mode differ from the 2026-11-02 baselines with either plugin, AO Off or High, and cockpit and race_start
+sit at their thresholds (the baselines need recording again).

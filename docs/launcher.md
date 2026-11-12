@@ -35,13 +35,17 @@ backing up its catalog. Apply the imported design to a matching car in-game. See
 
 **Website account (website #4):** Online > Online > Website account, shown with the public
 server only, links the game to an optional account on forza.dyotson.dev (Discord, GitHub or an
-emailed code), the second factor the website's player features need. **Link to website account**
-signs `POST https://forza.dyotson.dev/api/game/link/start` with the game's key (`live_auth.py`,
+emailed code), the second factor the website's player features need. **Sign in or create an
+account** signs `POST https://forza.dyotson.dev/api/game/link/start` with the game's key (`live_auth.py`,
 the `signing_seed` of `live_identity.txt`; the address is built in, never the server setting, and
-no friends key or key made from it is sent), opens the answer's `account.html#link=<token>` in the
-browser (`QDesktopServices.openUrl`, the OpenURI portal on Flatpak) and shows an 8-character code
-for another device (`forza.dyotson.dev/account.html`). It polls the request every 3 seconds in a
-`ui/workers.Task` thread. Once the browser's account claims it, the launcher asks "Link this game
+no friends key or key made from it is sent) and shows the answer's `account.html#link=<token>` in
+the launcher's own window (`ui/web_view.py`, a Qt WebEngine view; see "Website sign-in window"
+below): the player signs in there, or makes their account by signing in the first time, with
+Discord, GitHub or an emailed code, and clicks the page's Link. **Use my browser instead**, a
+launcher without Qt WebEngine, `FORZA_NO_WEB_VIEW=1` or a window whose page process stops open the
+same address in the browser instead (`QDesktopServices.openUrl`, the OpenURI portal on Flatpak).
+An 8-character code for another device (`forza.dyotson.dev/account.html`) is always shown. It
+polls the request every 3 seconds in a `ui/workers.Task` thread. Once the browser's account claims it, the launcher asks "Link this game
 to website account K7Q2-XM4P (Discord, created 2 Nov 2026)?": **Link** confirms that account by
 its id, **Not me** (or closing the dialog) declines it. After a link the card shows the account
 and offers **Unlink** and **Sign out everywhere** (every browser of the linked account), which
@@ -51,6 +55,37 @@ once a session when the card is shown. The calls are in `web_account.py` (HTTPS 
 `fetch.urlopen`, the operating system's certificates on Windows), the card and the dialog in
 `ui/web_account.py`; `test_web_account.py` runs them against a fake service that checks every
 signature. The service is forza-live's `accounts/` (its README has the API and the rules).
+
+**Website sign-in window (`ui/web_view.py`).** The dialog shows the page in a Qt WebEngine view
+with a read-only address line, Back and Reload, and the launcher's status and its Link / Not me
+under it. There are still two approvals: the page's Link (the account claims the request) and the
+launcher's Link (the key confirms the account id it was shown). The page cannot skip its click in
+the launcher: anything it could check to know it runs there, an attacker could send along with
+their own token. The view:
+- main frame: only the site's origin and `https://discord.com` and `https://github.com` (the
+  providers' sign-in, `web_view.decide`). A link on the site to Discord or GitHub, every other
+  address and every new window (`target=_blank`, `window.open`) open in the browser; `file:`,
+  `data:` and plain `http` are refused. Frames (the providers' captchas) may be any `https` page;
+- no scripts, no QWebChannel and no cookie access from the launcher; certificate errors are
+  rejected; downloads are cancelled; every page permission is denied; the menu has only editing
+  and Back/Forward/Reload. Passkeys and security keys get the account choice, the PIN and "Touch
+  your security key";
+- its own persistent profile in `<data folder>/web-account` (cookies, site storage, cache), shared
+  with nothing. The website's sign-in stays there like in a browser. **Sign out of the website in
+  the launcher** on the card deletes the folder (if a file is still open, a `web-account.forget`
+  marker deletes it at the next open);
+- an emailed code is typed into the view: the mail's link opens the browser, where the code does
+  not work (it belongs to the browser that asked for it).
+Qt WebEngine is imported only when the window opens (`AA_ShareOpenGLContexts` is set before the
+`QApplication`), the page and then the profile are deleted when the dialog closes so its processes
+end, and the packages carry `PySide6_WebEngine` (`launcher/requirements-build.txt`): the spec keeps
+only the en-US locale and drops the devtools and `.debug.pak` files, PyInstaller's hook adds
+QtWebEngineProcess and the NSS modules, and the Flatpak builds MIT krb5 (the pip Qt6Network needs
+`libgssapi_krb5.so.2`, which the runtime lacks) and runs `flatpak/trim_pyside6.py`, which deletes
+the 217 MB of Addons and WebEngine the launcher never loads. Measured on Linux (2026-11-11): the
+PyInstaller folder grows from 216 to 454 MB, 87 to 191 MB gzipped. On NVIDIA with Wayland a
+blank view is a known Qt WebEngine problem: `QTWEBENGINE_CHROMIUM_FLAGS=--disable-gpu` or **Use my
+browser instead**.
 
 Discord status sharing is available under **Online > Online > Discord** (off by
 default). See [Discord Rich Presence](discord.md) for the one-time public application
@@ -1133,6 +1168,58 @@ valid for the schema, warnings, the first-run / existing-settings / player-choic
   (`ui/online_features.py`) before the update check runs; it is asked again until answered.
   *Reset settings* keeps those features off for a player who chose off. `test_installer.ps1` installs
   twice (default, then `/ONLINE=no`) and checks the file, and that the uninstaller removes it.
+* The Ubuntu 22.04 toolchain (`sdk-linux` on pushes and tags). The overlay is built on 22.04 so it
+  needs glibc 2.35 only, but 22.04's g++ is 12, without C++23's library. The SDK is compiled by the
+  pinned clang (`pins.py`) against GCC 14's headers and libstdc++, which come from, in order:
+  1. **GCC 14.3.0 built from GNU's sources** for 22.04: `gcc-14.3.0-jammy-x86_64.tar.xz` in the
+     pre-release `ci-toolchain-jammy-gcc14` (never the latest release), pinned by SHA-256 in
+     `launcher/packaging/ci_toolchain_sha256sums.txt`. `ci_linux_sdk_setup.sh` unpacks it to
+     `~/gcc-14` and writes `clang.cfg` and `clang++.cfg` (`--gcc-install-dir=~/gcc-14/lib/gcc/x86_64-linux-gnu/14.3.0`)
+     next to `~/llvm/bin/clang`, so every clang of the job (CMake's, `build_rexglue_sdk.sh`'s and the
+     test compiles in `release.yml`) uses it with no flags of its own. It puts `CI_CXX_HEADERS`,
+     `CI_CLANG_GCC_FLAGS` and `LD_LIBRARY_PATH=~/gcc-14/lib64` in `$GITHUB_ENV`: programs built in the
+     job and run there need GCC 14's libstdc++ (22.04's lacks `GLIBCXX_3.4.31` and newer).
+     `$GITHUB_ENV` only reaches later steps, so the same exports go to `~/gcc-14/.fh1-env` too: a step
+     that runs `--compiler-only` and then its own tests (the SDK cache-hit path) sources it. `g++`, `cc`
+     and `c++` stay Ubuntu's (the OpenXR loader is built with them, as before).
+  2. The PPA's g++-14 packages from the same release (`ci-toolchain-mirror.yml`, `ci_toolchain_debs.txt`).
+  3. The `ubuntu-toolchain-r/test` PPA itself, then Launchpad's file links.
+  Pull requests build on 24.04 with the archive's g++-14 and use none of this.
+
+  What players need does not change: the overlay links libstdc++ dynamically and uses the player's
+  own (the game is built on the player's machine with their g++, which must be new enough for C++23
+  anyway; the launcher doesn't ship a libstdc++ for it, and `cleanenv.py` keeps the frozen launcher's
+  own older one away from it). Built with the PPA's g++-14 (0.3.2) the overlay asks for `GLIBC_2.35`
+  and `GLIBCXX_3.4.32` at most (`libopenxr_loader.so.1`: `GLIBCXX_3.4.29`, Ubuntu's g++ 11). Built
+  with this GCC (2026-11-11: `ci_linux_sdk_setup.sh`, `build_rexglue_sdk.sh`, the overlay tests that
+  link `librexruntime.so` and `package_sdk_overlay.sh` in an `ubuntu:22.04` container) it asks for the
+  same: `GLIBC_2.35` and `GLIBCXX_3.4.32` (same GCC version, same headers). No RUNPATH points at
+  `~/gcc-14`. (That container had no g++, so CMake built the OpenXR loader with clang too and it asked
+  for `GLIBCXX_3.4.32`; the runner has Ubuntu's g++ 11, which builds it as before.)
+
+  **Rebuilding it.** `launcher/packaging/build_gcc14_jammy.sh OUT_DIR` builds it in a podman or docker
+  container of the pinned `ubuntu:22.04` image (by digest): it downloads `gcc-14.3.0.tar.xz` and its
+  `.sig` from GNU's mirrors, checks the pinned SHA-256 and GNU's signature (`gpgv` against
+  `gcc_release_key.asc`, Richard Biener's key exported from `gnu-keyring.gpg`, fingerprint pinned in
+  the script), lets `contrib/download_prerequisites` fetch GMP, MPFR, MPC and isl (it checks their
+  SHA-512 against the signed tarball's list), builds C and C++ only into `/opt/gcc-14` without
+  bootstrap (the reason is in the script) and packs a sorted tarball with fixed times. The compiler
+  programs link GMP, MPFR, MPC, isl and libstdc++ statically: they need only glibc. It takes about
+  6 minutes with `GCC_JOBS=6` (7 with 4) on a desktop PC; two local builds with 6 and 4 jobs gave
+  the same bytes, so the pin in `ci_toolchain_sha256sums.txt` is the hash GitHub's build should
+  give too. The Ubuntu packages it
+  was compiled with are listed in `gcc-14/share/fh1-buildinfo.txt`: a later security update to
+  22.04's GCC 11 or binutils can change the bytes (the publish job then stops, and a new pin is
+  needed).
+  `launcher/packaging/check_gcc14_jammy.sh TARBALL [CLANG++]` checks that every ELF file in it needs
+  glibc 2.35 or older and that a C++23 program (`std::expected`, `std::print`, ranges,
+  `std::generator`) builds and runs with its g++ and with clang. On GitHub, run the
+  `ci-toolchain-gcc` workflow by hand: it does the same in the same image, then adds the tarball
+  and its source (GCC, its `.sig`, the prerequisite tarballs) to the release. It never replaces a
+  release file with other bytes, and stops before uploading when the tarball differs from its pin
+  (run it with `repin` ticked to upload such a build as unpinned instead). A new pin (a new GCC
+  version, or a build that changed) is a pull request changing `ci_toolchain_sha256sums.txt`; the
+  run's summary prints the lines.
 * The website (forza.dyotson.dev) is its own repository,
   [FH1-ReImagined/website](https://github.com/FH1-ReImagined/website), with its Pages workflow
   and `tools/preview_site.sh`. Screenshots it shows from `docs/images` are copied there.
@@ -1253,7 +1340,8 @@ only), the TU4 step on Linux in the frozen app.
 * The Linux overlay is built on Ubuntu 22.04 (CI image `ubuntu-22.04`, glibc 2.35: the binaries
   need `GLIBC_2.35` and `GLIBCXX_3.4.32`, so any distro from 2022 on that has a g++ new enough
   for the game build runs it). 22.04 has neither C++23 headers nor CMake 3.25, so
-  `launcher/packaging/ci_linux_sdk_setup.sh` takes g++-14 from the `ubuntu-toolchain-r/test` PPA
+  `launcher/packaging/ci_linux_sdk_setup.sh` takes GCC 14 from the project's own build of it
+  (falling back to the `ubuntu-toolchain-r/test` PPA; "The Ubuntu 22.04 toolchain" above)
   and CMake, ninja and LLVM from the launcher's pinned downloads (`ci_fetch.py`); the SDK's
   extra `-dev` packages (`libx11-xcb-dev` was the missing one) are listed there. The same script
   was run in an `ubuntu:22.04` container: configure, build and `package_sdk_overlay.sh` pass

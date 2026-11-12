@@ -368,8 +368,11 @@ def fh1_texture_of(t):
     return t[:6] + ((t[6] & ~drop) | 0x100,)
 
 
-def convert(F, files):
-    """FM4's PVS (read_fm4) to FH1's PVS, its one zone and the zone's file list."""
+def convert(F, files, fits=None):
+    """FM4's PVS (read_fm4) to FH1's PVS, its zones (what each holds: ZONE_REACH) and the
+    grid. fits(zones, grid), when given, says whether zones fit the game's streaming pool;
+    when the neighbours' reach does not, a shorter one is tried (NEIGHBOUR_NEAR), then the
+    zones' own instances alone."""
     insts = F["instances"]
     P = {"hdr": (F["hdr"][0], 0), "ribbon": F["ribbon"], "pgeo": 0, "g1": 1, "g2": 0,
          # The size of FH1's resource table: zone file records and texture files take ids in
@@ -451,11 +454,11 @@ def convert(F, files):
     # The sky dome (FM4's first always-drawn instance) as an object of every zone: FH1 keeps
     # its own sky above, the dome adds FM4's landscape round the horizon. Its model's extent
     # is FM4's 0; FH1 gets the dome's size instead.
+    everywhere = []
     sky = [i for i in F["always"] if i not in (0xFFFF, 0xFFFFFFFF)][:1] if SKY else []
     for i in sky:
         P["models"][insts[i]["model"]]["extent"] = [SKY_EXTENT] * 3
-        for cell in grid.cells:
-            members[cell].append(i)
+        everywhere.append(i)
     # A ground under everything (see GROUND): one flat terrain piece of FM4's own, placed
     # again stretched GROUND_SCALE times across, below the lowest ground, in every zone.
     if GROUND:
@@ -465,18 +468,29 @@ def convert(F, files):
                 g["model"] = ground_model_copy(F, P, files, g["model"], g["reach"])
             insts = insts + [g]
             P["instances"].append(fh1_instance_of(g))
-            for cell in grid.cells:
-                members[cell].append(len(insts) - 1)
-    zones = []
-    for cell in grid.cells:
-        zi = members[cell]
-        models = sorted({insts[i]["model"] for i in zi})
-        tex = sorted({t & 0xFFFFFF for m in models for t in F["models"][m]["textures"]} |
-                     ({insts[i]["idx"] & 0xFFFFFF for i in zi if insts[i]["u12"] != 0xFFFFFFFF}
-                      if LIGHTMAPS else set()))
-        zones.append({"instances": [0x80000000 | i for i in zi], "models": models,
-                      "textures": tex, "texture_flags": [ZONE_TEXTURE_FLAG] * len(tex), "files": [],
-                      "drawn": [1] * len(zi), "placements": [placement_of(insts[i]) for i in zi]})
+            everywhere.append(len(insts) - 1)
+    # What each zone holds (ZONE_REACH): FH1 draws the camera's zone alone, so a zone holds
+    # what is seen from it, its own instances and its six neighbours'. Where that needs more
+    # streaming blocks than the game has, the neighbours' instances within NEIGHBOUR_NEAR m
+    # of the zone's centre (their extent's reach added, as cells_near), else its own alone.
+    def reach_of(i):
+        e = F["models"][insts[i]["model"]]["extent"]
+        return (e[0] ** 2 + e[2] ** 2) ** 0.5
+    zones = None
+    for near in ([None] + list(NEIGHBOUR_NEAR) if ZONE_REACH == "neighbours" else []):
+        zones = zone_records(F, insts, grid, with_neighbours(grid, members, near, spots, reach_of),
+                             everywhere)
+        if fits is None or fits(zones, grid):
+            P["zone_reach"] = ("their own and their neighbours' instances" if near is None else
+                               f"their own and their neighbours' instances within {near:.0f} m "
+                               f"(all of them: over the game's {MAX_STREAM_BLOCKS} streaming blocks)")
+            break
+        zones = None
+    if zones is None:
+        P["zone_reach"] = "their own instances" + (
+            f" (with their neighbours': over the game's {MAX_STREAM_BLOCKS} streaming blocks)"
+            if ZONE_REACH == "neighbours" else "")
+        zones = zone_records(F, insts, grid, members, everywhere)
     P["zones"] = [(len(z["instances"]), 0, len(z["models"])) for z in zones]
     # FH1 sizes its pools of live instance objects and placements from the largest zone in
     # this table: 3 x (its instances + 128) + the dynamic ones (sub_82E296C0), for Colorado's
@@ -488,6 +502,42 @@ def convert(F, files):
         biggest = max(z[0] for z in P["zones"])
         P["zones"].append((POOL_ZONES * biggest, 0, 0))
     return P, zones, grid
+
+
+def with_neighbours(grid, members, near=None, spots=None, reach=None):
+    """Each cell's members, then those of its six neighbours it does not hold yet: all of them,
+    or (near, m) those whose spot is within near + reach(i) of the cell's centre."""
+    out = {}
+    for cell in grid.cells:
+        zi, seen = list(members[cell]), set(members[cell])
+        cx, cz = grid.centre(*cell)
+        for n in grid.neighbours(*cell):
+            for i in members[n]:
+                if i in seen:
+                    continue
+                if near is not None:
+                    x, z = spots[i]
+                    if (x - cx) ** 2 + (z - cz) ** 2 > (near + reach(i)) ** 2:
+                        continue
+                seen.add(i)
+                zi.append(i)
+        out[cell] = zi
+    return out
+
+
+def zone_records(F, insts, grid, members, everywhere=()):
+    """The zones of the grid's cells: each cell's members, then the instances in every zone."""
+    zones = []
+    for cell in grid.cells:
+        zi = list(members[cell]) + list(everywhere)
+        models = sorted({insts[i]["model"] for i in zi})
+        tex = sorted({t & 0xFFFFFF for m in models for t in F["models"][m]["textures"]} |
+                     ({insts[i]["idx"] & 0xFFFFFF for i in zi if insts[i]["u12"] != 0xFFFFFFFF}
+                      if LIGHTMAPS else set()))
+        zones.append({"instances": [0x80000000 | i for i in zi], "models": models,
+                      "textures": tex, "texture_flags": [ZONE_TEXTURE_FLAG] * len(tex), "files": [],
+                      "drawn": [1] * len(zi), "placements": [placement_of(insts[i]) for i in zi]})
+    return zones
 
 
 # FM4_PVS_GROUND=0 leaves out the ground under the circuit. FM4 has none: where its sky
@@ -519,6 +569,8 @@ GROUND_COPIES = {}  # new file in the track's bin folder: (the file it is a copy
 # blocks in use measured on a lap (24454 for 24037 at the 120 m visible set, 34225 for 34518
 # at 25 m).
 STREAM_MARGIN = float(os.environ.get("FM4_PVS_STREAM_MARGIN", "1.25"))
+# The most blocks the game links in (kMaxBlocks in fm4_track.cpp: 64 MB in all).
+MAX_STREAM_BLOCKS = 65536
 # A test (FM4_PVS_ZONE_TEXTURES=1): a zone's file list holds its textures' own files too, as
 # Colorado's do (a streamed record's object holds the archive index of its _0x<id>.bix as its
 # resource id). It changed nothing at Sunset Infield (FH1 requests a streamed texture itself):
@@ -1013,13 +1065,26 @@ def lightmap_uv_copies(converted, files, bin_dir, skip=()):
     return changed
 
 
+def fits_stream_pool(need):
+    """Whether need blocks (stream_blocks) and their margin fit the game's streaming pool."""
+    return int(need * STREAM_MARGIN + 0.5) <= MAX_STREAM_BLOCKS
+
+
 def stream_blocks(F, cells, grid, bin_dir):
     """Blocks the zones of one ribbon need at most (see STREAM_MARGIN), without the margin."""
     size = {}
     def file_size(m):
         if m not in size:
-            p = os.path.join(bin_dir, m if isinstance(m, str) else f"{F['prefix']}.{m:05d}.rmb.bin")
-            size[m] = os.path.getsize(p) if os.path.exists(p) else 0
+            name = m if isinstance(m, str) else f"{F['prefix']}.{m:05d}.rmb.bin"
+            p = os.path.join(bin_dir, name)
+            if os.path.exists(p):
+                size[m] = os.path.getsize(p)
+            elif name in GROUND_COPIES:
+                # The ground's model copy (see GROUND_LAYER), in the zones before its file is
+                # written: the size of the file it is a copy of (the renames keep the length).
+                size[m] = file_size(GROUND_COPIES[name][0])
+            else:
+                size[m] = 0
         return size[m]
 
     def zone_files(cell):  # the models' files and, with ZONE_TEXTURES, the textures' own files
@@ -1030,12 +1095,9 @@ def stream_blocks(F, cells, grid, bin_dir):
         return out
     index = {c: k for k, c in enumerate(grid.cells)}
     best = 0
-    for (col, row), k in index.items():
-        # Odd columns sit half a hex lower (HexGrid): their side neighbours are rows row, row+1.
-        side = (0, 1) if col % 2 else (-1, 0)
-        near = [(col, row - 1), (col, row + 1)] + [(col + dc, row + dr) for dc in (-1, 1) for dr in side]
+    for cell, k in index.items():
         models = zone_files(cells[k])
-        for c in near:
+        for c in grid.neighbours(*cell):
             if c in index:
                 models.update(zone_files(cells[index[c]]))
         best = max(best, sum(file_size(m) for m in models))
@@ -1084,6 +1146,18 @@ def ground_model_copy(F, P, files, model, reach):
         files.append(dst)
     GROUND_COPIES[dst] = (src, renames)
     return new
+
+
+def write_ground_copies(bin_dir):
+    """The files of GROUND_COPIES, in the track's bin folder."""
+    for dst, (src, renames) in GROUND_COPIES.items():
+        with open(os.path.join(bin_dir, src), "rb") as f:
+            data = f.read()
+        for a, b in renames:  # the shader names in the model's material table
+            data = data.replace(a, b)
+        os.makedirs(os.path.dirname(os.path.join(bin_dir, dst)), exist_ok=True)
+        with open(os.path.join(bin_dir, dst), "wb") as f:
+            f.write(data)
 
 
 def ground_instance(F, used):
@@ -1152,6 +1226,21 @@ VISIBLE = os.environ.get("FM4_PVS_VISIBLE", "1") == "1"
 VISIBLE_NEAR = float(os.environ.get("FM4_PVS_VISIBLE_NEAR", "40"))
 VISIBLE_CELLS = int(os.environ.get("FM4_PVS_VISIBLE_CELLS", "1"))
 VISIBLE_SIZE = float(os.environ.get("FM4_PVS_VISIBLE_SIZE", "25"))
+# FM4_PVS_ZONE_REACH: what a zone holds. FH1 draws the camera's zone alone; Colorado's zones
+# each list what is seen from them (an instance is in 16.5 of them on average), where a hex
+# zone of its own instances (and the large pieces of FM4's visible set) showed small pieces
+# only 120 m ahead at the median, and stretches of Le Mans that filled in at 200 km/h and
+# over as the car got there (#824). "neighbours" (the default): a zone holds its own and its
+# six neighbours' instances, everything within 200 m of its centre and more. Should that need
+# more streaming blocks than the game has (MAX_STREAM_BLOCKS with STREAM_MARGIN), a layout's
+# zones take the neighbours' instances within NEIGHBOUR_NEAR m of their centre, else their own
+# alone. "own": their own alone, as before.
+ZONE_REACH = os.environ.get("FM4_PVS_ZONE_REACH", "neighbours")
+if ZONE_REACH not in ("neighbours", "own"):
+    raise SystemExit(f"FM4_PVS_ZONE_REACH={ZONE_REACH}: neighbours or own")
+# The shorter reaches tried in turn when the neighbours' whole hexes need too many blocks (m
+# from the zone's centre: its own hex ends 87 to 100 m from it, the six around 200 to 273 m).
+NEIGHBOUR_NEAR = (200.0, 150.0)
 # FM4_PVS_SKY=0 leaves FM4's sky dome out (see convert).
 SKY = os.environ.get("FM4_PVS_SKY", "1") == "1"
 SKY_EXTENT = 4200.0
@@ -1205,6 +1294,13 @@ class HexGrid:
             if (cx - x) ** 2 + (cz - z) ** 2 <= lim:
                 out.add(cell)
         return sorted(out)
+
+    def neighbours(self, c, r):
+        """The cells around (c, r), up to six: odd columns sit half a hex lower, so the side
+        neighbours of an odd column's cell are in rows r and r + 1, of an even one's r - 1 and r."""
+        side = (0, 1) if c % 2 else (-1, 0)
+        near = [(c, r - 1), (c, r + 1)] + [(c + dc, r + dr) for dc in (-1, 1) for dr in side]
+        return [(nc, nr) for nc, nr in near if 0 <= nc < self.w and 0 <= nr < self.h]
 
     def write(self):
         zone = {cell: k for k, cell in enumerate(self.cells)}
@@ -1623,6 +1719,200 @@ def fix_pass_groups(data):
     return out
 
 
+# FM4 draws its road lines, road edges and other overlays (decals) in a pass of their own:
+# such a model has its command buffers in the third group of a pass's three alone (opaque,
+# transparent, decal): 11, 14 and 17, and with them 8 where its instances may show in mirrors
+# (their flag bit 4 clear) and 5 where in cube maps (bit 9 clear). Its instances carry flag
+# bit 28. With that bit the load faults (fh1_flags tells of it), so it is dropped, and then
+# nothing drew them: an instance is drawn with its opaque or its transparent groups, which
+# these models leave empty. (FH1's own decal models fill groups 2, 5, 14 and 20, and their
+# instances carry bit 28 without bit 27: FH1's real decal pass may take FM4's buffers with
+# those; not tried.)
+# The main pass's decal group (14) takes the place of the group the model's instances are
+# flagged for (DECAL_SLOT; the empty groups before it move up, the data stays where it is and
+# the file keeps its size), so FH1 draws the model in that pass with the buffer's own state:
+# FM4's polygon offset and, for the painted lines and edges, its cover by alpha (alpha to
+# mask, no blending; depth state below), for the blended road detail FM4's blending. In the
+# other group's place the load faults as it does with bit 28 (Suzuka's lines as transparent,
+# Infineon's road detail as opaque): the GPU reads at an address nothing has patched
+# (physical 0x20000000, the end of memory). So the buffer's own blend state has to agree
+# with the flag, set before each of its draws (it does on every decal model of FM4's Disc 1):
+# a model where it does not, or where the scan cannot tell, is left undrawn rather than
+# risked. The mirror and cube map groups stay where they are, unused.
+# FM4_PVS_DECALS=0 leaves the decals undrawn, as before.
+DECALS = os.environ.get("FM4_PVS_DECALS", "1") == "1"
+DECAL_GROUPS = frozenset(range(2, 21, 3))
+# An instance's flag bits 2 (opaque) and 1 (transparent): the group that takes the decal
+# buffer. FM4_PVS_DECAL_BLENDED=0 leaves the transparent ones undrawn (a test).
+DECAL_SLOT = {0x4: 12, 0x2: 13}
+if os.environ.get("FM4_PVS_DECAL_BLENDED", "1") != "1":
+    del DECAL_SLOT[0x2]
+NO_BLEND = 0x00010001  # RB_BLENDCONTROL0 (register 0x2201): source one, destination zero
+PM4_DRAWS = frozenset((0x22, 0x36))  # type-3 opcodes (bits 8-14): DRAW_INDX, DRAW_INDX_2
+# RB_DEPTHCONTROL (register 0x2200) of a decal buffer drawn in the opaque pass, the bits
+# cleared and the bits set: FM4's 0x082082E3 tests the depth without writing it, a state for
+# a pass that comes after the road. In FH1's opaque pass the road may come after its lines,
+# and a line drawn first is painted over by it (whole stretches of Suzuka without lines, the
+# rest with). With the depth written (bit 2: 0x082082E7, the state of FM4's own
+# rdedg_*_zwrite decals) a line stands whichever is drawn first: its polygon offset puts it
+# in front of the road under it. The stencil function stays FM4's EQUAL: passing the stencil
+# always (0x087087E3) did not bring a line back, and beside the depth write it changed
+# nothing (Suzuka, the same drive each way). The buffers drawn in the transparent pass keep
+# FM4's state. FM4_PVS_DECAL_DEPTH (a test): 0 keeps FM4's state in the opaque pass too,
+# "stencil" only passes the stencil always, "both" does that and writes the depth (the
+# road's own 0x087087E7).
+DECAL_DEPTHS = {"1": (0, 0x00000004), "0": (0, 0), "stencil": (0x00700700, 0x00700700),
+                "both": (0x00700700, 0x00700704)}
+DECAL_DEPTH = DECAL_DEPTHS.get(os.environ.get("FM4_PVS_DECAL_DEPTH", "1"), DECAL_DEPTHS["1"])
+
+
+def _pm4_type3_registers(buf, at, w):
+    """The registers the type-3 packet at offset at of buf writes, as the command processor
+    reads it: SET_CONSTANT and LOAD_ALU_CONSTANT (from memory) of registers (the kind word's
+    bits 16-23 4: from 0x2000 + its low 11 bits), SET_CONSTANT2 and SET_SHADER_CONSTANTS (from
+    the word's low 16 bits), REG_RMW and COND_WRITE to a register; every register for an
+    INDIRECT_BUFFER (a buffer not read here) or one of these too short for its words. An
+    empty range for the others."""
+    op, n = (w >> 8) & 0x7F, (w >> 16) & 0x3FFF       # n + 1 data words
+    d = struct.unpack_from(f">{n + 1}I", buf, at + 4)
+    every = range(0x10000)
+    if op == 0x2D:                                     # SET_CONSTANT: kind, values
+        kind, size = d[0], n
+    elif op == 0x2F:                                   # LOAD_ALU_CONSTANT: address, kind, size
+        if n < 2:
+            return every
+        kind, size = d[1], d[2] & 0xFFF
+    elif op in (0x55, 0x56):                           # SET_CONSTANT2, SET_SHADER_CONSTANTS
+        return range(d[0] & 0xFFFF, (d[0] & 0xFFFF) + n)
+    elif op == 0x21:                                   # REG_RMW: register, and, or
+        return range(d[0] & 0x1FFF, (d[0] & 0x1FFF) + 1)
+    elif op == 0x45:                                   # COND_WRITE: ..., register, value
+        if n < 5:
+            return every
+        return range(0) if d[0] & 0x100 else range(d[4], d[4] + 1)  # bit 8: to memory
+    elif op in (0x37, 0x3F):                           # INDIRECT_BUFFER_PFD, INDIRECT_BUFFER
+        return every
+    else:
+        return range(0)
+    first = 0x2000 + (kind & 0x7FF)
+    return range(first, first + size) if (kind >> 16) & 0xFF == 4 else range(0)
+
+
+def decal_model(data):
+    """(the .fx header's place, the header, the 21 pass groups) of a decal model's file: its
+    groups parse, group 14 is filled, and no group but DECAL_GROUPS; None for any other."""
+    k = data.rfind(b".fx")
+    if k < 0:
+        return None
+    p = k + 3
+    if p + 32 > len(data):
+        return None
+    head = struct.unpack_from(">8I", data, p)
+    if head[0] != 1:
+        return None
+    g = pass_groups(data, p + 32)
+    if not g:
+        return None
+    filled = [i for i, x in enumerate(g) if x[2] or any(x[3])]
+    if 14 not in filled or not set(filled) <= DECAL_GROUPS:
+        return None
+    return p, head, g
+
+
+def decal_group_to(data, slot=12):
+    """The model file of a decal model with its main pass's decal group (14) in the place of
+    group slot (12 opaque, 13 transparent), and for 12 that group's buffer writing the depth
+    (DECAL_DEPTH). None for any other model, and for a decal model whose buffer is not the
+    pass's: an RB_BLENDCONTROL0 write of it blends in the opaque pass or does not in the
+    transparent one, a draw comes before any (it would take the state the buffer drawn before
+    it left), or RB_BLENDCONTROL0 or RB_DEPTHCONTROL is written in a way the scan does not
+    read (a type-0 packet to one register, a type-3 packet). Also None for either slot when
+    the buffer has no RB_DEPTHCONTROL write, although only slot 12 patches it, and when the
+    header or the buffer is not laid out as expected."""
+    m = decal_model(data)
+    if m is None:
+        return None
+    p, head, g = m
+    # the areas after the groups (the layout above insert_fetch_constant, and its checks)
+    pop = [x for x in g if any(x[3])]
+    if sum(x[3][0] for x in pop) != head[3] or sum(x[3][2] for x in pop) != head[5]:
+        return None
+    B = g[-1][1] + head[3]
+    o, start = 0, None
+    for x in pop:
+        o = (o + 31) & ~31
+        if x is g[14]:
+            start = B + o
+        o += x[3][1]
+    if start is None or o != head[4] or B + head[4] + head[5] > len(data):
+        return None
+    buf = bytearray(data[start:start + g[14][3][1]])
+    packets = _pm4_packets(bytes(buf))
+    if packets is None:
+        return None
+    depth_at, blends = [], set()
+    for at, w in packets:
+        reg, count = w & 0x7FFF, ((w >> 16) & 0x3FFF) + 1
+        if w >> 30 == 3:
+            if (w >> 8) & 0x7F in PM4_DRAWS:
+                if not blends:
+                    return None
+            else:
+                regs = _pm4_type3_registers(buf, at, w)
+                if 0x2200 in regs or 0x2201 in regs:
+                    return None
+            continue
+        if w >> 30:                                    # type 1 (registers below 0x800), type 2
+            continue
+        if w & 0x8000:                                 # every value to register reg
+            if reg in (0x2200, 0x2201):
+                return None
+            continue
+        if reg <= 0x2200 < reg + count:
+            depth_at.append(at + 4 + 4 * (0x2200 - reg))
+        if reg <= 0x2201 < reg + count:
+            blends.add(struct.unpack_from(">I", buf, at + 4 + 4 * (0x2201 - reg))[0] != NO_BLEND)
+    # every draw of the buffer has to be of the pass's kind, by a blend write before it: none
+    # blends in the opaque one, all blend in the transparent one
+    if not depth_at or blends != {slot == 13}:
+        return None
+    if slot == 12:
+        for q in depth_at:
+            struct.pack_into(">I", buf, q, struct.unpack_from(">I", buf, q)[0] & ~DECAL_DEPTH[0] | DECAL_DEPTH[1])
+    data = data[:start] + bytes(buf) + data[start + len(buf):]
+    a0, b0, b1 = g[slot][0], g[14][0], g[14][1]
+    return data[:a0] + data[b0:b1] + data[a0:b0] + data[b1:]
+
+
+def draw_decals(converted, bin_dir):
+    """Has FH1 draw the decal models (see DECALS): each one's file in the track's bin folder
+    gets its decal group in the place its instances are flagged for (over every ribbon of its
+    prefix). A decal model (decal_model) flagged both ways or neither, or that decal_group_to
+    does not move for its flag, is left undrawn. The numbers of models drawn and left."""
+    if not DECALS or FLAGS != "map":
+        return 0, 0
+    asked = {}
+    for _, _, _, P, _, _, _ in converted:
+        for inst in P["instances"] + P["dynamic"]:
+            asked.setdefault((P["prefix"], inst["model"]), set()).add(inst["flags"] & 0x6)
+    done = left = 0
+    for (prefix, m), bits in sorted(asked.items()):
+        path = os.path.join(bin_dir, f"{prefix}.{m:05d}.rmb.bin")
+        if not os.path.isfile(path):
+            continue
+        with open(path, "rb") as f:
+            data = f.read()
+        slot = DECAL_SLOT.get(next(iter(bits))) if len(bits) == 1 else None
+        out = decal_group_to(data, slot) if slot else None
+        if out is not None:
+            with open(path, "wb") as f:
+                f.write(out)
+            done += 1
+        elif decal_model(data) is not None:
+            left += 1
+    return done, left
+
+
 def convert_mod(mod, fh1_disc, loose):
     tracks = os.path.join(mod, "media", "tracks")
     (track,) = [d for d in os.listdir(tracks) if os.path.isdir(os.path.join(tracks, d))]
@@ -1692,19 +1982,20 @@ def convert_mod(mod, fh1_disc, loose):
               f"({len(Fs[0]['models']) - n_models} model copies, {len(RECT_COPIES)} shaders; "
               f"{len(INSERTED)} with a fetch constant added)")
     for (ribbon, path, data, _), F in zip(ribbons, Fs):
-        P, cells, grid = convert(F, files)
+        P, cells, grid = convert(F, files, lambda cells, grid, F=F: fits_stream_pool(
+            stream_blocks(F, cells, grid, bin_dir)))
         nn = ribbon[-2:]
         converted.append((ribbon, path, F, P, cells, grid,
                           [f"__R{int(nn):02d}Z{k:05d}.pvsz" for k in range(len(cells))]))
     n_lmuv = lightmap_uv_copies(converted, files, bin_dir, rect_done)
     if n_lmuv:
         print(f"{track}: {n_lmuv} models drawn with lightmap-identity shader copies ({len(LMUV_COPIES)} shaders)")
-    for dst, (src, renames) in GROUND_COPIES.items():
-        data = open(os.path.join(bin_dir, src), "rb").read()
-        for a, b in renames:  # the shader names in the model's material table
-            data = data.replace(a, b)
-        os.makedirs(os.path.dirname(os.path.join(bin_dir, dst)), exist_ok=True)
-        open(os.path.join(bin_dir, dst), "wb").write(data)
+    write_ground_copies(bin_dir)
+    n_decals, n_left = draw_decals(converted, bin_dir)
+    if n_decals or n_left:
+        print(f"{track}: {n_decals} decal models (road lines, road edges) drawn in FH1's opaque and transparent passes"
+              + (f"; {n_left} left undrawn (flagged both ways or neither, or their buffer's state or layout"
+                 " is not as their flag needs)" if n_left else ""))
     need = max(stream_blocks(c[2], c[4], c[5], bin_dir) for c in converted) if converted else 0
     order = archive_order(files + [zn for c in converted for zn in c[6]])
     index = {p: i for i, p in enumerate(order)}
@@ -1740,7 +2031,9 @@ def convert_mod(mod, fh1_disc, loose):
             b"".join(struct.pack(">II", index[zn], k) for k, zn in enumerate(zone_names)))
         print(f"{ribbon}: {len(P['instances'])} instances, {len(P['models'])} models, "
               f"{len(P['textures'])} textures; {len(cells)} zones ({grid.w}x{grid.h} hexes of "
-              f"{grid.r:.0f} m), the largest {max(len(c['instances']) for c in cells)} "
+              f"{grid.r:.0f} m) of {P['zone_reach']}, "
+              f"{sum(len(c['instances']) for c in cells) / len(cells):.0f} "
+              f"instances each on average, the largest {max(len(c['instances']) for c in cells)} "
               f"instances, {max(len(c['models']) for c in cells)} models, "
               f"{max(len(c['textures']) for c in cells)} textures")
     # The static pack's texture numbers: pack entry k is texture file k; its record is the
@@ -1850,10 +2143,13 @@ def convert_mod(mod, fh1_disc, loose):
     out_dir = os.path.join(loose, "media", "tracks", track)
     os.makedirs(out_dir, exist_ok=True)
     if need:
-        blocks = int(need * STREAM_MARGIN + 0.5)
+        blocks = min(int(need * STREAM_MARGIN + 0.5), MAX_STREAM_BLOCKS)
         with open(os.path.join(out_dir, "fm4_stream_blocks.txt"), "w") as f:
             f.write(f"{blocks}\n")
         print(f"{track}: streaming blocks {need} at most, {blocks} asked for (fm4_stream_blocks.txt)")
+        if not fits_stream_pool(need):
+            print(f"{track}: warning: that is more than the game's {MAX_STREAM_BLOCKS} with the "
+                  f"margin ({STREAM_MARGIN}); the pool may run dry")
     start, size, count = write_track_zip(members, os.path.join(out_dir, "bin.zip"))
     shutil.rmtree(bin_dir)
     manifest = open(os.path.join(fh1_disc, "media", "zipmanifest.xml"), "rb").read().decode("utf-8-sig")

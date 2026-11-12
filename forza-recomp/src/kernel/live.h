@@ -157,6 +157,9 @@ bool LiveIsBlocked(uint64_t xuid);
 bool LiveSendFriend(const std::vector<uint8_t>& body);
 void LiveFriendMessage(const uint8_t* body, size_t size);
 void LiveFriendsTick();
+// A notice about online (the server refused us, net.cpp), shown over the game as the
+// friends notices are, when nothing else shows. Any thread.
+void LiveOnlineNotice(const std::string& text);
 
 // The friends screen over the game: F8 (live_friends_key) or holding the left stick press;
 // F9 (live_chat_key) opens it on the Chat tab.

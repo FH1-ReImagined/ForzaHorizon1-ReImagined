@@ -50,7 +50,8 @@ A start on a circuit:
 
 - plays **offline**: other players are in Colorado;
 - **backs up your save** first, whatever the save manager's setting is;
-- uses your current FH1 car.
+- uses the car you last drove in Colorado. Choose it there first (play with **FH1's
+  Colorado**): there is no car choice on a circuit yet.
 
 ## Time attack and your laps
 
@@ -75,15 +76,22 @@ tab appears once a circuit is imported.
 Works:
 
 - Free driving on the circuit: its buildings, stands, crowds, road and kerbs, and its collision
-  (walls and the ground).
+  (walls and the ground). A circuit imported with an earlier launcher loads its scenery only a
+  short way ahead of the car, so at speed it appears as you drive: import it again.
 - Timed laps with sectors, the best-lap ghost and the laps page.
+- The circuit's road on the minimap, from FM4's AI line. A circuit imported with an earlier
+  launcher has none: import it again.
 - All 24 circuits of Disc 1 convert and load. Suzuka is the most tested one.
+- The road's painted lines and edges and the rubber on it (FM4 draws them over the road, as
+  decals). A circuit imported with an earlier launcher has none: import it again.
 
 Not yet:
 
 - **Races and events.** FH1's race flow loads on a circuit and puts the grid on it, but the AI
-  cars do not drive yet: FH1's races need a road network the circuits do not have.
+  cars do not drive yet. An import writes the road network and the race route FH1's races need;
+  no race has been run with them yet, and nothing starts one on a circuit.
 - **AI cars and traffic** on the circuit.
+- **Choosing a car** on a circuit: you drive the car you last used in Colorado.
 - **Shadows of the circuit's own buildings and trees.** Your car's shadow is drawn on the
   circuit with the Vulkan renderer (with ReGPU, the D3D12 renderer, circuits have no shadows
   yet). A circuit imported with an earlier launcher has none: import it again.
@@ -115,14 +123,16 @@ Where the files are, in the game's data folder (`%LOCALAPPDATA%\ForzaReImagined`
 | `fm4-tracks/<circuit>/` | the converted circuit |
 | `fm4-tracks/laps/<circuit>.jsonl` | your laps there, one a line |
 | `fm4-tracks/laps/<circuit>.ghost.txt` | the best lap's ghost |
-| `mods/.fm4-track-<circuit>/` | its database, a mod the Mods page does not list |
+| `mods/.fm4-track-<circuit>/` | its database and race route, a mod the Mods page does not list |
 
 ## How it works
 
 The launcher runs the converter (`tools/fm4_track_mod.py`, then `tools/fm4_pvs.py`) on each
 circuit: the track's files and layout in FH1's formats, its collision, its shaders adapted to
 FH1's, and the database rows that make free roam load it. `tools/fm4_timing.py` takes the lap's
-line and sectors from FM4's AI line and database. A start on a circuit passes the game
+line and sectors from FM4's AI line and database, and `tools/fm4_routes.py` builds the circuit's
+road network (what the minimap draws) and a race route from the same line. A start on a circuit
+passes the game
 `--fm4_track_dir=<the circuit's folder>`: the game mounts that folder inside its own game folder
 (the game folder on disk is never changed) and turns on what a converted circuit needs. The game
 is built with ReIGlue, our fork of ReXGlue. The converter's notes are in

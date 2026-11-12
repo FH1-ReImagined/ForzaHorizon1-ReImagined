@@ -1,9 +1,8 @@
 """Steam shortcut card. Discovery and writes run outside the GUI thread."""
 from PySide6.QtCore import QUrl, Qt
-from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QInputDialog, QPushButton, QVBoxLayout, QWidget
 
-from .. import GITHUB_URL, paths, steam_shortcuts
+from .. import GITHUB_URL, browser, paths, steam_shortcuts
 from . import workers
 from .widgets import label
 
@@ -32,7 +31,7 @@ class SteamCard(QWidget):
         layout.addWidget(self.message)
         guide = QPushButton("Steam Deck setup guide")
         guide.setObjectName("link")
-        guide.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(GUIDE)))
+        guide.clicked.connect(lambda: browser.open_url(QUrl(GUIDE)))
         layout.addWidget(guide, 0, Qt.AlignLeft)
 
     def busy(self):
@@ -44,7 +43,7 @@ class SteamCard(QWidget):
 
     def add(self):
         if paths.IN_FLATPAK:
-            QDesktopServices.openUrl(QUrl(GUIDE))
+            browser.open_url(QUrl(GUIDE))
             return
         if self.task or self.probe:
             return

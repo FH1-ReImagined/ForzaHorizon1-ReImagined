@@ -15,14 +15,20 @@ are Infineon 5-6's grey road, Indianapolis 7's pale sand and Top Gear 3's orange
 
 1. `tools/fm4_track_mod.py` builds a mod from FM4's track folder (`media/tracks/<track>`),
    the TU4 `media.zip` and FM4's game database: the track's files, a gamedb that makes free
-   roam load the circuit (`--free-roam 317` for Suzuka) and the gamemode files.
+   roam load the circuit (`--free-roam 317` for Suzuka) and the gamemode files. With
+   `--fm4-ai` (FM4's `Media/AI/Tracks`) also the circuit's road network and race route
+   (`tools/fm4_routes.py`, "The road network and the race route" below).
 2. `tools/fm4_pvs.py convert MOD FH1_DISC LOOSE` converts the mod's layouts (ribbons):
    - each PVS from FM4's version 27 to FH1's 50, split into 100 m hex zones (`.hex`,
      `__RnnZnnnnn.pvsz`, `FilenameMap_nn.dat`, `PVSZLookup_nn.dat`); big models go into every
-     zone their extent reaches, and each zone also takes the large pieces (25 m and over)
-     of the FM4 visibility cell that best matches its centre (`FM4_PVS_VISIBLE*`);
+     zone their extent reaches, each zone also takes the large pieces (25 m and over) of the
+     FM4 visibility cell that best matches its centre (`FM4_PVS_VISIBLE*`), and then what its
+     six neighbours hold, as FH1 draws the camera's zone alone (`FM4_PVS_ZONE_REACH`, "Zones
+     that hold what is seen from them" below);
    - texture records (FM4's atlas flag 8 and projected-lightmap flag 0x10 dropped), shader
      names, instance flags (high half 0x083F, FM4's low 16 bits, bit 28 dropped);
+   - FM4's decal models (road lines, road edges, road detail) drawn in FH1's opaque and
+     transparent passes ("Decals" below);
    - the sky dome as an object of every zone; one padding zone-table entry that sizes FH1's
      zone pools (`FM4_PVS_POOL_ZONES`);
    - a ground under the circuit, in every zone: FM4's flattest terrain piece placed again 15
@@ -47,7 +53,8 @@ are Infineon 5-6's grey road, Indianapolis 7's pale sand and Top Gear 3's orange
 | --- | --- |
 | `FORZA_INSECURE_FILES='zipmanifest.xml\|\tracks\<track>\'` | lets the changed manifest and the track's files open as plain files |
 | `FORZA_FM4_STX='<Track>\|LOOSE/<track>_stx_numbers.bin'` | FM4's static texture pack read as FH1's |
-| `FORZA_TRACK_SPAWN=x,y,z[,fx,fz]` | the player's teleports go there (facing fx,fz); FM4TRACK diagnostics on. Suzuka's grid: `605.6,598.5,-134.1,0.61,-0.79` (15 m behind FM4's first AI waypoint, `media/AI/Tracks/suzuka_00.geo`) |
+| `FORZA_TRACK_SPAWN=x,y,z[,fx,fz]` | the player's teleports go there (facing fx,fz); the game's fatal file errors (the ones its own check stops on, not the 997s of every overlapped read) and its dirty disc message logged. Suzuka's grid: `605.6,598.5,-134.1,0.61,-0.79` (15 m behind FM4's first AI waypoint, `media/AI/Tracks/suzuka_00.geo`) |
+| `FORZA_TRACK_DIAG=1` | the FM4TRACK diagnostics: zones made live, zone, texture and resource table checks, files streamed, the texture pack (off on a player's start on a circuit, #825) |
 | `FORZA_FM4_COL=1` | the collision manager reads every cell from the `.col` (no `.fiz` streaming) |
 | `FORZA_FM4_ZONE_POOL=n` | n x the live-instance and placement pools (not needed with the padding zone) |
 | `FORZA_TRACK_NO_TRAFFIC=1` | the other cars go far below the circuit |
@@ -58,9 +65,10 @@ are Infineon 5-6's grey road, Indianapolis 7's pale sand and Top Gear 3's orange
 | `FORZA_PVS_TRACE=FILE` | every read of the PVS reader (layout work) |
 
 Converter test switches: `FM4_PVS_FLAGS`, `FM4_PVS_FLAGMASK`, `FM4_PVS_SHADERS`,
-`FM4_PVS_PROJLM`, `FM4_PVS_SKY`, `FM4_PVS_SHADER_PATCHES`, `FM4_PVS_LIGHTMAPS`, `FM4_PVS_HEX`,
+`FM4_PVS_PROJLM`, `FM4_PVS_SKY`, `FM4_PVS_SHADER_PATCHES`, `FM4_PVS_LIGHTMAPS`, `FM4_PVS_HEX`, `FM4_PVS_ZONE_REACH`,
 `FM4_PVS_EXTENT`, `FM4_PVS_VISIBLE`, `FM4_PVS_VISIBLE_NEAR`, `FM4_PVS_VISIBLE_CELLS`, `FM4_PVS_VISIBLE_SIZE`,
-`FM4_PVS_TOD`, `FM4_PVS_TRACKSETTINGS`, `FM4_PVS_TRACKSETTINGS_FM4`, `FM4_SHADERS_LIGHTMAP`,
+`FM4_PVS_TOD`, `FM4_PVS_TRACKSETTINGS`, `FM4_PVS_TRACKSETTINGS_FM4`, `FM4_PVS_DECALS`,
+`FM4_PVS_DECAL_BLENDED`, `FM4_PVS_DECAL_DEPTH`, `FM4_SHADERS_LIGHTMAP`,
 `FM4_SHADERS_LIGHTMAP_COLOURS`, `FM4_SHADERS_SHADOW_COLOUR`, `FM4_SHADERS_SHADOW_CLIP`, `FM4_SHADERS_TINTS`, `FM4_PVS_PASS_GROUPS`, `FM4_PVS_PASS_GROUP_DROP`, `FM4_PVS_GROUND`, `FM4_PVS_GROUND_SCALE`, `FM4_PVS_GROUND_BELOW`, `FM4_PVS_GROUND_MODEL`, `FM4_PVS_GROUND_LAYER`, `FM4_PVS_GROUND_AT`, `FM4_PVS_STREAM_MARGIN`,
 `FM4_COL_NORMALS`, `FM4_COL_WALL`, `FM4_COL_EDGES`, `FM4_COL_REMAP`, `FM4_COL_GRID`,
 `FM4_COL_SURFACE`, `FM4_COL_KEEP_DEGENERATE`; `FM4_DISC` (FM4's disc folder) for the
@@ -975,6 +983,94 @@ maps the mask's 0 to 0.45 (`FH1_FM4_SHADOW_FLOOR`), close to FM4's TrackSettings
   8 and 9 with the marks off and on draw the same (mean difference 4.7, 1.7, 2.6), no shadow and
   no black; the sunlit lane at 8 and 9 shows there too. Left: the ReIGlue PR.
 
+## Decals: road lines, road edges and road detail
+
+FM4 draws a circuit's painted lines, its road edges, the rubber and patches on the road and a
+few signs as models of their own, in a decal pass. A converted circuit drew none of them:
+Suzuka's road had no lines.
+
+- **What they are.** Models whose command buffers are all in the third group of a pass's
+  three (opaque, transparent, decal): 11, 14 and 17, with 8 too in the models whose instances
+  show in mirrors (flag bit 4 clear) and 5 in those that show in cube maps (bit 9 clear).
+  Their instances carry flag bit 28. On Disc 1's 24 circuits they are 6037 of 48518 models
+  (Suzuka 147 of 1282, Tsukuba 77 of 1088, the Nordschleife 797 of 6309), most with
+  `rdline_*` and `rdedg_*` shaders. No model mixes decal groups with others.
+- **Why nothing drew them.** `fh1_flags` drops bit 28 (with it the load faults), and FH1
+  draws an instance with the groups its other flags name: 12 for opaque (bit 2), 13 for
+  transparent (bit 1). A decal model has neither.
+- **Two kinds, by FM4's own flags.** 5995 are flagged opaque: lines, edges and signs that
+  cover by alpha (alpha to mask, RB_COLORCONTROL 0xAA000017 or 0x97000017; no blending,
+  RB_BLENDCONTROL0 0x00010001) under a polygon offset (PA_SU_SC_MODE_CNTL 0x00219802, scale
+  16). 42 are flagged transparent and blend (0x07060706, RB_COLORCONTROL 0x87000007): road
+  detail (`rddet_diff_opac_norm_alpha_3`: the Alps 30, Infineon 8) and Tsukuba's lake (4).
+  No model has instances of both kinds, and on every one the flag agrees with the buffer:
+  none of the 5995 blends, all of the 42 do.
+- **Converter** (`fm4_pvs.draw_decals`; `FM4_PVS_DECALS=0` leaves the decals undrawn,
+  `FM4_PVS_DECAL_BLENDED=0` the blended ones): the model's group 14 takes the place of group
+  12 or 13, as its instances are flagged. The groups between are empty, so the populated
+  groups keep their order, which the areas after them follow; the file keeps its size and
+  nothing else in it moves. Groups 5, 8, 11 and 17 stay where they are (FH1 does not run them
+  for these instances). A model is moved only if its buffer's own state is the pass's (no
+  draw of it blends for 12, every draw blends for 13: RB_BLENDCONTROL0, written before the
+  buffer's first draw, which would otherwise take the state the buffer before it left), the
+  buffer writes RB_DEPTHCONTROL (for 13 too, though only 12 changes it) and writes neither
+  register in a way the scan does not read (a type-0 packet to one register, a type-3
+  packet such as SET_CONSTANT), and its header's three area sizes are the groups' sums, as
+  `insert_fetch_constant` checks them; any other decal model is left undrawn and counted in
+  the converter's line. On the 24 circuits the checks leave none of the 6037 out (with and
+  without them the same models moved, to the same bytes; the same for the stricter draw and
+  packet checks, on every model file for both slots: every draw of group 14, 7733, follows a
+  blend write, and no such packet writes either register); and on
+  Suzuka's own files (`tools/test_fm4_decals.py` with `FM4_DISC` set) areas A and C stay byte
+  for byte, the buffers change in their RB_DEPTHCONTROL words alone, and every area C fixup
+  lands in a fetch constant write or a draw.
+- **The other place faults.** Suzuka's lines in group 13 with their instances flagged
+  transparent, and Infineon's road detail in group 12 flagged opaque, stop the load as bit 28
+  does: `Unhandled read fault at host 0x220000000` in the GPU command processor (guest
+  physical 0x20000000, the end of memory). Why is not known. The files are whole: every draw
+  of every decal buffer has its index fixup (checked offline on Suzuka and Infineon). A lead,
+  not followed: TU4 sub_82D006E8 walks a model's pass groups, and for group i sub_82D1B080
+  sets a mesh part's buffers up (sub_8248C200, sub_8248B2D8, sub_8248B5D0) only when a
+  virtual call on the part (+0x14, with i) says yes. So the place follows FM4's flag, and a
+  model flagged both ways (none on the disc) is left undrawn.
+- **Order in the opaque pass.** FM4's lines test the depth without writing it (RB_DEPTHCONTROL
+  0x082082E3; the stencil function is EQUAL), a state for a pass that comes after the road.
+  FH1 draws its opaque pass in its own order, and with that state Suzuka had lines along some
+  stretches and none along others (the approach to turn 1). The same 85 s of Suzuka four ways
+  (`FM4_PVS_DECAL_DEPTH=0`, `stencil`, `1`, `both`): FM4's state loses the lines along
+  stretches; passing the stencil always (0x087087E3) loses the same ones; writing the depth
+  (0x082082E7) keeps them all; both together (0x087087E7, the road's own state) look as the
+  depth write alone does. So a line drawn before its road was painted over by it, and the
+  moved buffer writes the depth: with its polygon offset the line then stands whichever comes
+  first. The stencil function stays FM4's. 0x082082E7 is also the state of FM4's own
+  `rdedg_*_zwrite` decals (184 models of the Nordschleife). The buffers moved to group 13 keep
+  FM4's state: the transparent pass comes after the road. Not the cause: the instances' LOD
+  distances (Colorado's 150, 250 and 500 m on them changed nothing).
+- **Runs** (the 0.3.2 build, Windows, a Radeon RX 9070 XT with Vulkan, free roam on a fresh
+  copy of a save for every run, the dev autopilot on a line from FM4's AI line with
+  `FORZA_AUTOPILOT_DELAY=6`, so that it looks for the line once the car is placed): all 24
+  circuits converted from this branch on `main` and driven for 60 s from the grid, 0.8 to
+  1 km each: no fault, lines, edges and kerb paint on every one, 6116 decal models drawn (the
+  disc's 6037 and the copies the lightmap steps make) and none left undrawn. Then a lap of Suzuka, 400 s:
+  no fault.
+  Before that, with the depth and the stencil state both changed (0x087087E7), the 24
+  circuits were driven the same way, a lap of Suzuka, and Suzuka with the decals off and on
+  for the same 85 s: no lines and lines, 13648 and 13656 frames. With #780 in `main` no run
+  logs an `ExecutePacketType0 overflow` (Infineon logged 152360 in a minute before it, Road
+  Atlanta 106128, with the decals or without). The flat grey stretches of road at Crown Jewel
+  and Hockenheim are there with the decals off too, and with #780: another matter; the lines
+  show on them.
+- **Left.** FM4's decals in FH1's own decal pass (a lead from the review of this change).
+  Colorado's own decal models (483 with a `*decal*` shader) have every instance at a high
+  half of 0x103F, bit 28 without bit 27, with bit 1 (transparent) and not bit 2, and their
+  files fill groups 2, 14 and 20 (5 too in 259 of the 400 read). `fh1_flags` gives 0x083F, so
+  the bit 28 that faulted was 0x183F beside bit 2, on models without groups 2 and 20. Bit 28
+  with 0x103F, and groups 2 and 20 filled from 14 and 17, may reach FH1's real decal pass and
+  make the slot rule and the depth write unnecessary: not tried. Decals in mirrors and cube
+  maps (groups 8 and 5 are not moved). The stencil function is FM4's EQUAL in both passes
+  (FH1's own decals hold ALWAYS): a decal drawn where the stencil is not its reference would
+  be dropped; none was seen missing on the circuits driven.
+
 ## Towards players: a plan
 
 What a player would need, beyond the spike (none of this is built yet):
@@ -1041,6 +1137,191 @@ and left for later. What it needs:
 
 Each piece has a precedent in the codebase, but together they are several boxes of work: the
 state-machine request first (one experiment decides it), then the per-world switches.
+
+## The road network and the race route (tools/fm4_routes.py)
+
+FH1's sat-nav and its races read files FM4's circuits lack. `fm4_track_mod.py --fm4-ai` (the
+launcher's import passes it) writes them from FM4's AI line of the layout that is the circuit's
+world (`media/AI/Tracks/<track>_NN.geo`: the waypoints, a vector across the road as long as half
+its width, the racing line's place on it):
+
+- `media/tracks/<track>/<track>.nav`, the road network (the format `tools/build_map_roads.py`
+  reads): a node every 20 m of the line (Colorado's median spacing), tagged a main road
+  (`road_type` a) without traffic (`traffic_disabled`) under the track's name. It is the
+  road of that one layout: the circuit's other layouts' own stretches are left out, since
+  the layout's barriers close them and a road on the map that cannot be reached would mislead
+  the map and whatever plans a route (`fm4_routes.py write ... OTHER_GEO` joins them at both
+  ends, for the day barriers go by route). With it `<track>.owr` (12 bytes: the magic word,
+  0, the magic word) and Colorado's 32-byte `colorado.oww` as the circuit's (what it holds is
+  not known).
+- `media/tracks/<track>/ribbon_00/trackroute101.xml`, a lap race's places, laid out as
+  Colorado's `TrackRoute049.xml` (measured there: the trigger 57.9 m before waypoint 0, the
+  cannons from 35 m to 3 m before it, the place after the race at 26 m, the grid from 10.7 m
+  back every 6 m): 8 start places from 10 m behind the line, 6 m apart, at 0.35 of the half
+  width to either side; 5 finish cannons a side over the last 35 m; their trigger 58 m
+  before the line; the place after the race; a route waypoint about every 250 m; the
+  gantry's cannon.
+- `media/aiopenworld/<track>/ribbon_00/route_101.owt`, the route's line every 2 m (centre,
+  the vector across, FM4's racing line as the factor). A file of the game's aiopenworld
+  archive, so the import keeps it with the circuit's database mod.
+
+What FH1 needs of a road network, found on TU4 before this converter, with Suzuka loaded as
+a track of its own in a package:
+
+- The tag names the game looks up, in the file's own table, which is sorted (a binary search,
+  sub_82D9D4A8). The game asks for a name and uses the answer unchecked: with a table of 4
+  names, free roam crashed once the network had more than one road (sub_82D98D20 asks for
+  `oneway` and calls sub_82D9C8E0 with it for each road), and so did the start of a race.
+  The names TU4 asks for: `ai_disabled`, `allowedfordemo`, `area_type`, `deadend`,
+  `discovery_zone`, `display_name`, `first_time_flow_disabled`, `iefestivaldrive`, `oneway`,
+  `point_of_interest` (not in Colorado's table either), `road_type`, `sat_nav_junction`,
+  `traffic_density`, `traffic_disabled`. The table carries Colorado's 17 names and its values,
+  from the player's own `colorado.nav`.
+- The map screen's `cursor_area`, a rectangle round the circuit (400 m here): without it the
+  circuit sat in a corner of the map.
+
+Kept from the network that then worked, and not isolated as needs of their own: no closed road
+(Colorado has none, its closed ways are areas: the lap is a ring of open ways that share their
+end nodes, cut at junctions and every 60 nodes, in two at least), and a road node near every
+route waypoint.
+
+`fm4_routes.check_network` refuses a network without those names, with its tag names or values
+out of byte order (Colorado's two tables are in it, each string once), with a closed road or
+with a waypoint off the roads; `fm4_routes.checked` refuses an AI line that is not 100 m to
+100 km of finite numbers (one whose points all coincide passes for a lap). The step is
+optional and never stops an import: whatever goes wrong in it, `fm4_track_mod.add_routes`
+says so in a line and leaves the circuit without the files, as before. They are written beside
+the mod and moved in once all are there, and a move that fails takes the others out again.
+A race row's RouteId is not 0 (free roam's): 101. In that package FH1 loaded a track's world
+from ribbon 0 whatever the row's RibbonIndex was and the route's files from the row's ribbon,
+so they are in `ribbon_00` (`--fm4-ai` needs `--free-roam`, which makes that ribbon).
+
+Measured:
+
+- The formats: the player's own `colorado.nav` (12,036 nodes, 459 ways, 585,674 bytes) reads
+  and writes back byte for byte, and so do all 46 routes of `aiopenworld.zip` (25 laps).
+- All 24 circuits of Disc 1 get a network that passes the check and a race route. The
+  smallest is Crown Jewel's (49 nodes, 2 roads, a 900 m lap), the largest the Nordschleife's
+  (1,229 nodes, 21 roads, 24.5 km), then Fujimi Kaido's (14 roads, 16.4 km) and Le Mans's
+  (12, 13.6 km). Every world layout is a lap (its line's ends 2 m apart).
+- An import of Suzuka by the launcher's code with and without `--fm4-ai` (98 s either way):
+  230 of the 231 files are the same byte for byte (the archive, the database, the game modes
+  and the rest); `track.json` differs in its size alone, by the five new files' 166,790 bytes.
+- In the game (Windows 11, Radeon RX 9070 XT, Vulkan, the 0.3.2 build, offline on a copy of a
+  save, the 1000 Club pack installed; started as the benchmark starts, with its event's
+  activity renamed so it stays in free roam; shots by `FORZA_SCREENSHOT_TRIGGER`): Suzuka and
+  Infineon without and with the files, 80 to 85 s each. Both load to the grid alike, with
+  the lap timer's prompt. Without, the minimap is the player's arrow alone (and Colorado's
+  pins); with, it draws the circuit's roads round it. Top Gear (the most roads) and Le Mans
+  (no ribbon 0: its ribbon 1 is the world), with the files, 80 s each: both load to the grid
+  with their roads on the minimap. The game's own places for the two other cars it teleports
+  in free roam differ: (0, -1020, 0) and (0, -1030, 0) with the files on all four circuits,
+  places near the origin without (Suzuka: (0.6, -123.0, 0.0) and (0.8, -119.8, 0.0)).
+- Suzuka against the package above, which was driven on ReImagined before (free roam with
+  the circuit's roads on the map, and lap races on its three layouts from multiplayer race
+  rows; AI drivers were not looked at there): the route's line (`route_101.owt`) and the
+  `.owr` are the package's byte for byte; the route's places differ in the finish trigger's
+  one line (the package had it 1 m before the line); the network is the package's byte for
+  byte when the tool is given the other layouts' lines (10 roads), and without them its lap's
+  5 roads.
+- A lap driven with the files (this branch on `main` with #777, #778 and #780; Suzuka
+  imported afresh by the launcher's code, started through the game's own menus on a copy of
+  a save; the dev autopilot on FM4's AI line at up to 80 km/h): 400 s, the whole 5.8 km lap
+  and 550 m of the next, the circuit's road on the minimap all the way round, the lap timer
+  running, no guest fault and no `ExecutePacketType0 overflow` in the log.
+
+Not done:
+
+- No Tracks row uses route 101, so nothing reads the race route yet. What a race row needed
+  in that package: RouteId 101, RibbonIndex 0, RibbonConfiguration 0 (a looped circuit; FH1's
+  leftover FM4 rows carry -1, which hid them as races), SurfaceTypeRibbonConfiguration 0, and
+  `gamemodes/<track>/cutscenes/tracks/cutscenes_<DevName>.xml` holding Colorado's
+  `prerace_countdown_<DevName>` cutscene renamed (its cameras are in car space; a route's
+  other Colorado cutscenes place cameras and people at Colorado's positions).
+- A race is not checked in this flow. With the benchmark's event (FR02) pointed at Suzuka's
+  row 37 in the circuit's database, on a start on the circuit with `FORZA_TRACK_NO_TRAFFIC=0`,
+  the event's load did not end on the 0.3.2 build: a black screen for 110 s without these
+  files (row 37 as it is), the loading screen for 250 s with them (row 37 set as above, the
+  countdown cutscene in place). The benchmark's own thread list at 120 s shows every guest
+  thread waiting. So whether the AI drives with the network is still to measure, with the
+  race tooling.
+- One difference seen in those runs: with the files in place the benchmark logs `BENCHMARK
+  AI: created native race driver for player container` when the world loads (6 runs of 6,
+  on the four circuits); without them it does not (3 of 3): the opponent factory
+  (sub_82A5D748) gives no container.
+- Only the world's own lap gets a route and its road. A race on another layout needs the
+  roads between them open and its barriers by route (FH1's way: instances and collision
+  polygons that carry route ids); until then the other layouts' roads stay out of the
+  network.
+- The map screen and GPS routes on a circuit were not looked at; the map's picture and pins
+  are Colorado's.
+
+## Zones that hold what is seen from them (#824)
+
+A reported Le Mans session at 200-330 km/h: the scenery appeared as the car drove, and
+stretches filled in as it passed. FH1 draws the camera's zone alone. Colorado's zones are
+visibility sets (1434 zones, 640 instances in the median one, each instance in 16.5 zones on
+average), where the converter's hex zone held only its own instances (those whose extent
+reaches it, plus 100 m) and the large pieces of one FM4 visibility cell: Le Mans had 3.7 zones
+an instance, and along
+the lap's line small trackside pieces showed only 120 m ahead at the median (p10 58 m), about
+1.5 s at those speeds (offline, from that conversion's zones and the circuit's lap.txt; in the
+session's log the archive thread read 15 to 200 files a second at speed and the pool never ran
+dry, so streaming was not the limit).
+
+- What a zone holds (`FM4_PVS_ZONE_REACH`): `neighbours` (the default) makes each zone its own
+  instances and then those of its six neighbouring hexes (`HexGrid.neighbours`), so a zone holds
+  everything within 200 m of its centre (the seven hexes' inradius) and its neighbours' large
+  pieces; `own` is the old zoning, and converts byte for byte as before (Suzuka's bin.zip, same
+  hash). The same offline count along Le Mans's line: 100% of the pieces within 150 m of the
+  car in the camera's zone (66% before), 86% within 300 m (38%); small pieces 200 m ahead at
+  p10, 280 m at the median.
+- The cost is in the streaming pool: FH1 streams the camera's zone and the six around it, so a
+  zone's need (`stream_blocks`) is now the files of the hexes two rings out.
+  `fm4_stream_blocks.txt` stays under the hook's cap: a layout whose zones with their whole
+  neighbours would need more than 65536 blocks with the 1.25 margin (`MAX_STREAM_BLOCKS`,
+  `kMaxBlocks` in hooks/fm4_track.cpp) takes the neighbours' instances within 200 m, then 150 m
+  of the zone's centre (`NEIGHBOUR_NEAR`), else its own alone; the converter's line for the
+  layout says which. The file itself is never more than 65536 (with a warning when the margin
+  does not fit: Crown Jewel's and Mugello's other layouts already needed more with their own
+  zones, as before).
+- The padding zone (`FM4_PVS_POOL_ZONES`) follows the largest zone: Le Mans 522 -> 1269
+  instances, so FH1's live instance and placement pools are 3 x (4 x 1269 + 128) = 15612.
+
+All 24 circuits of Disc 1 converted both ways from the disc (`tools/fm4_track_mod.py` and
+`fm4_pvs.py convert` as the launcher runs them). Ribbon_00 is the layout free roam loads; the
+blocks are the file's (the largest of all layouts, with the margin):
+
+| Circuit | Zones | Instances a zone, average | Largest zone | Blocks asked | Ribbon_00's zones |
+|---|---|---|---|---|---|
+| Alps | 238 | 40 -> 54 | 294 -> 471 | 63721 -> 65193 | neighbours within 150 m |
+| AmalfiGP | 4312 | 7 -> 14 | 446 -> 1168 | 34183 -> 42838 | neighbours |
+| Autopark | 1026 | 39 -> 129 | 556 -> 1234 | 53935 -> 65250 | neighbours |
+| Catalunya | 120 | 132 -> 503 | 776 -> 2068 | 43160 -> 59249 | neighbours |
+| CrownJewel | 378 | 40 -> 134 | 390 -> 1086 | 65536 -> 65536 | neighbours |
+| FujimiKaido | 875 | 28 -> 109 | 629 -> 1086 | 29456 -> 44818 | neighbours |
+| Hockenheim | 144 | 122 -> 232 | 666 -> 1336 | 50149 -> 63223 | neighbours within 200 m |
+| Indi | 153 | 170 -> 258 | 638 -> 944 | 57284 -> 64314 | neighbours within 200 m |
+| Infin | 130 | 90 -> 306 | 495 -> 1135 | 46395 -> 60444 | neighbours |
+| LagunaSeca | 224 | 89 -> 326 | 710 -> 1672 | 33731 -> 47393 | neighbours |
+| LeMans | 805 | 48 -> 176 | 522 -> 1269 | 38151 -> 52033 | neighbours |
+| MapleValley | 176 | 63 -> 219 | 272 -> 750 | 26550 -> 37914 | neighbours |
+| Motegi | 324 | 95 -> 134 | 734 -> 1177 | 54349 -> 65473 | neighbours within 200 m |
+| Mugello | 208 | 111 -> 111 | 591 -> 591 | 65536 -> 65536 | own (fallback) |
+| Nurburgring | 2226 | 72 -> 242 | 752 -> 1898 | 37925 -> 48999 | neighbours |
+| NurburgringF1 | 361 | 66 -> 66 | 452 -> 452 | 63121 -> 63546 | own (fallback) |
+| RoadAmerica | 169 | 124 -> 534 | 409 -> 1343 | 24326 -> 39501 | neighbours |
+| RoadAtlanta | 154 | 100 -> 385 | 464 -> 1432 | 27958 -> 46280 | neighbours |
+| Sebring | 315 | 84 -> 329 | 698 -> 1938 | 35953 -> 56659 | neighbours |
+| Silverstone | 304 | 100 -> 288 | 457 -> 1013 | 51266 -> 64071 | neighbours |
+| SunsetInfield | 120 | 198 -> 198 | 555 -> 555 | 62469 -> 64318 | own (fallback) |
+| Suzuka | 209 | 72 -> 249 | 504 -> 1158 | 43280 -> 60124 | neighbours |
+| TopGear | 242 | 110 -> 261 | 408 -> 724 | 36390 -> 47226 | neighbours |
+| Tsukuba | 176 | 40 -> 147 | 737 -> 1531 | 44238 -> 49423 | neighbours |
+
+To check in the game: frame time and draw count over a Le Mans lap at speed, and how far ahead
+the scenery appears. A circuit imported before this change keeps its old zones until it is
+imported again.
 
 ## Open
 

@@ -148,6 +148,7 @@ std::vector<Result> results;
 // --- notifications ---
 std::deque<std::string> notices;
 int64_t notice_until = 0;
+std::deque<std::string> online_notices;  // LiveOnlineNotice: the server refused us
 // --- chat ---
 struct ChatLine {
   uint8_t channel = 0;  // 1 session, 2 world, 3 direct, 4 club, 0 a line from the server
@@ -769,6 +770,15 @@ bool LiveIsBlocked(uint64_t xuid) {
   return r && r->kind == LiveRelationKind::kBlocked;
 }
 
+void LiveOnlineNotice(const std::string& text) {
+  if (!LiveSignin()) {  // LiveFriendsPad shows nothing then
+    HudShow("Online", text, kNoticeMs / 1000.0);
+    return;
+  }
+  std::lock_guard<std::mutex> lock(mutex);
+  if (online_notices.size() < 5) online_notices.push_back(text);
+}
+
 void LiveFriendsTick() {
   if (!LiveSignin()) return;
   const int64_t now = NowMs();
@@ -1092,6 +1102,10 @@ uint16_t LiveFriendsPad(uint16_t buttons, int left_x, int left_y, bool& block_al
     if (REXCVAR_GET(live_friends_pad_shortcut)) body += ", or hold the left stick (Chat tab)";
     HudShow("Chat", body, kChatToastMs / 1000.0);
     notice_until = now + kChatToastMs;
+  } else if (!busy && !online_notices.empty() && now >= notice_until) {
+    HudShow("Online", online_notices.front(), kNoticeMs / 1000.0);
+    online_notices.pop_front();
+    notice_until = now + kNoticeMs;
   } else if (!busy && !notices.empty() && now >= notice_until) {
     HudShow("Friends", notices.front(), kNoticeMs / 1000.0);
     notices.pop_front();

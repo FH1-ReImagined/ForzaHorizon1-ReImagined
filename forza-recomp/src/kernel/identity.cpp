@@ -13,6 +13,7 @@
 //   the gamertag; gamertag / FORZA_GAMERTAG override it, also offline.
 
 #include "identity.h"
+#include "identity_file.h"
 
 #include <rex/cvar.h>
 #include <rex/filesystem.h>
@@ -130,9 +131,6 @@ Identity LoadOrCreateLiveIdentity() {
     changed = true;
   }
   if (changed) {
-    std::error_code ec;
-    std::filesystem::create_directories(path.parent_path(), ec);
-    std::ofstream out(path);
     char xuid[17];
     std::snprintf(xuid, sizeof(xuid), "%016llX", (unsigned long long)id.xuid);
     char key[33] = {}, seed[65] = {};
@@ -142,6 +140,7 @@ Identity LoadOrCreateLiveIdentity() {
     for (size_t i = 0; i < 32; ++i) {
       std::snprintf(seed + 2 * i, 3, "%02X", unsigned(uint8_t(id.signing_seed[i])));
     }
+    std::ostringstream out;
     out << "# Forza Live identity: your online XUID and gamertag (15 characters max).\n"
         << "# friends_key and signing_seed prove to the server that your friends list is yours:\n"
         << "# keep them private and with the XUID (copy this file to play as you on another\n"
@@ -149,7 +148,13 @@ Identity LoadOrCreateLiveIdentity() {
         << "# friends_key is sent once, to move an older binding to it.\n"
         << "xuid=" << xuid << "\ngamertag=" << id.gamertag << "\nfriends_key=" << key
         << "\nsigning_seed=" << seed << "\n";
-    REXLOG_INFO("FORZA_LIVE: created identity {} ({})", id.gamertag, path.string());
+    // Checked: a blocked write (Controlled folder access, a read-only or OneDrive Documents)
+    // used to make a new player at every start without a word in the log.
+    if (std::string why; !identity_file::WriteChecked(path, out.str(), why)) {
+      REXLOG_WARN("FORZA_LIVE: {}", identity_file::WarningText(path.string(), why));
+    } else {
+      REXLOG_INFO("FORZA_LIVE: created identity {} ({})", id.gamertag, path.string());
+    }
   }
   return id;
 }

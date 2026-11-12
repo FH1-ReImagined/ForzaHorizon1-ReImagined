@@ -129,7 +129,9 @@ The tool behind it can also be run by hand:
                               (--cars BUG_Veyron_09,1106 | --all)
 
 Without `--package` the cars' files go into the mod too (for a few cars: the mod overlay's
-4 GB limit).
+4 GB limit); a car that needs a sound bank FH1 lacks is then left out, as the game reads banks
+only from a package ([why](#engine-sound-banks-776)). `tools/fm4_cars.py check` lists what an
+installed import lacks ([the same section](#engine-sound-banks-776)).
 
 `FM4_DISC1` is the unpacked disc 1, `FM4_PACKS` a folder with the unpacked Disc 2 packages
 (`tools/xcontent_extract.py`), `FM4_DLC` a folder with unpacked FM4 DLC packs, `GAME` FH1's game
@@ -162,7 +164,7 @@ from unpacked files; 5.6 GB of package, 10 MB of mod).
 | `Thumbnail_<id>.xds` | FM4 | none (the same 884,788-byte format); the game draws a new one after a paint job |
 | database rows | FM4 | [below](#the-database) |
 | names (`data_car.str`, `list_carmake.str`) | FM4 | added to FH1's tables ([strings](#strings)) |
-| engine sound | FH1 | FH1 has the sound banks, harmonic tuning, `CarModelTuning` and `EngineTuning` of all 381 cars ([checked](#checked-in-the-game)); what it lacks would be taken from FM4's archives. The `EngineTuning` of an engine no FH1 car uses goes into the mod with its `GlobalCarVolume` curve times 1.6, at most 1.0 ([level](#engine-level-712)) |
+| engine sound | FH1, else FM4 | FH1 has the sound banks, harmonic tuning, `CarModelTuning` and `EngineTuning` of all 381 disc cars ([checked](#checked-in-the-game)); what it lacks is taken from FM4's archives and DLC packs, its sound banks too ([below](#engine-sound-banks-776)). The `EngineTuning` of an engine no FH1 car uses goes into the mod with its `GlobalCarVolume` curve times 1.6, at most 1.0 ([level](#engine-level-712)): FH1's copy, else FM4's, and FM4's where FH1's is a cut traffic car's ([below](#traffic-car-tunings-840)) |
 
 `interior_emissive_LOD0.xds` and `zlights*.xds` are not made: 19 of FH1's own 175 cars have no
 `interior_emissive_LOD0.xds` either, and FM4's cockpit materials do not sample it.
@@ -369,9 +371,88 @@ Lights and engine sound, the Title Update 4 build of this branch, a copied save,
 | Engine bank | the game opened `12N2_LP640_Exh.fsb`, `12N2_LP640_Int.fsb` and `6N0_Boxster_EngAmb.fsb` (watched with inotify on a private copy of the game files), the three its `EngineTuning` names; the Aventador uses `12N2_LP640_Int`, `12N2_Murc_Exh` and `6N3_GT3R_EngAmb` |
 | Engine sound | the game's mix as it submits it (a local dump of the samples `FORZA_AUDIOLOG` measures, no output device), 3 s idle then 10 s full throttle from the spawn: LP640 −15.6 dBFS idle, −13.5 full throttle; Aventador −19.0 and −12.4. No dropped frames (187.7 a second for 55 s), no silence (quietest 50 ms at full throttle −16.7 dBFS; Aventador −26.7). The strongest partial near the V12's firing frequency (rpm / 60 × 6) follows the rpm from telemetry: r = 0.85 over 1,550-8,700 rpm (Aventador 0.88 over 2,000-8,500) |
 
-Every FM4 car the import adds has its `CarModelTuning` and `EngineTuning` in FH1, and every
+Every FM4 disc car the import adds has its `CarModelTuning` and `EngineTuning` in FH1, and every
 sound bank those name is one of FH1's (`NA.fsb`, named for five of the cars, is FH1's own
-placeholder bank of its `NA_*_HT.xml` files).
+placeholder of its `NA_*_HT.xml` files: no file has it, and 24 of FH1's own cars name it). Three
+FM4 DLC cars name banks FH1 lacks ([below](#engine-sound-banks-776)).
+
+### Engine sound banks (#776)
+
+An engine's `EngineTuning` names a harmonic tuning file per part (`Exhaust`, `EngineIntake`,
+`EngineAmbient`), and that file names its sound bank (`<Soundbank name="5T1_A200b_EXH.fsb">`).
+FM4's DLC packs bring the banks of their new engines as loose files, in a folder named after the
+pack's car zip (`Media/DLCZips/29_pri_65/Media/audio/cars/Engines/Soundbanks/LOD1/`); FH1's DLC
+packs do the same. Of the cars the import adds, three name banks FH1 lacks: the 1986 Audi Sport
+quattro S1 (`5T1_A200b_EXH.fsb`, through `5T1_A200_1478_Exh_HT.xml`), the 1985 Mazda RX-7
+(`2RN3_FBRX7_EngAmb`, `_Exh`, `_Int`) and the 1991 #55 Mazda 787B (`4R3_787B_EngAmb`, `_Exh`,
+`_Int`), seven banks, 1.5 MB. An import before this fix copied their harmonic tuning but not the
+banks, and the game stopped with its disc read error ("XamShowDirtyDiscErrorUI" in `forza.log`,
+after `NtCreateFile FAILED ... Soundbanks\LOD1\5T1_A200b_EXH.fsb`) when it loaded the car: right
+after buying it in the Autoshow, and at every start once it was the save's current car (the save
+holds its garage row and the current car, nothing broken in itself).
+
+The game reads a bank only as a file, never from a zip: with the bank in the mod (the title
+update's archive) it opened `update:\media\Audio\...\5T1_A200b_EXH.fsb` as a loose file, which
+does not exist, and crashed. A DLC package's zip gets a folder of loose files where a folder of
+the zip's name is next to it (the game looks in `DLCRootN:\media\dlczips\<zip>\` for the
+package's `media\effects\` and the like only then). So the import copies each bank FH1's disc
+lacks from FM4's files into `Media/DLCZips/fm4cars<n>_pri_60/Media/audio/cars/Engines/Soundbanks/`
+next to the zip that holds the car. A car whose tuning or bank no given file has is left out
+("its engine sound bank ... is in none of the files given"), checked before any of its files is
+written, and so is one that needs a bank without `--package`.
+
+An import made before this fix is repaired once, when the launcher next starts the game
+(`fm4cars.repair_sound`; the import's `.reimagined-fm4-cars.json` has no `"banks"`): each harmonic
+tuning file of the import whose bank no file has gets FH1's most similar one in the mod, which
+the game reads before the package's copy (same part, same kind of engine and cylinder count, the
+longest common name: the S1 gets `5T1_A200_Exh_HT.xml`, the RX-7 and the 787B the RX-8's). The
+cars then drive with that engine's sound and a save stuck on one starts again; the launcher says
+so, and importing FM4 cars again gives them their own banks.
+
+`tools/fm4_cars.py check --fh1 GAME --update TU4 --out MOD --package PACKAGE` lists what an
+installed import lacks that the game reads for each of its cars: the model, the
+`CarModelTuning`, the engine rows and `EngineTuning`, the harmonic tuning those name and the
+banks that names, each where the game looks for it.
+
+Checked (Linux, a main build, a copy of the TU4 golden save with the S1 made its current car
+with the launcher's garage code, offline, audio muted): an import of the S1, the RX-7, the 787B
+and the LP640 by the tool before the fix reproduced the report (the bank's failed open, then
+the disc read error, at the start); the same with the bank in the mod crashed on the
+`update:\` path; with the bank next to the package's zip, and after `repair_sound` on the old
+import, the save started in free roam in the S1 and it drove. `check` named the seven banks of the
+old import and nothing for the new one or the repaired one.
+
+### Traffic car tunings (#840)
+
+FH1 keeps an `EngineTuning` for five FM4 cars it cut as traffic cars and does not have (no model,
+no database row): the 2006 Ford Focus ST (also the 2011 Ka's swap), the 2011 Audi A4 race car
+(`AUD_2_A4_11`), the 2011 Chevrolet Spark and Volt and the 2009 Scion xD. They are cut down
+("removing proper assignments to make this car lightweight for civilian traffic in Horizon",
+FH1's own comment around the Focus ST's real slots): `EngineAmbient` and `Intake` name
+`NA_EngAmb_HT.xml` and `NA_Int_HT.xml` (the `NA.fsb` placeholder, no sound), and every exhaust
+level the same `Traffic_*_Exh_HT.xml`, a few low loops only (the Focus ST's 5 up to 3,908 rpm,
+against `5T1_S40_Exh_HT.xml`'s 9 up to 20,000; its redline is 6,800). An import before this fix
+took those copies, as for any engine no FH1 car uses, so the cars had no intake or engine
+ambient sound, an exhaust that ends at about 3,900 rpm and exhaust upgrades that changed nothing.
+
+The import now takes FM4's own copy where FH1's live (uncommented) exhaust, intake or engine
+ambient slot names a `Traffic_*_HT.xml` or an `NA_*_HT.xml` and FM4's does not
+(`tools/fm4_cars.py` `traffic_tuning`), at FH1's level as before. The Volt is electric and NA in
+FM4 too, so it keeps FH1's copy. Every harmonic tuning file FM4's four copies name is in FH1's
+`HarmonicTuning.zip`, and every bank those name is one of FH1's disc banks: nothing else comes in.
+Of FH1's 807 tunings, 24 are traffic ones (`traffic_tuning`); FM4 has 2 (the Volt's and the Leaf's).
+
+Checked with `tools/fm4_cars.py convert` on the six cars that use these engines (the Focus ST,
+the Ka, the xD, the Spark, the Volt, the A4): the four tunings are FM4's (the Focus ST's
+`10N2_SRT10_j_EngAmb_HT.xml`, `5T1_A200_Int_HT.xml`, `5T1_S40_Exh_HT.xml`), the Volt's and the
+other engines' the same as before, no harmonic tuning file or bank added, and `check` finds
+nothing missing. Over all 381 cars of the discs, `audio_plan` before and after this fix differs
+only in those four tunings. Not yet heard in the game.
+
+An import made before this fix keeps the traffic tunings until FM4 cars are imported again (the
+right files come only from FM4's discs). Its `.reimagined-fm4-cars.json` has no
+`"engine_tuning": 2`; when its mod folder holds one of the four, the launcher says so once when
+it starts the game (`fm4cars.tuning_notice`), and the Mods page until the next import.
 
 ### Engine level (#712)
 

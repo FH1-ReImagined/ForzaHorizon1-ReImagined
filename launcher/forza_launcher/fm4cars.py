@@ -67,6 +67,89 @@ def stale(cfg):
     return _dlc(cfg) != sorted(info.get("dlc", []))
 
 
+SOUND_NOTICE = ("Some imported FM4 DLC cars (such as the 1986 Audi Sport quattro S1) had no engine sound bank, "
+                "and the game stopped with a disc read error when one was bought or was your current car. "
+                "They now use the sound of a similar FH1 engine, and your save starts again. To give them "
+                "their own engine sound, import FM4 cars again (Mods > Forza Motorsport 4 cars).")
+
+
+def repair_sound(cfg, log=print):
+    """Once for an import made before #776 (its marker has no "banks"): that import left out the
+    engine sound banks FH1 lacks, and a save whose current car was one of those cars stopped at
+    every start with the game's disc read error. Its harmonic tuning files that name a missing
+    bank get FH1's most similar one in the mod (which the game reads before the package), so the
+    cars drive with a similar engine's sound until the next import, which brings FM4's banks.
+    Returns a notice for the player when it changed something, else None."""
+    info = status(cfg)
+    if not info or info.get("banks"):
+        return None
+    folder = mods.mods_dir(cfg) / MOD
+    media = cfg.game_files() / "media"
+    if not media.is_dir():
+        return None  # no game files to check against: next time
+    try:
+        tools = _tools()
+        package, _ = _package(cfg)
+        fixes = tools.sound_fallbacks(str(media), str(package) if package.is_dir() else None, str(folder))
+        if fixes is None:
+            return None
+        ht_dir = folder / "media" / "audio" / "cars" / "engines" / "harmonictuning"
+        for name, (_, data) in fixes.items():
+            ht_dir.mkdir(parents=True, exist_ok=True)
+            (ht_dir / name).write_bytes(data)
+        info["banks"] = True
+        if fixes:
+            info["sound_fallback"] = {name: fh1 for name, (fh1, _) in sorted(fixes.items())}
+        (folder / MARKER).write_text(json.dumps(info, ensure_ascii=False, indent=1), encoding="utf-8")
+    except Exception as e:  # never in the way of starting the game
+        log(f"FM4 cars: could not check the engine sound banks ({e})")
+        return None
+    if not fixes:
+        return None
+    for name, (fh1, _) in sorted(fixes.items()):
+        log(f"FM4 cars: {name} names an engine sound bank no file has; FH1's {fh1} in its place (#776)")
+    return SOUND_NOTICE
+
+
+# The engine tunings an import before #840 took from FH1, a cut traffic car's (the Traffic_/NA_
+# placeholder slots tools/fm4_cars.py traffic_tuning finds): FM4's own are full ones. The Volt's
+# is NA in FM4 too (electric) and stays.
+TRAFFIC_TUNINGS = ("AUD_2_A4_11_ET.xml", "CHE_Spark_11_ET.xml", "FOR_FocusST_06_ET.xml", "SCI_xD_09_ET.xml")
+TUNING_NOTICE = ("Some imported FM4 cars (such as the 2006 Ford Focus ST) have a cut-down traffic car's "
+                 "engine sound, the same with every exhaust. Import FM4 cars again (Mods > Forza Motorsport "
+                 "4 cars) to give them FM4's own.")
+
+
+def traffic_tuned(cfg):
+    """The engine tunings (TRAFFIC_TUNINGS) an import made before #840 holds: its marker has no
+    "engine_tuning". Only a new import replaces them (they come from FM4's discs)."""
+    info = status(cfg)
+    if not info or info.get("engine_tuning", 1) >= 2:
+        return []
+    folder = mods.mods_dir(cfg) / MOD / "media" / "audio" / "cars" / "engines" / "enginetuning"
+    try:
+        have = {p.name.lower() for p in folder.iterdir()}
+    except OSError:
+        return []
+    return [n for n in TRAFFIC_TUNINGS if n.lower() in have]
+
+
+def tuning_notice(cfg, log=print):
+    """Once for an import made before #840 that has a traffic car's engine tuning (traffic_tuned):
+    a notice for the player, else None. The Mods page says it until the next import."""
+    info = status(cfg)
+    if not info or info.get("tuning_notice") or not traffic_tuned(cfg):
+        return None
+    try:
+        info["tuning_notice"] = True
+        (mods.mods_dir(cfg) / MOD / MARKER).write_text(json.dumps(info, ensure_ascii=False, indent=1),
+                                                     encoding="utf-8")
+    except OSError as e:
+        log(f"FM4 cars: could not note the engine tuning notice ({e})")
+        return None
+    return TUNING_NOTICE
+
+
 # ---- What the player chose (#681) --------------------------------------------------------------
 # Disc 1 can be a disc image (whole, trimmed or split into parts), a Games on Demand or hard drive
 # install package (its data parts hold the same XDVDFS volume as the disc), a folder with the
@@ -970,6 +1053,10 @@ def _update_root(cfg):
     from .config import render_toml
     install, _ = game_module.find_game(cfg)
     update = game_module.update_data_root(cfg, install, render_toml(cfg)) if install else None
+    if not update or not update.is_dir():
+        # With no managed update directory, Play leaves the root unset and the TU4
+        # game defaults to a sibling of its game-data directory.
+        update = Path(os.path.abspath(cfg.game_files())).parent / "tu4"
     extra = game_module.split_args(cfg.advanced.get("extra_args", ""))
     for i, arg in enumerate(extra):
         if arg.startswith("--update_data_root="):
@@ -1108,7 +1195,9 @@ def _build(cfg, tools, target, backup, work, disc1, disc2, progress, cancelled, 
             fh1.close()
         if fm4 is not None:
             fm4.close()
-    info = {"format": 1, "cars": [c[1] for c in report["cars"]],
+    # banks: made with the engine sound banks FH1 lacks (#776), nothing for repair_sound to do
+    # engine_tuning 2: FM4's own engine tuning where FH1's is a cut traffic car's (#840)
+    info = {"format": 1, "banks": True, "engine_tuning": 2, "cars": [c[1] for c in report["cars"]],
             "skipped": [s[1] for s in report["skipped"]],
             "dlc": _dlc(cfg)}
     if dlc_packs or dlc:

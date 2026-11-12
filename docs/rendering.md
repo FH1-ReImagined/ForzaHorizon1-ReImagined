@@ -514,6 +514,31 @@ artifact detector. Screenshots and the RenderDoc capture are retained locally.
 This correction is independent of DLSS and does not establish that every moving-scene
 artifact is resolved.
 
+### Grey bands in the street race intro at a 1080p output (#785)
+
+Two light-grey bands, each about 128 pixels tall, crossed the screen during the street race
+intro (the crowd shot before the pre-race menu) and the picture below them was moved down.
+Only with the scene/HUD split at a 1080p output and render scale 2: FSR 3 in every mode, or
+the split without an upscaler. 1440p and 4K were clean, so the earlier attempts at a 1440p
+output did not see it. Reproduced on an RX 9060 XT (RADV) with the reporter's settings
+(1080p output, FSR 3 Balanced, render scale 2, 144 fps, fullscreen) in Beaumont Limits from
+the Gladstone Cell Tower hub; turning ambient occlusion off or changing the scene scale live
+did not change it, switching the output to 1440p live removed it.
+
+A RenderDoc capture showed the cause. The intro is drawn on the HUD target, whose raster at a
+1080p output is 1920x1080 of the 2560x1440 that render scale 2 gives (0.75), and the HUD's
+shaders read every screen texture at 0.75 of its coordinates. That shot is drawn with
+predicated tiling: three 1280x256 EDRAM tiles with 4x MSAA, each moved into place by a window
+offset of 0, -256 or -512 and resolved to its own rows of the 1280x720 scene texture. Each
+tile's pixels fill only its first 192 rows, but the resolves kept the tiles at rows 256 and
+512, so the 2560x1440 scaled texture held unrendered rows at 384-512 and 896-1024: the two
+bands. ReIGlue 0490 resolves such a tile (its draws on the fractional raster, a nonzero window
+offset) to 0.75 of its screen position, rows 192 and 384, copying 0.75 of its size; the EDRAM
+clear keeps the tile's rectangle. The log names the first moves (`FH1 fractional raster: tile
+resolve at screen (0, 256) placed at (0, 192), 960x192`). After it, the intro, the pre-race
+car camera and the race start were clean in Beaumont Limits (30 and 144 fps), Valley Sprint,
+Canyon Run and Reservoir Drag (30 fps); 1440p and 4K take no new path.
+
 ## The car's picture with an empty pipeline cache (#74, 2026-10-16)
 
 Buying a car saved its picture (`ForzaProfile/Thumbnails/Thumbnail_N.xdc`, 768x288) nearly

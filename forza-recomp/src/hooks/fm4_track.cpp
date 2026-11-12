@@ -1,8 +1,10 @@
 // forza - FM4 circuits inside FH1 (#648, "The Festival"): dev switches for the conversion
 // work (tools/fm4_track_mod.py, tools/fm4_pvs.py). All off unless their variable is set:
-//   FORZA_TRACK_SPAWN=x,y,z   the player car's teleports go there; also turns on the
-//                             FM4TRACK diagnostics below (file errors, the dirty disc
-//                             message, zone, texture and resource table checks)
+//   FORZA_TRACK_SPAWN=x,y,z   the player car's teleports go there (set on every start on an
+//                             imported circuit, fm4_track_mount.cpp); the game's fatal file
+//                             errors and its dirty disc message are logged then
+//   FORZA_TRACK_DIAG=1        the FM4TRACK diagnostics below (zones made live, zone, texture
+//                             and resource table checks, files streamed, the texture pack)
 //   FORZA_PVS_TRACE=<file>    every read of the PVS reader, to <file>
 //   FORZA_INSECURE_FILES=a|b  files the secure file system lets open as plain files (a
 //                             changed zipmanifest.xml that mounts a converted track's archive)
@@ -23,6 +25,8 @@
 // FORZA_TRACK_SPAWN=x,y,z[,fx,fz] (world metres, y up; Suzuka's grid is
 // 605.6,598.5,-134.1,0.61,-0.79) moves the player car's teleports there (the spawn into free roam, a car
 // reset), facing (fx, 0, fz) when given, and logs every vehicle teleport. Called from the teleport hook in teleport_velocity.cpp.
+
+#include "fm4_file_error.h"
 
 #include "../platform/guest_addr.h"
 #include "../platform/guest_memory.h"
@@ -197,15 +201,31 @@ extern "C" REX_FUNC(sub_82D378E8) {
 }
 #endif
 
-// The game's fatal file error (the dirty disc message, sub_82CBF3E0): who raised it, when
-// FORZA_TRACK_SPAWN or FORZA_PVS_TRACE is set (a track being converted).
-// tu_address_map: TU4 addresses
 #if FORZA_TU4
+// FORZA_TRACK_DIAG: the FM4TRACK diagnostics (a track being converted or looked into). Not on
+// for a player's start on a circuit: some of them log on every zone or file streamed.
+static bool TrackDiag() {
+  static const bool on = [] {
+    const char* p = std::getenv("FORZA_TRACK_DIAG");
+    return p && *p && std::string_view(p) != "0";
+  }();
+  return on;
+}
+
+// The game's file error check (sub_82CBF3E0): who raised a fatal one (the game then shows its
+// dirty disc message and stops), on a circuit (FORZA_TRACK_SPAWN), with FORZA_TRACK_DIAG or
+// FORZA_PVS_TRACE.
+// tu_address_map: TU4 addresses
 extern "C" REX_FUNC(__imp__sub_82CBF3E0);
 extern "C" REX_FUNC(sub_82CBF3E0) {
-  // Called after every file operation (r3 the kind, 1 a read, 2 an open; r4 the result, 0 a
-  // failure; r5 the error code).
-  if (!ctx.r4.u32 && (std::getenv("FORZA_TRACK_SPAWN") || PvsTrace())) {
+  // Called after every file operation: r3 the file object's +8 field, r4 the operation's
+  // result (0 a failure), r5 the error code (GetLastError); which of them stop the game:
+  // fm4_file_error.h (its own timed check first, when 0x8352EF14 is set, is not about the
+  // result). Reads of overlapped files fail with 997 here (the SDK reads at once and answers
+  // PENDING), which the game lets pass: tens of thousands a session on a circuit, so only the
+  // fatal ones are logged.
+  if (forza::fm4_track::GameFatalFileError(ctx.r3.s32, ctx.r4.u32, ctx.r5.u32) &&
+      (std::getenv("FORZA_TRACK_SPAWN") || TrackDiag() || PvsTrace())) {
     std::string chain;
     uint32_t frame = ctx.r1.u32;
     for (int i = 0; i < 12 && Stack(frame) && GuestReadable(frame); ++i) {
@@ -223,7 +243,7 @@ extern "C" REX_FUNC(sub_82CBF3E0) {
 // The dirty disc message (sub_82CC94E8): who showed it.
 extern "C" REX_FUNC(__imp__sub_82CC94E8);
 extern "C" REX_FUNC(sub_82CC94E8) {
-  if (std::getenv("FORZA_TRACK_SPAWN") || PvsTrace()) {
+  if (std::getenv("FORZA_TRACK_SPAWN") || TrackDiag() || PvsTrace()) {
     std::string chain;
     uint32_t frame = ctx.r1.u32;
     for (int i = 0; i < 16 && Stack(frame) && GuestReadable(frame); ++i) {
@@ -277,11 +297,11 @@ static std::atomic<uint32_t> fm4_presentation{0};
 // The streaming resource manager (sub_82E2EAD8's r3; +16 its 12-byte entries by id).
 static std::atomic<uint32_t> fm4_resource_manager{0};
 // A zone being made live (sub_82E1CA20: r3 the track presentation, r4 the zone record):
-// the presentation's model and instance tables, for FORZA_TRACK_SPAWN runs.
+// the presentation's model and instance tables, for FORZA_TRACK_DIAG runs.
 namespace { void LogZones(uint8_t* base, uint32_t pres, const char* what, uint32_t zone); }
 extern "C" REX_FUNC(__imp__sub_82E1CA20);
 extern "C" REX_FUNC(sub_82E1CA20) {
-  if (std::getenv("FORZA_TRACK_SPAWN")) {
+  if (TrackDiag()) {
     const uint32_t t = ctx.r3.u32, z = ctx.r4.u32;
     {
       const uint32_t texs = Load32(base, t + 2812);
@@ -334,13 +354,13 @@ extern "C" REX_FUNC(sub_82E1CA20) {
 }
 
 // A zone's instance index (sub_82CEE9F8: r3 out, r4 the cell, r5 &k): log the zone's list
-// once, for FORZA_TRACK_SPAWN runs.
+// once, for FORZA_TRACK_DIAG runs.
 extern "C" REX_FUNC(__imp__sub_82CEE9F8);
 extern "C" REX_FUNC(sub_82CEE9F8) {
   const uint32_t cell = ctx.r4.u32;
   __imp__sub_82CEE9F8(ctx, base);
   static std::atomic<int> logged{0};
-  if (std::getenv("FORZA_TRACK_SPAWN") && logged.fetch_add(1) < 3) {
+  if (TrackDiag() && logged.fetch_add(1) < 3) {
     const uint32_t list = Load32(base, cell + 88), count = Load32(base, cell + 92) >> 16;
     uint32_t mx = 0, cap = Load32(base, cell + 96);
     std::string first5;
@@ -355,11 +375,11 @@ extern "C" REX_FUNC(sub_82CEE9F8) {
 }
 
 // A model's textures being bound (sub_82E18FC8: r3 the presentation, r4 &model): log a model
-// whose texture has no user list, for FORZA_TRACK_SPAWN runs.
+// whose texture has no user list, for FORZA_TRACK_DIAG runs.
 extern "C" REX_FUNC(__imp__sub_82E18FC8);
 extern "C" REX_FUNC(sub_82E18FC8) {
   static std::atomic<int> logged{0};
-  if (std::getenv("FORZA_TRACK_SPAWN") && logged.load() < 5) {
+  if (TrackDiag() && logged.load() < 5) {
     const uint32_t t = ctx.r3.u32;
     const uint32_t model = uint32_t(*forza::GuestPtr(base, ctx.r4.u32)) << 8 |
                            *forza::GuestPtr(base, ctx.r4.u32 + 1);
@@ -390,7 +410,7 @@ extern "C" REX_FUNC(__imp__sub_82E24248);
 namespace { void AliasAtlasTiles(uint8_t* base, uint32_t t); }
 extern "C" REX_FUNC(sub_82E24248) {
   AliasAtlasTiles(base, ctx.r3.u32);
-  if (std::getenv("FORZA_TRACK_SPAWN")) {
+  if (TrackDiag()) {
     const uint32_t t = ctx.r3.u32;
     REXLOG_INFO("FM4TRACK: texture users: lists {} {} textures {} models {} instances {}",
                 Load32(base, t + 59436 + 4) - Load32(base, t + 59436),
@@ -399,7 +419,7 @@ extern "C" REX_FUNC(sub_82E24248) {
   }
   const uint32_t t = ctx.r3.u32;
   __imp__sub_82E24248(ctx, base);
-  if (std::getenv("FORZA_TRACK_SPAWN")) {
+  if (TrackDiag()) {
     const uint32_t texs = Load32(base, t + 2812), n = Load32(base, t + 2816);
     uint32_t nulls = 0, first = 0xFFFFFFFF;
     for (uint32_t i = 0; i < n; ++i) {
@@ -430,18 +450,18 @@ extern "C" REX_FUNC(sub_82E24248) {
 
 extern "C" REX_FUNC(__imp__sub_82E23B50);
 extern "C" REX_FUNC(sub_82E23B50) {
-  if (std::getenv("FORZA_TRACK_SPAWN")) {
+  if (TrackDiag()) {
     REXLOG_INFO("FM4TRACK: texture user slots: {} (from {:08X})", ctx.r4.u32, uint32_t(ctx.lr));
   }
   __imp__sub_82E23B50(ctx, base);
 }
 
 // The streaming resource table (sub_82E2E890: r3 the manager, r4 the resource id; 12-byte
-// entries at +16, their count at +52): log ids past the table, for FORZA_TRACK_SPAWN runs.
+// entries at +16, their count at +52): log ids past the table, for FORZA_TRACK_DIAG runs.
 extern "C" REX_FUNC(__imp__sub_82E2E890);
 extern "C" REX_FUNC(sub_82E2E890) {
   static std::atomic<int> logged{0};
-  if (std::getenv("FORZA_TRACK_SPAWN")) {
+  if (TrackDiag()) {
     const uint32_t m = ctx.r3.u32, id = ctx.r4.u32, n = Load32(base, m + 52);
     if ((id >= n || logged.load() < 3) && logged.fetch_add(1) < 12) {
       REXLOG_INFO("FM4TRACK: resource {} of {} (table {:08X}) r5 {:08X} r6 {:08X} r7 {:08X} "
@@ -458,13 +478,13 @@ extern "C" REX_FUNC(sub_82E2E890) {
 extern "C" REX_FUNC(__imp__sub_82EB6960);
 extern "C" REX_FUNC(sub_82EB6960) {
   static std::atomic<int> logged{0};
-  if (std::getenv("FORZA_TRACK_SPAWN") && GuestReadable(ctx.r7.u32) &&
+  if (TrackDiag() && GuestReadable(ctx.r7.u32) &&
       Load32(base, ctx.r7.u32) == 0xBEBEBEBE) {
     REXLOG_ERROR("FM4TRACK: stream file {} '{}' with an unset descriptor {:08X}", ctx.r5.u32,
                  CString(base, ctx.r6.u32), ctx.r7.u32);
   }
   static std::atomic<int> totals[3];
-  if (std::getenv("FORZA_TRACK_SPAWN")) {
+  if (TrackDiag()) {
     const std::string name = CString(base, ctx.r6.u32);
     const int kind = name.find(".rmb.bin") != std::string::npos ? 0
                      : name.find(".bix") != std::string::npos ? 1 : 2;
@@ -476,7 +496,7 @@ extern "C" REX_FUNC(sub_82EB6960) {
   }
   static const bool every = std::getenv("FORZA_STREAM_LOG") != nullptr;  // every file
   if (every) REXLOG_INFO("FM4STREAM: {} {}", ctx.r5.u32, CString(base, ctx.r6.u32));
-  if (std::getenv("FORZA_TRACK_SPAWN") && logged.fetch_add(1) < 5) {
+  if (TrackDiag() && logged.fetch_add(1) < 5) {
     REXLOG_INFO("FM4TRACK: stream file {} r4 {:08X} r6 '{}' r7 {:08X} r8 {:08X} from {:08X}",
                 ctx.r5.u32, ctx.r4.u32, CString(base, ctx.r6.u32), ctx.r7.u32, ctx.r8.u32,
                 uint32_t(ctx.lr));
@@ -676,7 +696,7 @@ thread_local uint32_t fm4_stx_last = 0, fm4_stx_ids = 0;
 extern "C" REX_FUNC(sub_82E323A0) {
   const Fm4Stx& c = Fm4StxConfig();
   std::string path = CString(base, ctx.r5.u32);
-  if (std::getenv("FORZA_TRACK_SPAWN")) {
+  if (TrackDiag()) {
     REXLOG_INFO("FM4TRACK: texture pack '{}' r7 {:08X} r8 {:08X}", path, ctx.r7.u32, ctx.r8.u32);
   }
   for (auto& ch : path) ch = char(std::tolower(static_cast<unsigned char>(ch)));
@@ -707,7 +727,7 @@ void DumpCaff(uint8_t* base, uint32_t owner, const char* what) {
 
 extern "C" REX_FUNC(sub_82D099E0) {
   static std::atomic<int> dumps{0};
-  if (std::getenv("FORZA_TRACK_SPAWN") && dumps.fetch_add(1) < 2) {
+  if (TrackDiag() && dumps.fetch_add(1) < 2) {
     DumpCaff(base, ctx.r3.u32, fm4_stx_active ? "FM4 pack" : "pack");
   }
   if (!fm4_stx_active) return __imp__sub_82D099E0(ctx, base);
@@ -1317,7 +1337,7 @@ extern "C" REX_FUNC(sub_82D095C0) {
 extern "C" REX_FUNC(__imp__sub_82D21528);
 extern "C" REX_FUNC(sub_82D21528) {
   static std::atomic<int> logged{0};
-  if (std::getenv("FORZA_TRACK_SPAWN") && logged.fetch_add(1) < 400) {
+  if (TrackDiag() && logged.fetch_add(1) < 400) {
     REXLOG_INFO("FM4TRACK: depot file {}", ctx.r4.u32);
   }
   static std::atomic<int> traced{0};

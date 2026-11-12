@@ -69,6 +69,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           .\auto-pause-test.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          clang-cl /nologo /std:c++17 /EHsc /W4 /WX forza-recomp/tests/frame_rate_choices_test.cpp /Fe:frame-rate-choices-test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\frame-rate-choices-test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - if: runner.os != 'Windows'
         run: |
           g++ -std=c++17 -pthread -Wall -Wextra -Werror forza-recomp/tests/challenge_hud_test.cpp -o challenge-hud-test
@@ -85,6 +89,8 @@ jobs:
           ./stall-watch-test
           g++ -std=c++17 -Wall -Wextra -Werror forza-recomp/tests/auto_pause_test.cpp -o auto-pause-test
           ./auto-pause-test
+          g++ -std=c++17 -Wall -Wextra -Werror forza-recomp/tests/frame_rate_choices_test.cpp -o frame-rate-choices-test
+          ./frame-rate-choices-test
       - if: runner.os == 'Linux'
         run: |
           g++ -std=c++17 -Wall -Wextra -Werror -DFORZA_CPU_TARGET_V3=1 forza-recomp/tests/cpu_target_test.cpp forza-recomp/src/platform/cpu_target.cpp -o cpu-target-test

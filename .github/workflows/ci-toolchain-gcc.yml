@@ -1,0 +1,115 @@
+# Builds GCC 14.3.0 for Ubuntu 22.04 from GNU's sources (launcher/packaging/build_gcc14_jammy.sh,
+# in the same pinned ubuntu:22.04 image as a local build) and adds the tarball and its source to the
+# pre-release ci-toolchain-jammy-gcc14, which is never the latest release. release.yml's sdk-linux job
+# (ci_linux_sdk_setup.sh) uses it before the PPA's g++-14 packages, only when it matches its line in
+# launcher/packaging/ci_toolchain_sha256sums.txt. Anyone can run this to rebuild the tarball and
+# compare it with the release's.
+#
+# The build job can't write anything. The publish job adds files only: a file the release already
+# holds with other bytes, or a build that differs from its pin, stops it before any upload (with
+# the repin input, a build that differs from its pin goes up as an unpinned file instead). Files
+# not pinned yet are added and the run fails with the lines to pin (a pull request adds them).
+#
+# By hand only. Without bootstrap the build took under 6 minutes on 6 cores of a desktop PC; a
+# 4-core runner should take well under an hour.
+name: ci-toolchain-gcc
+
+on:
+  workflow_dispatch:
+    inputs:
+      repin:
+        description: "Upload even if the tarball differs from its pin (a new GCC, or 22.04's compiler changed); the run prints the new pin"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# The same group as ci-toolchain-mirror.yml: both write the release's SHA256SUMS.
+concurrency:
+  group: ci-toolchain-mirror
+  cancel-in-progress: false
+
+env:
+  TAG: ci-toolchain-jammy-gcc14
+  TARBALL: gcc-14.3.0-jammy-x86_64.tar.xz
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    # The image build_gcc14_jammy.sh pins (IMAGE there): keep the two the same.
+    container:
+      image: docker.io/library/ubuntu@sha256:076e7bf82319619f28dd0aa9c02ab34b055ad37100395b4f49a2ffba04fb5e11
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: The image is the one build_gcc14_jammy.sh pins
+        run: |
+          grep -q '^IMAGE=docker.io/library/ubuntu@sha256:076e7bf82319619f28dd0aa9c02ab34b055ad37100395b4f49a2ffba04fb5e11$' \
+            launcher/packaging/build_gcc14_jammy.sh
+      - name: Build GCC 14 from GNU's sources
+        run: launcher/packaging/build_gcc14_jammy.sh --in-container "$RUNNER_TEMP/gcc"
+      - name: Check it (glibc 2.35, C++23 headers, a C++23 program)
+        run: launcher/packaging/check_gcc14_jammy.sh "$RUNNER_TEMP/gcc/$TARBALL"
+      - name: Collect the tarball and its source
+        run: |
+          mkdir -p "$RUNNER_TEMP/upload"
+          cp "$RUNNER_TEMP/gcc/$TARBALL" "$RUNNER_TEMP/gcc"/source/* "$RUNNER_TEMP/upload/"
+          cat "$RUNNER_TEMP/gcc/$TARBALL.sha256"
+          {
+            echo "### $TARBALL"
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/gcc/$TARBALL.sha256"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gcc-14-jammy
+          path: ${{ runner.temp }}/upload/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      # Creates the pre-release and uploads its files; nothing else in the repository has this.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: gcc-14-jammy
+          path: ${{ runner.temp }}/upload
+      - name: Hash the files and check them against the pins
+        env:
+          REPIN: ${{ inputs.repin }}
+        run: |
+          args=()
+          if [ "$REPIN" = true ]; then args+=(--repin); fi
+          python3 launcher/packaging/ci_toolchain_mirror.py sums "$RUNNER_TEMP/upload" "${args[@]}"
+      - name: Add them to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 launcher/packaging/ci_toolchain_mirror.py upload "$RUNNER_TEMP/upload" "$GITHUB_REPOSITORY" "$TAG"
+      - name: Files ci_toolchain_sha256sums.txt doesn't pin yet
+        run: |
+          unpinned="$RUNNER_TEMP/upload/UNPINNED"
+          [ -s "$unpinned" ] || exit 0
+          {
+            echo "### Add these lines to launcher/packaging/ci_toolchain_sha256sums.txt"
+            echo
+            echo '```'
+            cat "$unpinned"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$unpinned"
+          echo "::error::The release has files that ci_toolchain_sha256sums.txt doesn't pin; CI won't use them until it does (lines above and in the run summary)."
+          exit 1
