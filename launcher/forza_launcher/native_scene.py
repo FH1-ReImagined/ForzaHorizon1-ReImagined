@@ -46,6 +46,12 @@ def available(cfg, install):
     executable = Path(install.exe)
     folder = executable.parent if paths.IS_WINDOWS else executable.resolve().parent
     try:
+        # The plugin filename also depends on rexruntime's build configuration.
+        # A directory with non-release variants is ambiguous without an attested
+        # runtime configuration, so do not advertise this release-only contract.
+        stem, suffix = ("rexgpu-xenos", ".dll") if paths.IS_WINDOWS else ("librexgpu-xenos", ".so")
+        if any((folder / (stem + postfix + suffix)).exists() for postfix in ("d", "rd")):
+            return False
         data = json.loads((folder / CAPABILITY).read_text(encoding="utf-8"))
         return (isinstance(data, dict) and type(data.get("api")) is int and data["api"] == 1 and
                 data.get("renderer_sha256") == dlss._sha256(folder / renderer))

@@ -151,6 +151,14 @@ class NativeSceneTests(unittest.TestCase):
         self.capability.unlink()
         self.assertFalse(native_scene.available(self.cfg, self.install))
 
+    def test_other_build_configuration_is_ambiguous(self):
+        self.mark_capable()
+        debug = self.folder / ("rexgpu-xenosd.dll" if paths.IS_WINDOWS else "librexgpu-xenosd.so")
+        debug.write_bytes(b"debug renderer")
+        self.assertFalse(native_scene.available(self.cfg, self.install))
+        debug.unlink()
+        self.assertTrue(native_scene.available(self.cfg, self.install))
+
     def test_output_presets_and_custom_sizes(self):
         self.mark_capable()
         self.cfg.settings.update(fh1_native_scene_width=8960, fh1_native_scene_height=5040)
