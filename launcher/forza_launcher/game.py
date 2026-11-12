@@ -652,6 +652,8 @@ def _build_plan(cfg: Config, game: GameInstall, write, refresh_xenia, log, saver
     antialiasing.configure_runtime(cfg, env, args, write=write)
 
     extra = split_args(cfg.advanced.get("extra_args", ""))
+    from . import native_scene
+    native_scene.configure(cfg, game, args, notes, extra, vr=vr, battery_saver=saver.active)
     vendor_arg = gpu_vendor_arg(cfg, extra)
     if vendor_arg:
         args.append(vendor_arg)

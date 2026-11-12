@@ -19,6 +19,10 @@ LOW_FRAME_RATES = (20, 30, 40)
 # The rates the launcher's Frame rate list and the in-game Graphics menu offer (#783; the game's
 # copy is forza-recomp/src/platform/frame_rate_choices.h, test_frame_rate_presets.py keeps them equal).
 FRAME_RATE_PRESETS = (*LOW_FRAME_RATES, 60, 75, 90, 100, 120, 144, 165, 180, 200, 240)
+# Vulkan's current seven-times-per-axis scaled-resolve envelope. The device
+# and the combined scene/HUD backing still decide whether a pair can run.
+NATIVE_SCENE_MAX_WIDTH = 8960
+NATIVE_SCENE_MAX_HEIGHT = 5040
 
 
 @dataclass
@@ -147,6 +151,14 @@ add("resolution_scale", "Render scale", "Display", "int", 1,
     "Draws at 1x to 8x the guest resolution. 1 with FSR 1 is the fast default; 2 is real extra detail "
     "for about 40% fewer fps; above 2 is experimental (flicker on NVIDIA, issue #47).", "Picture",
     lo=1, hi=8, restart=True)
+add("fh1_native_scene_width", "Custom 3D scene width", "Display", "int", 0,
+    "Scene pixels, independent of the output and HUD. Set both dimensions, or both to 0 for the "
+    "default. Requires a compatible Vulkan renderer; the GPU may impose a lower limit.",
+    "Picture", lo=0, hi=NATIVE_SCENE_MAX_WIDTH, restart=True)
+add("fh1_native_scene_height", "Custom 3D scene height", "Display", "int", 0,
+    "Scene pixels, independent of the output and HUD. Set both dimensions, or both to 0 for the "
+    "default. Requires a compatible Vulkan renderer; the GPU may impose a lower limit.",
+    "Picture", lo=0, hi=NATIVE_SCENE_MAX_HEIGHT, restart=True)
 add("scene_resolution", "3D scene resolution", "Display", "choice", "720",
     "For integrated graphics and entry cards (GTX 1650 class) that can't hold the frame rate: 540p "
     "draws the 3D scene at 960x540 "
