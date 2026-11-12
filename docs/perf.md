@@ -3996,7 +3996,38 @@ free roam at noon 0.0017 against 0.0457). B's run gave 48 descriptions another's
 built). The final 0520 (the driver given each description's own state) passes 6 of 6 too, photo
 mode at 0.0072 and free roam at noon at 0.0034, with 52 descriptions given another's pipeline.
 
-**Next.** An NVIDIA measurement (#53's review counted 575 against 251 reused on a restart there):
-whether its duplicates are as cheap as RADV's, and how many of its 324 identical blobs 0520
-merges. The microcode trailer could also be left out of the shader hash, which would translate each
+**On NVIDIA** (GTX 1650 Ti, Windows 11, driver 555.97, the launcher's NVIDIA preset: 60 fps cap,
+540p, no game driver pipeline file). The built-in benchmark with A and B as the only change (the
+SDK DLLs built from 46ae834 and from 0520 for the same game build), the golden TU4 save, in the order
+A, B, B, A. Cold: an empty game cache root and an empty NVIDIA shader cache
+(`__GL_SHADER_DISK_CACHE_PATH`, one folder per run); warm: the restart on both. Driver time is the
+frame cost CSV's background pipeline time; the race window is the 15 s settling plus the 60 s
+measured.
+
+| Run | 46ae834 (A) | 0520 (B) |
+| --- | --- | --- |
+| Cold: pipelines built | 410, 406 | 375 + 33 shared, 376 + 33 shared |
+| Cold: driver time, whole run | 58.3 s, 66.3 s | 59.1 s, 59.6 s |
+| Cold: driver time in the race window (pipelines created there) | 21.4 s (148), 30.9 s (154) | 23.8 s (130), 22.7 s (126) |
+| Cold: fps, 1% low, p99 | 58.6 / 22.8 / 23.6 ms, 58.1 / 20.9 / 24.8 ms | 58.7 / 22.1 / 23.2 ms, 57.7 / 21.9 / 24.9 ms |
+| Cold: frames over 50 ms, measured (race window) | 11 (64), 12 (69) | 12 (65), 12 (59) |
+| Cold: draws skipped for pipelines, whole run (race window) | 47908 (1633), 44793 (1776) | 29901 (1494), 25230 (1948) |
+| Cold: NVIDIA shader cache after the run | 20.7 MB, 20.6 MB | 20.5 MB, 20.8 MB |
+| Warm: warm-up | 405 in 413 ms, 397 in 406 ms | 405 (34 shared) in 419 ms, 404 (33 shared) in 411 ms |
+| Warm: driver time | 0.23 s, 0.97 s | 0.22 s, 0.67 s |
+| Warm: fps / 1% low, frames over 50 ms | 59.1 / 40.8 and 0, 59.8 / 43.1 and 0 | 59.8 / 41.6 and 1, 59.2 / 41.6 and 0 |
+
+The upgrade (B's first start on copies of A's cold caches, both rounds): 414 (38 shared) and 411 (37
+shared) created from storage in 418 and 421 ms, 0.38 and 0.25 s of driver time, 59.4 / 38.7 and
+59.6 / 41.2, no frame over 50 ms: the driver found its stored shaders for every pipeline.
+
+So NVIDIA is like RADV: 0520 builds about 8% fewer pipelines, and nothing it saves shows in time.
+A first benchmark costs about a minute of driver time here (some 145 ms a pipeline, the slowest
+0.5 to 1.5 s), and a duplicate costs next to nothing of it, as the driver already has the shaders;
+its shader cache does not grow with them either (20.5 to 20.8 MB both ways). B skipped fewer draws
+over the whole run (the loading screens before the race), not in the race. The cold 1% low (21 to 23)
+and the 11 or 12 measured stalls are the first-play compiles of new shader code, which 0520 does not
+touch; the prebuilt shader list (#276) is what removes them.
+
+**Next.** The microcode trailer could be left out of the shader hash, which would translate each
 such shader once, but the hash is the key of every stored description.
