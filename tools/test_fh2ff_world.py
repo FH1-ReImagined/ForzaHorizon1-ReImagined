@@ -265,6 +265,23 @@ class RoadNetwork(unittest.TestCase):
         self.assertNotIn("a_high", n["values"])
         fm4_routes.check_network(fm4_routes.write_nav(n))
 
+    def test_streaming_blocks_of_a_cell_and_its_neighbours(self):
+        # a 3 x 3 hex grid, zones 0..3 in four cells; zone k has model k, of (k + 1) KB
+        cells = [-1, 0, -1,
+                 1, 2, 3,
+                 -1, -1, -1]
+        hexd = struct.pack(">4sifffiii", b"HEXY", 101, 100.0, 0.0, 0.0, 4, 3, 3) + struct.pack(">9i", *cells)
+        w = ff.World.__new__(ff.World)
+        w.uid_models = {k: {k, 99} for k in range(4)}       # 99: a model with no file, not counted
+        w.model_entry = {k: k for k in range(4)}
+        w.info_of = [mock.Mock(file_size=(k + 1) * 1024) for k in range(4)]
+        # the centre cell (1, 1) holds zone 2; its neighbours (1, 0), (0, 1), (2, 1) the others
+        self.assertEqual(w.stream_blocks(hexd), 1 + 2 + 3 + 4)
+
+    def test_keep_right(self):
+        line = ff.keep_right([(0, 1, 0), (10, 1, 0)], 2.0)
+        self.assertEqual(line, [(0.0, 1, -2.0), (10.0, 1, -2.0)])  # heading +x: right is -z
+
     def test_spawn_on_the_longest_stretch_inside(self):
         nodes = [(x, 5, 0) for x in range(0, 1000, 100)] + [(0, 5, z) for z in range(0, 300, 100)]
         n = net([(list(range(10)), {"road_type": "a"}), ([10, 11, 12], {"road_type": "b"}),
@@ -383,6 +400,29 @@ class Archive(unittest.TestCase):
             self.assertEqual(back.read(back.infos[0]), b"zone bytes")
             self.assertEqual(back.read(back.infos[1]), b"model data" * 10)
             back.close()
+
+    def test_copies_of_a_file_are_read_once(self):
+        import warnings
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "src.zip")
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")  # zipfile warns of a duplicate name: FH2's archive has them
+                with zipfile.ZipFile(src, "w") as z:
+                    z.writestr("a.rmb.bin", b"model")
+                    z.writestr("b.fiz", b"cell")
+                    z.writestr("a.rmb.bin", b"model")   # FH2 (and Colorado): again, near another zone
+            arch = ff.Archive(src)
+            self.assertEqual([i.filename for i in arch.infos], ["a.rmb.bin", "b.fiz"])
+            self.assertEqual(arch.copies, 1)
+            self.assertEqual(len(arch.by_base["a.rmb.bin"]), 1)
+            arch.close()
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                with zipfile.ZipFile(src, "w") as z:
+                    z.writestr("a.rmb.bin", b"model")
+                    z.writestr("a.rmb.bin", b"other")
+            with self.assertRaises(ValueError):
+                ff.Archive(src)
 
     def test_silent_tile_is_xml(self):
         import xml.etree.ElementTree as ET

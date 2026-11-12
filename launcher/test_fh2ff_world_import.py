@@ -11,17 +11,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from forza_launcher import fh2ffworld, fm4tracks  # noqa: E402
 from forza_launcher.config import Config  # noqa: E402
 from forza_launcher.fetch import Cancelled  # noqa: E402
+from test_fm4_import import xex  # noqa: E402
 from test_fm4_tracks import Base, QApplication, gamedb  # noqa: E402
 
 SPAWN = "951.0,135.9,-1827.9,-0.976,-0.218"
 
 
-def ff_disc(root: Path, horizon_zip=False):
-    """A game's files as F&F's (or FH2's) disc holds them: its world and database."""
+def ff_disc(root: Path, horizon_zip=False, title=None):
+    """A game's files as F&F's (or FH2's) disc holds them: its world and database (and its
+    default.xex with the title id, when given)."""
     world = root / "media" / "tracks" / "Anthem"
     (world / "Ribbon_00").mkdir(parents=True)
     (world / "bin.zip").write_bytes(b"x" * 1000)
     gamedb(root / "media" / "db" / "gamedb.slt")
+    if title:
+        (root / "default.xex").write_bytes(xex(title))
     if horizon_zip:
         (root / "media" / "ui" / "textures").mkdir(parents=True)
         (root / "media" / "ui" / "textures" / "Horizon.zip").write_bytes(b"PK")
@@ -53,14 +57,14 @@ def fake_tool(calls, spawn=SPAWN):
 class WorldBase(Base):
     def setUp(self):
         super().setUp()
-        self.ff = ff_disc(self.t / "FF" / "disc")
-        self.fh2 = ff_disc(self.t / "FH2", horizon_zip=True)
+        self.ff = ff_disc(self.t / "FF" / "disc", title=fh2ffworld.FF_TITLE)
+        self.fh2 = ff_disc(self.t / "FH2", horizon_zip=True, title=fh2ffworld.FH2_TITLE)
 
-    def import_world(self, fh2=None, spawn=SPAWN, cancelled=lambda: False):
+    def import_world(self, fh2=None, spawn=SPAWN, cancelled=lambda: False, key="anthem", src=None):
         calls = []
         with mock.patch.object(fm4tracks, "tool_command", lambda s, *a: ["python", s] + [str(x) for x in a]):
-            msg = fh2ffworld.build(self.cfg, self.t / "FF", fh2, runner=fake_tool(calls, spawn),
-                                   cancelled=cancelled)
+            msg = fh2ffworld.build(self.cfg, src or self.t / "FF", fh2, runner=fake_tool(calls, spawn),
+                                   cancelled=cancelled, key=key)
         return msg, calls
 
 
@@ -70,8 +74,11 @@ class World(WorldBase):
         self.assertEqual(fh2ffworld.disc_root(self.ff), self.ff)
         with self.assertRaises(fh2ffworld.Fh2ffError):
             fh2ffworld.disc_root(self.t / "game")  # FH1's: no Anthem
+        with self.assertRaises(fh2ffworld.Fh2ffError) as e:
+            fh2ffworld.fh2_root(self.ff)  # F&F's, given as FH2's: its default.xex says so
+        self.assertIn("Fast & Furious", str(e.exception))
         with self.assertRaises(fh2ffworld.Fh2ffError):
-            fh2ffworld.fh2_root(self.ff)  # F&F's, given as FH2's
+            fh2ffworld.disc_root(self.fh2)  # and the other way round
         self.assertEqual(fh2ffworld.fh2_root(self.fh2), self.fh2)
         self.assertIsNone(fh2ffworld.fh2_root(None))
 
@@ -128,7 +135,9 @@ class World(WorldBase):
         # stays and FM4's collision and texture switches are not set
         self.assertEqual(plan.env["FORZA_INSECURE_FILES"], "zipmanifest.xml|\\tracks\\anthem\\")
         self.assertEqual(plan.env["FORZA_TRACK_SPAWN"], SPAWN)
-        self.assertFalse([k for k in plan.env if k in ("FORZA_TRACK_NO_TRAFFIC", "FORZA_FM4_COL", "FORZA_FM4_STX")])
+        # the world's fm4_stream_blocks.txt (the streaming pool) would turn these on: off
+        self.assertEqual((plan.env["FORZA_FM4_COL"], plan.env["FORZA_TRACK_NO_TRAFFIC"]), ("0", "0"))
+        self.assertNotIn("FORZA_FM4_STX", plan.env)
         self.assertEqual(plan.env["FORZA_SERVER"], "")  # offline
         self.assertTrue(any("Fast & Furious" in n and "offline" in n for n in plan.notes))
         # a developer's switch in the extra environment still wins
@@ -137,6 +146,25 @@ class World(WorldBase):
         fm4tracks.remove(self.cfg, "anthem")
         self.assertFalse(folder.exists())
         self.assertEqual(fm4tracks.selected(Config(self.cfg.path)), "")
+
+    def test_fh2s_own_world(self):
+        msg, calls = self.import_world(key="fh2", src=self.t / "FH2")
+        cmd = calls[0][0]
+        self.assertEqual(cmd[cmd.index("build") + 1], str(self.fh2))
+        self.assertEqual(cmd[cmd.index("--fh2") + 1], str(self.fh2))  # its own road types and map art
+        self.assertIn("Forza Horizon 2", msg)
+        info = fh2ffworld.installed(self.cfg, "fh2")
+        self.assertEqual((info["kind"], info["name"]), ("fh2", "Forza Horizon 2"))
+        self.assertTrue((self.cfg.data_home() / "mods" / ".fm4-track-fh2" / "media" / "db" / "gamedb.slt").is_file())
+        self.import_world()  # F&F's beside it
+        self.assertEqual({k for k, _ in fm4tracks.choices(self.cfg)}, {"", "anthem", "fh2"})
+        fm4tracks.select(self.cfg, "fh2")
+        plan = self.plan(write=True)
+        self.assertIn(f"--fm4_track_dir={fm4tracks.store(self.cfg) / 'fh2'}", plan.argv)
+        self.assertEqual(plan.env["FORZA_INSECURE_FILES"], "zipmanifest.xml|\\tracks\\anthem\\")
+        self.assertTrue(any("Forza Horizon 2" in n for n in plan.notes))
+        with self.assertRaises(fh2ffworld.Fh2ffError):
+            self.import_world(key="fh2", src=self.t / "FF")  # F&F's files given as FH2's
 
     def test_a_circuit_named_anthem_is_not_replaced(self):
         self.import_world()

@@ -3,24 +3,28 @@
 Forza Horizon 2 Presents Fast & Furious (Xbox 360, 2015) is a standalone part of Forza Horizon 2:
 its world, `media/tracks/Anthem`, is FH2's southern Europe map cut to an area around Nice, with
 places of its own (an airfield, docks). `tools/fh2ff_world.py` makes it a world FH1 drives in
-free roam, from the player's own copies of the games. The output is the player's own and is never
-shared.
+free roam, from the player's own copies of the games, and FH2's own world the same way (its
+`media/tracks/Anthem` is the whole map: 2,798 zones to F&F's 1,132). The output is the player's
+own and is never shared.
 
 ## In the launcher
 
 Mods > Mods > Forza Motorsport 4 tracks > **Import Fast & Furious…** (experimental) asks for the
 folder of F&F's files and, optionally, FH2's (for its map art and road types), and runs `build`
-(`launcher/forza_launcher/fh2ffworld.py`). The world is kept where the imported FM4 circuits are,
-`<data>/fm4-tracks/anthem` (its `track.json` of kind `fh2ff`), with its mod as
-`<data>/mods/.fm4-track-anthem`, so the Play page's picker offers "Fast & Furious (FH2 world)"
-and Remove takes it out. A start in it mounts the folder as a circuit's (`--fm4_track_dir`), loads
-the mod last and plays offline, with the world's own switches, set by the launcher: only
-`FORZA_INSECURE_FILES` and `FORZA_TRACK_SPAWN`. None of a circuit's: the world's collision
-streams as FH1's own does (no `FORZA_FM4_COL`), its textures need no `FORZA_FM4_STX`, traffic
-stays (no `FORZA_TRACK_NO_TRAFFIC`) and no FM4 grid node is added to its `GameObjs.xml` (the game
-sets a circuit's switches only for a track with `fm4_stream_blocks.txt`, which the world has not).
-A variable in the launcher's extra environment still wins. Only folders of the games' files are
-read, not disc images.
+(`launcher/forza_launcher/fh2ffworld.py`); **Import Forza Horizon 2…** asks for FH2's and builds
+its world. Each game's `default.xex` (title 4D530AB5 F&F, 4D530AA4 FH2) tells them apart. A world
+is kept where the imported FM4 circuits are, `<data>/fm4-tracks/anthem` or `.../fh2` (its
+`track.json` of kind `fh2ff` or `fh2`), with its mod as `<data>/mods/.fm4-track-<key>`, so the
+Play page's picker offers "Fast & Furious (FH2 world)" and "Forza Horizon 2 (FH2 world)" and
+Remove takes one out. A start in one mounts the folder as a circuit's (`--fm4_track_dir`), loads
+the mod last and plays offline, with the world's own switches, set by the launcher:
+`FORZA_INSECURE_FILES` and `FORZA_TRACK_SPAWN`, and `FORZA_FM4_COL=0` and
+`FORZA_TRACK_NO_TRAFFIC=0`: the world's `fm4_stream_blocks.txt` (below) is the converter's marker
+the game gives a circuit's switches by, and a 0 turns one off. So the world's collision streams
+as FH1's own does, traffic stays, its textures need no `FORZA_FM4_STX` and no FM4 grid node is
+added to its `GameObjs.xml`. A variable in the launcher's extra environment still wins. Only
+folders of the games' files are read, not disc images. (A marker of a world's own in the game's
+mount would make the two 0s unneeded: a change to the game left for later.)
 
 ## Running it (dev)
 
@@ -38,6 +42,7 @@ FH2's map art. The game then runs with
 --fm4_track_dir=OUT/fm4-tracks/anthem --forza_mods_dir=OUT/mods --forza_mods=fh2ff-anthem
 FORZA_INSECURE_FILES='zipmanifest.xml|\tracks\anthem\'
 FORZA_TRACK_SPAWN=<the line of OUT/fm4-tracks/anthem/spawn.txt>
+FORZA_FM4_COL=0 FORZA_TRACK_NO_TRAFFIC=0
 ```
 
 and free roam loads the world in place of Colorado (the mod puts free roam's Tracks row 317 on
@@ -95,6 +100,16 @@ wrong picture:
   Dirt3, RallyGravel). Only RallyGravel (71) is used: 2,263 triangles in 58 cells, past the end of
   FH1's table. Each extra surface becomes FH1's of its name without "Rally" and a trailing number
   (71 Gravel, 68 Grass, 69 and 70 Dirt), in the cells that use one.
+- **The archive's copies.** FH2's `bin.zip` stores a file again near each zone that streams it
+  (220,842 members for 50,956 files, 3.2 GB), as FH1's Colorado does; F&F's once. Every copy is
+  the same file: the tool reads one of each (an archive whose copies differ is refused) and
+  writes them once, 0.8 GB.
+- **Streaming pool.** FH1 streams a zone's model files into a pool of 22,440 1 KB blocks. FH2's
+  world ran it dry at its first place (a null block, sub_82E3A2E8). The game links in as many as
+  a track's `fm4_stream_blocks.txt` asks for (`hooks/fm4_track.cpp`, up to 65,536): the tool
+  writes the largest union of a hex cell's zone's model files and its six neighbours', in KB,
+  1.25 times over (FH2 50,234 and 62,793 asked for; F&F 52,089, capped at 65,536 less the
+  rounding, 65,111; F&F drove on the game's own pool before, so the measure is generous).
 - **Spawn.** F&F streams 1,132 zones on the western 66 x 50 of FH2's 104 x 50 hex grid (FH2:
   2,798). Outside every zone FH1 draws from the nearest one, which sees the place from afar: a
   spawn there had the road under the car invisible. The spawn is the start of the longest
@@ -132,7 +147,12 @@ a save for every run, the dev autopilot:
 - a closed road driven 1.3 km past the edge of the zones: no reset;
 - a closure in Nice: the barrier line and cones across the road are gone;
 - the minimap draws the formerly closed roads; the full map (Start, Map) shows FH2's art under
-  the roads, aligned.
+  the roads, aligned;
+- with the streaming pool and the launcher's switches (the two 0s): F&F 200 s with traffic and a
+  free-roam driver, no fault;
+- FH2's own world: its build (3.5 minutes, 1.0 GB), 240 s along 5.2 km from the same start with
+  traffic, no fault; 150 s on its eastern motorway (x 5.8 to 7.4 km, beyond F&F's area); a road
+  driven across x 8.2 km to 8.8 km.
 
 `tools/test_fh2ff_world.py`: synthetic files (the version 51 layout and placements, the
 procedural geometry block, the hex grid, FH1's file order, the closures, the road network and
@@ -144,5 +164,11 @@ archive member the same.
 
 - Animated scenes (procedural type 5); the PDB's `CProceduralAnimatedScene` structs.
 - F&F's own audio; its game modes (events, the map's icons are Colorado's).
-- The rest of FH2's map (the zones F&F cut away come from FH2's own world).
+- FH2's far east. FH1 streams the zones round a point it clamps near x = 8.2 km: a start at
+  x 9.1 to 9.4 km (zones 2422 to 2535) had zone 2250 (x 8.25 km) made live and nothing else, the
+  car held still with no collision under it. FH2's grid reaches x 10.85 km (about the last
+  sixth of it) and its roads 14.8 km. Either the clamp found in the game (17 floats of 8192 in
+  the TU4 image to look through) or the world moved 3 km west (every placement, the hex grid,
+  the collision cells and index, the road network, the ribbon's XML) is the next step.
+- F&F's places in FH2's world (its airfield, docks): one world or the other for now.
 - NVIDIA and Intel GPUs, Linux, macOS, ReGPU.

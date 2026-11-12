@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Forza Horizon 2 Presents Fast & Furious (Xbox 360): its world, media/tracks/Anthem, as a world
-FH1 drives in free roam, from the player's own copies of the games (#821).
+FH1 drives in free roam, from the player's own copies of the games (#821). Forza Horizon 2's own
+world (the same folder, the whole map) is built the same way: its disc folder as FF_DISC.
 
-A first, command-line step: it writes a track folder for the circuit mount (--fm4_track_dir, as
-FM4's circuits use it) and a mod. The launcher's import comes later. What it reads and writes is
-the player's own and stays on their PC: never share the output.
+It writes a track folder for the circuit mount (--fm4_track_dir, as FM4's circuits use it) and a
+mod; the launcher's import runs it (launcher/forza_launcher/fh2ffworld.py). What it reads and
+writes is the player's own and stays on their PC: never share the output.
 
 Usage:
   tools/fh2ff_world.py build FF_DISC FH1_DISC UPDATE_MEDIA_ZIP OUT [--fh2 FH2_DISC]
@@ -17,8 +18,9 @@ Usage:
                         taken out, and the full map shows FH2's map art
     OUT/fm4-tracks/anthem/   the track folder: media/tracks/Anthem (the world converted),
                              media/zipmanifest.xml, media/audio/tracks/Anthem, spawn.txt (a
-                             place on a road) and autopilot.txt (a line along that road for the
-                             dev autopilot)
+                             place on a road), autopilot.txt (a line along that road for the
+                             dev autopilot) and media/tracks/Anthem/fm4_stream_blocks.txt (the
+                             game's streaming pool)
     OUT/mods/fh2ff-anthem/   the mod: the database (Environments 70 = Anthem, free roam's Tracks
                              row 317 on it), Colorado's game modes as Anthem's, the lighting
                              templates and, with --fh2, the map's background
@@ -29,7 +31,9 @@ Usage:
 To run it (dev), with the game's own launch arguments and environment:
   --fm4_track_dir=OUT/fm4-tracks/anthem --forza_mods_dir=OUT/mods --forza_mods=fh2ff-anthem
   FORZA_INSECURE_FILES='zipmanifest.xml|\\tracks\\anthem\\'
-  FORZA_TRACK_SPAWN=<the line in spawn.txt>  (traffic drives F&F's roads; FORZA_TRACK_NO_TRAFFIC=1 takes it away)
+  FORZA_TRACK_SPAWN=<the line in spawn.txt>
+  FORZA_FM4_COL=0 FORZA_TRACK_NO_TRAFFIC=0  (fm4_stream_blocks.txt would turn a circuit's on: the
+                             world's collision streams and traffic drives its roads)
   FORZA_AUTOPILOT=<autopilot.txt>,1.0 FORZA_AUTOPILOT_DELAY=6  (drives it)
 
 docs/fh2ff-world.md has what is converted and why, and what is not done yet.
@@ -119,7 +123,18 @@ class Archive:
     def __init__(self, path):
         self.path = path
         self.zf = zipfile.ZipFile(path)
-        self.infos = self.zf.infolist()
+        # One of each member: FH2's archive (as FH1's Colorado) stores a file again near each zone
+        # that streams it, 220,842 members for 50,956 files; F&F's once. The copies are the same
+        # file (an archive where they are not is refused); the first is kept.
+        self.infos, first = [], {}
+        for i in self.zf.infolist():
+            key = i.filename.replace("\\", "/").lower()
+            if key not in first:
+                first[key] = i
+                self.infos.append(i)
+            elif (i.CRC, i.file_size, i.compress_size) != (first[key].CRC, first[key].file_size, first[key].compress_size):
+                raise ValueError(f"{path}: two different files named {i.filename}")
+        self.copies = len(self.zf.infolist()) - len(self.infos)
         self.fh = open(path, "rb")
         self.tmp = tempfile.mkdtemp(prefix="fh2ff-")
         self.by_base = collections.defaultdict(list)
@@ -311,12 +326,35 @@ class World:
         self._zone_data = None
         self._kinds = {}
         self._routes = None
+        self.zone_models, self.uid_models = {}, {}
 
     def __enter__(self):
         return self
 
     def __exit__(self, *exc):
         self.zip.close()
+
+    def stream_blocks(self, hex_data):
+        """FH1's streaming blocks (1 KB of file each) the largest union of a hex cell's zone's
+        model files and its six neighbours' takes (tools/fm4_pvs.py's measure, after convert())."""
+        _, _, _, _, _, gw, gh = struct.unpack_from(">ifffiii", hex_data, 4)
+        cells = struct.unpack_from(f">{gw * gh}i", hex_data, 32)
+        size = {}
+        best = 0
+        for r in range(gh):
+            for col in range(gw):
+                if cells[r * gw + col] < 0:
+                    continue
+                side = (0, 1) if col % 2 else (-1, 0)   # odd columns sit half a hex lower
+                near = [(col, r), (col, r - 1), (col, r + 1)] + [(col + dc, r + dr) for dc in (-1, 1) for dr in side]
+                models = set()
+                for c, rr in near:
+                    if 0 <= c < gw and 0 <= rr < gh and cells[rr * gw + c] >= 0:
+                        models |= {m for m in self.uid_models.get(cells[rr * gw + c], ()) if m in self.model_entry}
+                for m in models - size.keys():
+                    size[m] = self.info_of[self.model_entry[m]].file_size
+                best = max(best, sum(size[m] for m in models))
+        return (best + 1023) // 1024
 
     def zones(self):
         if self._zone_data is None:
@@ -432,6 +470,7 @@ class World:
             fm4_pvs.write_cell(w, out, P["g2"])
             zones[info.filename] = bytes(w.b)
             sizes[info.filename.replace("\\", "/").split("/")[-1].lower()] = (len(out["instances"]), len(out["models"]))
+            self.zone_models[info.filename.replace("\\", "/").split("/")[-1].lower()] = set(out["models"])
         rb = os.path.join(self.root, "Ribbon_00")
         with open(os.path.join(rb, "PVSZLookup_00.dat"), "rb") as f:
             lk = f.read()
@@ -444,6 +483,8 @@ class World:
                 table[uid] = (sizes[n][0], old[1], sizes[n][1])
         layout = fm4_pvs.write_fh1(dict(P, resources=base + len(self.names) + 64, zones=table))
         lookup = b"".join(struct.pack(">ii", self.vol[entry], uid) for entry, uid in look)
+        self.uid_models = {uid: self.zone_models[self.names[entry].lower()] for entry, uid in look
+                           if self.names[entry].lower() in self.zone_models}
         with open(os.path.join(rb, f"{NAME}_00.hex"), "rb") as f:
             hexd = convert_hex(f.read())
         return layout, zones, hexd, self.fh1_map, lookup
@@ -501,6 +542,7 @@ def spawn_of(net, inside):
             "".join(f"{x:.2f} {y:.2f} {z:.2f} 20.0\n" for x, y, z in line), best[0])
 
 
+STREAM_CAP = 65536   # the game's cap on streaming blocks (hooks/fm4_track.cpp kMaxBlocks)
 LANE = 2.0   # metres right of a road's centre line: the middle of its right-hand lane
 
 
@@ -844,6 +886,14 @@ def _build_into(ff_disc, fh1_disc, update_zip, out, fh2_disc):
                 dst = os.path.join(out_track, rel, f)
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
                 shutil.copyfile(os.path.join(d, f), dst)
+        # FH1's streaming pool (22,440 blocks) ran dry in FH2's world at its first place: the game
+        # links in as many as a track's fm4_stream_blocks.txt asks for (hooks/fm4_track.cpp),
+        # up to 65,536. F&F's world measures 52,089 and drove on the game's pool; FH2's 50,234.
+        need = w.stream_blocks(hexd)
+        blocks = min(STREAM_CAP, int(need * fm4_pvs.STREAM_MARGIN + 0.5))
+        with open(os.path.join(out_track, "fm4_stream_blocks.txt"), "w") as f:
+            f.write(f"{blocks}\n")
+        print(f"streaming blocks: {need} at most, {blocks} asked for")
         rb = os.path.join(out_track, "Ribbon_00")
         for name, data in ((f"{NAME}_00.pvs", layout), (f"{NAME}_00.hex", hexd),
                            ("FilenameMap_00.dat", fmap), ("PVSZLookup_00.dat", lookup)):
