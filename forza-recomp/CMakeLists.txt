@@ -247,6 +247,18 @@ set(FORZA_SOURCES
     src/platform/xr.cpp
 )
 
+# The D3D trace (docs/native-renderer.md "Tools"): counting wrappers around the TU4 D3D library's
+# functions that tag the command-buffer dwords each one writes, for the GPU plugin's PM4 trace
+# (ReIGlue built with REXGLUE_FH1_PM4_TRACE). A study build only: it costs every D3D call.
+option(FORZA_D3D_TRACE "Count and tag the Xbox D3D library's calls (native renderer inventory)" OFF)
+if(FORZA_D3D_TRACE)
+    if(NOT FORZA_TITLE_UPDATE STREQUAL "4" OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        message(FATAL_ERROR "FORZA_D3D_TRACE needs the TU4 build (FORZA_TITLE_UPDATE=4) on Linux")
+    endif()
+    list(APPEND FORZA_SOURCES src/debug/d3d_trace.cpp)
+    message(STATUS "D3D trace: on (src/debug/d3d_trace_hooks.inc)")
+endif()
+
 # fiber_trace.cpp interposes the SDK's rexcrt_SwitchToFiber with dlsym(RTLD_NEXT): Linux only.
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     list(REMOVE_ITEM FORZA_SOURCES src/debug/fiber_trace.cpp)
@@ -303,6 +315,9 @@ add_subdirectory(texcompress)
 add_custom_command(TARGET forza POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/forza-telemetry.json" "$<TARGET_FILE_DIR:forza>/forza-telemetry.json")
 target_compile_definitions(forza PRIVATE FORZA_TITLE_UPDATE=${FORZA_TITLE_UPDATE})
+if(FORZA_D3D_TRACE)
+    target_compile_definitions(forza PRIVATE FORZA_D3D_TRACE=1)
+endif()
 
 # The build the game names to the Forza Live server on its title service calls (X-Forza-Build,
 # src/kernel/live_auth.cpp RequestLines), which the server keeps with each leaderboard row (#517). The
