@@ -493,6 +493,43 @@ class EngineLevelTests(unittest.TestCase):
         self.assertEqual(report["louder"], 2)
         self.assertEqual(report["audio"], [("CHE_CamaroSS_10", ["CHE_CamaroSS_10_ET.xml"])])
 
+    def test_a_traffic_cars_tuning_in_fh1_gives_way_to_fm4s(self):
+        # #840: FH1's FOR_FocusST_06_ET.xml is a cut traffic car's, its real slots commented out
+        conv = self.converter({"FOR_FocusST_06_ET.xml": TRAFFIC_ET, "Che_Volt_11_ET.xml": NA_ET,
+                               "LAM_MurcielagoLP640_07_ET.xml": ET},
+                              {"FOR_FocusST_06_ET.xml": ET, "Che_Volt_11_ET.xml": NA_ET,
+                               "LAM_MurcielagoLP640_07_ET.xml": S1_ET})
+        self.assertTrue(fm4_cars.traffic_tuning(TRAFFIC_ET))
+        self.assertTrue(fm4_cars.traffic_tuning(NA_ET))
+        self.assertFalse(fm4_cars.traffic_tuning(ET))
+        self.assertFalse(fm4_cars.traffic_tuning(ET.replace(b"</Engine>", b"<!-- " + NA_SLOTS + b" -->\r\n</Engine>")))
+        plan = conv.audio_plan("FOR_FocusST_06", ["FOR_FocusST_06"])
+        # FM4's copy, louder, under its name; its harmonic tuning is FH1's: nothing else to bring
+        self.assertEqual(plan, [("louder", "media/audio/cars/engines/enginetuning/FOR_FocusST_06_ET.xml",
+                                 fm4_cars.louder_engine(ET), "FOR_FocusST_06_ET.xml")])
+        report = {}
+        conv.audio("FOR_FocusST_06", ["FOR_FocusST_06"], report)
+        conv.audio("CHE_Volt_11", ["Che_Volt_11"], report)
+        conv.audio("LAM_MurcielagoLP640_07", ["LAM_MurcielagoLP640_07"], report)
+        self.assertEqual(self.et_out(conv, "FOR_FocusST_06"), fm4_cars.louder_engine(ET))
+        self.assertEqual(self.et_out(conv, "Che_Volt_11"), fm4_cars.louder_engine(NA_ET))  # FM4's is NA too: FH1's
+        self.assertEqual(self.et_out(conv, "LAM_MurcielagoLP640_07"), fm4_cars.louder_engine(ET))  # FH1's, as before
+        self.assertEqual(report["louder"], 3)
+        self.assertEqual(report["audio"], [("FOR_FocusST_06", ["FOR_FocusST_06_ET.xml"])])
+
+    def test_fm4s_copy_brings_the_harmonic_tuning_fh1_lacks(self):
+        conv = self.converter({"FOR_FocusST_06_ET.xml": TRAFFIC_ET}, {"FOR_FocusST_06_ET.xml": S1_ET})
+        with self.assertRaisesRegex(fm4_cars.ConvertError, "5T1_A200_1478_Exh_HT.xml is in none of the files"):
+            conv.audio_plan("FOR_FocusST_06", ["FOR_FocusST_06"])  # checked, never left naming a missing file
+
+
+NA_SLOTS = (b'<EngineAmbient><Upgrade L0="NA_EngAmb_HT.xml"/></EngineAmbient>\r\n'
+            b'  <Intake><Upgrade L0="NA_Int_HT.xml" L1="NA_Int_HT.xml"/></Intake>\r\n')
+NA_ET = ET.replace(b"12N2_LP640_Exh_HT.xml", b"NA_Exh_HT.xml").replace(b"</Engine>", b"  " + NA_SLOTS + b"</Engine>")
+TRAFFIC_ET = (ET.replace(b"  <Exhaust>", b"<!-- removing proper assignments ... civilian trafficin Horizon <Exhaust>", 1)
+              .replace(b"</Exhaust>", b"</Exhaust>-->\r\n  " + NA_SLOTS
+                       + b'  <Exhaust><Upgrade L0="Traffic_12N2_LP640_Exh_HT.xml"/></Exhaust>', 1))
+
 
 S1 = "AUD_2_SportQuattro_86"
 S1_ET = ET.replace(b"12N2_LP640_Exh_HT.xml", b"5T1_A200_1478_Exh_HT.xml")

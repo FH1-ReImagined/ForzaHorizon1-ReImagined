@@ -470,6 +470,9 @@ class ModsPage(FolderListPage):
                 if info.get("sound_fallback"):
                     text += (" Some of them use a similar engine's sound (their own was missing): import "
                              "again to give them theirs.")
+                if fm4cars.traffic_tuned(self.cfg):
+                    text += (" Some of them (such as the 2006 Ford Focus ST) have a cut-down traffic car's "
+                             "engine sound: import again to give them FM4's.")
                 self.fm4_message.setText(text)
             else:
                 self.fm4_message.setText("")
