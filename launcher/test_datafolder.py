@@ -121,6 +121,24 @@ class Defaults(unittest.TestCase):
             self.assertEqual(df.normalize_choice(tmp), Path(tmp))                       # one of ours
 
 
+class GameDefault(unittest.TestCase):
+    """Where the game writes without --user_data_root, and its identity always (#815)."""
+
+    def test_linux_is_the_xdg_data_home(self):
+        with mock.patch.object(df, "IS_WINDOWS", False), \
+                mock.patch.dict(os.environ, {"XDG_DATA_HOME": "/xdg/data"}):
+            self.assertEqual(df.game_default_data_home(), Path("/xdg/data") / "forza")
+
+    def test_linux_without_xdg_data_home_is_local_share(self):
+        env = {k: v for k, v in os.environ.items() if k != "XDG_DATA_HOME"}
+        with mock.patch.object(df, "IS_WINDOWS", False), mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(Path, "home", return_value=Path("/home/me")):
+            self.assertEqual(df.game_default_data_home(), Path("/home/me/.local/share/forza"))
+        with mock.patch.object(df, "IS_WINDOWS", False), mock.patch.dict(os.environ, {"XDG_DATA_HOME": ""}), \
+                mock.patch.object(Path, "home", return_value=Path("/home/me")):
+            self.assertEqual(df.game_default_data_home(), Path("/home/me/.local/share/forza"))
+
+
 class Move(unittest.TestCase):
     def test_copy_keeps_old_and_skips_rebuildable(self):
         with tempfile.TemporaryDirectory() as tmp:

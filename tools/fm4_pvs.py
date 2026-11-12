@@ -1402,7 +1402,9 @@ def pass_groups(d, p):
 #     8-aligned end of the table + 8, then 11223344 55667789;
 #   area B, each group's command buffer (sizes[1] bytes, PM4) at the next 32-byte boundary
 #     from the area's start (the .fx header's word 4: the area's size, word 3 area A's);
-#   area C, sizes[2] bytes each (word 5).
+#   area C, sizes[2] bytes each (word 5): vertex/index buffer fixups, two words each.
+#     TU4 sub_824AA8D0 and sub_824AABD8 take the base dword from bits 6-25 of
+#     the first word, then add the vertex slot or the index-address offset.
 # The .fx header's word 7 is 8 times the groups' records. A record's second word for a fixup
 # (type 3, a texture: 0x47000000 | index; kinds 0x41-0x47) indexes the patch table (TU4
 # sub_824AAA28, the table at +0x90): from that word on, each word (0x84.., 0xC4..: one; 0x88..,
@@ -1463,13 +1465,16 @@ def insert_fetch_constant(data, fc, template=FC7_TEMPLATE):
     reg = 0x4800 + 6 * fc
     key = struct.pack(">I", (fc << 16) | 3)
     blocks, bufs, recs_of, sizes_of = [], [], {}, {}
-    a = A
+    area_c = bytearray(data[C:C + head[5]])
+    a, c = A, 0
     added = 0
     for x, bo in zip(pop, offs):
         s0, s1, s2 = x[3]
         blk = bytearray(data[a:a + s0])
         buf = bytearray(data[B + bo:B + bo + s1])
         a += s0
+        fixup_start = c
+        c += s2
         n = x[2]
         recs = [data[x[0] + 8 + 8 * r:x[0] + 16 + 8 * r] for r in range(n)]
         has0 = struct.pack(">I", 3) in [r[:4] for r in recs]
@@ -1496,6 +1501,22 @@ def insert_fetch_constant(data, fc, template=FC7_TEMPLATE):
             if cnt % 6 or 0x4800 + cnt > reg:
                 return None
             ins.append(o + 4 + 4 * cnt)
+        # Area C has its own offsets into the same PM4 buffer. Inserting only in
+        # area B would leave these writes targeting the old vertex/index slots.
+        if s2 % 8:
+            return None
+        for off in range(fixup_start, c, 8):
+            word = struct.unpack_from(">I", area_c, off)[0]
+            if (word & 0xFC000000) not in (0x08000000, 0x48000000):
+                return None
+            target = ((word >> 6) & 0xFFFFF) * 4
+            last = target + 4 * max(2, (word & 0x3F) + 1)
+            if last >= s1 or any(target < o <= last for o in ins):
+                return None
+            shift = 7 * sum(o <= target for o in ins)
+            if target // 4 + shift > 0xFFFFF:
+                return None
+            struct.pack_into(">I", area_c, off, word + (shift << 6))
         # the patch places after an insertion move with it
         table = [W(0xC8 + 4 * t) for t in range(count)]
         t = 0
@@ -1545,7 +1566,7 @@ def insert_fetch_constant(data, fc, template=FC7_TEMPLATE):
     head[4] = len(area_b)
     head[7] += 8 * added
     return (data[:hp] + struct.pack(">8I", *head) + data[hp + 32:g[0][0]] + groups +
-            b"".join(blocks) + bytes(area_b) + data[C:])
+            b"".join(blocks) + bytes(area_b) + bytes(area_c) + data[C + head[5]:])
 
 
 # FM4_PVS_FIXUP_DROP=4,5,6: those command-buffer fixup types become 0 (skipped) in every

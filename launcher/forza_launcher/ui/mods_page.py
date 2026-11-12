@@ -467,6 +467,9 @@ class ModsPage(FolderListPage):
                 text += "."
                 if fm4cars.stale(self.cfg):
                     text += " Your DLC changed since: import again so the DLC cars keep their names."
+                if info.get("sound_fallback"):
+                    text += (" Some of them use a similar engine's sound (their own was missing): import "
+                             "again to give them theirs.")
                 self.fm4_message.setText(text)
             else:
                 self.fm4_message.setText("")

@@ -1,1 +1,6 @@
 pyinstaller>=6.10,<7
+# Qt WebEngine for the website sign-in window (forza_launcher/ui/web_view.py), in the packages only:
+# a checkout without it opens the player's browser instead. Pinned to the PySide6 the Flatpak uses
+# (6.12.0; it pulls PySide6_Addons and PySide6_Essentials of the same version). There is no macOS
+# build, and Windows on Arm has no Qt WebEngine (its wheel is empty).
+PySide6_WebEngine==6.12.0.140; sys_platform != 'darwin'

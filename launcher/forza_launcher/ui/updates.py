@@ -6,10 +6,9 @@ import subprocess
 import sys
 
 from PySide6.QtCore import QThread, QTimer, QUrl, QStandardPaths, Signal, Qt
-from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QProgressBar, QPushButton, QWidget
 
-from .. import GITHUB_URL, __version__, fetch, paths, updater
+from .. import GITHUB_URL, __version__, browser, fetch, paths, updater
 from .widgets import card, label
 
 
@@ -189,7 +188,7 @@ class UpdateCard(QWidget):
         self.action.setVisible(self.asset is not None)
 
     def open_release(self):
-        QDesktopServices.openUrl(QUrl(self.release.url if self.release else GITHUB_URL + "/releases/latest"))
+        browser.open_url(QUrl(self.release.url if self.release else GITHUB_URL + "/releases/latest"))
 
     def act(self):
         if self.busy() or not self.asset:
@@ -247,7 +246,7 @@ class UpdateCard(QWidget):
             return
         if paths.IN_FLATPAK:
             self.message.setText(self.flatpak_instructions())
-            if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.downloaded.parent))):
+            if not browser.open_url(QUrl.fromLocalFile(str(self.downloaded.parent))):
                 self.message.setText(self.flatpak_instructions() + "\nDownload folder: " + str(self.downloaded.parent))
             return
         if self.window.setup.busy() or self.window.running():
@@ -283,5 +282,5 @@ class UpdateCard(QWidget):
                 t.isInterruptionRequested)
             self._start(fn, self._installed)
         else:
-            if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.downloaded.parent))):
+            if not browser.open_url(QUrl.fromLocalFile(str(self.downloaded.parent))):
                 self.message.setText("Open the downloaded update at: " + str(self.downloaded))

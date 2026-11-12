@@ -23,6 +23,8 @@ permissions:
 
 jobs:
   post:
+    # Game releases only (v* tags): not the CI toolchain's pre-release (ci-toolchain-mirror.yml).
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'v')
     runs-on: ubuntu-24.04
     # The webhook secret lives in this environment, usable only from v* tags and main.
     environment: announcements

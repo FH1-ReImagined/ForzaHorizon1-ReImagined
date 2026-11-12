@@ -5,12 +5,12 @@ from pathlib import Path
 
 from PySide6.QtCore import (QAbstractListModel, QBuffer, QIODevice, QModelIndex, QSize,
                             QSortFilterProxyModel, QStandardPaths, QThread, Qt, QTimer, QUrl, Signal)
-from PySide6.QtGui import QColor, QDesktopServices, QIcon, QImage, QPainter, QPixmap
+from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFileDialog, QFormLayout, QHBoxLayout,
                                QLabel, QLineEdit, QListView, QProgressBar, QPushButton, QScrollArea,
                                QSplitter, QStackedWidget, QVBoxLayout, QWidget, QMessageBox)
 
-from .. import TITLE_ID, paths, ugc
+from .. import TITLE_ID, browser, paths, ugc
 from . import theme
 from .widgets import label
 
@@ -449,7 +449,7 @@ class CatalogsPage(QWidget):
         self.message.setText(f'Design imported. Apply it to the matching car in-game. Catalog backup: {backup}')
 
     def show_export(self):
-        if self.exported and not QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.exported))):
+        if self.exported and not browser.open_url(QUrl.fromLocalFile(str(self.exported))):
             self._error(f'Could not open the folder. Open it manually: {self.exported}')
 
     def _error(self, message):

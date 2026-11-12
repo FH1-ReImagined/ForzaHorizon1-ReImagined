@@ -665,6 +665,12 @@ def _build_plan(cfg: Config, game: GameInstall, write, refresh_xenia, log, saver
     # refuses one given twice.
     from . import mods, texture_packs
     named = {a[2:].split("=", 1)[0] for a in extra if a.startswith("--")}
+    if write:
+        # an FM4 cars import made before #776: its cars without their sound bank, once
+        from . import fm4cars
+        note = fm4cars.repair_sound(cfg, log)
+        if note:
+            notes.append(note)
     args += mods.launch_args(cfg, named)
     from . import loading_tips  # ReImagined loading-screen tips (Settings > Gameplay), first in the order
     loading_tips.launch_args(cfg, args, write, log)

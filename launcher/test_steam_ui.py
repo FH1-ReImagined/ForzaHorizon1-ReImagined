@@ -96,7 +96,7 @@ class SteamUI(unittest.TestCase):
     def test_flatpak_opens_manual_guide_without_discovery_or_write(self):
         from forza_launcher.ui import steam
         with patch.object(steam.paths, "IN_FLATPAK", True), \
-             patch.object(steam.QDesktopServices, "openUrl") as opened, \
+             patch.object(steam.browser.QDesktopServices, "openUrl") as opened, \
              patch.object(steam.steam_shortcuts, "accounts") as accounts, \
              patch.object(steam.steam_shortcuts, "add") as add:
             self.card.button.click()

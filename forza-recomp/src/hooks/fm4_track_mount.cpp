@@ -36,6 +36,8 @@
 #include <rex/filesystem/entry.h>
 #include <rex/filesystem/vfs.h>
 #include <rex/logging.h>
+#include <rex/ppc/context.h>
+#include <rex/ppc/func.h>
 #include <rex/thread/mutex.h>
 
 #include <algorithm>
@@ -221,3 +223,20 @@ void Install(rex::filesystem::VirtualFileSystem* vfs) {
 }
 
 }  // namespace forza::fm4_mount
+
+#if defined(FORZA_TITLE_UPDATE) && FORZA_TITLE_UPDATE == 4
+extern "C" REX_FUNC(__imp__sub_824F4820);
+
+extern "C" REX_FUNC(sub_824F4820) {
+  // Both 1000 Club loaders call this to parse a car's challenge definitions.
+  // Colorado's location challenges resolve road nodes that FM4 circuits do not have (#769).
+  // Return the parser's existing "no challenges loaded" result and let its callers finish.
+  if (!forza::fm4_mount::TrackPath().empty() &&
+      (ctx.lr == 0x824F4FDC || ctx.lr == 0x824F504C)) {
+    REXLOG_INFO("FM4 track: skipping Colorado's 1000 Club challenge definitions");
+    ctx.r3.u64 = 0;
+    return;
+  }
+  __imp__sub_824F4820(ctx, base);
+}
+#endif
