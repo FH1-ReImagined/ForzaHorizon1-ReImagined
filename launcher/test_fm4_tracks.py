@@ -413,6 +413,10 @@ class Ui(Base):
         self.assertFalse(picker.note.isHidden())
         self.assertIn("Experimental", picker.note.text())
         self.assertIn("offline", picker.note.text())
+        # no car choice on a circuit yet: the car is the one last used in Colorado (#826)
+        self.assertIn("the car you last used in Colorado", picker.note.text())
+        self.assertIn("choose it there first", picker.note.text())
+        self.assertIn("the car you last used in Colorado", fm4tracks.EXPERIMENTAL)
 
     def test_the_laps_page(self):
         from forza_launcher.ui.fm4_tracks import Fm4LapsPage

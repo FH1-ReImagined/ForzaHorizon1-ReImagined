@@ -78,11 +78,14 @@ NOT_CIRCUITS = re.compile(r"(?i)^(homespace\d*|ui.*)$")  # FM4's garage sets and
 EXPERIMENTAL = ("Experimental. What works: free driving on the circuit, with its buildings, stands "
                 "and collision, and timed laps (lap, sectors and best lap on the game's HUD, kept "
                 "per circuit), your car's shadow, the circuit's road on the minimap. Not yet: events "
-                "and races, the circuit's own shadows, AI cars and traffic, the map screen and GPS. "
+                "and races, a choice of car (you drive the car you last used in Colorado), the "
+                "circuit's own shadows, AI cars and traffic, the map screen and GPS. "
                 "Suzuka is the most tested circuit. "
                 "A start on a circuit plays offline, and your save is backed up first.")
 EXPERIMENTAL_SHORT = ("Experimental: free driving and timed laps on the circuit (no events "
-                      "yet). It plays offline, and your save is backed up first.")
+                      "yet). You drive the car you last used in Colorado, so choose it there "
+                      "first: there is no car choice on a circuit yet. It plays offline, and "
+                      "your save is backed up first.")
 
 # Disc 1's files the converter reads besides the circuits' folders.
 DISC1_COMMON = ("default.xex", "Media/db", "Media/physics", "Media/AI/Tracks")

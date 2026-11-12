@@ -50,7 +50,8 @@ A start on a circuit:
 
 - plays **offline**: other players are in Colorado;
 - **backs up your save** first, whatever the save manager's setting is;
-- uses your current FH1 car.
+- uses the car you last drove in Colorado. Choose it there first (play with **FH1's
+  Colorado**): there is no car choice on a circuit yet.
 
 ## Time attack and your laps
 
@@ -87,6 +88,7 @@ Not yet:
   cars do not drive yet. An import writes the road network and the race route FH1's races need;
   no race has been run with them yet, and nothing starts one on a circuit.
 - **AI cars and traffic** on the circuit.
+- **Choosing a car** on a circuit: you drive the car you last used in Colorado.
 - **Shadows of the circuit's own buildings and trees.** Your car's shadow is drawn on the
   circuit with the Vulkan renderer (with ReGPU, the D3D12 renderer, circuits have no shadows
   yet). A circuit imported with an earlier launcher has none: import it again.
