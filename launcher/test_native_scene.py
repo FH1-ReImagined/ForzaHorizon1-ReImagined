@@ -203,6 +203,16 @@ class NativeSceneTests(unittest.TestCase):
                 page._apply_dependencies()
                 self.assertTrue(page.rows[native_scene.WIDTH].control.isEnabled())
                 self.assertTrue(page.rows[native_scene.HEIGHT].control.isEnabled())
+                with patch("forza_launcher.ui.settings_page.power.decide") as decide:
+                    decide.return_value.active = True
+                    page._apply_dependencies()
+                    self.assertFalse(page.rows[native_scene.WIDTH].control.isEnabled())
+                    self.assertFalse(page.rows[native_scene.HEIGHT].control.isEnabled())
+                    decide.assert_called_with(self.cfg.effective_settings())
+                    decide.return_value.active = False
+                    page._apply_dependencies()
+                    self.assertTrue(page.rows[native_scene.WIDTH].control.isEnabled())
+                    self.assertTrue(page.rows[native_scene.HEIGHT].control.isEnabled())
                 self.cfg.settings["gpu_backend"] = "d3d12"
                 page._apply_dependencies()
                 self.assertFalse(page.rows[native_scene.WIDTH].control.isEnabled())
