@@ -4001,8 +4001,9 @@ mode at 0.0072 and free roam at noon at 0.0034, with 52 descriptions given anoth
 SDK DLLs built from 46ae834 and from 0520 for the same game build), the golden TU4 save, in the order
 A, B, B, A. Cold: an empty game cache root and an empty NVIDIA shader cache
 (`__GL_SHADER_DISK_CACHE_PATH`, one folder per run); warm: the restart on both. Driver time is the
-frame cost CSV's background pipeline time; the race window is the 15 s settling plus the 60 s
-measured.
+frame cost CSV's pipeline creation time (`bg_pipeline_ms`, real pipelines on any thread); the race
+window runs from the benchmark's wait for race movement (17 to 19 s of race start on a cold run)
+through the 15 s settling and the 60 s measured, 92 to 94 s.
 
 | Run | 46ae834 (A) | 0520 (B) |
 | --- | --- | --- |
@@ -4022,8 +4023,8 @@ shared) created from storage in 418 and 421 ms, 0.38 and 0.25 s of driver time, 
 59.6 / 41.2, no frame over 50 ms: the driver found its stored shaders for every pipeline.
 
 So NVIDIA is like RADV: 0520 builds about 8% fewer pipelines, and nothing it saves shows in time.
-A first benchmark costs about a minute of driver time here (some 145 ms a pipeline, the slowest
-0.5 to 1.5 s), and a duplicate costs next to nothing of it, as the driver already has the shaders;
+A first benchmark costs about a minute of driver time here (140 to 165 ms a pipeline, the slowest
+0.8 to 1.5 s), and a duplicate costs next to nothing of it, as the driver already has the shaders;
 its shader cache does not grow with them either (20.5 to 20.8 MB both ways). B skipped fewer draws
 over the whole run (the loading screens before the race), not in the race. The cold 1% low (21 to 23)
 and the 11 or 12 measured stalls are the first-play compiles of new shader code, which 0520 does not
