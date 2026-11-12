@@ -2,6 +2,7 @@
 converter, removal, the Play page's choice and what a start on a circuit passes to the game.
 Synthetic files only (no game file is read)."""
 import os
+import shutil
 import sqlite3
 import struct
 import sys
@@ -73,6 +74,11 @@ def fake_converter(calls):
             (mod / "media" / "gamemodes" / t / "activities.xml").write_text("<a/>")
             (loose / "media" / "audio" / "tracks" / track_dir.name).mkdir(parents=True)
             (loose / "media" / "audio" / "tracks" / track_dir.name / "amb.fev").write_bytes(b"fev")
+            if "--fm4-ai" in args:  # the road network and the race route (tools/fm4_routes.py)
+                (mod / "media" / "tracks" / t / f"{t}.nav").write_bytes(b"nav")
+                (mod / "media" / "tracks" / t / "Ribbon_00" / "trackroute101.xml").write_text("<TrackRoute/>")
+                (mod / "media" / "aiopenworld" / t / "ribbon_00").mkdir(parents=True)
+                (mod / "media" / "aiopenworld" / t / "ribbon_00" / "route_101.owt").write_bytes(b"OWTM")
             on_line("4932 bin.zip members")
         elif script == "fm4_pvs.py":
             mod, out = Path(args[1]), Path(args[3])
@@ -175,6 +181,8 @@ class Import(Base):
         self.assertEqual(mod_cmd[mod_cmd.index("--free-roam") + 1], "317")
         self.assertEqual(env["FM4_DISC"], str(self.disc))
         self.assertFalse([k for k in env if k.startswith("FM4_PVS")])
+        # FM4's AI lines, for the circuit's road network and race route
+        self.assertEqual(Path(mod_cmd[mod_cmd.index("--fm4-ai") + 1]), self.disc / "Media" / "AI" / "Tracks")
         info = fm4tracks.find(self.cfg, "suzuka")
         self.assertEqual((info["folder"], info["ribbon"]), ("Suzuka", 0))
         # 15 m behind waypoint 0, facing along the line (FM4's (x, y, z) is FH1's (x, z + 1, y))
@@ -188,15 +196,32 @@ class Import(Base):
         for rel in ("media/tracks/suzuka/bin.zip", "media/tracks/suzuka/fm4_stream_blocks.txt",
                     "media/tracks/suzuka/TrackSettings.xml", "media/tracks/suzuka/Ribbon_00/a.pvs",
                     "media/zipmanifest.xml", "media/audio/tracks/Suzuka/amb.fev",
-                    "stx/suzuka_stx_numbers.bin", "stx/suzuka_stx_files.bin", "spawn.txt"):
+                    "stx/suzuka_stx_numbers.bin", "stx/suzuka_stx_files.bin", "spawn.txt",
+                    "media/tracks/suzuka/suzuka.nav", "media/tracks/suzuka/Ribbon_00/trackroute101.xml"):
             self.assertTrue((root / rel).is_file(), rel)
         m = mods.mods_dir(self.cfg) / ".fm4-track-suzuka"
         self.assertTrue((m / "media" / "db" / "gamedb.slt").is_file())
         self.assertTrue((m / "media" / "gamemodes" / "suzuka" / "activities.xml").is_file())
+        # the race route is a file of the game's aiopenworld archive: it goes with the mod
+        self.assertTrue((m / "media" / "aiopenworld" / "suzuka" / "ribbon_00" / "route_101.owt").is_file())
+        self.assertFalse((root / "media" / "aiopenworld").exists())
         self.assertGreater(info["size"], 0)
         # the Mods page does not list it, and no mod is turned on by it
         self.assertEqual(mods.scan(mods.mods_dir(self.cfg)), [])
         self.assertFalse(list(fm4tracks.store(self.cfg).glob(".work-*")))
+
+    def test_a_disc_without_ai_lines_is_converted_without_the_road_network_step(self):
+        shutil.rmtree(self.disc / "Media" / "AI")
+        calls = []
+        disc = fm4tracks.open_disc(str(self.disc), self.t / "work")
+        with mock.patch.object(fm4tracks, "tool_command", lambda s, *a: ["python", s] + [str(x) for x in a]):
+            try:
+                fm4tracks.build(self.cfg, disc, ["Suzuka"], runner=fake_converter(calls))
+            except fm4tracks.Fm4TrackError:
+                pass  # whatever the import makes of a circuit that has no grid either
+        self.assertEqual(Path(calls[0][0][1]).name, "fm4_track_mod.py")
+        self.assertNotIn("--fm4-ai", calls[0][0])
+        self.assertFalse((mods.mods_dir(self.cfg) / ".fm4-track-suzuka" / "media" / "aiopenworld").exists())
 
     def test_the_lap_line_and_the_laps(self):
         self.build()
