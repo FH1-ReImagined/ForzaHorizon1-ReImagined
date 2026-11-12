@@ -180,7 +180,8 @@ def select(cfg, key: str):
 
 def choices(cfg) -> list:
     """[(key, label)] for the picker: Colorado first."""
-    return [(DEFAULT, COLORADO)] + [(i["key"], f"{i['name']} (FM4, experimental)") for i in installed(cfg)]
+    return [(DEFAULT, COLORADO)] + [(i["key"], f"{i['name']} ({'FH2 world' if i.get('kind') == 'fh2ff' else 'FM4'}, "
+                                               "experimental)") for i in installed(cfg)]
 
 
 def remove(cfg, key: str):
@@ -449,7 +450,7 @@ def laps(cfg, key: str) -> list:
 
 def lap_circuits(cfg) -> list:
     """[(key, name)] of the imported circuits and of those with laps (removed since), by name."""
-    names = {i["key"]: i.get("name", i["key"]) for i in installed(cfg)}
+    names = {i["key"]: i.get("name", i["key"]) for i in installed(cfg) if i.get("kind") != "fh2ff"}  # no lap timer there
     try:
         for p in (store(cfg) / LAPS).glob("*.jsonl"):
             lower = {k.lower(): v for k, v in NAMES.items()}
@@ -743,7 +744,8 @@ def configure(cfg, env: dict, args: list, unset: list, notes: list, write=True):
     if info is None:
         return None
     folder = Path(info["path"])
-    if write:
+    world = info.get("kind") == "fh2ff"  # Fast & Furious's world (fh2ffworld.py): its own switches
+    if write and not world:
         spawn_file = folder / SPAWN_FILE
         try:
             with spawn_file.open(encoding="utf-8") as f:
@@ -768,6 +770,10 @@ def configure(cfg, env: dict, args: list, unset: list, notes: list, write=True):
         unset.remove("FORZA_SERVER")
     if not any(a.startswith("--discord_presence") for a in args):
         args.append("--discord_presence=false")
+    if world:
+        from . import fh2ffworld
+        fh2ffworld.configure(info, env, notes)
+        return info
     notes.append(f"Starting on the Forza Motorsport 4 circuit {info['name']} (experimental, offline). "
                  "Choose FH1's Colorado on the Play page to drive in Colorado again.")
     return info

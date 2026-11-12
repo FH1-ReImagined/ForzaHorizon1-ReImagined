@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QDialogBut
                                QHeaderView, QLabel, QListWidget, QListWidgetItem, QProgressBar, QPushButton,
                                QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
-from .. import fm4tracks
+from .. import fh2ffworld, fm4tracks
 from .widgets import card, label
 
 EXPERIMENTAL_TAG = "Experimental"
@@ -114,6 +114,11 @@ class Fm4TracksCard(QWidget):
         self.import_button = QPushButton("Import FM4 tracks…")
         self.import_button.clicked.connect(self._import)
         row.addWidget(self.import_button)
+        self.ff_button = QPushButton("Import Fast & Furious…")
+        self.ff_button.setToolTip("Free roam in Forza Horizon 2 Presents Fast & Furious's world, from your own "
+                                  "copy's files (experimental). " + fh2ffworld.EXPERIMENTAL)
+        self.ff_button.clicked.connect(self._import_ff)
+        row.addWidget(self.ff_button)
         self.remove_button = QPushButton("Remove circuit")
         self.remove_button.clicked.connect(self._remove)
         row.addWidget(self.remove_button)
@@ -150,6 +155,7 @@ class Fm4TracksCard(QWidget):
     def _buttons(self):
         idle = self.task is None
         self.import_button.setEnabled(idle)
+        self.ff_button.setEnabled(idle)
         self.remove_button.setEnabled(idle and bool(self.table.selectedItems()))
         self.remove_button.setVisible(self.table.rowCount() > 0)
 
@@ -261,6 +267,40 @@ class Fm4TracksCard(QWidget):
                 raise InstallError(f"Import FM4 tracks stopped: {exc}") from exc
         self._start(job, "import FM4 tracks", f"Converting {len(names)} circuit(s)… Circuits imported "
                     "before stay until each new one is complete.", self._build_done)
+
+    def _import_ff(self):
+        """Fast & Furious's world (fh2ffworld.py): its files' folder, then FH2's (optional)."""
+        from PySide6.QtWidgets import QFileDialog
+        if self.page._game_running():
+            self.message.setText("Close the game before importing.")
+            return
+        ff = QFileDialog.getExistingDirectory(self, "Forza Horizon 2 Presents Fast & Furious: the folder of its files")
+        if not ff:
+            return
+        try:
+            fh2ffworld.disc_root(ff)
+        except fh2ffworld.Fh2ffError as e:
+            self.message.setText(str(e))
+            return
+        fh2 = None
+        if self.page._confirm("Forza Horizon 2 (optional)", "Do you have Forza Horizon 2's files too? With them "
+                              "the full map shows FH2's map art and the roads Fast & Furious closed get "
+                              "FH2's road types. Choose No to import without them."):
+            fh2 = QFileDialog.getExistingDirectory(self, "Forza Horizon 2: the folder of its files") or None
+            try:
+                fh2ffworld.fh2_root(fh2)
+            except fh2ffworld.Fh2ffError as e:
+                self.message.setText(str(e))
+                return
+
+        def job(task):
+            try:
+                return fh2ffworld.build(self.cfg, ff, fh2, lambda f, text: task.progress.emit(f, text), task.cancelled)
+            except (OSError, ValueError) as exc:
+                from ..installer import InstallError
+                raise InstallError(f"Import Fast & Furious stopped: {exc}") from exc
+        self._start(job, "import Fast & Furious", "Converting Fast & Furious's world… An earlier import stays "
+                    "until the new one is complete.", self._build_done)
 
     def _build_done(self, ok, message):
         self._end()

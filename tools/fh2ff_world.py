@@ -493,12 +493,28 @@ def spawn_of(net, inside):
             run = []
     if best is None:
         raise ValueError("no road inside the zones")
-    line = best[1]
+    line = keep_right(best[1])
     a, b = line[0], line[1]
     fx, fz = b[0] - a[0], b[2] - a[2]
     n = math.hypot(fx, fz) or 1.0
     return (f"{a[0]:.1f},{a[1] + 0.5:.1f},{a[2]:.1f},{fx / n:.3f},{fz / n:.3f}",
             "".join(f"{x:.2f} {y:.2f} {z:.2f} 20.0\n" for x, y, z in line), best[0])
+
+
+LANE = 2.0   # metres right of a road's centre line: the middle of its right-hand lane
+
+
+def keep_right(line, metres=LANE):
+    """The line moved `metres` to the right of its way (right of a heading (fx, fz) is (fz, -fx),
+    as the game's teleports place a car): the road network's nodes are its centre line, where
+    oncoming traffic met the car head on."""
+    out = []
+    for k, p in enumerate(line):
+        a, b = line[max(k - 1, 0)], line[min(k + 1, len(line) - 1)]
+        fx, fz = b[0] - a[0], b[2] - a[2]
+        n = math.hypot(fx, fz) or 1.0
+        out.append((p[0] + fz / n * metres, p[1], p[2] - fx / n * metres))
+    return out
 
 
 def fix_tags(net):

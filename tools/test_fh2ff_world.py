@@ -270,7 +270,7 @@ class RoadNetwork(unittest.TestCase):
         n = net([(list(range(10)), {"road_type": "a"}), ([10, 11, 12], {"road_type": "b"}),
                  ([0, 9], {"area_type": "lake"})], nodes, ["area_type", "road_type"], ["a", "b", "lake"])
         spawn, line, length = ff.spawn_of(n, lambda x, z: x < 650)
-        self.assertEqual(spawn, "0.0,5.5,0.0,1.000,0.000")
+        self.assertEqual(spawn, "0.0,5.5,-2.0,1.000,0.000")  # the right-hand lane (keep_right)
         self.assertEqual(length, 600)
         self.assertEqual(len(line.splitlines()), 7)
         with self.assertRaises(ValueError):
