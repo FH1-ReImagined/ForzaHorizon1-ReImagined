@@ -3869,8 +3869,10 @@ runs (the measured minute) and a 3-minute free-roam drive at noon, ms of GPU tim
 The benchmark: 58.4 fps without the profile, 57.4 and 58.6 with it. Transfers are still the largest
 cost after the guest's draws: 3.5 ms a frame, about 25 a frame to depth. The test without any
 stencil bit draws in the section above (wrong in general) puts the bit draws that are left at about
-1.1 ms of the transfers from depth and 0.5 ms of those from color: the depth target at EDRAM tile 720
-(kD24S8) has stencil in it, and 0461 can skip only bits that are set nowhere in the source.
+1.1 ms of the transfers from depth and 0.5 ms of those from color, and 0461 can skip only bits that
+are set nowhere in the source. (This section first said the depth target at EDRAM tile 720 (kD24S8)
+has stencil in it. It does not: see the
+[section below](#the-stencil-of-one-sample-depth-transfers-from-a-buffer-copy-and-the-stencil-values-fh1-has-640-2026-11-11).)
 
 **A test hook (ReIGlue 0480).** `FORZA_TEST_NO_STENCIL_EXPORT=1` leaves
 `VK_EXT_shader_stencil_export` off, so an AMD or Intel GPU takes the NVIDIA transfer path (the
@@ -3905,6 +3907,80 @@ shadow map going back to 1x) a compute pass could write the stencil bytes to a b
 into the image's stencil aspect, which Vulkan allows for single-sample images. Then the texture
 loads (1.9 ms; the 1024x1024 k_24_8 shadow map loaded 4 times a frame is 0.52 ms of it) and the
 resolves (1.7 ms in 88 a frame, about 10 us each, mostly fixed cost).
+
+## The stencil of one-sample depth transfers from a buffer copy, and the stencil values FH1 has (#640, 2026-11-11)
+
+The next idea of the section above, measured: it does not pay either.
+
+**The cut (ReIGlue experiment 0521, `vulkan_transfer_stencil_copy`).** Without stencil export, a
+transfer to a one-sample depth target wrote its stencil to a buffer instead of the stencil clear
+and the bit draws: one draw over the transfer's rectangles with the transfer shader itself (so the
+source sample of each destination pixel is the same by construction), which ORs the pixel's
+stencil byte into a zeroed buffer of the destination's rows, then `vkCmdCopyBufferToImage` into the
+image's stencil aspect, outside the render pass (the image to `TRANSFER_DST_OPTIMAL` and back). It
+covered every transfer to a 1x depth target, from depth and from color. The render tests on an
+RX 9060 XT with `FORZA_TEST_NO_STENCIL_EXPORT=1` (0480) pass with it, within the run-to-run noise.
+
+**Measured** on the GTX 1650 Ti of the sections above (one build, the cut on or off by its cvar,
+the launcher's settings for the laptop, the built-in benchmark, warm caches):
+
+| | Off | On |
+| --- | --- | --- |
+| Benchmark, 60 fps cap, 6 alternating runs (on, off, off, on, on, off) | 59.7, 59.7, 59.7 fps | 58.1, 58.0, 58.2 fps |
+| GPU frame, `--fh1_gpu_profile=5`, 2 runs each | 13.30, 13.17 ms | 14.16, 14.26 ms |
+| Transfers to depth from depth | 1.63, 1.62 ms | 2.51, 2.53 ms |
+
+By transfer (ms a frame, one profiled run each way):
+
+| Transfer | Off | On |
+| --- | --- | --- |
+| 720t kD24S8 1x from its 4x self (3 a frame) | 0.214 | 0.594 |
+| 0t kD24FS8 1x from its 4x self (the shadow map, stencil 0) | 0.162 | 0.405 |
+| 720t kD24S8 1x from 720t kD24FS8 1x | 0.067 | 0.188 |
+| 408t kD24FS8 1x from color (k_2_10_10_10_FLOAT 2x, 8 bit draws before) | 0.128 | 0.118 |
+
+Splitting the first row (`vulkan_transfer_stencil_copy_test`, wrong pictures): without the copy
+(and its layout transitions) 0.394 ms, without the stencil draw 0.377, without zeroing the buffer
+0.598. The transitions and the copy alone cost about as much as the whole transfer did, and the
+draw with its atomics as much again; only a color source, whose eight bit draws are not masked,
+came out slightly ahead (0.01 ms a frame). The 4x transfers back from these targets, which the cut
+did not change, got slower too (720t 0.232 -> 0.266 ms, 0t 0.220 -> 0.240 ms a frame), likely from
+the depth and stencil image now also being a transfer destination (its depth may be kept
+decompressed). And the off runs sit at the 60 fps cap, so the 1.6 fps between them is the least the
+cut costs. The experiment was not kept, and its code is not in ReIGlue.
+
+**One draw per stencil value instead of one per bit.** `vulkan_transfer_stencil_value_stats`
+(testing, in the same experiment) logs the stencil values each depth source of a transfer holds. In the
+benchmark's measured minute, a transfer:
+
+| Source -> destination | Nonzero values | Bits |
+| --- | --- | --- |
+| 816t kD24FS8 2x (the scene depth) -> its 4x self | 206 | 8 |
+| 0t kD24FS8 1x (the shadow map) -> its 4x self | 1.08 (01, 03, 0F, 12, 15, 18, 81) | 1.66 |
+| 408t kD24FS8 1x -> its 4x self, and -> 720t kD24FS8 1x | 1 (85) | 3 |
+| 128t and 80t (2x and 4x) between themselves and from 0t | 1 (01) | 1 |
+| 720t kD24S8, 816t 2x from 4x, the rest | 0 | 0 |
+
+The scene depth's stencil going to 4x holds 206 different values, so one draw per bit is already
+the fewest draws there; elsewhere a value draw would save two draws of 408t's transfers and about
+half a draw of the shadow map's, about 0.1 ms a frame by the costs above, and it needs the values on
+the CPU (a readback a frame late, with the bit draws as the fallback). Not done. Every transfer from
+a depth source had its bit draws masked (0461); the ones that were not are those from color.
+
+**A correction to the section above.** It put the bit draws left in the transfers from depth on the
+depth target at tile 720 (kD24S8). It has no stencil: every transfer with a 720t kD24S8 source
+(1x from 4x, 4x from 1x, 816t 2x from 720t 1x) holds no nonzero value in the measured minute, with
+the cut off and with it on. When a test filled that buffer with garbage instead of zeroing it, the
+720t 4x-from-1x transfer went from 0.23 to 0.55 ms. The bit draws that are left come from the scene
+depth's 8 bits (816t 2x to 4x), the shadow map, and 408t, 128t and 80t going to 4x. All three 1x
+destinations of the cut (720t from its 4x self, the shadow map from its 4x self, 720t from 720t
+kD24FS8) had sources with no stencil, so 0461 had already skipped all of their bit draws. The cut
+could only save their stencil clear and the conditional draws' overhead, and that is why it could
+not pay.
+
+**What is left.** Without stencil export, the transfers' stencil costs what the bit draws of the
+scene depth's 8 bits and of the color sources cost; the other cuts in reach are the texture loads
+and the resolves of the section above.
 
 ## Pipelines the driver was given twice (#607, 2026-11-11)
 
