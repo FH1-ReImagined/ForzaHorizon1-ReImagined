@@ -368,8 +368,11 @@ def fh1_texture_of(t):
     return t[:6] + ((t[6] & ~drop) | 0x100,)
 
 
-def convert(F, files):
-    """FM4's PVS (read_fm4) to FH1's PVS, its one zone and the zone's file list."""
+def convert(F, files, fits=None):
+    """FM4's PVS (read_fm4) to FH1's PVS, its zones (what each holds: ZONE_REACH) and the
+    grid. fits(zones, grid), when given, says whether zones fit the game's streaming pool;
+    when the neighbours' reach does not, a shorter one is tried (NEIGHBOUR_NEAR), then the
+    zones' own instances alone."""
     insts = F["instances"]
     P = {"hdr": (F["hdr"][0], 0), "ribbon": F["ribbon"], "pgeo": 0, "g1": 1, "g2": 0,
          # The size of FH1's resource table: zone file records and texture files take ids in
@@ -451,11 +454,11 @@ def convert(F, files):
     # The sky dome (FM4's first always-drawn instance) as an object of every zone: FH1 keeps
     # its own sky above, the dome adds FM4's landscape round the horizon. Its model's extent
     # is FM4's 0; FH1 gets the dome's size instead.
+    everywhere = []
     sky = [i for i in F["always"] if i not in (0xFFFF, 0xFFFFFFFF)][:1] if SKY else []
     for i in sky:
         P["models"][insts[i]["model"]]["extent"] = [SKY_EXTENT] * 3
-        for cell in grid.cells:
-            members[cell].append(i)
+        everywhere.append(i)
     # A ground under everything (see GROUND): one flat terrain piece of FM4's own, placed
     # again stretched GROUND_SCALE times across, below the lowest ground, in every zone.
     if GROUND:
@@ -465,18 +468,29 @@ def convert(F, files):
                 g["model"] = ground_model_copy(F, P, files, g["model"], g["reach"])
             insts = insts + [g]
             P["instances"].append(fh1_instance_of(g))
-            for cell in grid.cells:
-                members[cell].append(len(insts) - 1)
-    zones = []
-    for cell in grid.cells:
-        zi = members[cell]
-        models = sorted({insts[i]["model"] for i in zi})
-        tex = sorted({t & 0xFFFFFF for m in models for t in F["models"][m]["textures"]} |
-                     ({insts[i]["idx"] & 0xFFFFFF for i in zi if insts[i]["u12"] != 0xFFFFFFFF}
-                      if LIGHTMAPS else set()))
-        zones.append({"instances": [0x80000000 | i for i in zi], "models": models,
-                      "textures": tex, "texture_flags": [ZONE_TEXTURE_FLAG] * len(tex), "files": [],
-                      "drawn": [1] * len(zi), "placements": [placement_of(insts[i]) for i in zi]})
+            everywhere.append(len(insts) - 1)
+    # What each zone holds (ZONE_REACH): FH1 draws the camera's zone alone, so a zone holds
+    # what is seen from it, its own instances and its six neighbours'. Where that needs more
+    # streaming blocks than the game has, the neighbours' instances within NEIGHBOUR_NEAR m
+    # of the zone's centre (their extent's reach added, as cells_near), else its own alone.
+    def reach_of(i):
+        e = F["models"][insts[i]["model"]]["extent"]
+        return (e[0] ** 2 + e[2] ** 2) ** 0.5
+    zones = None
+    for near in ([None] + list(NEIGHBOUR_NEAR) if ZONE_REACH == "neighbours" else []):
+        zones = zone_records(F, insts, grid, with_neighbours(grid, members, near, spots, reach_of),
+                             everywhere)
+        if fits is None or fits(zones, grid):
+            P["zone_reach"] = ("their own and their neighbours' instances" if near is None else
+                               f"their own and their neighbours' instances within {near:.0f} m "
+                               f"(all of them: over the game's {MAX_STREAM_BLOCKS} streaming blocks)")
+            break
+        zones = None
+    if zones is None:
+        P["zone_reach"] = "their own instances" + (
+            f" (with their neighbours': over the game's {MAX_STREAM_BLOCKS} streaming blocks)"
+            if ZONE_REACH == "neighbours" else "")
+        zones = zone_records(F, insts, grid, members, everywhere)
     P["zones"] = [(len(z["instances"]), 0, len(z["models"])) for z in zones]
     # FH1 sizes its pools of live instance objects and placements from the largest zone in
     # this table: 3 x (its instances + 128) + the dynamic ones (sub_82E296C0), for Colorado's
@@ -488,6 +502,42 @@ def convert(F, files):
         biggest = max(z[0] for z in P["zones"])
         P["zones"].append((POOL_ZONES * biggest, 0, 0))
     return P, zones, grid
+
+
+def with_neighbours(grid, members, near=None, spots=None, reach=None):
+    """Each cell's members, then those of its six neighbours it does not hold yet: all of them,
+    or (near, m) those whose spot is within near + reach(i) of the cell's centre."""
+    out = {}
+    for cell in grid.cells:
+        zi, seen = list(members[cell]), set(members[cell])
+        cx, cz = grid.centre(*cell)
+        for n in grid.neighbours(*cell):
+            for i in members[n]:
+                if i in seen:
+                    continue
+                if near is not None:
+                    x, z = spots[i]
+                    if (x - cx) ** 2 + (z - cz) ** 2 > (near + reach(i)) ** 2:
+                        continue
+                seen.add(i)
+                zi.append(i)
+        out[cell] = zi
+    return out
+
+
+def zone_records(F, insts, grid, members, everywhere=()):
+    """The zones of the grid's cells: each cell's members, then the instances in every zone."""
+    zones = []
+    for cell in grid.cells:
+        zi = list(members[cell]) + list(everywhere)
+        models = sorted({insts[i]["model"] for i in zi})
+        tex = sorted({t & 0xFFFFFF for m in models for t in F["models"][m]["textures"]} |
+                     ({insts[i]["idx"] & 0xFFFFFF for i in zi if insts[i]["u12"] != 0xFFFFFFFF}
+                      if LIGHTMAPS else set()))
+        zones.append({"instances": [0x80000000 | i for i in zi], "models": models,
+                      "textures": tex, "texture_flags": [ZONE_TEXTURE_FLAG] * len(tex), "files": [],
+                      "drawn": [1] * len(zi), "placements": [placement_of(insts[i]) for i in zi]})
+    return zones
 
 
 # FM4_PVS_GROUND=0 leaves out the ground under the circuit. FM4 has none: where its sky
@@ -519,6 +569,8 @@ GROUND_COPIES = {}  # new file in the track's bin folder: (the file it is a copy
 # blocks in use measured on a lap (24454 for 24037 at the 120 m visible set, 34225 for 34518
 # at 25 m).
 STREAM_MARGIN = float(os.environ.get("FM4_PVS_STREAM_MARGIN", "1.25"))
+# The most blocks the game links in (kMaxBlocks in fm4_track.cpp: 64 MB in all).
+MAX_STREAM_BLOCKS = 65536
 # A test (FM4_PVS_ZONE_TEXTURES=1): a zone's file list holds its textures' own files too, as
 # Colorado's do (a streamed record's object holds the archive index of its _0x<id>.bix as its
 # resource id). It changed nothing at Sunset Infield (FH1 requests a streamed texture itself):
@@ -1013,13 +1065,26 @@ def lightmap_uv_copies(converted, files, bin_dir, skip=()):
     return changed
 
 
+def fits_stream_pool(need):
+    """Whether need blocks (stream_blocks) and their margin fit the game's streaming pool."""
+    return int(need * STREAM_MARGIN + 0.5) <= MAX_STREAM_BLOCKS
+
+
 def stream_blocks(F, cells, grid, bin_dir):
     """Blocks the zones of one ribbon need at most (see STREAM_MARGIN), without the margin."""
     size = {}
     def file_size(m):
         if m not in size:
-            p = os.path.join(bin_dir, m if isinstance(m, str) else f"{F['prefix']}.{m:05d}.rmb.bin")
-            size[m] = os.path.getsize(p) if os.path.exists(p) else 0
+            name = m if isinstance(m, str) else f"{F['prefix']}.{m:05d}.rmb.bin"
+            p = os.path.join(bin_dir, name)
+            if os.path.exists(p):
+                size[m] = os.path.getsize(p)
+            elif name in GROUND_COPIES:
+                # The ground's model copy (see GROUND_LAYER), in the zones before its file is
+                # written: the size of the file it is a copy of (the renames keep the length).
+                size[m] = file_size(GROUND_COPIES[name][0])
+            else:
+                size[m] = 0
         return size[m]
 
     def zone_files(cell):  # the models' files and, with ZONE_TEXTURES, the textures' own files
@@ -1030,12 +1095,9 @@ def stream_blocks(F, cells, grid, bin_dir):
         return out
     index = {c: k for k, c in enumerate(grid.cells)}
     best = 0
-    for (col, row), k in index.items():
-        # Odd columns sit half a hex lower (HexGrid): their side neighbours are rows row, row+1.
-        side = (0, 1) if col % 2 else (-1, 0)
-        near = [(col, row - 1), (col, row + 1)] + [(col + dc, row + dr) for dc in (-1, 1) for dr in side]
+    for cell, k in index.items():
         models = zone_files(cells[k])
-        for c in near:
+        for c in grid.neighbours(*cell):
             if c in index:
                 models.update(zone_files(cells[index[c]]))
         best = max(best, sum(file_size(m) for m in models))
@@ -1084,6 +1146,18 @@ def ground_model_copy(F, P, files, model, reach):
         files.append(dst)
     GROUND_COPIES[dst] = (src, renames)
     return new
+
+
+def write_ground_copies(bin_dir):
+    """The files of GROUND_COPIES, in the track's bin folder."""
+    for dst, (src, renames) in GROUND_COPIES.items():
+        with open(os.path.join(bin_dir, src), "rb") as f:
+            data = f.read()
+        for a, b in renames:  # the shader names in the model's material table
+            data = data.replace(a, b)
+        os.makedirs(os.path.dirname(os.path.join(bin_dir, dst)), exist_ok=True)
+        with open(os.path.join(bin_dir, dst), "wb") as f:
+            f.write(data)
 
 
 def ground_instance(F, used):
@@ -1152,6 +1226,21 @@ VISIBLE = os.environ.get("FM4_PVS_VISIBLE", "1") == "1"
 VISIBLE_NEAR = float(os.environ.get("FM4_PVS_VISIBLE_NEAR", "40"))
 VISIBLE_CELLS = int(os.environ.get("FM4_PVS_VISIBLE_CELLS", "1"))
 VISIBLE_SIZE = float(os.environ.get("FM4_PVS_VISIBLE_SIZE", "25"))
+# FM4_PVS_ZONE_REACH: what a zone holds. FH1 draws the camera's zone alone; Colorado's zones
+# each list what is seen from them (an instance is in 16.5 of them on average), where a hex
+# zone of its own instances (and the large pieces of FM4's visible set) showed small pieces
+# only 120 m ahead at the median, and stretches of Le Mans that filled in at 200 km/h and
+# over as the car got there (#824). "neighbours" (the default): a zone holds its own and its
+# six neighbours' instances, everything within 200 m of its centre and more. Should that need
+# more streaming blocks than the game has (MAX_STREAM_BLOCKS with STREAM_MARGIN), a layout's
+# zones take the neighbours' instances within NEIGHBOUR_NEAR m of their centre, else their own
+# alone. "own": their own alone, as before.
+ZONE_REACH = os.environ.get("FM4_PVS_ZONE_REACH", "neighbours")
+if ZONE_REACH not in ("neighbours", "own"):
+    raise SystemExit(f"FM4_PVS_ZONE_REACH={ZONE_REACH}: neighbours or own")
+# The shorter reaches tried in turn when the neighbours' whole hexes need too many blocks (m
+# from the zone's centre: its own hex ends 87 to 100 m from it, the six around 200 to 273 m).
+NEIGHBOUR_NEAR = (200.0, 150.0)
 # FM4_PVS_SKY=0 leaves FM4's sky dome out (see convert).
 SKY = os.environ.get("FM4_PVS_SKY", "1") == "1"
 SKY_EXTENT = 4200.0
@@ -1205,6 +1294,13 @@ class HexGrid:
             if (cx - x) ** 2 + (cz - z) ** 2 <= lim:
                 out.add(cell)
         return sorted(out)
+
+    def neighbours(self, c, r):
+        """The cells around (c, r), up to six: odd columns sit half a hex lower, so the side
+        neighbours of an odd column's cell are in rows r and r + 1, of an even one's r - 1 and r."""
+        side = (0, 1) if c % 2 else (-1, 0)
+        near = [(c, r - 1), (c, r + 1)] + [(c + dc, r + dr) for dc in (-1, 1) for dr in side]
+        return [(nc, nr) for nc, nr in near if 0 <= nc < self.w and 0 <= nr < self.h]
 
     def write(self):
         zone = {cell: k for k, cell in enumerate(self.cells)}
@@ -1825,19 +1921,15 @@ def convert_mod(mod, fh1_disc, loose):
               f"({len(Fs[0]['models']) - n_models} model copies, {len(RECT_COPIES)} shaders; "
               f"{len(INSERTED)} with a fetch constant added)")
     for (ribbon, path, data, _), F in zip(ribbons, Fs):
-        P, cells, grid = convert(F, files)
+        P, cells, grid = convert(F, files, lambda cells, grid, F=F: fits_stream_pool(
+            stream_blocks(F, cells, grid, bin_dir)))
         nn = ribbon[-2:]
         converted.append((ribbon, path, F, P, cells, grid,
                           [f"__R{int(nn):02d}Z{k:05d}.pvsz" for k in range(len(cells))]))
     n_lmuv = lightmap_uv_copies(converted, files, bin_dir, rect_done)
     if n_lmuv:
         print(f"{track}: {n_lmuv} models drawn with lightmap-identity shader copies ({len(LMUV_COPIES)} shaders)")
-    for dst, (src, renames) in GROUND_COPIES.items():
-        data = open(os.path.join(bin_dir, src), "rb").read()
-        for a, b in renames:  # the shader names in the model's material table
-            data = data.replace(a, b)
-        os.makedirs(os.path.dirname(os.path.join(bin_dir, dst)), exist_ok=True)
-        open(os.path.join(bin_dir, dst), "wb").write(data)
+    write_ground_copies(bin_dir)
     n_decals, n_left = draw_decals(converted, bin_dir)
     if n_decals or n_left:
         print(f"{track}: {n_decals} decal models (road lines, road edges) drawn in FH1's opaque and transparent passes"
@@ -1877,7 +1969,9 @@ def convert_mod(mod, fh1_disc, loose):
             b"".join(struct.pack(">II", index[zn], k) for k, zn in enumerate(zone_names)))
         print(f"{ribbon}: {len(P['instances'])} instances, {len(P['models'])} models, "
               f"{len(P['textures'])} textures; {len(cells)} zones ({grid.w}x{grid.h} hexes of "
-              f"{grid.r:.0f} m), the largest {max(len(c['instances']) for c in cells)} "
+              f"{grid.r:.0f} m) of {P['zone_reach']}, "
+              f"{sum(len(c['instances']) for c in cells) / len(cells):.0f} "
+              f"instances each on average, the largest {max(len(c['instances']) for c in cells)} "
               f"instances, {max(len(c['models']) for c in cells)} models, "
               f"{max(len(c['textures']) for c in cells)} textures")
     # The static pack's texture numbers: pack entry k is texture file k; its record is the
@@ -1987,10 +2081,13 @@ def convert_mod(mod, fh1_disc, loose):
     out_dir = os.path.join(loose, "media", "tracks", track)
     os.makedirs(out_dir, exist_ok=True)
     if need:
-        blocks = int(need * STREAM_MARGIN + 0.5)
+        blocks = min(int(need * STREAM_MARGIN + 0.5), MAX_STREAM_BLOCKS)
         with open(os.path.join(out_dir, "fm4_stream_blocks.txt"), "w") as f:
             f.write(f"{blocks}\n")
         print(f"{track}: streaming blocks {need} at most, {blocks} asked for (fm4_stream_blocks.txt)")
+        if not fits_stream_pool(need):
+            print(f"{track}: warning: that is more than the game's {MAX_STREAM_BLOCKS} with the "
+                  f"margin ({STREAM_MARGIN}); the pool may run dry")
     start, size, count = write_track_zip(members, os.path.join(out_dir, "bin.zip"))
     shutil.rmtree(bin_dir)
     manifest = open(os.path.join(fh1_disc, "media", "zipmanifest.xml"), "rb").read().decode("utf-8-sig")

@@ -5,6 +5,7 @@
 //   clang++ -std=gnu++23 -msse4.1 -DSPDLOG_COMPILED_LIB -DSPDLOG_FMT_EXTERNAL -isystem $SDK/include \
 //     forza-recomp/tests/fm4_track_mount_test.cpp forza-recomp/src/hooks/fm4_track_mount.cpp \
 //     -L$SDK/lib -lrexruntime -Wl,-rpath,$SDK/lib -fuse-ld=lld -o fm4-mount-test && ./fm4-mount-test
+#include "../src/hooks/fm4_file_error.h"
 #include "../src/hooks/fm4_track_mount.h"
 
 #include <rex/cvar.h>
@@ -81,6 +82,15 @@ int main() {
   Put(track / "stx" / "suzuka_stx_numbers.bin", "\x01");
   Put(track / "spawn.txt", "605.6,598.6,-134.0,0.612,-0.791\n");
 
+  // the game's fatal file errors (sub_82CBF3E0), the only ones fm4_track.cpp logs on a circuit (#825)
+  using forza::fm4_track::GameFatalFileError;
+  CHECK(!GameFatalFileError(1, 0, 997) && !GameFatalFileError(2, 0, 997) && !GameFatalFileError(0, 0, 997));
+  CHECK(!GameFatalFileError(2, 0, 38) && !GameFatalFileError(2, 0, 996) && !GameFatalFileError(0, 0, 1392));
+  CHECK(GameFatalFileError(1, 0, 1392) && GameFatalFileError(1, 0, 1393) && !GameFatalFileError(1, 0, 2));
+  CHECK(GameFatalFileError(2, 0, 2) && GameFatalFileError(2, 0, 1392) && !GameFatalFileError(2, 1, 2));
+  CHECK(!GameFatalFileError(1, 1, 1392) && !GameFatalFileError(3, 0, 2));
+
+  unsetenv("FORZA_TRACK_DIAG");
   rex::filesystem::VirtualFileSystem vfs;
   // as the runtime mounts the game folder (runtime.cpp)
   auto device = std::make_unique<rex::filesystem::HostPathDevice>("\\Device\\Harddisk0\\Partition1", game, true);
@@ -129,6 +139,7 @@ int main() {
   CHECK(Env("FORZA_FM4_COL") == "1");
   CHECK(Env("FORZA_TRACK_NO_TRAFFIC") == "(unset)");
   CHECK(Env("FORZA_TRACK_SPAWN") == "1,2,3");
+  CHECK(Env("FORZA_TRACK_DIAG") == "(unset)");  // the diagnostics stay off on a circuit (#825)
   CHECK(lap_file == track / "lap.txt");
   CHECK(laps_file == tmp / "data" / "fm4-tracks" / "laps" / "suzuka.jsonl");
 

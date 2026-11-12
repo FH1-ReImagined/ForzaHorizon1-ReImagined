@@ -50,7 +50,8 @@ A start on a circuit:
 
 - plays **offline**: other players are in Colorado;
 - **backs up your save** first, whatever the save manager's setting is;
-- uses your current FH1 car.
+- uses the car you last drove in Colorado. Choose it there first (play with **FH1's
+  Colorado**): there is no car choice on a circuit yet.
 
 ## Time attack and your laps
 
@@ -75,7 +76,8 @@ tab appears once a circuit is imported.
 Works:
 
 - Free driving on the circuit: its buildings, stands, crowds, road and kerbs, and its collision
-  (walls and the ground).
+  (walls and the ground). A circuit imported with an earlier launcher loads its scenery only a
+  short way ahead of the car, so at speed it appears as you drive: import it again.
 - Timed laps with sectors, the best-lap ghost and the laps page.
 - The circuit's road on the minimap, from FM4's AI line. A circuit imported with an earlier
   launcher has none: import it again.
@@ -89,6 +91,7 @@ Not yet:
   cars do not drive yet. An import writes the road network and the race route FH1's races need;
   no race has been run with them yet, and nothing starts one on a circuit.
 - **AI cars and traffic** on the circuit.
+- **Choosing a car** on a circuit: you drive the car you last used in Colorado.
 - **Shadows of the circuit's own buildings and trees.** Your car's shadow is drawn on the
   circuit with the Vulkan renderer (with ReGPU, the D3D12 renderer, circuits have no shadows
   yet). A circuit imported with an earlier launcher has none: import it again.
