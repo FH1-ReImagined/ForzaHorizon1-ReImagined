@@ -4026,9 +4026,12 @@ So NVIDIA is like RADV: 0520 builds about 8% fewer pipelines, and nothing it sav
 A first benchmark costs about a minute of driver time here (140 to 165 ms a pipeline, the slowest
 0.8 to 1.5 s), and a duplicate costs next to nothing of it, as the driver already has the shaders;
 its shader cache does not grow with them either (20.5 to 20.8 MB both ways). B skipped fewer draws
-over the whole run (the loading screens before the race), not in the race. The cold 1% low (21 to 23)
-and the 11 or 12 measured stalls are the first-play compiles of new shader code, which 0520 does not
-touch; the prebuilt shader list (#276) is what removes them.
+over the whole run (the loading screens before the race), not in the race. In this cold benchmark, the
+1% low (21 to 23) and the 11 or 12 measured stalls coincide with first-play compiles of new shader code,
+which 0520 does not touch; the prebuilt shader list (#276) is the change aimed at those. It does not
+remove every first-play stall: the fresh-profile A/B for #400 still had the same four transition hitches
+with 251 and with 575 startup hits, and those frames recorded no foreground pipeline time and no
+background pipeline completions, so pipeline work does not explain them.
 
 **Not merged.** As it saves no time on either GPU, 0520 was not taken into ReIGlue; the code stays on
 ReIGlue's branch `fh1-607-pipeline-share`. The microcode trailer could also be left out of the
