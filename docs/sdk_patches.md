@@ -732,3 +732,47 @@ Checked (Linux, TU4 build of main 0ec811b6 with the FM4 cars mod, RX 9060 XT, RA
 `tools/fm4_line.py` lines): with the plugin of the current pin the crash came 9 s into lap 1, as in the three runs
 before; with 0510, Suzuka two full laps (4:07.49, 4:05.82) and Laguna Seca one (3:45.29), no crash; FH1's free roam
 in Colorado drives as before.
+
+## ReIGlue 0530: the world AO's stencil request leaves the first shadow pass its textures (#823)
+
+With Ambient occlusion on (patch 0350), single frames showed the near ground, the road and everything close dark
+below a hard straight line, the far scenery lit; the next frame was normal. In a scripted race at the owner's
+settings (144 fps, render scale 2, FSR 3 balanced at 1080p, Ultra world detail, Softer shadows, AO High) that was
+5-19 frames in every 7,520 captured, and none with AO off.
+
+0350 loads the depth pre-pass stencil's 8-bit view through fetch constant 31 from inside the frame's first
+`ApplyShadows` draw, after that draw's own texture request. When a memory watch had fired between the two (the
+game's CPU writes into watched texture memory many times a frame in a race), the borrowed request found
+`texture_became_outdated_`, ran `ResetTextureBindings()` (every binding cleared) and resolved only constant 31. The
+draw then bound null views for its tf0 (the scene depth) and tf1 (the nearest cascade's shadow map), so that one
+pass, the nearest cascade, wrote shadow over everything it covers: the straight line is the cascade's far edge.
+The later cascades were right, since each pass requests its own textures again. A per-frame log of the AO's inputs
+(the projection constants, the depth and stencil views, extents, formats, the shadow passes and the blur) showed
+the same projection, views and sizes on the flash frames as on the others; what differed was that the first
+shadow pass's tf0 and tf1 views had changed across the AO's request: 62 such frames in one run, and each of its 13
+flash frames came about 12 ms (the capture's delay) after one of them. Most of the others inside the capture
+bursts gave a smaller one-frame change, below the scan's threshold.
+
+0530 requests the draw's own textures again after the borrowed request (`fh1_world_ao.h`,
+`RequestThroughBorrowedFetch`; nothing is loaded again when nothing was reset) and takes the AO's depth view after
+it. `tools/test_world_ao.cpp` checks the sequence against a texture cache that resets its bindings on the borrowed
+request.
+
+Measured (TU4, Linux, RX 9060 XT, RADV; a scripted run kept out of the repository: boot on a copy of a TU4 save, the GoPro
+Millennia Masters race driven by `tools/autodrive.py`, 96-frame screenshot bursts every 3 s scanned for one-frame
+changes; each pair ran side by side, so the fps are two games' share of the GPU):
+
+| Run | Pin (`46ae834`): flash frames / 7,520 | race fps | 0530: flash frames / 7,520 | race fps |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 5 | 71.4 | 0 | 71.3 |
+| 2 | 9 | 71.4 | 0 | 72.1 |
+| 3 | 3 | 69.6 | 0 | 69.7 |
+
+With a lower threshold (a one-frame change of 10 instead of 25 of 255) the pin's runs had 9, 16 and 6 and 0530's
+still none. The occlusion itself is unchanged: alone on the machine, uncapped at the free roam spawn and switched
+live, AO High against Off cost the same (pin 147.5 against 151.9 fps, 0530 148.5 against 155.3, two sessions each;
+the standing car's camera drifts, so the spread is a few fps).
+In `tools/render_test.py`'s six scenes (render scale 1) the darkening AO High adds over Off is the same with 0530
+as with the pin (race start: 1.6-1.7 against 1.5-1.6 of 255 on average, 5 % of the pixels by 8 or more, the
+contact shadow under the car among them), and the check gives the same results with both (the five scenes after
+the title differ from the 2026-11-02 baselines with either plugin, AO Off or High).
