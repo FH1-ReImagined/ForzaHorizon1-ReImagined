@@ -542,6 +542,103 @@ def spawn_of(net, inside):
             "".join(f"{x:.2f} {y:.2f} {z:.2f} 20.0\n" for x, y, z in line), best[0])
 
 
+# ---- races and playground arenas (data only: not yet tried in a lobby) ----
+
+ROUTE_KINDS = (0, 2, 7)   # Tracks.RibbonConfiguration: circuit, point to point, playground arena
+ROUTE_BASE = 5000         # the world's route rows' Tracks ids (FH1's own end at 1111)
+_NAMED = re.compile(r"<NamedTransform name='(?P<name>[^']*)'(?P<attrs>[^>]*)>(?P<sp1>\s*)"
+                    r"<Transform (?P<t>[^>]*?)\s*/>(?P<sp2>\s*)</NamedTransform>")
+
+
+def _facing_unit(t):
+    """A Transform's attributes with its facing a unit vector (F&F's are 2 to 4 long; FH1's 1)."""
+    f = {k: float(v) for k, v in re.findall(r"facing\.([xyz])='([^']*)'", t)}
+    n = math.sqrt(sum(v * v for v in f.values())) if len(f) == 3 else 0.0
+    if not n or abs(n - 1) < 1e-3:
+        return t
+    return re.sub(r"facing\.([xyz])='[^']*'", lambda m: f"facing.{m.group(1)}='{f[m.group(1)] / n:.6g}'", t)
+
+
+def route_xml(text):
+    """An F&F/FH2 TrackRouteNNN.xml in FH1's terms: facings made unit vectors, an arena's edge
+    (Arena_NN) named as FH1's (route_boundary_NN), and the places after a race FH1 looks for
+    (post_race_location_NN, a race's: an arena has none) from F&F's end positions, else its start
+    places. Other names stay."""
+    blocks = list(_NAMED.finditer(text))
+    if not blocks:
+        return text
+    out, at, places, arena_file = [], 0, {}, False
+    for m in blocks:
+        name, t = m.group("name"), _facing_unit(m.group("t"))
+        attrs = m.group("attrs")
+        arena = re.fullmatch(r"Arena_(\d+)", name)
+        arena_file = arena_file or name.startswith("route_boundary")
+        if arena:
+            arena_file = True
+            name, attrs = f"route_boundary_{int(arena.group(1)):02d}", ""
+        for kind in ("end_position", "start_location"):
+            k = re.fullmatch(kind + r"_?(\d+)", name)
+            if k:
+                places.setdefault(kind, []).append(t)
+        out.append(text[at:m.start()])
+        out.append(f"<NamedTransform name='{name}'{attrs}>{m.group('sp1')}<Transform {t}/>{m.group('sp2')}</NamedTransform>")
+        at = m.end()
+    out.append(text[at:])
+    text = "".join(out)
+    have = any(m.group("name").startswith("post_race_location") for m in blocks)
+    src = places.get("end_position") or places.get("start_location")
+    if not have and not arena_file and src and "</NamedTransforms>" in text:
+        nl = "\r\n" if "\r\n" in text else "\n"
+        add = "".join(f"\t\t<NamedTransform name='post_race_location_{k:02d}'>{nl}\t\t\t<Transform {t}/>{nl}"
+                      f"\t\t</NamedTransform>{nl}" for k, t in enumerate(src))
+        i = text.rindex("</NamedTransforms>")
+        line = text.rfind("\n", 0, i) + 1
+        text = text[:line] + add + text[line:]
+    return text
+
+
+def route_file(ribbon_dir, route_id):
+    """The ribbon's TrackRouteNNN.xml for a route id (FH1 names it %03d), any case, or None."""
+    want = f"trackroute{route_id:03d}.xml"
+    return next((os.path.join(ribbon_dir, n) for n in os.listdir(ribbon_dir) if n.lower() == want), None)
+
+
+def world_routes(src_db, ribbon_dir):
+    """The world's own races and arenas: its Tracks rows (MediaName Anthem, a ROUTE_KINDS
+    configuration) whose route file the ribbon holds, as {column: value}, by id."""
+    con = sqlite3.connect(f"file:{Path(src_db).as_posix()}?mode=ro", uri=True)
+    try:
+        cols = [r[1] for r in con.execute("PRAGMA table_info(Tracks)")]
+        rows = [dict(zip(cols, r)) for r in con.execute(
+            f"SELECT * FROM Tracks WHERE MediaName LIKE ? AND RibbonConfiguration IN ({','.join('?' * len(ROUTE_KINDS))}) "
+            "ORDER BY id", (NAME, *ROUTE_KINDS))]
+    finally:
+        con.close()
+    return [r for r in rows if isinstance(r.get("RouteId"), int) and r["RouteId"] > 0
+            and route_file(ribbon_dir, r["RouteId"])]
+
+
+def add_world_routes(db, rows):
+    """The rows put into FH1's Tracks as the world's (ids from ROUTE_BASE, Environments 70, its
+    developer name as the shown one: F&F's string ids are not in FH1's tables). Only the columns
+    FH1's table has. Returns {RibbonConfiguration: count}."""
+    have = [r[1] for r in db.execute("PRAGMA table_info(Tracks)")]
+    used = {r[0] for r in db.execute("SELECT id FROM Tracks")}
+    counts = collections.Counter()
+    next_id = ROUTE_BASE
+    for row in rows:
+        while next_id in used:
+            next_id += 1
+        r = dict(row, id=next_id, MediaName=NAME, EnvironmentId=ENVIRONMENT, RibbonIndex=0,
+                 DisplayName=row.get("DevName") or f"Route {row['RouteId']}",
+                 ShortDisplayName=row.get("DevName") or f"Route {row['RouteId']}")
+        keys = [c for c in have if c in r]
+        db.execute(f"INSERT INTO Tracks ({','.join(keys)}) VALUES ({','.join('?' * len(keys))})", [r[c] for c in keys])
+        used.add(next_id)
+        counts[row["RibbonConfiguration"]] += 1
+    return dict(counts)
+
+
 STREAM_CAP = 65536   # the game's cap on streaming blocks (hooks/fm4_track.cpp kMaxBlocks)
 LANE = 2.0   # metres right of a road's centre line: the middle of its right-hand lane
 
@@ -1008,6 +1105,17 @@ def _build_into(ff_disc, fh1_disc, update_zip, out, fh2_disc):
         db.execute(f"INSERT OR REPLACE INTO Environments ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
                    [row[c] for c in cols])
         db.execute("UPDATE Tracks SET MediaName=?, EnvironmentId=?, RibbonIndex=0 WHERE id=?", (NAME, ENVIRONMENT, FREE_ROAM))
+        # the world's own races and playground arenas: their rows and route files in FH1's terms
+        routes = world_routes(os.path.join(ff_disc, "media", "db", "gamedb.slt"), rb)
+        for r in routes:
+            path = route_file(rb, r["RouteId"])
+            with open(path, encoding="utf-8-sig", newline="") as f:
+                text = f.read()
+            new = route_xml(text)
+            if new != text:
+                with open(path, "w", encoding="utf-8", newline="") as f:
+                    f.write(new)
+        print("races and arenas (Tracks rows by configuration):", add_world_routes(db, routes))
         db.commit()
         gamemodes = os.path.join(mod, "media", "gamemodes", NAME.lower())
         count = copy_member(os.path.join(fh1_disc, "media", "gamemodes.zip"), "colorado/", gamemodes, tmp)

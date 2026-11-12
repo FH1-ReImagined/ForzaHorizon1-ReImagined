@@ -110,6 +110,17 @@ wrong picture:
   writes the largest union of a hex cell's zone's model files and its six neighbours', in KB,
   1.25 times over (FH2 50,234 and 62,793 asked for; F&F 52,089, capped at 65,536 less the
   rounding, 65,111; F&F drove on the game's own pool before, so the measure is generous).
+- **Races and playground arenas** (data only: not tried in a lobby yet). FH1's races and its King,
+  Infected and Cat & Mouse arenas are Tracks rows (RibbonConfiguration 0 a circuit, 2 point to
+  point, 7 an arena) with a `TrackRouteNNN.xml` in the ribbon. F&F's and FH2's databases have the
+  same Tracks table; the world's rows with a route file in its ribbon (F&F: 54 circuits, 119 point
+  to point, 35 arenas at the docks, the abbey, the chateau, the airfield, the warehouse;
+  FH2: 54, 121 and 35) go into the mod's database as ids 5000 on, on Environments 70, showing
+  their developer name (F&F's string ids are not in FH1's tables). Their route files take FH1's names: an arena's edge
+  `Arena_NN` is `route_boundary_NN`, a race gets `post_race_location_NN` (from F&F's
+  `end_position_NN`, else its start places), and every facing is a unit vector (F&F's are 2 to 4
+  long). F&F's AI lines (`aiopenworld.zip`, OWTM version 2 in segments; FH1 reads version 1) are
+  not converted: AI racers have no line on these routes.
 - **Spawn.** F&F streams 1,132 zones on the western 66 x 50 of FH2's 104 x 50 hex grid (FH2:
   2,798). Outside every zone FH1 draws from the nearest one, which sees the place from afar: a
   spawn there had the road under the car invisible. The spawn is the start of the longest
@@ -146,6 +157,7 @@ a save for every run, the dev autopilot:
   along 4.6 km with 34 zones;
 - a closed road driven 1.3 km past the edge of the zones: no reset;
 - a closure in Nice: the barrier line and cones across the road are gone;
+- with the world's races and arenas in the database (208 rows): F&F loads and drives, 150 s;
 - the minimap draws the formerly closed roads; the full map (Start, Map) shows FH2's art under
   the roads, aligned;
 - with the streaming pool and the launcher's switches (the two 0s): F&F 200 s with traffic and a
@@ -171,4 +183,6 @@ archive member the same.
   the TU4 image to look through) or the world moved 3 km west (every placement, the hex grid,
   the collision cells and index, the road network, the ribbon's XML) is the next step.
 - F&F's places in FH2's world (its airfield, docks): one world or the other for now.
+- Races and arenas in a lobby (their data is in: see above); the AI lines (OWTM version 2); the
+  routes' own names (FH1 shows the developer's).
 - NVIDIA and Intel GPUs, Linux, macOS, ReGPU.

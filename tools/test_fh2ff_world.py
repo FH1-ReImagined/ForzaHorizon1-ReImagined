@@ -294,6 +294,67 @@ class RoadNetwork(unittest.TestCase):
             ff.spawn_of(n, lambda x, z: False)
 
 
+ARENA_XML = ("<TrackRoute>\r\n\t<NamedTransforms>\r\n"
+             "\t\t<NamedTransform name='Arena_00' width='4.0'>\r\n"
+             "\t\t\t<Transform pos.x='1' pos.y='2' pos.z='3' facing.x='0.0' facing.y='0.0' facing.z='4.0'/>\r\n"
+             "\t\t</NamedTransform>\r\n"
+             "\t\t<NamedTransform name='start_location_00' width='4.0'>\r\n"
+             "\t\t\t<Transform pos.x='5' pos.y='6' pos.z='7' facing.x='3.0' facing.y='0.0' facing.z='4.0'/>\r\n"
+             "\t\t</NamedTransform>\r\n\t</NamedTransforms>\r\n</TrackRoute>\r\n")
+
+
+class Routes(unittest.TestCase):
+    def test_an_arena_in_fh1s_terms(self):
+        import xml.etree.ElementTree as ET
+        out = ff.route_xml(ARENA_XML)
+        root = ET.fromstring(out)
+        names = [n.get("name") for n in root.iter("NamedTransform")]
+        self.assertEqual(names, ["route_boundary_00", "start_location_00"])   # no post-race places
+        start = root.find("NamedTransforms/NamedTransform[@name='start_location_00']/Transform")
+        self.assertEqual((start.get("facing.x"), start.get("facing.z")), ("0.6", "0.8"))   # a unit vector
+        self.assertIsNone(root.find("NamedTransforms/NamedTransform[@name='route_boundary_00']").get("width"))
+        self.assertEqual(ff.route_xml(out), out)
+        self.assertIn("\r\n", out)
+
+    def test_a_race_gets_its_post_race_places(self):
+        import xml.etree.ElementTree as ET
+        race = ARENA_XML.replace("Arena_00", "end_position_00")
+        root = ET.fromstring(ff.route_xml(race))
+        post = root.find("NamedTransforms/NamedTransform[@name='post_race_location_00']/Transform")
+        self.assertEqual(post.get("pos.x"), "1")   # from the end position
+        root = ET.fromstring(ff.route_xml(race.replace("end_position_00", "route_waypoint_00")))
+        self.assertEqual(root.find("NamedTransforms/NamedTransform[@name='post_race_location_00']/Transform")
+                         .get("pos.x"), "5")       # no end position: the start place
+
+    def test_rows_with_a_route_file(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as tmp:
+            rb = os.path.join(tmp, "Ribbon_00")
+            os.mkdir(rb)
+            for n in ("TrackRoute012.xml", "TrackRoute3001.xml"):
+                open(os.path.join(rb, n), "w").write(ARENA_XML)
+            src = os.path.join(tmp, "src.slt")
+            con = sqlite3.connect(src)
+            con.execute("CREATE TABLE Tracks (id INTEGER, DisplayName TEXT, ShortDisplayName TEXT, MediaName TEXT, "
+                        "RibbonIndex INTEGER, RibbonConfiguration INTEGER, RouteId INTEGER, EnvironmentId INTEGER, "
+                        "DevName TEXT, FH2Only INTEGER)")
+            con.executemany("INSERT INTO Tracks VALUES (?, '_&1', '_&2', 'Anthem', 0, ?, ?, 70, ?, 1)",
+                            [(3, 0, 12, "Anthem Route 12"), (571, 7, 3001, "NEW DOCK PLAY 3001"),
+                             (10571, 7, 6706, "NEW DOCK PLAY 3001"),    # no route file: left out
+                             (0, 5, 0, "ANTHEM")])                      # free roam: not a race
+            con.commit()
+            con.close()
+            rows = ff.world_routes(src, rb)
+            self.assertEqual([r["RouteId"] for r in rows], [12, 3001])
+            db = sqlite3.connect(":memory:")
+            db.execute("CREATE TABLE Tracks (id INTEGER, DisplayName TEXT, ShortDisplayName TEXT, MediaName TEXT, "
+                       "RibbonIndex INTEGER, RibbonConfiguration INTEGER, RouteId INTEGER, EnvironmentId INTEGER, DevName TEXT)")
+            db.execute("INSERT INTO Tracks (id) VALUES (5000)")   # an id taken: the next one is used
+            self.assertEqual(ff.add_world_routes(db, rows), {0: 1, 7: 1})
+            got = db.execute("SELECT id, DisplayName, MediaName, EnvironmentId, RouteId FROM Tracks WHERE id > 5000").fetchall()
+            self.assertEqual(got, [(5001, "Anthem Route 12", "Anthem", 70, 12), (5002, "NEW DOCK PLAY 3001", "Anthem", 70, 3001)])
+
+
 class Lighting(unittest.TestCase):
     def test_track_settings_as_64(self):
         v66 = ('<TrackSettings Version="66">\r\n  <SkyboxIndex value="1"/>\r\n  <CarGlowScale value="2.0"/>\r\n'
