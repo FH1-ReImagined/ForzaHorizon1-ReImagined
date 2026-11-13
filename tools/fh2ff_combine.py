@@ -24,9 +24,9 @@ lines. What is combined (fnf_map/COMBINED_MAP_PLAN.md has the measurements):
   F&F's everywhere else. Round the region, F&F's zones lose their instances and procedural
   geometry standing in it and see FH2's there as FH2's zone of the same cell does.
 - The layout: F&F's tables (its instances whole when they fit), then FH2's after them. Shaders
-  are shared by name. An FH2 texture that is one of F&F's byte for byte (4,749 of F&F's 10,233
-  against FH2's) is F&F's record; the rest are records of their own with their ids moved
-  (TEXTURE_ID_STEP). Moved, FH2's records never had their full mips streamed in.
+  are shared by name. FH2's texture records are records of their own after F&F's, their ids
+  moved (TEXTURE_ID_STEP); sharing F&F's record for a texture that is byte for byte one of
+  F&F's (4,749 of F&F's 10,233 against FH2's) is a test switch, it faulted (match_textures).
 - FH2's files take numbers and ids after F&F's where their name holds one: model files
   (aout.NNNNN.rmb.bin), procedural geometry (__r00gNNNNN.pgeo), textures of its own (_0x<id>.bix,
   _B.bix, .bin), bundles (_0x1000NNNN.bundle, with only its own textures), zones (__R00ZNNNNN.pvsz,

@@ -6,7 +6,8 @@ roam drives (docs/fh2ff-world.md); this runs it from the launcher and keeps the 
 FM4 circuits are (fm4tracks.py), so the Play page's picker offers it and a start in it works as
 one on a circuit:
 
-  <data>/fm4-tracks/<key>/              the world (key "anthem" F&F's, "fh2" FH2's):
+  <data>/fm4-tracks/<key>/              the world (key "anthem" F&F's, "fh2" FH2's, "fh2docks" FH2's
+                                        with F&F's docks, made first by tools/fh2ff_combine.py):
                                         media/tracks/Anthem (its archive, ribbon, collision, road
                                         network), its sound bank stand-ins, media/zipmanifest.xml,
                                         spawn.txt, track.json (kind fh2ff or fh2)
@@ -34,7 +35,10 @@ FORMAT = 1
 FF_TITLE, FH2_TITLE = 0x4D530AB5, 0x4D530AA4
 
 # key: (track.json kind, name, the game's title id)
-WORLDS = {"anthem": ("fh2ff", "Fast & Furious", FF_TITLE), "fh2": ("fh2", "Forza Horizon 2", FH2_TITLE)}
+WORLDS = {"anthem": ("fh2ff", "Fast & Furious", FF_TITLE), "fh2": ("fh2", "Forza Horizon 2", FH2_TITLE),
+          # FH2's world with Fast & Furious's docks in it (tools/fh2ff_combine.py); FH2's files lead
+          "fh2docks": ("fh2docks", "Forza Horizon 2 + Fast & Furious docks", FH2_TITLE)}
+COMBINED = "fh2docks"
 KINDS = {kind for kind, _, _ in WORLDS.values()}
 KEY = "anthem"                    # F&F's (the first import)
 KIND = WORLDS[KEY][0]
@@ -105,7 +109,11 @@ def build(cfg, ff_folder, fh2_folder=None, progress=lambda f, text: None, cancel
     from fh2_folder when given; "fh2": FH2's own from ff_folder) and installs it in place of an
     earlier import of it (kept until the new one is complete). Returns a message for the player."""
     kind, name, _ = WORLDS[key]
-    if key == "fh2":
+    added = None
+    if key == COMBINED:               # FH2's files (ff_folder) lead, F&F's (fh2_folder) give the docks
+        src = fh2 = fh2_root(ff_folder)
+        added = disc_root(fh2_folder, "anthem")
+    elif key == "fh2":
         src = fh2 = fh2_root(ff_folder)
     else:
         src, fh2 = disc_root(ff_folder), fh2_root(fh2_folder)
@@ -123,16 +131,21 @@ def build(cfg, ff_folder, fh2_folder=None, progress=lambda f, text: None, cancel
         raise Fh2ffError(f"An imported circuit is named {key} already: remove it first.")
     # FH2's archive stores a file once for each zone that streams it: the world takes about a
     # third of it; F&F's about its size
-    fm4tracks._need_space(root, fm4tracks._tree_size(_world(src)) * (1 if key == "fh2" else 3))
+    fm4tracks._need_space(root, fm4tracks._tree_size(_world(src)) * {"fh2": 1, COMBINED: 2}.get(key, 3))
     work = Path(tempfile.mkdtemp(prefix=".work-", dir=root))
     lines = [0]
 
     def say(line):
         lines[0] += 1  # the tool prints some 25 lines; the bar moves with them
-        progress(min(0.95, lines[0] / 30), line[:120])
+        progress(min(0.95, lines[0] / (50 if added else 30)), line[:120])
     try:
         out = work / "out"
-        progress(0.0, f"Converting {name}'s world (a few minutes)…")
+        if added:
+            progress(0.0, "Putting Fast & Furious's docks into Forza Horizon 2's world (a few minutes)…")
+            env = {k: v for k, v in fm4tracks._tool_env().items() if not k.startswith("FH2FF_")}
+            runner(fm4tracks.tool_command("fh2ff_combine.py", src, added, work / "combined"), env, say, cancelled)
+            src = work / "combined"
+        progress(0.4 if added else 0.0, f"Converting {name}'s world (a few minutes)…")
         runner(fm4tracks.tool_command("fh2ff_world.py", "build", src, game, Path(update) / "media.zip", out,
                                       *(("--fh2", fh2) if fh2 else ())),
                fm4tracks._tool_env(), say, cancelled)
@@ -157,6 +170,9 @@ def build(cfg, ff_folder, fh2_folder=None, progress=lambda f, text: None, cancel
     finally:
         fm4cars._remove(work)
     progress(1.0, "Imported.")
+    if added:
+        return (f"Imported {name} ({fm4tracks.size_text(info['size'])}). Choose it on the Play page to drive "
+                "it (experimental).")
     return (f"Imported {name}'s world ({fm4tracks.size_text(info['size'])})"
             + ("" if fh2 else ", without FH2's map art and road types (choose FH2's files too to add them)")
             + ". Choose it on the Play page to drive it (experimental).")

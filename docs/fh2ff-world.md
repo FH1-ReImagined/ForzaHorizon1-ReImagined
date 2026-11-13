@@ -152,6 +152,56 @@ surface is a reset trigger, and the HandOfGodReset values are the races' off-tra
 FH1's code and Colorado's game modes there are none: a drive along a closed road 1.3 km past the
 zones' edge went on without a reset or a wall.
 
+## One world: FH2's with Fast & Furious's docks (`tools/fh2ff_combine.py`)
+
+The big part of Fast & Furious's world that FH2 lacks is its docks. `fh2ff_combine.py` writes a
+third world folder, in the two games' own format, that is FH2's whole world with F&F's docks in
+it; `fh2ff_world.py build` then converts that folder as it converts either game's:
+
+    tools/fh2ff_combine.py FH2_DISC FF_DISC OUT_DISC
+    tools/fh2ff_world.py build OUT_DISC FH1_DISC UPDATE_MEDIA_ZIP OUT --fh2 FH2_DISC
+
+In the launcher: **Import FH2 + F&F docks…** on the Mods > FM4 tracks card asks for both games'
+folders and runs both steps (about 10 minutes); the world is kept as `fm4-tracks/fh2docks`.
+
+**Where the docks are.** The two worlds share a hex grid. F&F has zones in 24 cells FH2 has none
+in, and rebuilt 37 more round them, where FH2 has an older dock area of its own (a crane,
+warehouses and plain tanks on sand). In those 37 cells the two worlds share 8 to 30% of their
+placements; elsewhere 50 to 90%. The tool takes F&F's zone in the cells FH2 lacks and, growing
+out from them, in every neighbouring cell whose two zones are less than 40% alike (`--similar`):
+61 cells. FH2's zone stays everywhere else.
+
+**What is renumbered.** F&F's tables go after FH2's in the layout, and everything of F&F's that
+names one moves with them:
+- zones, models, instances and texture records; model, procedural geometry, texture, bundle,
+  zone and soundscape files by the number in their name;
+- procedural geometry (`.pgeo`, read with the FH2 prototype's PDB and checked on all 15,684 files
+  of both worlds): texture record numbers after the name, a scene's geometry file numbers, and a
+  Models file's layout instance numbers (in its model references' LOD lists);
+- bundles: their textures by record number (not by id), their own ids carrying on after FH2's
+  (an id is 0x10000001 + 2k);
+- a zone's file records: a zone's own resource number is the zone, FH2's other resources move
+  past the added zones, and a file both worlds name takes FH2's record **of the same type** (by
+  the file alone, a collision record took the numbers of FH2's preload record of that file, and
+  the game broke its stream list as the first added zone went live).
+
+**What is merged.** In the 61 cells: F&F's collision cells and shadow squares; F&F's collision
+objects (`CollObjs.xml`; its road-closure fences there are left out, with their instances) in
+place of FH2's; F&F's roads, joined to FH2's network where they cross the edge (3 places, each
+within a metre of an FH2 node). Round the 61 cells, FH2's zones lose FH2's old dock instances and
+procedural geometry and see F&F's docks as F&F's zone of the same cell does. The rest (lighting,
+races and arenas, map art) is FH2's; FH2's dock arenas' route files are byte for byte F&F's.
+
+**Checked** (the rig of the runs above): the dock road for 100 s, three more dock roads for 80 s
+each, FH2's coast road across the docks' edge for 200 s with traffic, and FH2's default road for
+150 s: no fault; the docks draw as in F&F's own world (ground, striped tanks, containers), and
+the map shows the dock roads. FH2 combined with itself over 22 cells also runs (a check that the
+renumbering alone changes nothing).
+
+**Not done:** F&F's lighting and its other changes outside the docks; a byte-identical texture
+in both worlds is stored twice (sharing FH2's record is a test switch: it faulted); bundles are
+stored uncompressed.
+
 ## Checked
 
 Windows 11, Radeon RX 9070 XT (AMD 26.10.1), Vulkan, the 0.3.2 build, offline, a fresh copy of

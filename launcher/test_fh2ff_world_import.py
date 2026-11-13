@@ -36,6 +36,10 @@ def fake_tool(calls, spawn=SPAWN):
     """A stand-in for tools/fh2ff_world.py build: writes what it writes."""
     def run(cmd, env, on_line, cancelled, cwd=None):
         calls.append((cmd, env))
+        if Path(cmd[1]).name == "fh2ff_combine.py":   # the combined world's folder, as the tool leaves it
+            ff_disc(Path(cmd[4]))
+            on_line("zones: 2798 base + 61 added")
+            return
         args = cmd[cmd.index("build") + 1:]
         out = Path(args[3])
         t = out / "fm4-tracks" / "anthem"
@@ -165,6 +169,29 @@ class World(WorldBase):
         self.assertTrue(any("Forza Horizon 2" in n for n in plan.notes))
         with self.assertRaises(fh2ffworld.Fh2ffError):
             self.import_world(key="fh2", src=self.t / "FF")  # F&F's files given as FH2's
+
+    def test_fh2_with_the_docks(self):
+        os.environ["FH2FF_COMBINE_TEST"] = "share"       # a test switch never reaches a player's import
+        self.addCleanup(os.environ.pop, "FH2FF_COMBINE_TEST", None)
+        msg, calls = self.import_world(fh2=self.t / "FF", key="fh2docks", src=self.t / "FH2")
+        (combine, env), (build, _) = calls
+        self.assertEqual(Path(combine[1]).name, "fh2ff_combine.py")
+        self.assertEqual(combine[2:4], [str(self.fh2), str(self.ff)])    # FH2 the base, F&F added
+        self.assertFalse([k for k in env if k.startswith("FH2FF_")])
+        self.assertEqual(build[build.index("build") + 1], combine[4])    # the world built from the combined one
+        self.assertEqual(build[build.index("--fh2") + 1], str(self.fh2))
+        self.assertIn("docks", msg)
+        info = fh2ffworld.installed(self.cfg, "fh2docks")
+        self.assertEqual((info["kind"], info["key"]), ("fh2docks", "fh2docks"))
+        self.assertFalse(list(fm4tracks.store(self.cfg).glob(".work-*")))
+        self.assertIn(("fh2docks", "Forza Horizon 2 + Fast & Furious docks (FH2 world, experimental)"),
+                      fm4tracks.choices(self.cfg))
+        self.assertNotIn("fh2docks", dict(fm4tracks.lap_circuits(self.cfg)))
+        fm4tracks.select(self.cfg, "fh2docks")
+        plan = self.plan(write=True)
+        self.assertEqual((plan.env["FORZA_FM4_COL"], plan.env["FORZA_TRACK_NO_TRAFFIC"]), ("0", "0"))
+        with self.assertRaises(fh2ffworld.Fh2ffError):
+            self.import_world(fh2=self.t / "FH2", key="fh2docks", src=self.t / "FH2")   # FH2 given as F&F
 
     def test_a_circuit_named_anthem_is_not_replaced(self):
         self.import_world()
