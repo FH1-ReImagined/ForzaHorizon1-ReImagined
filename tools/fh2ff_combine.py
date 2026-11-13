@@ -375,6 +375,8 @@ class Combined:
         if forced:
             (c0, c1), (r0, r1) = (tuple(int(v) for v in part.split("-")) for part in forced.split(","))
             self.region = {cell for cell in self.hexB if c0 <= cell[0] <= c1 and r0 <= cell[1] <= r1}
+        elif similar == "all":
+            self.region = set(self.hexB)
         elif similar:
             self.region = changed_region(self.hexA, self.hexB, zone_prints(self.A, self.hexA),
                                          zone_prints(self.B, self.hexB), similar)
@@ -866,8 +868,43 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
             if C.in_region((lo[0] + hi[0]) / 2, (lo[2] + hi[2]) / 2):
                 a_pgeo_drop.add(e)
 
+    # F&F's zones in the region are retired (no cell is theirs: written empty). The model and
+    # procedural geometry files only they used are left out (with every cell of FH2's taken,
+    # the two worlds' files are past the archive's 65,535), and F&F's entries numbered again.
+    az = {zone_uid(info): c for info, c in A.zones()}
+    retired = {uid for cell, uid in C.hexA.items() if cell in C.region}
+    a_ref, a_pg_inst = set(), set()
+    for uid, c in az.items():
+        if uid in retired:
+            continue
+        a_ref.update(f[3] for f in c["files"] + c.get("files2", []))
+        for m in list(c["models"]) + list(c.get("models2", [])) + [PA["instances"][v & 0x7FFFFFFF]["model"] for v in c["instances"]]:
+            if m in A.model_entry:
+                a_ref.add(A.model_entry[m])
+    todo = [e for e in a_ref if A.names[e].lower().endswith(".pgeo")]
+    while todo:
+        d = A.zip.read(A.info_of[todo.pop()])
+        pp = pgeo_parts(d)
+        if pp is None:
+            continue
+        for g in read_refs(d, pp["geo"]):
+            e = A.entry.get(f"__r00g{g:05d}.pgeo")
+            if e is not None and e not in a_ref:
+                a_ref.add(e)
+                todo.append(e)
+        for v in read_refs(d, pp["inst"], 4):
+            a_pg_inst.add(v)
+            m = PA["instances"][v]["model"]
+            if m in A.model_entry:
+                a_ref.add(A.model_entry[m])
+    prune = bool(retired) and "noprune" not in TESTS
+    a_old = [e for e, n in enumerate(A.names)
+             if not prune or e in a_ref or not n.lower().endswith((".rmb.bin", ".pgeo"))]
+    a_new = {e: k for k, e in enumerate(a_old)}
+    NA = len(a_old)
+    report_pruned = len(A.names) - NA
     # every file's combined name; FH2's that F&F's stands for map to F&F's name
-    names = list(A.names)
+    names = [A.names[e] for e in a_old]
     a_index = {n.lower(): k for k, n in enumerate(names)}
     b_to = {}                      # FH2 entry -> combined entry
     b_member = {}                  # combined entry (an FH2 file) -> FH2 entry
@@ -919,9 +956,13 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
 
     # F&F's own record ids and resource numbers of its files (for FH2's records that name them)
     a_res = {}
-    for _, c in A.zones():
+    for uid, c in az.items():
+        if uid in retired:
+            continue
         for f in c["files"] + c.get("files2", []):
-            a_res.setdefault((f[3], f[2]), (f[0], f[1]))
+            if f[3] in a_new:
+                a_res.setdefault((a_new[f[3]], f[2]), (f[0], f[1]))
+    OWN9 = len(A.names) + len(B.names)     # ids of FH2's preload records: past F&F's (its entries)
 
     # Resource numbers (a record's second field) in the combined world. Both worlds number a
     # zone's file resource as the zone (every type 1 record of F&F's 6,560 and FH2's 17,332),
@@ -933,9 +974,13 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
     NBZ = len(C.b_zones)
     B_RES = C.RES + NBZ
 
-    def a_record(f):
+    def a_record(f, new=False):
+        """F&F's record in the combined world (None: its file is left out); new: its entry is
+        the combined one already."""
         own, res, kind, e = f
-        return (own, own if kind == ZONE else res + NBZ, kind, e)
+        if not new:
+            e = a_new.get(e)
+        return None if e is None else (own, own if kind == ZONE else res + NBZ, kind, e)
 
     def b_record(f):
         own, res, kind, e = f
@@ -948,15 +993,17 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
             # FH2's zones preload their neighbours' files (models, procedural geometry, collision,
             # shadows, soundscapes; their own id is the file's number): kept, renumbered. Left
             # out, FH1 corrupted its memory streaming them in (lr 82C12C10).
-            return (ne, res + B_RES, kind, ne)
-        if ne < len(A.names):    # F&F's file: F&F's numbers
+            if (ne, kind) in a_res:
+                return a_record((*a_res[(ne, kind)], kind, ne), new=True)
+            return (OWN9 + ne, res + B_RES, kind, ne)
+        if ne < NA:    # F&F's file: F&F's numbers
             if kind == FIZ:
                 own = int(names[ne].split(".")[0])
             # F&F's own record of this file of the same type. (By the file alone, FH2's base
             # gave a collision record the numbers of a preload record of the same file, whose
             # id is the file's entry: the game broke its stream list as the zone went live.)
             if (ne, kind) in a_res:
-                return a_record((*a_res[(ne, kind)], kind, ne))
+                return a_record((*a_res[(ne, kind)], kind, ne), new=True)
             return (own, res + B_RES, kind, ne)
         if kind in (ZONE, SOUNDSCAPE):
             own = C.zone_new.get(own, own)
@@ -977,9 +1024,10 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
     if len(PA["instances"]) + len(b_used) <= 0xFFFF:
         a_used = set(range(len(PA["instances"])))
     else:
-        a_used = set()
-        for _, c in A.zones():
-            a_used.update(v & 0x7FFFFFFF for v in c["instances"])
+        a_used = set(a_pg_inst)
+        for uid, c in az.items():
+            if uid not in retired:
+                a_used.update(v & 0x7FFFFFFF for v in c["instances"])
     a_inst = {v: k for k, v in enumerate(sorted(a_used))}
     a_whole = len(a_inst) == len(PA["instances"])
     b_inst = {v: len(a_inst) + k for k, v in enumerate(sorted(b_used))}
@@ -1014,17 +1062,21 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
         return out
     report["base zones' neighbour entries now the region's"] = 0
 
+    a_pgeo_new = {a_new[e] for e in a_pgeo_drop if e in a_new}
+
     def a_zone(c, uid):
         """F&F's zone: its instances renumbered; round the region, its own instances and
         procedural geometry standing in the region out and FH2's region (as FH2's zone of the
         cell sees it) in, with their models and textures; the region's zones its neighbours."""
-        if az_cell.get(uid) in C.region:   # replaced: no cell is its, its numbers kept consistent
-            return dict(c, instances=[(v & 0x80000000) | a_inst[v & 0x7FFFFFFF] for v in c["instances"]],
-                        files=[a_record(f) for f in c["files"]],
-                        **({"files2": [a_record(f) for f in c["files2"]]} if "files2" in c else {}))
-        c = dict(c, files=a_neighbours([a_record(f) for f in c["files"]]),
-                 **({"files2": a_neighbours([a_record(f) for f in c["files2"]])} if "files2" in c else {}))
-        if "noseam" in TESTS:
+        if uid in retired:               # replaced: no cell is its; an empty zone
+            return {k: [] for k in c}
+
+        def mine(files):
+            return a_neighbours([r for r in (a_record(f) for f in files) if r])
+        c = dict(c, files=mine(c["files"]), **({"files2": mine(c["files2"])} if "files2" in c else {}))
+        # a zone in a cell FH2 has no zone in keeps F&F's own view of the region (FH2's zones
+        # see it from their own cells only): it changes to FH2's at the region's edge
+        if "noseam" in TESTS or az_cell.get(uid) not in C.hexB:
             return dict(c, instances=[(v & 0x80000000) | a_inst[v & 0x7FFFFFFF] for v in c["instances"]])
         keep = region_part(PA, c, False)
         report["base instances in the region left out of zones round it"] += len(c["instances"]) - len(keep)
@@ -1034,7 +1086,7 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
         out["placements"] = [c["placements"][k] for k in keep]
         for key in ("files", "files2"):
             if key in c:
-                out[key] = [f for f in c[key] if not (f[2] == PGEO and f[3] in a_pgeo_drop)]
+                out[key] = [f for f in c[key] if not (f[2] == PGEO and f[3] in a_pgeo_new)]
                 report["base procedural geometry entries left out"] += len(c[key]) - len(out[key])
         if uid in seen_from:
             bc, ks = seen_from[uid]
@@ -1113,8 +1165,8 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
     wr = ff.TrackZipWriter(os.path.join(out_root, "bin.zip"))
     try:
         for k, n in enumerate(names):
-            if k < len(A.names):
-                info = A.info_of[k]
+            if k < NA:
+                info = A.info_of[a_old[k]]
                 if os.environ.get("FH2FF_COMBINE_SHADERS") == "fh2" and n.lower().endswith(".fxobj")                         and n.lower() in B.entry:                      # a test: FH2's shader files
                     bi = B.info_of[B.entry[n.lower()]]
                     wr.add_raw(info.filename, bi, B.zip.raw(bi))
@@ -1231,6 +1283,8 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
     return {"zones": f"{len(PA['zones'])} base + {len(C.b_zones)} added", "files": len(names),
             "models": len(models), "textures": len(textures), "added textures that are the base's": C.twins,
             "bundles": f"{len(bundle_data)} named, {sum(1 for d in bundle_data.values() if d is None)} left out",
+            "base files left out (only retired zones used them)": report_pruned,
+            "instances": len(instances),
             "region": f"{len(C.region)} cells, {sum(1 for c in C.region if c in C.hexA)} of the base's replaced",
             "collision cells": struct.unpack_from(">I", col, 0x4C)[0],
             "shadow squares the region's": len(sh_take),
@@ -1241,11 +1295,14 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
 def main(argv):
     args = list(argv[1:])
     similar = SIMILAR
+    if "--all" in args:               # the added world's zone in every cell it has one
+        args.remove("--all")
+        similar = "all"
     if "--similar" in args:
         k = args.index("--similar")
         similar = float(args[k + 1])
         del args[k:k + 2]
-    if len(args) != 3 or not 0 <= similar <= 1:
+    if len(args) != 3 or not (similar == "all" or 0 <= similar <= 1):
         print(__doc__)
         return 2
     for key, value in combine(*args, similar=similar).items():
