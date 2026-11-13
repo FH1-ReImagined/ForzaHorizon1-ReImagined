@@ -85,6 +85,121 @@ int main() {
   Check(cpf::PartName(42) == "MotorParts", "MotorParts");
   Check(cpf::PartName(43).empty(), "no name past the table");
 
+  // The parts every car, engine, drivetrain and car body has a stock row of (both databases).
+  for (uint32_t type : {0u, 1u, 2u, 4u, 11u, 12u, 20u, 23u, 30u, 33u, 34u, 41u}) {
+    Check(cpf::Required(type), "a required part");
+  }
+  for (uint32_t type : {3u, 21u, 22u, 24u, 25u, 26u, 27u, 28u, 29u, 42u, 43u}) {
+    Check(!cpf::Required(type), "an optional part (motor, manifold, restrictor, turbos)");
+  }
+
+  // #862: the RUF Yellowbird (1516) with a drivetrain part the database doesn't have; its
+  // drivetrain parts were given DrivetrainID 2147483647, the empty record's value.
+  Check(cpf::ParentType(Creator::kDrivetrain) == 1 && cpf::ParentType(Creator::kEngine) == 0 &&
+            cpf::ParentType(Creator::kCarBody) == 2 && cpf::ParentType(Creator::kMotor) == 3,
+        "the car-level part of each sub-part creator");
+  Check(cpf::ParentSql(Creator::kDrivetrain, 2147483647) ==
+            "SELECT Id FROM List_UpgradeDrivetrain WHERE DrivetrainID=2147483647 LIMIT 1",
+        "the parent's row");
+  Check(cpf::ParentSql(Creator::kCar, 1516).empty(), "the car's own parts have no parent part");
+  Check(cpf::CarParentSql(Creator::kDrivetrain, 1516) ==
+            "SELECT DrivetrainID FROM List_UpgradeDrivetrain WHERE Ordinal=1516 AND IsStock=1 "
+            "ORDER BY Id LIMIT 1",
+        "the car's stock drivetrain");
+  Check(cpf::CarParentSql(Creator::kEngine, 788) ==
+            "SELECT EngineID FROM List_UpgradeEngine WHERE Ordinal=788 AND IsStock=1 ORDER BY Id "
+            "LIMIT 1",
+        "the car's stock engine");
+  Check(cpf::CarParentSql(Creator::kCarBody, 1516).find("SELECT CarBodyID FROM "
+                                                        "List_UpgradeCarBody WHERE Ordinal=1516") == 0,
+        "the car's stock car body");
+  Check(cpf::CarParentSql(Creator::kCar, 1516).empty(), "no car parent for the car's parts");
+
+  Check(cpf::UseCarParent(Creator::kDrivetrain, 30, false), "unknown drivetrain: the car's");
+  Check(cpf::UseCarParent(Creator::kDrivetrain, 33, true), "a drivetrain without a differential");
+  Check(cpf::UseCarParent(Creator::kEngine, 25, false), "a turbo of an unknown engine");
+  Check(!cpf::UseCarParent(Creator::kEngine, 25, true), "an engine without a twin turbo has none");
+  Check(cpf::UseCarParent(Creator::kEngine, 12, true), "an engine without a camshaft");
+  Check(!cpf::UseCarParent(Creator::kCar, 1, false), "the car's parts: by the car");
+  Check(!cpf::UseCarParent(Creator::kDrivetrain, 12, false), "not the creator's type");
+
+  // The log lines. #836's stay as docs/modding.md quotes them.
+  cpf::Outcome o;
+  o.car = 1398;
+  o.creator = Creator::kDrivetrain;
+  o.type = 30;
+  o.part = 3000;
+  o.parent = o.used_parent = 806;
+  o.found = true;
+  o.replacement = 806000;
+  Check(cpf::Describe(o) == "Car 1398: its Clutch part 3000 doesn't belong to its DrivetrainID "
+                            "806: loaded with the stock part 806000 instead (#836)",
+        "#836's line");
+  o.creator = Creator::kEngine;
+  o.type = 25;
+  o.part = 1000;
+  o.parent = o.used_parent = 788;
+  o.found = false;
+  o.replacement = cpf::kNoPart;
+  Check(cpf::Describe(o) == "Car 1398: its TurboTwin part 1000 doesn't belong to its EngineID "
+                            "788, which has no stock TurboTwin: loaded without one (#836)",
+        "no stock turbo");
+  o.made = false;
+  Check(cpf::Describe(o).find("loaded without one, which failed too (#836)") != std::string::npos,
+        "a retry that failed too");
+
+  cpf::Outcome drivetrain;
+  drivetrain.car = drivetrain.parent = drivetrain.used_parent = 1516;
+  drivetrain.creator = Creator::kCar;
+  drivetrain.type = 1;
+  drivetrain.part = 1516001;
+  drivetrain.missing = true;
+  drivetrain.found = true;
+  drivetrain.replacement = 1516000;
+  Check(cpf::Describe(drivetrain) == "Car 1516: its Drivetrain part 1516001 is not in the game's "
+                                     "database: loaded with the stock part 1516000 instead (#862)",
+        "a drivetrain the database doesn't have");
+
+  cpf::Outcome clutch;
+  clutch.car = 1516;
+  clutch.creator = Creator::kDrivetrain;
+  clutch.type = 30;
+  clutch.part = 842003;
+  clutch.parent = 2147483647;
+  clutch.parent_known = false;
+  clutch.used_parent = 923;
+  clutch.found = true;
+  clutch.replacement = 923000;
+  Check(cpf::Describe(clutch) ==
+            "Car 1516: its Clutch part 842003 doesn't belong to its DrivetrainID 2147483647, which "
+            "is not in the game's database: loaded with the stock part 923000 of the car's "
+            "DrivetrainID 923 instead (#862)",
+        "#862's clutch, from the car's own drivetrain");
+  clutch.parent_known = true;
+  clutch.parent = 842;
+  Check(cpf::Describe(clutch).find("DrivetrainID 842: loaded with the stock part 923000 of the "
+                                   "car's DrivetrainID 923 instead (#862)") != std::string::npos,
+        "a drivetrain without a stock clutch");
+  clutch.parent_known = false;
+  clutch.parent = 2147483647;
+  clutch.found = false;
+  clutch.used_parent = clutch.parent;
+  clutch.replacement = cpf::kNoPart;
+  Check(cpf::Describe(clutch).find("which is not in the game's database: loaded without one (#862)") !=
+            std::string::npos,
+        "no car to take the part from");
+
+  cpf::Outcome missing_clutch = clutch;
+  missing_clutch.parent = missing_clutch.used_parent = 923;
+  missing_clutch.parent_known = true;
+  missing_clutch.missing = true;
+  missing_clutch.part = 923099;
+  missing_clutch.found = true;
+  missing_clutch.replacement = 923000;
+  Check(cpf::Describe(missing_clutch) == "Car 1516: its Clutch part 923099 is not in the game's "
+                                         "database: loaded with the stock part 923000 instead (#862)",
+        "a clutch the database doesn't have");
+
   std::puts("car_part_fallback_test: ok");
   return 0;
 }

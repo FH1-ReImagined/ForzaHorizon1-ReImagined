@@ -124,6 +124,30 @@ Leaderboard screens, Windows and Steam Deck are not scripted: a hand run in the 
 
 ## Status log
 
+- 2026-11-12: **A car part the game's database doesn't have loads as the stock part (#862).**
+  After the #836 fix, a player's RUF Yellowbird (1516) hung after START: every drivetrain
+  part logged "doesn't belong to its DrivetrainID 2147483647, which has no stock ...: loaded
+  without one". The loader (TU4 `sub_82CB4500`) reads DrivetrainID and CarBodyID from the
+  Drivetrain and CarBody records without checking that they have a row, and a record whose
+  part id matches no row (a removed mod's drivetrain swap) reads 2147483647 for any column.
+  No drivetrain part matched that parent, it has no stock parts, and the car loaded without a
+  clutch, gearbox, driveline and differential. A part from another car was already handled:
+  its creator returns NULL and #836 retries with the stock part. Now
+  `src/hooks/car_part_fallback.cpp` also replaces an empty record (row count 0) of a part
+  every car has (`Required`: types 0-2, 4-20, 23, 30-41, a stock row for every car, engine,
+  drivetrain and car body in the disc and TU4 databases) with the stock part. A sub-part whose
+  parent is not in the database, or has no stock part of a required kind, takes the stock part
+  of the car's own stock parent. Measured on the TU4 build with copies of golden-save-tu4,
+  offline, on the Aventador (1398): Drivetrain 1398001 (no row) with clutch, transmission and
+  driveline 842003 and differential 842000, the player's set. Without the change the log shows
+  the player's four lines and the game stays on a grey screen with the speedometer after
+  SINGLE PLAYER. With it, one #862 line for the drivetrain (stock 1398000), four #836 lines
+  (stock 806000), free roam, and the car drives up to about 175 km/h. A build without the
+  empty-record step logs the sub-parts as "loaded with the stock part 806000 of the car's
+  DrivetrainID 806", and the car drives too. The #836 cases (clutch 3000; transmission,
+  camshaft, hood and brakes; a foreign engine with a foreign twin turbo; another car's
+  drivetrain 1434000) log as before and drive. An intact save logs no fallback line.
+
 - 2026-11-12: **A garage car with another car's part loads with the stock part (#836).**
   When a save's current car has a part from another car, START on the title screen ended
   the game with exit code 134. A mod's database or a save edit had put the part there; the
