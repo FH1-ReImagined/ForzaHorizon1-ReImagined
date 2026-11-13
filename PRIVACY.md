@@ -2,7 +2,7 @@
 
 This policy covers Forza Horizon 1: ReImagined: the Windows installer, the Linux packages, the launcher, the game the launcher builds on your PC, the project's public Forza Live server, and the project website, forza.dyotson.dev, with its optional website accounts. It says what is sent over the network, when, where it goes, what is stored and for how long, what is public, and how to turn each thing off.
 
-Last updated: 2026-11-11. Every change to this policy is a change to this file, so its history on GitHub lists them: https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/commits/main/PRIVACY.md
+Last updated: 2026-11-13. Every change to this policy is a change to this file, so its history on GitHub lists them: https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/commits/main/PRIVACY.md
 
 ## In short
 
@@ -19,8 +19,8 @@ Last updated: 2026-11-11. Every change to this policy is a change to this file, 
 - When you play online, the server receives your gamertag, a random player ID (your XUID) and your IP addresses. Other players see your gamertag and XUID, and the server gives the players in your room your IP addresses so that their games can connect to yours.
 - Traffic to the game server is not encrypted. That includes chat messages. Your keys are not sent: the game and the launcher sign their requests with your signing key, and the server keeps only its public key. The one exception is your friends key from older versions, which the game sends once to the public server to move your account to the signing key.
 - The public server keeps most records with no time limit. Its status page and leaderboards are public.
-- Website accounts are optional, and you don't need one to play. If you make one (with Discord, GitHub or an email address), the website stores an account id, a number from Discord or GitHub or a one-way hash of your email address, and your sign-ins. It uses one sign-in cookie and one security cookie, and has no analytics, tracking or advertising. You can link the account to your game from the launcher; a linked account can like community photos and designs and delete your own. You can unlink it or delete the account at any time. See "The website and website accounts".
-- What you choose to share is public: a photo mode **Big Shot** you upload is published on the project website with your gamertag, and paint jobs and vinyl groups you share on the storefront can be found, downloaded and rated by other players in the game, with their previews shown on the project website. They carry your player ID (the one the leaderboards publish) and their like totals, and the website has a page for each player that shows them together. Your XUID is not published with them.
+- Website accounts are optional, and you don't need one to play. If you make one (with Discord, GitHub or an email address), the website stores an account id, a number from Discord or GitHub or a one-way hash of your email address, and your sign-ins. It uses one sign-in cookie and one security cookie, and has no analytics, tracking or advertising. You can link the account to your game from the launcher; a linked account can like community photos, videos and designs and delete your own. You can unlink it or delete the account at any time. See "The website and website accounts".
+- What you choose to share is public: a photo mode **Big Shot** you upload is published on the project website with your gamertag, and paint jobs and vinyl groups you share on the storefront can be found, downloaded and rated by other players in the game, with their previews shown on the project website. They carry your player ID (the one the leaderboards publish) and their like totals, and the website has a page for each player that shows them together. Your XUID is not published with them. A movie you upload from the game is published on the project website's videos page in the same way, once it has been checked.
 
 ## Who is involved
 
@@ -144,7 +144,7 @@ While "Sign in to Xbox LIVE" is on (the default), the game also:
 - sends the chat messages you write, the list of sessions you are in, and the content your game has that changes which cars exist: the numbers of the DLC packs installed and the names of the mods you loaded that change cars or the game database (not your other mods). The server compares it with the players in your session and tells you, and them, what you do not share, because a car that one game lacks looks like a plain placeholder in the other. It is kept in memory only, never written to disk, and shared only with the players of your session as that notice, and asks the server every 10 seconds which car club you are in;
 - in Horizon World free roam, sends your car's in-game position, heading and speed four times a second, for head-to-head challenges (Online > Online > "Head-to-head challenges" turns this off);
 - sends an invite only when you send one ("Show game invites" controls whether invites from others are shown to you);
-- uses the server's title services over plain HTTP: sign-in (gamertag and career level), profile progress (XP, credits, race history), race scores and lap times, Rivals ghost replays, photos you upload or share (image, preview, title, description), photo mode Big Shots you upload (a 3840x2160 picture and its file name), paint jobs and vinyl groups you share on the storefront (the design, its preview, title, description and keywords, and the car it is for), car clubs and the cars shared in them, auctions and gifts, and Message Center checks. Each of these requests carries your XUID, a signature made with your signing key (not the key itself) and the version of the game that sends it (for example 0.2.1/tu4).
+- uses the server's title services over plain HTTP: sign-in (gamertag and career level), profile progress (XP, credits, race history), race scores and lap times, Rivals ghost replays, photos you upload or share (image, preview, title, description), photo mode Big Shots you upload (a 3840x2160 picture and its file name), movies you upload (the clip, with the title, car and track the game gives it, and your gamertag as the game writes it), paint jobs and vinyl groups you share on the storefront (the design, its preview, title, description and keywords, and the car it is for), car clubs and the cars shared in them, auctions and gifts, and Message Center checks. Each of these requests carries your XUID, a signature made with your signing key (not the key itself) and the version of the game that sends it (for example 0.2.1/tu4).
 
 None of this traffic is encrypted.
 
@@ -207,6 +207,7 @@ Records are kept by XUID.
 - Skill stats: rating and number of games, with gamertag. No time limit.
 - Photos you upload: image, preview, title, description and time, up to 100 per player. You can remove shared photos in the game, and the oldest can be replaced. No time limit.
 - Community photos (Big Shots), only from games that sign their requests: a 1920x1080 copy of the picture, with your gamertag at the time, the upload time and your XUID (kept private, to apply limits and bans). The 3840x2160 original is not kept. Up to 10 a day and 200 in total per player. The copy is kept until you delete it from your account page on the website (with an account linked to your game) or the maintainer removes it; to have a photo removed otherwise, see "Contact". New photos may be checked automatically for nudity, violence or hate symbols before they are published; that check runs on the server and sends the picture nowhere else.
+- Community videos (movies you upload), only from games that sign their requests: an MP4 copy of the clip (at most 1280 pixels wide and 2 minutes), a poster and a few frames from it, with your gamertag at the time, the clip's title, the upload time and your XUID (kept private, to apply limits and bans). The copy carries none of the clip's own tags (title, car, track, driver); the uploaded clip itself is kept as one of your files, like the photos you upload (above), and is not published. Up to 5 a day and 50 in total per player. The copy is kept until you delete it from your account page on the website (with an account linked to your game) or the maintainer removes it; to have a video removed otherwise, see "Contact". Every video is checked before it is published: frames from it are checked automatically for nudity, violence or hate symbols on the server, which sends them nowhere else, and a video with a doubtful frame is not published. The sound is not checked.
 - Shared designs (paint jobs and vinyl groups): the design, its preview, title, description, keywords, car, share code, your XUID (private) and gamertag, the time, its downloads and ratings, and which players reported it. Up to 25 of each kind per player. The design itself contains your XUID, so it is only given to players who download it in the game, never published elsewhere. You can remove a design in the game (REMOVE in MY SHARED DESIGNS) or from your account page on the website; a design reported by three players is hidden. No time limit.
 - Car clubs, auctions and gifts: club memberships, roles and history, shared cars, auction listings and bids, and gifts with their messages. No time limit. The server uses your club membership to deliver your Club chat messages, to show your clubmates (by gamertag, with `/club`) that you are online and, in the same room, whether you are in a Horizon World or Co-op Festival world and how many players it has, and to offer you a Horizon World with a clubmate first when you search. Players who have blocked each other don't see each other this way.
 - Message Center notifications: removed when you clear them. After 30 days they are no longer shown, but they are not deleted.
@@ -230,7 +231,7 @@ The project website, forza.dyotson.dev, is static pages, plus an accounts servic
 
 - The website's web server logs each request: your IP address, the time, the page or file (without anything after a "?"), the result and your browser's User-Agent. These logs are kept for 14 days.
 - The pages load nothing from other sites, and there are no analytics, tracking or ads.
-- Only the account page talks to the accounts service, and, once you have signed in on that browser, the photo and design pages, which ask it which photos and designs your game liked and for the current like totals. The pages remember in your browser (localStorage, key fh-signed-in) whether you signed in, so that the menu can say "Account" and only a signed-in visitor's pages call the service. That value never leaves your browser. Every other visitor's pages load nothing from the accounts service.
+- Only the account page talks to the accounts service, and, once you have signed in on that browser, the photo, video and design pages, which ask it which photos, videos and designs your game liked and for the current like totals. The pages remember in your browser (localStorage, key fh-signed-in) whether you signed in, so that the menu can say "Account" and only a signed-in visitor's pages call the service. That value never leaves your browser. Every other visitor's pages load nothing from the accounts service.
 
 ### Website accounts (optional)
 
@@ -243,7 +244,7 @@ What the website stores about an account:
 - the numeric Discord or GitHub id, or the hash of the email address;
 - your sign-in sessions. A session ends 30 days after you last used it, 90 days after the sign-in, or when you sign out. An account keeps at most 20;
 - while you sign in: the emailed code or the Discord or GitHub sign-in in progress, in your browser's session, for at most 10 minutes;
-- recent activity: sign-ins, sign-outs, when the account was made, when a game was linked, moved or unlinked (with that game's gamertag), and photos and designs you deleted (with their title), without IP addresses. It is shown on your account page and kept for 90 days;
+- recent activity: sign-ins, sign-outs, when the account was made, when a game was linked, moved or unlinked (with that game's gamertag), and photos, videos and designs you deleted (with their title), without IP addresses. It is shown on your account page and kept for 90 days;
 - to slow down abuse, the accounts service counts sign-in attempts and code requests for each IP address and each email hash. Those counts are kept for an hour or a day.
 
 Cookies, set only when you use the account page:
@@ -254,7 +255,7 @@ Neither is used for tracking or shared with anyone.
 
 ### Linking your game
 
-Linking makes your game key the account's second factor: the website's features for players (likes, deleting your own photos and designs, and later uploads) need a linked game. You start a link in the launcher (Online > Online > Website account), sign in on the website page it shows (in its own window or in your browser) and click Link there, then confirm the website account's id in the launcher. Both sides have to approve, so nobody can link your game to their account, or their game to yours, without you.
+Linking makes your game key the account's second factor: the website's features for players (likes, deleting your own photos, videos and designs, and later uploads) need a linked game. You start a link in the launcher (Online > Online > Website account), sign in on the website page it shows (in its own window or in your browser) and click Link there, then confirm the website account's id in the launcher. Both sides have to approve, so nobody can link your game to their account, or their game to yours, without you.
 
 What a link stores:
 - your XUID, the public half of your signing key (never the key itself), your gamertag (shown on your account page), and when the link was made and moved;
@@ -272,19 +273,19 @@ What is not stored: passwords (there are none), your email address, your Discord
 Who can see it: an account is not public. No page shows your account id, sign-in method, Discord or GitHub id, anything about your email address, which game is linked to which account, or what you liked. Your account page shows your own account, and the gamertag of your linked game, only to you. The website never shows your XUID. The launcher of the linked game sees the account's id, sign-in method and creation day.
 
 Deleting:
-- On the account page, "Delete my account" deletes the account, its sign-in methods, sessions, activity, game link and your game's likes at once (it asks you to have signed in within the last 10 minutes). Your photos and designs belong to your game and stay; delete them on the account page first if you want them gone.
+- On the account page, "Delete my account" deletes the account, its sign-in methods, sessions, activity, game link and your game's likes at once (it asks you to have signed in within the last 10 minutes). Your photos, videos and designs belong to your game and stay; delete them on the account page first if you want them gone.
 - Accounts unused for 30 days that are not linked to a game are deleted automatically, and so is an email account whose first code was never used, after a day.
 - The server's backups of the accounts database are kept for 7 days, so a deleted account is gone from them a week later.
 
-### Likes, and your own photos and designs
+### Likes, and your own photos, videos and designs
 
-With a linked account you can like community photos and designs on the website (one like per photo or design, never your own), and see and delete your own on the account page.
+With a linked account you can like community photos, videos and designs on the website (one like per photo, video or design, never your own), and see and delete your own on the account page.
 
-- A like is stored with your game's XUID (not the website account: a like stays one like if you move the link to another account), the photo or design, and the time.
+- A like is stored with your game's XUID (not the website account: a like stays one like if you move the link to another account), the photo, video or design, and the time.
 - Only the total for each photo and design is public, on the website and in the accounts service's public totals. Who liked what is never shown, to anyone.
 - Your likes count in the public totals once your game first signed in to the public server with its key at least 72 hours ago, and has signed in on at least 2 different days. Until then they are stored and not counted. They are not counted while the link is unlinked or on hold, or while your XUID is banned.
-- To show your photos and designs, and which can be liked, the accounts service reads, without changing anything, the public game server's records of the community photos and shared designs and who owns them.
-- On the account page you see your game's photos and designs in every state (on the website, waiting for the automatic check, held, hidden) with their likes, and can delete them (after a sign-in in the last 10 minutes). The accounts service asks the game server to delete the photo or design, which checks again that it is yours. A deleted photo can be uploaded again; a deleted design leaves the game's storefront too. Its likes are deleted with it, and it leaves the website at the next update of the pages (within about an hour).
+- To show your photos, videos and designs, and which can be liked, the accounts service reads, without changing anything, the public game server's records of the community photos, community videos and shared designs and who owns them.
+- On the account page you see your game's photos, videos and designs in every state (on the website, waiting for the automatic check, held, hidden) with their likes, and can delete them (after a sign-in in the last 10 minutes). The accounts service asks the game server to delete the photo, video or design, which checks again that it is yours. A deleted photo can be uploaded again; a deleted design leaves the game's storefront too. Its likes are deleted with it, and it leaves the website at the next update of the pages (within about an hour).
 - A like can be taken back with the same button. Deleting the account deletes your game's likes. Unlinking keeps them stored but not counted, until your game is linked again.
 
 ## What is public
@@ -300,6 +301,7 @@ With a linked account you can like community photos and designs on the website (
 - Shared designs on the project website's designs page (https://forza.dyotson.dev/designs.html): the preview, title, description, share code, car, downloads and rating, your gamertag and player ID, and the design's like total, once the design has passed the automatic check. The design itself and your XUID are not published.
 - Player pages on the project website (forza.dyotson.dev/profile.html?p=<player ID>): your gamertag, your community photos and shared designs that are on the website, and their like totals. Only what the photo and design pages already show; nothing about a website account.
 - Community photos (Big Shots you upload): the 1920x1080 copy, your gamertag, your player ID (the one the leaderboards publish, made from your XUID and a secret) and the upload time, in the server's public gallery feed and on the project website's photo pages, with the photo's like total on the website, for as long as the photo is kept.
+- Community videos (movies you upload): the MP4 copy and its poster, your gamertag, your player ID and the upload time, in the server's public videos feed and on the project website's videos page, with the video's like total on the website, for as long as the video is kept.
   - in the car club invite list, the gamertag, XUID, career level and online XP of every player who has signed in to the server and is not in a club.
 - The published shader list, which contains no player IDs.
 - The daily and weekly challenges (/challenges on the same address): the objectives and how many players finished each, with no names or player IDs.
@@ -324,8 +326,8 @@ With a linked account you can like community photos and designs on the website (
 - Website accounts: don't make one. To end one: "Sign out" or "Sign out everywhere" on the account page, or "Delete my account" there.
 - The website account link: don't link. To end it: "Unlink" in Online > Online > Website account, or on the account page.
 - Likes: don't like, or take a like back with the same button. Deleting the website account deletes your game's likes.
-- Your community photos and shared designs on the website: delete them on the account page (with an account linked to your game), or remove a design in the game.
+- Your community photos, videos and shared designs on the website: delete them on the account page (with an account linked to your game), or remove a design in the game.
 
 ## Contact
 
-You can delete your website account, and your community photos and shared designs, yourself on the account page (forza.dyotson.dev/account.html). For questions or corrections, or to ask for your records on the public server to be removed, open an issue at https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/issues. Issues are public. Include your gamertag, but never post your friends key, your signing key or the contents of live_identity.txt.
+You can delete your website account, and your community photos, videos and shared designs, yourself on the account page (forza.dyotson.dev/account.html). For questions or corrections, or to ask for your records on the public server to be removed, open an issue at https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/issues. Issues are public. Include your gamertag, but never post your friends key, your signing key or the contents of live_identity.txt.
