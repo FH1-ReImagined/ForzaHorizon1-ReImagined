@@ -111,6 +111,17 @@ int main() {
   call.vertex_bytes = 4096;
   CHECK(ns::BuildRecord(dev.data(), call, false, 0, out.data()) == ns::kMaxRecordWords);
 
+  // M3: a native blur's record carries its flags with the seed and vertex-data bits, and the
+  // flag values are the plugin's (ReIGlue fh1_host_packet.h, 0630).
+  CHECK(ns::kRecordNative == 4 && ns::kRecordBlur == 8 && ns::kRecordMaskResolve == 16 &&
+        ns::kRecordBlurKindShift == 8 && ns::kIslandNative == 2 && ns::kStatusShadowMaskBlur == 1);
+  call.vertex_data = reinterpret_cast<const uint8_t*>(quad);
+  call.vertex_bytes = sizeof(quad);
+  call.flags = ns::kRecordNative | ns::kRecordBlur | (3u << ns::kRecordBlurKindShift);
+  ns::BuildRecord(dev.data(), call, true, 1, out.data());
+  CHECK(Host(out.data(), 10) == (ns::kRecordSeed | ns::kRecordVertexData | ns::kRecordNative |
+                                 ns::kRecordBlur | (3u << ns::kRecordBlurKindShift)));
+
   std::puts("native shadow record: ok");
   return 0;
 }

@@ -17,6 +17,14 @@
 // a native blur computes from the records (ReIGlue 0620). In shadow mode every flush point is
 // also counted, a frame; off, a hook is one load and one branch before the original call.
 //
+// M3, native_render=hybrid: the same records, and the shadow mask's blurs and the mask's resolves
+// after them are not made as D3D calls: their records (kRecordNative) ask the plugin to draw them
+// (ReIGlue 0630). The blur hook (shadow_filter.cpp) decides it at the group's first blur, before
+// any call is skipped: only while the plugin's status word (written at each group's begin) says
+// it can draw them with the current settings, with world AO off (its apply draw lives in the
+// blur's render pass) and for a blur quad that covers the screen (the no-sun path blurs a zeroed
+// one after a clear, and the world pass's resolve must copy that clear).
+//
 // tu_address_map: TU4 addresses
 
 #include "native_device.h"
@@ -42,9 +50,13 @@
 #include <string>
 
 REXCVAR_DEFINE_STRING(native_render, "off", "Display",
-                      "Testing (native renderer): off, or shadow (the host device layer records "
+                      "Testing (native renderer): off; shadow (the host device layer records "
                       "the shadow mask's passes and the GPU plugin compares them with the "
-                      "emulated ones; nothing drawn changes)");
+                      "emulated ones; nothing drawn changes); or hybrid (also draws the groups "
+                      "of passes switched on below natively)");
+REXCVAR_DEFINE_BOOL(native_shadow_mask, true, "Display",
+                    "Testing (native_render=hybrid): the shadow mask's blurs and their resolves "
+                    "drawn natively by the GPU plugin");
 REXCVAR_DEFINE_INT32(native_shadow_compare_every, 60, "Display",
                      "Testing (native_render=shadow): compare the shadow mask's contents with a "
                      "native result every N groups of passes (0: never)");
@@ -55,6 +67,7 @@ REXCVAR_DEFINE_BOOL(native_shadow_seed_every_record, false, "Display",
 namespace forza::native_device {
 
 std::atomic<bool> g_shadow_mode{false};
+std::atomic<bool> g_hybrid{false};
 
 }  // namespace forza::native_device
 
@@ -133,6 +146,9 @@ uint64_t PointCalls(uint32_t point) {
 struct Totals {
   std::atomic<uint64_t> islands{0}, records{0}, written{0}, unwritten{0}, seeds{0}, words{0},
       not_device{0}, make_space{0}, record_ns{0}, frames{0};
+  // M3: groups drawn natively, calls skipped, groups the game drew itself and why.
+  std::atomic<uint64_t> native_islands{0}, skipped{0}, unexpected{0}, by_status{0}, by_ao{0},
+      by_quad{0}, by_switch{0};
 };
 Totals totals;
 
@@ -153,6 +169,8 @@ struct Packets {
 // The group of passes being recorded, on the render thread.
 struct Island {
   bool open = false, begun = false, need_seed = true, compare = false;
+  // M3: the native decision was made (at the first blur), its result, a blur was made.
+  bool decided = false, native = false, blurred = false;
   uint32_t id = 0, dev = 0, index = 0, written = 0, unwritten = 0;
   uint32_t calls[ns::kKindCount] = {};
   Packets now;
@@ -168,6 +186,9 @@ Island& CurrentIsland() {
   return *island;
 }
 thread_local int t_depth = 0;
+// M3: inside a blur call of the mask (its kind) or a resolve of the mask after the first blur.
+thread_local int t_blur_kind = -1;
+thread_local bool t_mask_resolve = false;
 // The shader literal constants the flush being recorded loads (LOAD_ALU_CONSTANT, sub_82441B80):
 // guest address, first word from register 0x4000, words.
 struct LiteralLoads {
@@ -180,6 +201,9 @@ thread_local LiteralLoads t_literals;
 std::atomic<uint32_t> island_ids{0};
 std::atomic<int32_t> compare_every{60};
 std::atomic<bool> seed_every{false};
+std::atomic<bool> shadow_mask_switch{true};
+// The plugin's status word (ReIGlue 0630, kStatus*), in guest memory.
+uint32_t status_word = 0;
 
 void MakeSpace(PPCContext& ctx, uint8_t* base, uint32_t dev) {
   // D3D's call may change any register the caller of the flush point does not expect it to
@@ -309,6 +333,14 @@ void LogFrames() {
       double(words - last_words) / 600.0, records, totals.written.load(), totals.seeds.load(),
       totals.unwritten.load(), totals.not_device.load(), totals.make_space.load());
   REXLOG_INFO("native_render shadow: D3D flush points a frame: {}", calls);
+  if (g_hybrid.load(std::memory_order_relaxed))
+    REXLOG_INFO(
+        "native_render hybrid: {} groups drawn natively, {} calls skipped ({} unexpected calls "
+        "made in a native blur); the game drew the shadow mask itself: plugin status {}, world "
+        "AO {}, quad {}, switch off {}",
+        totals.native_islands.load(), totals.skipped.load(), totals.unexpected.load(),
+        totals.by_status.load(), totals.by_ao.load(), totals.by_quad.load(),
+        totals.by_switch.load());
   last_records = records;
   last_ns = ns_total;
   last_islands = islands;
@@ -321,15 +353,25 @@ void ShadowMaskBegin(PPCContext& ctx, uint8_t* base) {
   static std::once_flag once;
   std::call_once(once, [] {
     const auto apply = [](std::string_view mode) {
-      const bool on = mode == "shadow";
-      if (on != g_shadow_mode.exchange(on))
-        REXLOG_INFO("native_render: {}", on ? "shadow (the shadow mask's passes are recorded "
-                                              "and compared; nothing drawn changes)"
-                                            : "off");
+      const bool hybrid = mode == "hybrid";
+      const bool on = mode == "shadow" || hybrid;
+      const bool was_hybrid = g_hybrid.exchange(hybrid);
+      if (on != g_shadow_mode.exchange(on) || hybrid != was_hybrid)
+        REXLOG_INFO("native_render: {}",
+                    hybrid ? "hybrid (the shadow mask's passes are recorded; its blurs are drawn "
+                             "natively by the GPU plugin when it can)"
+                    : on   ? "shadow (the shadow mask's passes are recorded and compared; "
+                             "nothing drawn changes)"
+                           : "off");
     };
     apply(REXCVAR_GET(native_render));
     compare_every = REXCVAR_GET(native_shadow_compare_every);
     seed_every = REXCVAR_GET(native_shadow_seed_every_record);
+    shadow_mask_switch = REXCVAR_GET(native_shadow_mask);
+    rex::cvar::RegisterChangeCallback("native_shadow_mask",
+                                      [](std::string_view, std::string_view v) {
+                                        shadow_mask_switch = v == "true";
+                                      });
     rex::cvar::RegisterChangeCallback("native_render",
                                       [apply](std::string_view, std::string_view v) { apply(v); });
   });
@@ -344,6 +386,7 @@ void ShadowMaskBegin(PPCContext& ctx, uint8_t* base) {
   const int32_t every = compare_every.load(std::memory_order_relaxed);
   is.compare = every > 0 && is.id % uint32_t(every) == 0;
   is.dev = 0;
+  is.decided = is.native = is.blurred = false;
   is.index = is.written = is.unwritten = 0;
   std::memset(is.calls, 0, sizeof(is.calls));
   totals.islands.fetch_add(1, std::memory_order_relaxed);
@@ -375,12 +418,35 @@ FlushScope::FlushScope(Point point, PPCContext& ctx, uint8_t* base)
   }
   EmitPending(ctx, base);
   if (!is.begun) {
-    const uint32_t begin[5] = {ns::kMagic, ns::kOpIslandBegin, is.id, ns::kIslandShadowMask,
-                               is.compare ? ns::kIslandCompareContents : 0u};
-    EmitHost(ctx, base, dev, begin, 5);
+    if (!status_word) {
+      // The plugin writes it at each begin; zero until it does (a plugin without 0630 never).
+      status_word = REX_KERNEL_MEMORY()->SystemHeapAlloc(64, 64);
+      if (status_word) Store32(base, status_word, 0);
+    }
+    const bool hybrid = g_hybrid.load(std::memory_order_relaxed);
+    const uint32_t begin[6] = {
+        ns::kMagic, ns::kOpIslandBegin, is.id, ns::kIslandShadowMask,
+        (is.compare && !hybrid ? ns::kIslandCompareContents : 0u) | (hybrid ? ns::kIslandNative : 0u),
+        status_word};
+    EmitHost(ctx, base, dev, begin, 6);
     is.begun = true;
   }
   record_ = true;
+  // M3: the blur's draw and the mask's resolves; skipped in a native group.
+  if (t_blur_kind >= 0) {
+    if (point == kPointDrawVerticesUp) {
+      flags_ = ns::kRecordBlur | (uint32_t(t_blur_kind) << ns::kRecordBlurKindShift);
+    } else if (is.native) {
+      totals.unexpected.fetch_add(1, std::memory_order_relaxed);
+    }
+  } else if (t_mask_resolve && point == kPointResolve) {
+    flags_ = ns::kRecordMaskResolve;
+  }
+  if (flags_ && is.native) {
+    flags_ |= ns::kRecordNative;
+    skip_ = true;
+    totals.skipped.fetch_add(1, std::memory_order_relaxed);
+  }
   t_literals.on = true;
   t_literals.count = t_literals.words = 0;
   ++is.calls[kPointKind[point]];
@@ -414,6 +480,7 @@ FlushScope::~FlushScope() {
   call.kind = kPointKind[point_];
   call.vertex_dirty = vertex_dirty_;
   call.pixel_dirty = pixel_dirty_;
+  call.flags = flags_;
   call.vertex_shader = Load32(base, dev + ns::kVertexShader);
   call.pixel_shader = Load32(base, dev + ns::kPixelShader);
   switch (point_) {
@@ -498,6 +565,53 @@ FlushScope::~FlushScope() {
   // The world pass's resolve of the mask is the group's last call (ResolveShadowMask below).
 }
 
+bool ShadowMaskBlurNative(uint8_t* base, bool quad_ok) {
+  if (!g_hybrid.load(std::memory_order_relaxed)) return false;
+  Island& is = CurrentIsland();
+  if (!is.open) return false;
+  if (is.decided) return is.native;
+  is.decided = true;
+  if (!shadow_mask_switch.load(std::memory_order_relaxed)) {
+    totals.by_switch.fetch_add(1, std::memory_order_relaxed);
+    return false;
+  }
+  if (!status_word || !is.dev || !(Load32(base, status_word) & ns::kStatusShadowMaskBlur)) {
+    totals.by_status.fetch_add(1, std::memory_order_relaxed);
+    return false;
+  }
+  // World AO multiplies its factor into the mask in the blur's render pass (ReIGlue
+  // fh1_world_ao.cpp); natively there is none yet.
+  const std::string ao = rex::cvar::GetFlagByName("world_ambient_occlusion");
+  if (ao == "low" || ao == "high") {
+    totals.by_ao.fetch_add(1, std::memory_order_relaxed);
+    return false;
+  }
+  if (!quad_ok) {
+    totals.by_quad.fetch_add(1, std::memory_order_relaxed);
+    return false;
+  }
+  is.native = true;
+  totals.native_islands.fetch_add(1, std::memory_order_relaxed);
+  return true;
+}
+
+BlurScope::BlurScope(uint32_t kind) : active_(Enabled()) {
+  if (!active_) return;
+  t_blur_kind = int(kind);
+  CurrentIsland().blurred = true;
+}
+BlurScope::~BlurScope() {
+  if (active_) t_blur_kind = -1;
+}
+MaskResolveScope::MaskResolveScope() : active_(Enabled()) {
+  if (!active_) return;
+  const Island& is = CurrentIsland();
+  t_mask_resolve = is.open && is.blurred;
+}
+MaskResolveScope::~MaskResolveScope() {
+  if (active_) t_mask_resolve = false;
+}
+
 }  // namespace forza::native_device
 
 namespace nd = forza::native_device;
@@ -511,7 +625,7 @@ namespace nd = forza::native_device;
       return;                                              \
     }                                                      \
     nd::FlushScope scope(point, ctx, base);                \
-    __imp__##function(ctx, base);                          \
+    if (!scope.Skip()) __imp__##function(ctx, base);       \
   }
 // The same, for functions the D3D trace does not wrap.
 #define NATIVE_FLUSH_POINT_UNTRACED(point, function)       \
@@ -522,7 +636,7 @@ namespace nd = forza::native_device;
       return;                                              \
     }                                                      \
     nd::FlushScope scope(point, ctx, base);                \
-    __imp__##function(ctx, base);                          \
+    if (!scope.Skip()) __imp__##function(ctx, base);       \
   }
 
 NATIVE_FLUSH_POINT(nd::kPointDrawVertices, sub_82445F18)
@@ -583,7 +697,10 @@ extern "C" REX_FUNC(sub_824933E0) {
     return;
   }
   const uint32_t lr = uint32_t(ctx.lr);
-  __imp__sub_824933E0(ctx, base);
+  {
+    nd::MaskResolveScope mask_resolve;
+    __imp__sub_824933E0(ctx, base);
+  }
   if (lr == nd::kWorldPassMaskResolve && nd::CurrentIsland().open && !nd::t_depth) {
     const uint64_t t0 = nd::NowNs();
     nd::EndIsland(ctx, base);

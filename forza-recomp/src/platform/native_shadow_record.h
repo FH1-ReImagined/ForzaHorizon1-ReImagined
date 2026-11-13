@@ -32,6 +32,10 @@ constexpr uint32_t kLiteralsHeaderWords = 5;
 constexpr uint32_t kConstantsSeed = 1, kConstantsHeaderWords = 5, kChunksPerPacket = 32;
 constexpr uint32_t kIslandShadowMask = 1;
 constexpr uint32_t kIslandCompareContents = 1;
+// M3 (ReIGlue 0630): the island may skip D3D calls (kIslandNative); its begin packet's sixth
+// word is the status word's guest address, where the plugin says what it can draw natively.
+constexpr uint32_t kIslandNative = 2;
+constexpr uint32_t kStatusShadowMaskBlur = 1;
 
 enum Kind : uint32_t {
   kKindNone = 0,
@@ -48,6 +52,10 @@ enum Kind : uint32_t {
 
 constexpr uint32_t kRecordHeaderWords = 16;
 constexpr uint32_t kRecordSeed = 1, kRecordVertexData = 2;
+// M3: the game skipped the call (the plugin draws it); the call is the shadow mask's blur of kind
+// (flags >> kRecordBlurKindShift) & 15, or one of the mask's resolves after the island's first blur.
+constexpr uint32_t kRecordNative = 4, kRecordBlur = 8, kRecordMaskResolve = 16,
+                   kRecordBlurKindShift = 8;
 constexpr uint32_t kRegisterShadowOffset = 10112, kRegisterShadowWords = 188;
 constexpr uint32_t kFetchOffset = 1152, kFetchWords = 192;
 constexpr uint32_t kAluOffset = 1920, kAluWords = 2048, kChunkWords = 16, kChunks = 128;
@@ -84,6 +92,8 @@ struct Call {
   // An UP draw's vertex data (guest order), or null.
   const uint8_t* vertex_data = nullptr;
   uint32_t vertex_bytes = 0;
+  // kRecordNative, kRecordBlur (with the kind) or kRecordMaskResolve.
+  uint32_t flags = 0;
 };
 
 // The ALU chunks dirty in the masks, in order (0-63 vertex, 64-127 pixel; bit 63 of a mask is
@@ -125,7 +135,7 @@ inline uint32_t BuildConstants(const uint8_t* device, uint32_t island, uint32_t 
 // `constant_packets`: how many were written for it. Returns the number of words.
 inline uint32_t BuildRecord(const uint8_t* device, const Call& call, bool seed,
                             uint32_t constant_packets, uint32_t* out) {
-  uint32_t flags = seed ? kRecordSeed : 0;
+  uint32_t flags = (seed ? kRecordSeed : 0) | call.flags;
   const uint32_t vertex_words = call.vertex_data ? (call.vertex_bytes / 4 < kVertexDataWords
                                                         ? call.vertex_bytes / 4
                                                         : kVertexDataWords)

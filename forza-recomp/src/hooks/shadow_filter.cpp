@@ -14,11 +14,15 @@
 // the box.
 // Console leaves both calls exactly as they are. docs/graphics-detail.md has what else was
 // tried (the game's PCF and 8-tap techniques) and why they are not used.
+// Native renderer M3 (native_render=hybrid, src/hooks/native_device.cpp): the blur calls of the
+// renderer's own mask open a native_device::BlurScope, and the group's blurs and resolves go to
+// the GPU plugin instead when native_device::ShadowMaskBlurNative says so.
 // tu_address_map: TU4 addresses
 
 #include "../platform/guest_addr.h"
 #include "../platform/guest_memory.h"
 #include "../platform/shadow_filter.h"
+#include "native_device.h"
 #include "thumbnail_sync.h"
 
 #include <rex/cvar.h>
@@ -26,6 +30,7 @@
 #include <rex/ppc/context.h>
 #include <rex/ppc/func.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstring>
@@ -123,26 +128,73 @@ extern "C" REX_FUNC(ApplyShadows) {
   for (int i = 0; i < kFilterTapWords; ++i) Store32(base, taps + 4 * i, saved[i]);
 }
 
+namespace {
+namespace nd = forza::native_device;
+
+// The blur's quad (its r4: 4 vertices of x, y, z, u, v) covers the screen and samples texels:
+// the no-sun path blurs a zeroed one after clearing the mask, and there the world pass's resolve
+// must copy that clear (the native renderer prototype's dawn failure).
+bool QuadCoversScreen(uint8_t* base, uint32_t vertices) {
+  if (!vertices) return false;
+  float v[20];
+  for (int i = 0; i < 20; ++i) {
+    const uint32_t w = Load32(base, vertices + 4 * i);
+    std::memcpy(&v[i], &w, 4);
+  }
+  float r[8] = {v[0], v[1], v[0], v[1], v[3], v[4], v[3], v[4]};
+  for (int k = 1; k < 4; ++k) {
+    const float* q = v + 5 * k;
+    r[0] = std::min(r[0], q[0]);
+    r[1] = std::min(r[1], q[1]);
+    r[2] = std::max(r[2], q[0]);
+    r[3] = std::max(r[3], q[1]);
+    r[4] = std::min(r[4], q[3]);
+    r[5] = std::min(r[5], q[4]);
+    r[6] = std::max(r[6], q[3]);
+    r[7] = std::max(r[7], q[4]);
+  }
+  return r[0] <= -1.0f && r[1] <= -1.0f && r[2] >= 1.0f && r[3] >= 1.0f && r[6] - r[4] > 0.5f &&
+         r[7] - r[5] > 0.5f;
+}
+}  // namespace
+
 extern "C" REX_FUNC(BlurShadowMask) {
   const uint32_t kind = ctx.r6.u32;
   const sf::BlurPlan plan = sf::PlanBlur(kind, CurrentLevel());
   // Only the shadow renderer's own mask: its r29 is the renderer, r5 the mask target.
   const uint32_t renderer = ctx.r29.u32;
-  if ((plan.first == kind && !plan.then_vertical) || !renderer ||
-      Load32(base, renderer + kMaskTarget) != ctx.r5.u32) {
-    OriginalBlurShadowMask(ctx, base);
+  const bool own_mask = renderer && Load32(base, renderer + kMaskTarget) == ctx.r5.u32;
+  if (nd::Enabled() && own_mask) {
+    // The native renderer's records (M2) know the blur's kind; in hybrid mode (M3) the group's
+    // blurs and resolves are drawn by the GPU plugin instead, decided at the group's first blur.
+    nd::ShadowMaskBlurNative(base, QuadCoversScreen(base, ctx.r4.u32));
+  }
+  if ((plan.first == kind && !plan.then_vertical) || !own_mask) {
+    if (own_mask) {
+      nd::BlurScope blur(kind);
+      OriginalBlurShadowMask(ctx, base);
+    } else {
+      OriginalBlurShadowMask(ctx, base);
+    }
     return;
   }
   const uint64_t r3 = ctx.r3.u64, r4 = ctx.r4.u64, r5 = ctx.r5.u64;
   ctx.r6.u64 = plan.first;
-  OriginalBlurShadowMask(ctx, base);
+  {
+    nd::BlurScope blur(plan.first);
+    OriginalBlurShadowMask(ctx, base);
+  }
   if (!plan.then_vertical) return;
   // As the game does between its own horizontal and vertical passes.
   ctx.r3.u64 = renderer;
-  ResolveShadowMask(ctx, base);
+  {
+    nd::MaskResolveScope mask_resolve;
+    ResolveShadowMask(ctx, base);
+  }
   ctx.r3.u64 = r3;
   ctx.r4.u64 = r4;
   ctx.r5.u64 = r5;
   ctx.r6.u64 = sf::kBlurVertical;
+  nd::BlurScope blur(sf::kBlurVertical);
   OriginalBlurShadowMask(ctx, base);
 }

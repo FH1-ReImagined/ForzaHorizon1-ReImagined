@@ -802,6 +802,7 @@ contact shadow under the car among them), and the check fails the same way with 
 photo_mode differ from the 2026-11-02 baselines with either plugin, AO Off or High, and cockpit and race_start
 sit at their thresholds (the baselines need recording again).
 
+<<<<<<< HEAD
 ## ReIGlue 0800: the stencil bit draws of transfers to multisampled targets once per pixel (#640)
 
 Without `VK_EXT_shader_stencil_export` (NVIDIA), a render target transfer to depth writes the stencil in one draw
@@ -816,3 +817,56 @@ draw. 1x targets, drivers with stencil export (AMD, Intel) and devices without s
 takes 0.5 ms of GPU time a frame off the transfers at the 540p scene and 1.8 ms at render scale 2 (23.4 -> 24.4
 fps); the pictures are the same. Measurements in
 [perf.md](perf.md#the-stencil-bit-draws-of-transfers-to-multisampled-targets-once-per-pixel-640-2026-11-13).
+=======
+## ReIGlue 0700: the upload rings in host-visible video memory with Resizable BAR (#858)
+
+A player found that their own Xbox 360 recompilation ran faster when the GPU was the limit after
+they moved its per-frame upload ring into video memory the CPU writes directly (Resizable BAR /
+Smart Access Memory). The Vulkan backend of ReIGlue (our ReXGlue fork) has three such rings: the
+constant buffers, which the shaders read in place, the converted index buffers, read in place too,
+and the staging of guest memory uploads, which a copy moves into the 512 MB guest memory buffer.
+Their pages took the first host-visible, not host-cached memory type a buffer accepts. RADV lists
+its system memory type (2) before the host-visible device-local ones (3 and 4, the whole 15.9 GB of
+the RX 9060 XT's video memory with Resizable BAR on), so every ring was in system memory. The guest
+memory buffer (vertex fetch, guest index buffers) is device-local. Readbacks use host-cached system
+memory. Only the gamma ramp was in host-visible video memory.
+
+0700 adds `vulkan_rebar_uploads` (off by default, read at start). On a discrete GPU with a
+host-visible, host-coherent, not host-cached device-local type on a heap of 1 GB or more, the three
+rings take that type; the 256 MB window without Resizable BAR and integrated GPUs keep system memory
+(`tools/test_vulkan_memory_placement.cpp` checks the choice for this PC's RADV layout with and without
+Resizable BAR, NVIDIA's and three integrated GPUs'). A ring that cannot allocate a page there goes on
+in system memory; readbacks are unchanged. The guest memory buffer is still written by a copy in the
+command stream, now from video memory: a direct CPU write would land before the frame's earlier draws
+that still read the old contents. The log names where the rings went (`Vulkan uploads: ...`) and,
+once a minute, the bytes written into them a frame by kind. In the benchmark race that is about
+6.3 MB a frame: fetch constants 2.4 MB (768 bytes, about 3,100 times), system constants 1.6 MB, float
+constants 1.6 MB, guest memory 0.7 MB.
+
+Measured on Linux, RX 9060 XT (RADV 26.2.1, Resizable BAR on), 8 cores, TU4 at 1280x720 with
+`--frame_rate=240`, the same build with the setting off and on, six alternating rounds a case, each
+run alone (CPU ms: all of the game's threads, over a 60-70 s window):
+
+| Case | Metric | Off: mean (sd) | On: mean (sd) | Change | Welch t |
+| --- | --- | --- | --- | --- | --- |
+| Race, render scale 2 (GPU-bound) | fps | 75.95 (0.36) | 80.02 (0.29) | +5.4% | +21.7 |
+| | 1% low fps | 63.41 (1.94) | 65.28 (2.50) | +2.9% | +1.4 |
+| | CPU ms a frame | 20.00 (0.21) | 19.79 (0.49) | -1.1% | -1.0 |
+| | recorder thread ms a frame | 4.96 (0.06) | 5.04 (0.15) | +1.6% | +1.2 |
+| Race, render scale 1 | fps | 173.65 (4.59) | 175.47 (9.61) | +1.0% | +0.4 |
+| | 1% low fps | 114.89 (4.90) | 102.75 (21.35) | -10.6% | -1.4 |
+| | CPU ms a frame | 16.62 (0.21) | 16.27 (0.47) | -2.1% | -1.7 |
+| | recorder thread ms a frame | 4.32 (0.05) | 4.25 (0.17) | -1.6% | -1.0 |
+| Free roam, standing | fps | 225.30 (12.46) | 224.75 (5.21) | -0.2% | -0.1 |
+| | 1% low fps | 127.36 (18.01) | 129.94 (7.54) | +2.0% | +0.3 |
+| | CPU ms a frame | 14.14 (0.23) | 14.38 (0.29) | +1.6% | +1.5 |
+| | recorder thread ms a frame | 3.51 (0.07) | 3.66 (0.07) | +4.1% | +3.6 |
+
+The GPU-bound race gains 5.4 %. At render scale 1 and in free roam the frame rate does not change
+beyond the noise. At render scale 1 one run with the setting on had a slow first minute (1% low 61.6,
+the whole game slower, its guest waits too); the other runs were 100.6-119.0 on and 105.9-120.9 off.
+The recorder thread, which writes the constants, is 4.1 % slower in free roam (t 3.6), since each of
+its stores now crosses the bus. So the setting stays off by default until the recorder writes fewer
+bytes (the fetch constants first, the largest kind). `tools/render_test.py check` with it on passed
+every scene.
+>>>>>>> origin/main
