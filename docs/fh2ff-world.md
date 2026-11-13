@@ -189,6 +189,12 @@ names one moves with them:
   the file alone, a collision record took the numbers of FH2's preload record of that file, and
   the game broke its stream list as the first added zone went live).
 
+**Collision.** Both worlds index collision as 100 m cells, but F&F's grid starts 12.72 m north of
+FH2's (the index's header). F&F's cells are cut again for FH2's grid (`retile_fiz`: the triangles
+of a cell and its neighbours that reach the new square, and the cell's 12 x 12 squares' lists made
+again; made in place, a cell's lists come out as the original's). With F&F's cells as they were,
+the car fell through the road in a strip at every row's edge (z = -1856.4, -1956.4, ...).
+
 **What is merged.** In the 61 cells: F&F's collision cells and shadow squares; F&F's collision
 objects (`CollObjs.xml`; its road-closure fences there are left out, with their instances) in
 place of FH2's; F&F's roads that FH2 has not, joined to FH2's network where they meet it (each
@@ -197,10 +203,11 @@ F&F marks its roads near its edge closed and empty, and traffic stood still wher
 procedural geometry and see F&F's docks as F&F's zone of the same cell does. The rest (lighting,
 races and arenas, map art) is FH2's; FH2's dock arenas' route files are byte for byte F&F's.
 
-**Checked** (the rig of the runs above): the dock road for 100 s, three more dock roads for 80 s
-each, FH2's coast road across the docks' edge for 200 s with traffic, and FH2's default road for
-150 s: no fault; the docks draw as in F&F's own world (ground, striped tanks, containers), and
-the map shows the dock roads. FH2 combined with itself over 22 cells also runs (a check that the
+**Checked** (the rig of the runs above, every run's frames looked at). Docks only: the dock road
+for 100 s, two more dock roads for 90 s each, FH2's coast road across the docks' edge for 150 s
+with traffic. The whole area: the same four, 2.4 km through Nice in 200 s, and F&F's eastern
+border crossed both ways with traffic. No fault, fall or missing surface; the docks draw as in
+F&F's own world (ground, striped tanks, containers), and the map shows the dock roads. FH2 combined with itself over 22 cells also runs (a check that the
 renumbering alone changes nothing).
 
 **Textures.** 5,072 of F&F's 10,233 texture records are byte for byte one of FH2's under another
