@@ -877,8 +877,9 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
         low = n.lower()
         # tests for a world combined with itself: the added zones name the base's own file of
         # the same name for these kinds ("apgeo", "abundles")
-        if (("apgeo" in TESTS and low.endswith(".pgeo")) or ("abundles" in TESTS and low.endswith(".bundle"))) \
-                and low in a_index:
+        if (("apgeo" in TESTS and low.endswith(".pgeo")) or ("abundles" in TESTS and low.endswith(".bundle"))
+                or ("amodels" in TESTS and (low.endswith(".rmb.bin") or low.startswith("_0x") and not low.endswith(".bundle")))
+                or ("aall" in TESTS and not low.endswith((".pvsz", ".soundscape")))) and low in a_index:
             b_to[e] = a_index[low]
             continue
         new = C.b_name(n, col_new, shadows_A)
@@ -921,7 +922,7 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
     for _, c in A.zones():
         for f in c["files"] + c.get("files2", []):
             a_ids.setdefault(f[3], (f[0], f[1]))
-            a_res.setdefault((f[3], f[0]), f[1])
+            a_res.setdefault((f[3], f[2]), (f[0], f[1]))
 
     # Resource numbers (a record's second field) in the combined world. Both worlds number a
     # zone's file resource as the zone (every type 1 record of F&F's 6,560 and FH2's 17,332),
@@ -941,6 +942,8 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
         own, res, kind, e = f
         if e not in b_to:
             return None
+        if kind == PGEO and f"nopgeo{B.kind(e)}" in TESTS:   # a test: one procedural type left out
+            return None
         ne = b_to[e]
         if kind == ff.PRELOAD:
             # FH2's zones preload their neighbours' files (models, procedural geometry, collision,
@@ -950,8 +953,8 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
         if ne < len(A.names):    # F&F's file: F&F's numbers
             if kind == FIZ:
                 own = int(names[ne].split(".")[0])
-            if kind in (PGEO, BUNDLE) and (ne, own) in a_res:   # the apgeo/abundles tests
-                return a_record((own, a_res[(ne, own)], kind, ne))
+            if (ne, kind) in a_res and TESTS & {"apgeo", "abundles", "aall", "amodels"}:   # the self-merge tests
+                return a_record((*a_res[(ne, kind)], kind, ne))
             if ne in a_ids:
                 return a_record((*a_ids[ne], kind, ne))
             return (own, res + B_RES, kind, ne)
@@ -980,8 +983,12 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
     a_inst = {v: k for k, v in enumerate(sorted(a_used))}
     a_whole = len(a_inst) == len(PA["instances"])
     b_inst = {v: len(a_inst) + k for k, v in enumerate(sorted(b_used))}
-    if len(a_inst) + len(b_inst) > 0xFFFF:
-        raise ValueError(f"{len(a_inst) + len(b_inst)} instances: FH1 takes 65,535")
+    ZM = C.NM                      # the added zones' models' shift
+    ztex = C.tex
+    if TESTS & {"aall", "amodels"}:   # a world combined with itself: the added zones use the base's
+        b_inst, ZM, ztex = dict(a_inst), 0, (lambda t: t)
+    if len(a_inst) + len(b_used) > 0xFFFF:
+        raise ValueError(f"{len(a_inst) + len(b_used)} instances: FH1 takes 65,535")
     report = {"base instances in the region left out of zones round it": 0,
               "region instances joining zones round it": 0, "base procedural geometry entries left out": 0}
 
@@ -1058,12 +1065,12 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
         out["instances"] = [(c["instances"][k] & 0x80000000) | b_inst[c["instances"][k] & 0x7FFFFFFF] for k in keep]
         out["drawn"] = [c["drawn"][k] for k in keep]
         out["placements"] = [c["placements"][k] for k in keep]
-        out["models"] = [m + C.NM for m in c["models"]]
-        out["textures"] = [C.tex(t) for t in c["textures"]]
+        out["models"] = [m + ZM for m in c["models"]]
+        out["textures"] = [ztex(t) for t in c["textures"]]
         out["files"] = [r for r in (b_record(f) for f in c["files"]) if r]
         if "files2" in c:
-            out["models2"] = [m + C.NM for m in c["models2"]]
-            out["textures2"] = [C.tex(t) for t in c["textures2"]]
+            out["models2"] = [m + ZM for m in c["models2"]]
+            out["textures2"] = [ztex(t) for t in c["textures2"]]
             out["files2"] = [r for r in (b_record(f) for f in c["files2"]) if r]
         return out
 
