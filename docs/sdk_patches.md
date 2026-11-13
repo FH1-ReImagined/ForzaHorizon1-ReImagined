@@ -802,22 +802,6 @@ contact shadow under the car among them), and the check fails the same way with 
 photo_mode differ from the 2026-11-02 baselines with either plugin, AO Off or High, and cockpit and race_start
 sit at their thresholds (the baselines need recording again).
 
-<<<<<<< HEAD
-## ReIGlue 0800: the stencil bit draws of transfers to multisampled targets once per pixel (#640)
-
-Without `VK_EXT_shader_stencil_export` (NVIDIA), a render target transfer to depth writes the stencil in one draw
-per bit (0461 skips the bits the source does not have). To a 2x or 4x target each of those draws ran its fragment
-shader once per sample (sample-rate shading). FH1's remaining bit draws are almost all to 4x targets: the scene depth
-going from 2x to 4x with all 8 bits, the shadow map, and depth made from color. With 0800 the stencil bit
-pipelines for multisampled targets run once per pixel. The shader walks the pixel's samples, computes each one's
-source as the per-sample shader did, and writes the samples whose bit is set through the sample mask; a pixel
-with none is discarded. The same samples get the same bits, with up to 4 times fewer shader invocations a bit
-draw. 1x targets, drivers with stencil export (AMD, Intel) and devices without sample-rate shading are unchanged.
-`vulkan_transfer_stencil_bit_per_pixel=false` (read at start) keeps the per-sample draws. On a GTX 1650 Ti it
-takes 0.5 ms of GPU time a frame off the transfers at the 540p scene and 1.8 ms at render scale 2 (23.4 -> 24.4
-fps); the pictures are the same. Measurements in
-[perf.md](perf.md#the-stencil-bit-draws-of-transfers-to-multisampled-targets-once-per-pixel-640-2026-11-13).
-=======
 ## ReIGlue 0700: the upload rings in host-visible video memory with Resizable BAR (#858)
 
 A player found that their own Xbox 360 recompilation ran faster when the GPU was the limit after
@@ -869,4 +853,18 @@ The recorder thread, which writes the constants, is 4.1 % slower in free roam (t
 its stores now crosses the bus. So the setting stays off by default until the recorder writes fewer
 bytes (the fetch constants first, the largest kind). `tools/render_test.py check` with it on passed
 every scene.
->>>>>>> origin/main
+
+## ReIGlue 0800: the stencil bit draws of transfers to multisampled targets once per pixel (#640)
+
+Without `VK_EXT_shader_stencil_export` (NVIDIA), a render target transfer to depth writes the stencil in one draw
+per bit (0461 skips the bits the source does not have). To a 2x or 4x target each of those draws ran its fragment
+shader once per sample (sample-rate shading). FH1's remaining bit draws are almost all to 4x targets: the scene depth
+going from 2x to 4x with all 8 bits, the shadow map, and depth made from color. With 0800 the stencil bit
+pipelines for multisampled targets run once per pixel. The shader walks the pixel's samples, computes each one's
+source as the per-sample shader did, and writes the samples whose bit is set through the sample mask; a pixel
+with none is discarded. The same samples get the same bits, with up to 4 times fewer shader invocations a bit
+draw. 1x targets, drivers with stencil export (AMD, Intel) and devices without sample-rate shading are unchanged.
+`vulkan_transfer_stencil_bit_per_pixel=false` (read at start) keeps the per-sample draws. On a GTX 1650 Ti it
+takes 0.5 ms of GPU time a frame off the transfers at the 540p scene and 1.8 ms at render scale 2 (23.4 -> 24.4
+fps); the pictures are the same. Measurements in
+[perf.md](perf.md#the-stencil-bit-draws-of-transfers-to-multisampled-targets-once-per-pixel-640-2026-11-13).
