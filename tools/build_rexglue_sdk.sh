@@ -80,7 +80,7 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # A reviewed full commit can be pinned before a maintainer publishes a tag.
 # When a tag is supplied, its target must still match this immutable commit.
 REIGLUE_TAG=
-REIGLUE_COMMIT=0ce74d3af93c4f97b9965799a4e91623a4b4752f  # ReIGlue feat/native-m2: main 99e17e2 (to 0530, 0570-0600) and 0610-0620
+REIGLUE_COMMIT=114306638de840a29accd286f31df6daeab54e59  # ReIGlue main: 0530, 0570-0620 (#58)
 REIGLUE_URL="${REIGLUE_URL:-https://github.com/FH1-ReImagined/ReIGlue}"
 NIGHTLY="${REXSDK_NIGHTLY:-$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64}"
 SRC="${REXSDK_SRC:-$HOME/rexglue-sdk-src-forza/sdk}"
