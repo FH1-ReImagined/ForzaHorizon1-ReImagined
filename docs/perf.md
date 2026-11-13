@@ -4288,3 +4288,69 @@ The list covers every shader of the race, so play translated nothing with either
 only, as expected: a pair the warm-up does not need is not in the pack either (the pack is the warm-up of the
 prebuild run). Frames over 33 ms (loading): 11, 12, 11 and 13, 12, 16.
 
+
+## The stencil bit draws of transfers to multisampled targets once per pixel (#640, 2026-11-13)
+
+The sections above left about 1.6 ms of GPU time a frame on a GTX 1650 Ti in the stencil bit draws of render
+target transfers, made because NVIDIA's driver has no `VK_EXT_shader_stencil_export`. Copying the stencil into the
+image from a buffer only works for one-sample targets, and those had no bit draws left (0461 skips them). All the
+draws that remain are to 4x targets: the scene depth going from 2x to 4x with all 8 bits, the shadow map, and the
+depth made from color.
+
+**The frame on current main.** The laptop of the sections above (GTX 1650 Ti 4 GB, driver 555.97, i5-10300H,
+8 GB, Windows 11), main 9f80d9b built by the launcher (ReIGlue 1143066), the launcher's settings for it (the 540p
+scene, AMD FSR 1, 60 fps, Vulkan), the built-in benchmark's measured minute, warm caches, `--fh1_gpu_profile=5`,
+two runs: the GPU frame 15.81 and 15.32 ms, guest draws 8.08 and 7.88, transfers to depth from depth 2.05 and
+1.91, texture loads 1.96 and 1.92, resolves 1.72 and 1.69, transfers to depth from color 0.72 and 0.70. These are the
+numbers of the sections above, so the bit draws still cost what they did.
+
+**The change (ReIGlue 0800, `vulkan_transfer_stencil_bit_per_pixel`, on).** To a multisampled target each bit
+draw ran its fragment shader once per sample (sample-rate shading), so a 4x target ran it 4 times a pixel per bit.
+The stencil bit pipelines for 2x and 4x targets now run without sample-rate shading. The shader walks the pixel's
+samples, computes each one's source as the per-sample shader did, and writes the samples whose bit is set through
+the sample mask (none: the pixel is discarded). The same samples get the same bits. Still one draw per bit, and the
+same reads of the source. 1x targets and drivers with stencil export are unchanged.
+
+**Measured** on that laptop, the same build with the switch off and on, 6 runs each alternating (on, off, off,
+on, ...), the benchmark's measured minute, ms of GPU time a frame. Values are means with the range in brackets, and
+t is Welch's t:
+
+| 540p scene, 60 fps cap, `--fh1_gpu_profile=5` | Off | On | t |
+| --- | --- | --- | --- |
+| Transfers | 3.49 [3.36-3.57] | 2.97 [2.90-3.08] | -10.3 |
+| To 4x depth from depth | 1.12 [1.08-1.15] | 0.86 [0.84-0.88] | -20.0 |
+| To 2x depth from depth | 0.21 [0.17-0.23] | 0.19 [0.16-0.22] | -0.9 |
+| To 1x depth from depth (no change expected) | 0.68 [0.66-0.70] | 0.65 [0.64-0.68] | -3.9 |
+| To depth from color (to 1x: 0.16 both) | 0.72 [0.70-0.73] | 0.52 [0.51-0.52] | -35.8 |
+| GPU frame | 15.79 [15.34-16.18] | 15.29 [15.05-15.54] | -3.3 |
+| fps | 57.9 [56.4-59.2] | 58.9 [58.0-59.4] | 2.0 |
+| 1% low | 39.6 [33.7-43.4] | 40.5 [39.2-42.4] | 0.6 |
+
+| Render scale 2 (the 1440p scene) | Off | On | t |
+| --- | --- | --- | --- |
+| Transfers | 9.72 [9.66-9.78] | 7.94 [7.90-8.00] | -65.9 |
+| To 4x depth from color | 3.01 [2.99-3.04] | 1.71 [1.70-1.72] | -147 |
+| To 4x depth from depth | 2.49 [2.46-2.54] | 2.06 [2.05-2.07] | -36.9 |
+| GPU frame | 42.42 [42.11-42.79] | 40.56 [40.16-41.06] | -9.2 |
+| fps, with the profile | 23.09 [22.91-23.27] | 24.14 [23.89-24.37] | 9.6 |
+| fps, without it (6 more runs each; one off run lost the device) | 23.42 [22.66-23.84] | 24.39 [24.10-24.70] | 4.4 |
+| 1% low, without it | 20.24 [19.45-20.71] | 20.90 [20.04-21.34] | 2.3 |
+
+Of the about 1.6 ms of bit draws at the 540p scene this takes 0.5 ms, of which 0.26 ms in the transfers to 4x depth from
+depth and 0.20 ms in those from color (whose bit draws 0461 does not mask; to 4x depth from color 43% less at both
+scales). At the 60 fps cap the frame rate moves less than the GPU time; at render scale 2 it is 1 fps (4%).
+
+**Pictures.** On an RX 9060 XT (RADV) with `FORZA_TEST_NO_STENCIL_EXPORT=1` (0480), which takes the NVIDIA transfer
+path, `tools/render_test.py`'s six scenes, three runs each way interleaved (off, on, on, off, off, on): 16 of 18
+scene checks pass off and 14 of 18 on. The last on run failed cockpit, both free roam scenes and photo mode
+together: the car rested a little differently at the spawn point (the road's yellow line a pixel over), the known
+noise of those scenes; the off runs' two failures were freeroam_midday and title, one run each. In the other two on
+runs every scene passed, with a mean dssim at or below the off runs' in all six scenes. Compared with each other,
+the on runs' shots are about as far from the off runs' as the off runs' are from each other (race start a little
+more: 0.0061 against 0.0048). On the GTX 1650 Ti, screenshots at two free roam spots at noon
+(540p and render scale 2) look the same; the camera's heading differs between sessions there, so they are compared
+by eye.
+
+**A device loss at render scale 2.** In 2 of the 24 render scale 2 runs the driver lost the device mid-benchmark,
+one with the switch on and one with it off, both at a draw with the vertex shader `0CBC533419F61E0D` (the GPU
+breadcrumbs, 0438). It comes from neither path. None of the 540p runs lost the device.

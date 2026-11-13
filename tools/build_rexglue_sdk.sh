@@ -77,10 +77,12 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # and 0530: the world AO's stencil request no longer leaves the first shadow pass with null textures (#823),
 # and 0570-0600: the PM4 trace and rexglue-shaders (build options, off), the start's shader
 # translations on several threads, and the shader pack Prebuild shaders writes (native renderer M0, M1).
+# and 0800: without stencil export (NVIDIA), the stencil bit draws of transfers to 2x and 4x targets once
+# per pixel through the sample mask (vulkan_transfer_stencil_bit_per_pixel, #640).
 # A reviewed full commit can be pinned before a maintainer publishes a tag.
 # When a tag is supplied, its target must still match this immutable commit.
 REIGLUE_TAG=
-REIGLUE_COMMIT=114306638de840a29accd286f31df6daeab54e59  # ReIGlue main: 0530, 0570-0620 (#58)
+REIGLUE_COMMIT=33aab3d7f3629d5eddfb4cde8b78e391b5609512  # ReIGlue perf/640-stencil-per-pixel: main + 0800 (#59)
 REIGLUE_URL="${REIGLUE_URL:-https://github.com/FH1-ReImagined/ReIGlue}"
 NIGHTLY="${REXSDK_NIGHTLY:-$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64}"
 SRC="${REXSDK_SRC:-$HOME/rexglue-sdk-src-forza/sdk}"
