@@ -50,6 +50,7 @@ import sqlite3
 import struct
 import sys
 import tempfile
+import urllib.parse
 import zipfile
 import zlib
 
@@ -614,10 +615,22 @@ def route_file(ribbon_dir, route_id):
     return next((os.path.join(ribbon_dir, n) for n in os.listdir(ribbon_dir) if n.lower() == want), None)
 
 
+def read_only_uri(path):
+    """SQLite's read-only URI of a database file. The path's own #, ? and % are escaped (a bare #
+    ends the name and takes mode=ro with it), and a network share (//server/share/...) is
+    written with the four slashes SQLite wants for one."""
+    p = os.path.abspath(path).replace("\\", "/")
+    if p.startswith("//"):
+        p = "//" + p
+    elif not p.startswith("/"):
+        p = "/" + p                     # C:/... is /C:/... in a URI
+    return "file:" + urllib.parse.quote(p, safe="/:") + "?mode=ro"
+
+
 def world_routes(src_db, ribbon_dir):
     """The world's own races and arenas: its Tracks rows (MediaName Anthem, a ROUTE_KINDS
     configuration) whose route file the ribbon holds, as {column: value}, by id."""
-    con = sqlite3.connect(f"file:{Path(src_db).as_posix()}?mode=ro", uri=True)
+    con = sqlite3.connect(read_only_uri(src_db), uri=True)
     try:
         cols = [r[1] for r in con.execute("PRAGMA table_info(Tracks)")]
         rows = [dict(zip(cols, r)) for r in con.execute(
@@ -662,7 +675,7 @@ def owt2_line(d):
     its waypoint count, its successors, 1, CAFEFEED); then 48-byte waypoints (position, the vector
     across, then -0.5, 0.5, the racing line, 0) and the magic again. FH1's line is one: the main
     chain from segment 0, looped when it comes back to it."""
-    if d[:4] != b"OWTM" or struct.unpack_from(">I", d, 4)[0] != 2:
+    if len(d) < 0x20 or d[:4] != b"OWTM" or struct.unpack_from(">I", d, 4)[0] != 2:
         raise ValueError("not an OWTM version 2 file")
     n = struct.unpack_from(">I", d, 0x10)[0]
     base = 0x20 + 32 * n
@@ -693,12 +706,13 @@ def ai_lines(zip_path, route_ids, out_dir):
         return dict(counts)
     with Archive(zip_path) as z:
         for info in z.infos:
-            m = re.fullmatch(r"(?i)[^/]+/ribbon_00/route(\d+)\.owt", info.filename.replace("\\", "/"))
+            # the world's own folder only (both games' archives hold no other): the ids are its rows'
+            m = re.fullmatch(rf"(?i){NAME}/ribbon_00/route(\d+)\.owt", info.filename.replace("\\", "/"))
             if not m or int(m.group(1)) not in route_ids:
                 continue
             try:
                 pts, looped = owt2_line(z.read(info))
-            except ValueError:
+            except (ValueError, struct.error):
                 counts["not read"] += 1
                 continue
             os.makedirs(out_dir, exist_ok=True)
@@ -804,9 +818,10 @@ def retype_blocked(net, fh2_net):
                                 votes[t] += 1
                 new = votes.most_common(1)[0][0] if votes else "b"
                 if new not in vals:        # the game searches the table as a sorted one
-                    at = bisect.bisect(vals, new)
-                    vals.insert(at, new)
-                    net["tags"] = [(tk, tv + (tv >= at)) for tk, tv in net["tags"]]
+                    put = bisect.bisect(vals, new)
+                    vals.insert(put, new)
+                    net["tags"] = [(tk, tv + (tv >= put)) for tk, tv in net["tags"]]
+                    blocked = vals.index("blocked")   # the other blocked roads' value moved too
                 net["tags"][ft + j] = (k, vals.index(new))
                 changed[new + (" (FH2's)" if votes else " (no FH2 road there)")] += 1
     return dict(changed)

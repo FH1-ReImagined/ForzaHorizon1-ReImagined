@@ -85,6 +85,15 @@ class World(WorldBase):
             fh2ffworld.disc_root(self.fh2)  # and the other way round
         self.assertEqual(fh2ffworld.fh2_root(self.fh2), self.fh2)
         self.assertIsNone(fh2ffworld.fh2_root(None))
+        # both games side by side in the chosen folder: each import finds its own
+        both = self.t / "both"
+        fh2, ff = (ff_disc(both / "A FH2", title=fh2ffworld.FH2_TITLE),
+                   ff_disc(both / "B FF", title=fh2ffworld.FF_TITLE))
+        self.assertEqual((fh2ffworld.disc_root(both), fh2ffworld.disc_root(both, "fh2")), (ff, fh2))
+        # FH2's own import has no "or none"
+        with self.assertRaises(fh2ffworld.Fh2ffError) as e:
+            fh2ffworld.fh2_root(fh2, optional=False)        # no Horizon.zip in this one
+        self.assertNotIn("none", str(e.exception))
 
     def test_import_installs_the_world_beside_the_circuits(self):
         msg, calls = self.import_world(self.fh2)
@@ -144,12 +153,40 @@ class World(WorldBase):
         self.assertNotIn("FORZA_FM4_STX", plan.env)
         self.assertEqual(plan.env["FORZA_SERVER"], "")  # offline
         self.assertTrue(any("Fast & Furious" in n and "offline" in n for n in plan.notes))
+        # the game reads those "0"s only with the world's block count: an import without it says so
+        self.assertTrue(any("import it again" in n for n in plan.notes))
+        (folder / "media" / "tracks" / "Anthem" / fh2ffworld.STREAM_BLOCKS).write_text("1000\n")
+        self.assertFalse(any("import it again" in n for n in self.plan().notes))
         # a developer's switch in the extra environment still wins
         self.cfg.advanced["extra_env"] = "FORZA_TRACK_SPAWN=1,2,3"
         self.assertEqual(self.plan().env["FORZA_TRACK_SPAWN"], "1,2,3")
         fm4tracks.remove(self.cfg, "anthem")
         self.assertFalse(folder.exists())
         self.assertEqual(fm4tracks.selected(Config(self.cfg.path)), "")
+
+    def test_the_worlds_races_reach_another_mods_database(self):
+        import sqlite3
+        from forza_launcher import mods
+        self.import_world(self.fh2)
+        own = mods.mods_dir(self.cfg) / ".fm4-track-anthem" / "media" / "db" / "gamedb.slt"
+        con = sqlite3.connect(own)
+        con.executemany("INSERT INTO Tracks VALUES (?, 'Anthem', 70, 0)", [(5000,), (5001,)])
+        con.commit()
+        con.close()
+        cars = mods.mods_dir(self.cfg) / "reimagined-fm4-cars" / "media" / "db" / "gamedb.slt"
+        gamedb(cars)
+        con = sqlite3.connect(cars)
+        con.execute("INSERT INTO Tracks VALUES (5001, 'Old', 9, 9)")   # an earlier copy of one: replaced
+        con.execute("INSERT INTO Tracks VALUES (400, 'Colorado', 1, 3)")
+        con.commit()
+        con.close()
+        fm4tracks.select(self.cfg, "anthem")
+        self.plan(write=True)
+        merged = sqlite3.connect(mods.mods_dir(self.cfg) / ".fm4-track-db" / "media" / "db" / "gamedb.slt")
+        self.assertEqual(merged.execute("SELECT * FROM Tracks ORDER BY id").fetchall(),
+                         [(317, "Anthem", 70, 0), (400, "Colorado", 1, 3), (5000, "Anthem", 70, 0),
+                          (5001, "Anthem", 70, 0)])
+        merged.close()
 
     def test_fh2s_own_world(self):
         msg, calls = self.import_world(key="fh2", src=self.t / "FH2")

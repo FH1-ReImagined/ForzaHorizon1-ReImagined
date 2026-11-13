@@ -674,8 +674,9 @@ def _gamedb_of(mod_dir: Path):
 
 
 def merge_db(base_db: Path, track_db: Path, out_db: Path):
-    """out_db: base_db (another mod's database) with the track's rows (its Environments row and
-    free roam's Tracks row, tools/fm4_track_mod.write_db) put in."""
+    """out_db: base_db (another mod's database) with the track's rows put in: its Environments row
+    and free roam's Tracks row (tools/fm4_track_mod.write_db), and the Tracks rows of its own
+    environment that are its alone (an FH2 world's races and arenas, tools/fh2ff_world.py)."""
     out_db.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(base_db, out_db)
     src = sqlite3.connect(f"file:{track_db.as_posix()}?mode=ro", uri=True)
@@ -686,6 +687,9 @@ def merge_db(base_db: Path, track_db: Path, out_db: Path):
             raise Fm4TrackError("The circuit's database has no free roam row: import it again.")
         cols = [r[1] for r in src.execute("PRAGMA table_info(Environments)")]
         env = src.execute("SELECT * FROM Environments WHERE Id=?", (row[1],)).fetchone()
+        tcols = [r[1] for r in src.execute("PRAGMA table_info(Tracks)")]
+        own = src.execute("SELECT * FROM Tracks WHERE EnvironmentId=? AND MediaName=? AND id<>?",
+                          (row[1], row[0], FREE_ROAM_TRACK)).fetchall()
     finally:
         src.close()
     db = sqlite3.connect(out_db)
@@ -697,6 +701,13 @@ def merge_db(base_db: Path, track_db: Path, out_db: Path):
                        f"({','.join('?' * len(pairs))})", [v for _, v in pairs])
         db.execute("UPDATE Tracks SET MediaName=?, EnvironmentId=?, RibbonIndex=? WHERE id=?",
                    (*row, FREE_ROAM_TRACK))
+        if own:
+            have = {r[1] for r in db.execute("PRAGMA table_info(Tracks)")}
+            keep = [i for i, c in enumerate(tcols) if c in have]
+            at = tcols.index("id")
+            db.execute(f"DELETE FROM Tracks WHERE id IN ({','.join('?' * len(own))})", [r[at] for r in own])
+            db.executemany(f"INSERT INTO Tracks ({','.join(tcols[i] for i in keep)}) VALUES "
+                           f"({','.join('?' * len(keep))})", [[r[i] for i in keep] for r in own])
         db.commit()
     finally:
         db.close()
