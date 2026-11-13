@@ -328,6 +328,40 @@ int main() {
     CHECK(!p::HeapOverBudget(l, u));
     CHECK(u.usage[0] + u.usage[2] <= 243 * kMB + 16 * kMB);
   }
+  // The upload rings' host-visible device-local types (#858, vulkan_rebar_uploads).
+  {
+    // This machine with resizable BAR: the two DL|HV|HC types of the 15 GB video memory heap.
+    CHECK(p::DeviceLocalUploadTypes(RadvDiscrete()) == 0b11000);
+    CHECK(p::LowestType(p::DeviceLocalUploadTypes(RadvDiscrete())) == 3);
+    // RADV without resizable BAR: the 256 MB window is a heap of its own: system memory.
+    const p::MemoryInfo no_rebar = Builder(p::kDeviceTypeDiscrete)
+                                       .Heap(15 * kGB, false)
+                                       .Heap(15 * kGB + 768 * kMB, true)
+                                       .Heap(256 * kMB, true)
+                                       .Type(1, DL)
+                                       .Type(0, HV | HC)
+                                       .Type(2, DL | HV | HC)
+                                       .Type(0, HV | HC | CACHED)
+                                       .m;
+    CHECK(p::DeviceLocalUploadTypes(no_rebar) == 0);
+    // NVIDIA with resizable BAR (the type on the video memory heap), a host-cached and an AMD
+    // device-coherent device-local type, which are never chosen, and one that is not coherent.
+    const p::MemoryInfo nvidia = Builder(p::kDeviceTypeDiscrete)
+                                     .Heap(8 * kGB, true)
+                                     .Heap(16 * kGB, false)
+                                     .Type(0, DL)
+                                     .Type(1, HV | HC)
+                                     .Type(0, DL | HV | HC | CACHED)
+                                     .Type(0, DL | HV | HC | kAmdCoherent)
+                                     .Type(0, DL | HV)
+                                     .Type(0, DL | HV | HC)
+                                     .m;
+    CHECK(p::DeviceLocalUploadTypes(nvidia) == 0b100000);
+    // Integrated GPUs keep their rings in system memory, whatever their heaps.
+    CHECK(p::DeviceLocalUploadTypes(RadvApu()) == 0);
+    CHECK(p::DeviceLocalUploadTypes(OneHeapApu()) == 0);
+    CHECK(p::DeviceLocalUploadTypes(VegaApuWindows()) == 0);
+  }
   std::puts("memory placement: ok");
   return 0;
 }
