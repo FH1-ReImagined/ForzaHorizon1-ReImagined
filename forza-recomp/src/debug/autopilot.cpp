@@ -3,7 +3,9 @@
 // FORZA_AUTOPILOT=<line file>[,<speed scale>] drives player 1's car along a line (a point per
 // row, "x y z speed_m_s": tools/fm4_line.py) once the car is near it: the left stick steers
 // at a point ahead on the line (pure pursuit; the look-ahead grows with speed), the triggers
-// hold the line's speed. The log gets the car's place every second ("AUTOPILOT:" lines).
+// hold the line's speed, and B and X shift up and down by the engine's speed (a save with
+// manual shifting stayed in first gear, on its limiter; FORZA_AUTOPILOT_SHIFT=0 leaves the
+// buttons alone). The log gets the car's place every second ("AUTOPILOT:" lines).
 // Off unless the variable is set.
 
 #include "../platform/telemetry.h"
@@ -55,13 +57,42 @@ const Line& Loaded() {
   return line;
 }
 
+// The shift button to hold now: B (up) near the redline with the throttle down, X (down) when
+// the engine is slow in a higher gear. One shift at a time: a button is held 0.15 s, and the
+// next waits 0.8 s for the engine's speed to settle in the new gear. With automatic shifting
+// the game shifts first and ignores the buttons.
+uint16_t Shift(const forza::telemetry::CarPhysicsView& ph, uint8_t throttle, double t) {
+  constexpr uint16_t kB = 0x2000, kX = 0x4000;
+  static const bool on = [] {
+    const char* p = std::getenv("FORZA_AUTOPILOT_SHIFT");
+    return !p || std::atoi(p) != 0;
+  }();
+  static double hold_until = 0, next = 0;
+  static uint16_t held = 0;
+  if (!on || ph.redline <= 0) return 0;
+  if (t < hold_until) return held;
+  held = 0;
+  if (t < next || ph.gear < 1 || ph.gear > 8) return 0;  // reverse, neutral: not ours
+  const float r = ph.rpm / ph.redline;
+  if (r > 0.92f && throttle > 0 && ph.gear < 8)
+    held = kB;
+  else if (r < 0.40f && ph.gear > 1)
+    held = kX;
+  if (held) {
+    hold_until = t + 0.15;
+    next = t + 0.95;
+  }
+  return held;
+}
+
 double Now() {
   return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
 }  // namespace
 
-bool Drive(uint8_t* base, int16_t& steer, uint8_t& brake, uint8_t& throttle) {
+bool Drive(uint8_t* base, int16_t& steer, uint8_t& brake, uint8_t& throttle, uint16_t& buttons) {
+  buttons = 0;
   const Line& line = Loaded();
   if (!line.on) return false;
   float pos[3], fwd[3];
@@ -169,6 +200,16 @@ bool Drive(uint8_t* base, int16_t& steer, uint8_t& brake, uint8_t& throttle) {
     brake = 255;
     steer = int16_t(-s * 32767);
   }
+  // The engine's speed and gear, read ten times a second: read on every pad poll (several a
+  // frame), the game stopped presenting frames.
+  static forza::telemetry::CarPhysicsView gears{};
+  static bool have_gears = false;
+  static double gears_at = 0;
+  if (t - gears_at >= 0.1) {
+    gears_at = t;
+    have_gears = forza::telemetry::LocalCarPhysics(base, gears);
+  }
+  if (have_gears && t >= reverse_until) buttons = Shift(gears, throttle, t);
   // FORZA_AUTOPILOT_TRACE=<file>: every 0.1 s, a row of time, place, speeds, inputs and
   // the four wheels (contact, suspension, wheel speed, slip ratio, slip angle).
   static std::FILE* trace = [] {
@@ -196,10 +237,10 @@ bool Drive(uint8_t* base, int16_t& steer, uint8_t& brake, uint8_t& throttle) {
   if (t - last_log > 1.0) {
     last_log = t;
     REXLOG_INFO("AUTOPILOT: at {} of {} ({:.1f},{:.1f},{:.1f}) {:.0f} km/h want {:.0f}, off {:.1f} m, "
-                "steer {:.2f}, slip {:.0f} deg, to target {:.0f} deg", at, n, pos[0], pos[1], pos[2],
-                speed * 3.6f, want * 3.6f, std::sqrt(d2(at)), s,
+                "steer {:.2f}, slip {:.0f} deg, to target {:.0f} deg, gear {}", at, n, pos[0], pos[1],
+                pos[2], speed * 3.6f, want * 3.6f, std::sqrt(d2(at)), s,
                 std::atan2(vx * fwd[2] - vz * fwd[0], vx * fwd[0] + vz * fwd[2]) * 57.3f,
-                angle * 57.3f);
+                angle * 57.3f, have_gears ? int(gears.gear) : -1);
   }
   return true;
 }
