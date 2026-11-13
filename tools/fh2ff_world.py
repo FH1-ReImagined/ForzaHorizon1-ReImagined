@@ -38,6 +38,7 @@ To run it (dev), with the game's own launch arguments and environment:
 
 docs/fh2ff-world.md has what is converted and why, and what is not done yet.
 """
+import bisect
 import collections
 from contextlib import ExitStack
 import math
@@ -802,8 +803,10 @@ def retype_blocked(net, fh2_net):
                             if t:
                                 votes[t] += 1
                 new = votes.most_common(1)[0][0] if votes else "b"
-                if new not in vals:
-                    vals.append(new)
+                if new not in vals:        # the game searches the table as a sorted one
+                    at = bisect.bisect(vals, new)
+                    vals.insert(at, new)
+                    net["tags"] = [(tk, tv + (tv >= at)) for tk, tv in net["tags"]]
                 net["tags"][ft + j] = (k, vals.index(new))
                 changed[new + (" (FH2's)" if votes else " (no FH2 road there)")] += 1
     return dict(changed)
@@ -820,7 +823,9 @@ def surface_names(physics_zip, tmp):
     """The surface list of a game's physics.zip surfaceTypes.xml (a triangle's surface is its
     number in it)."""
     with zipfile.ZipFile(physics_zip) as z, open(physics_zip, "rb") as fh:
-        info = next(i for i in z.infolist() if i.filename.replace("\\", "/").lower() == "surfacetypes.xml")
+        info = next((i for i in z.infolist() if i.filename.replace("\\", "/").lower() == "surfacetypes.xml"), None)
+        if info is None:
+            raise ValueError(f"{physics_zip} holds no surfaceTypes.xml")
         xml = fm4_track_mod.member_data(physics_zip, z, info, fh, tmp).decode("utf-8", "replace")
     return re.findall(r'<SurfaceType value="([^"]+)"', xml.split("</SurfaceTypesList>")[0])
 
@@ -876,6 +881,9 @@ def track_settings_64(xml):
     for tag in TRACK_SETTINGS_66:
         xml = re.sub(r"[ \t]*<%s\b[^>]*/>[ \t]*\r?\n" % tag, "", xml)
         xml = re.sub(r"[ \t]*<%s\b[^>]*>.*?</%s>[ \t]*\r?\n" % (tag, tag), "", xml, flags=re.S)
+    left = [tag for tag in TRACK_SETTINGS_66 if re.search(r"<%s\b" % tag, xml)]
+    if left:    # laid out another way than on its own lines: FH1 would light the world black
+        raise ValueError(f"TrackSettings.xml: could not take out {', '.join(left)}")
     return xml
 
 
@@ -997,7 +1005,12 @@ def _publish(stage, out, paths):
     # Serialize replacement of the pair. Keep backups outside the staging directory so
     # they survive if a filesystem error also prevents rollback.
     lock = out / ".fh2ff-publish"
-    lock.mkdir()
+    try:
+        lock.mkdir()
+    except FileExistsError:
+        raise ValueError(f"{lock} is there: an earlier build was interrupted while it put its output in "
+                         "place and could not put the old one back. What it kept of the old output is in "
+                         "that folder; move it out (or delete it) and build again.") from None
     backups, installed = [], []
     try:
         for path in paths:
