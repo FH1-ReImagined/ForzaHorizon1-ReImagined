@@ -269,6 +269,21 @@ class UpdateUITests(unittest.TestCase):
             self.card.install()
             spawn.assert_called_once_with([str(self.card.downloaded), "/DIR=" + str(Path("C:/Custom/Launcher"))])
 
+    def test_setup_downloads_are_cleaned_at_start_and_exit(self):
+        # #865: the Setup the installer ran is removed by the launcher it installed; the second
+        # pass at exit catches a Setup that was still open when the launcher started.
+        from forza_launcher import updater
+        from forza_launcher.ui.window import MainWindow
+        with patch.object(updater, "cleanup_downloads") as cleanup:
+            win = MainWindow(self.win.cfg)
+            cleanup.assert_called_once_with()
+            win.close()
+            self.assertEqual(cleanup.call_count, 2)
+        with patch.object(updater, "cleanup_downloads", side_effect=RuntimeError("boom")), \
+                patch("forza_launcher.paths.log_error") as log:
+            self.win.cleanup_update_downloads()
+            log.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
