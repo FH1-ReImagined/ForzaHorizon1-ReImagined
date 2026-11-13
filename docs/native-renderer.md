@@ -316,38 +316,42 @@ every 50 compares.
 
 **Measured** **[M]** (RX 9060 XT, RADV, 8 cores; 1280x720, render scale 1, softer shadow filter,
 world AO off; the benchmark race uncapped, its window 60-130 s; free roam standing at 30 fps,
-window 90-150 s; each run alone with the benchmark lock, hidden display, no `forza.toml`):
+window 90-150 s; each run alone with the benchmark lock, hidden display, no `forza.toml`). Eight
+alternating rounds, each build once a round in a rotated order; CPU a frame is the game process's
+CPU time over the window (`/proc`) divided by the frames in it; the M2 builds with the M2 plugin:
 
-| Benchmark race | Runs | fps | 1% low | p99 ms | CPU ms a frame (all threads) | Command processor | Recorder |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| M1 (game and plugin) | 5 | 181.7 (174.2-186.0) | 122 | 7.31 | 16.2 | 2.45 | 4.17 |
-| M2, `native_render=off` | 5 | 173.1 (164.0-183.0) | 117 | 7.67 | 16.8 | 2.58 | 4.35 |
-| M2, `shadow` | 2 | 175.8 (172.7-178.9) | 114 | 7.75 | 16.5 | 2.49 | 4.29 |
-| M2, `shadow`, first build (shared call counters) | 3 | 174.4 (170.7-177.6) | 122 | 7.37 | 17.0 | 2.61 | 4.38 |
+| The race, 8 rounds | Runs | fps | Window fps | 1% low | p99 ms | CPU ms a frame |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| M1 (game and plugin) | 8 | 171.4 (167.9-179.1) | 185.4 | 119.1 | 7.58 | 16.82 |
+| **M2, `native_render=off`** | 8 | **171.8** (165.3-177.9) | 186.3 | 120.6 | 7.52 | **16.85** |
+| Control: M2 linked, no hooks | 8 | 174.7 (162.1-185.7) | 186.6 | 122.1 | 7.42 | 16.89 |
+| M2 off, the off path as tail calls (not kept) | 8 | 177.2 (165.5-191.1) | 190.2 | 122.3 | 7.39 | 16.59 |
+| M2 `shadow` (the tail-call build) | 4 | 176.0 (172.0-183.3) | 188.9 | 121.4 | 7.41 | 16.66 |
 
-| Free roam, 30 fps, standing | Runs | CPU ms a frame (all threads) | Command processor | Recorder |
-| --- | ---: | ---: | ---: | ---: |
-| M2, `native_render=off` | 2 | 22.2 | 2.00 | 3.65 |
-| M2, `shadow` | 2 | 21.5 | 1.92 | 3.60 |
-
-Shadow mode costs nothing measurable against off: in the race it is within the spread of the
-runs, and at a fixed 30 fps (where CPU time a frame is steadier than fps) it was 0.7 ms lower, also
-within the noise.
-
-**Off must cost nothing.** Structurally it is one load and one branch, plus one more call level
-than the alias the hooks replace, at each of about 3,100 flush calls a frame in the race (the
-counts below), a few microseconds a frame **[I]**. Measured, it is not settled yet:
-
-| Off A/B (the race, interleaved) | Runs | fps | CPU ms a frame |
+| Free roam, 30 fps, 4 rounds | Runs | CPU ms a frame | Against M1 |
 | --- | ---: | ---: | ---: |
-| M1 game, M1 plugin | 5 + 3 | 181.7 / 177.8 (167.4-193.6) | 16.2 / 16.8 |
-| M2 game off, M1 plugin | 3 | 171.6 (167.1-175.4) | 16.9 |
-| M2 game off, M2 plugin | 5 + 2 | 173.1 / 170.1 (163.6-183.0) | 16.8 / 17.1 |
+| M1 (game and plugin) | 4 | 21.07 (20.80-21.24) | |
+| **M2, `native_render=off`** | 4 | **21.17** (20.45-21.59) | +0.5% (t = 0.4) |
+| Control: M2 linked, no hooks | 4 | 22.66 (21.76-23.14) | +7.5% (t = 4.8) |
+| M2 off, tail calls (not kept) | 4 | 21.65 (21.25-22.07) | +2.8% (t = 2.9) |
 
-The M2 builds averaged 3-5% fewer fps than M1, with run-to-run spreads of 20-26 fps in each mode
-(a two-sided t test of the first 5 + 5 runs: t = 2.1). The second A/B was stopped after 8 of 12
-runs to free the PC. More alternating runs are needed before this can be called zero or not
-**[M]**.
+**Off costs nothing measurable.** Against M1, M2 off is +0.2% fps in the race (t = 0.15; the
+round-paired difference +0.4 fps, standard error 2.3), +0.2% CPU a frame (t = 0.25) and +0.5% CPU
+a frame at 30 fps (t = 0.4). The 3-5% the first runs showed (5-8 runs each, another link of the
+same code) did not hold up. Structurally off is one load and one branch, plus one more call level
+than the alias the hooks replace, at each of about 3,100 flush calls a frame in the race (the
+counts below): a few microseconds a frame **[I]**.
+
+The control separates the hooks from the link: the M2 objects linked without the hook trampolines
+(the hooked functions stay the generated aliases, RunCommandBuffer without its scope), so it runs
+M1's code. It is the most expensive build at 30 fps (+7.5%, t = 4.8), more than M2 off with the
+hooks. What a relink moves (the generated functions start 1,952 bytes later in all three M2
+links, and the game's own objects and data after `native_device.cpp` move) changes CPU time by
+several percent either way, without any of the new code running: that is the size of the
+differences between two links on this PC, and the hooks' cost is below it. A variant whose off
+path is a tail call (no stack frame: the load, the branch and a jump; the shadow mode's work out of
+line) measured +3.3% fps in the race and +2.8% CPU at 30 fps, both directions again, so it is not
+kept. Shadow mode is within the same spread as off.
 
 Flush points a frame, the race (shadow mode's counters): DrawVertices 387, DrawIndexedVertices
 464, BeginVertices 15, DrawVerticesUP 9, DrawIndexedVerticesUP 11, Resolve 41, the clear 16,
@@ -370,6 +374,10 @@ The shadow mode's own work, from its counters:
 | Off by 1/255 | 1.29% | 1.93% |
 | Off by 2/255 / by more | 44 / 5 pixels | 1 / 0 pixels |
 
+Four more race runs in shadow mode (the A/B above): 99,000 groups, 1,881,000 records, all agree on
+what is read, every group's counts match; 98.73% of 1.47 G mask pixels identical, 25 pixels off by
+2/255 or more; record building 4.9-5.8 us a frame, the check 0.93-0.96 us a record.
+
 - The record building is far below the M2 budget (0.3 ms a frame for the whole frame): at
   0.3 us a record, the race's ~850 D3D draws a frame would cost about 0.25 ms. RunCommandBuffer's
   ~930 calls a frame and the model lists they run are not recorded yet.
@@ -390,6 +398,12 @@ agree on what is read, every group's counts match). The first shadow session pas
 (title); the five others differed in world state (other AI drivers' names, the race timer 13.18 s
 against 13.81 s, a car that is not in the baseline), not in the shadows: the world moved on
 differently in that session, as in one of M1's write sessions (#860). Nothing presented changes.
+
+The final build (ReIGlue 0ce74d3, main merged), five sessions alternating: **off 2/6, 6/6, 6/6;
+shadow comparing every group 6/6, 6/6** (15,000 groups, all 253,157 records agree on what is
+read, every group's counts match). The off session that passed 2 of 6 ran none of M2's code; its
+four failing scenes differ in the moment, not in shading: another traffic car and the camera's
+yaw 280.1 against 280.0 in photo mode, the trees' wind animation in free roam.
 
 **Not done yet** (the rest of M2): records for every flush call of the frame (the scene's ~850
 DrawVertices and DrawIndexedVertices a frame in the race) and the converter for the model lists
