@@ -469,6 +469,8 @@ class Combined:
     def close(self):
         self.A.zip.close()
         self.B.zip.close()
+        if getattr(self, "spool", None) is not None:
+            self.spool.close()
 
     # -- names: FH2's file name in the combined world, or None when F&F's is used --
     def b_name(self, name, col_new, shadows_A):
@@ -667,6 +669,19 @@ def merge_smashable_effects(xml_a, xml_b):
 
 
 CELL_HEAD = 0x90               # a collision cell's header (tools/fm4_col.py has the layout)
+CELL_IDS = 0x3C                # in it: a list of u16 ids, its count at +0x7A
+CELL_ID_COUNT = 0x7A
+ID_BITS = 0x7FFF               # a triangle's flag bits that select ids of its cell's list (bit k: id k)
+
+
+def cell_ids(c):
+    """A collision cell's id list. A triangle whose flags have 0x8000 is always there; one with
+    low bits is there for the ids those bits select (in both games: a race's route number, its
+    barriers). Each cell has its own list: 11% of F&F's cells have one, of 1 to 7 ids."""
+    n = struct.unpack_from(">H", c, CELL_ID_COUNT)[0]
+    if n > 15:
+        raise ValueError("a collision cell with more than 15 ids")
+    return struct.unpack_from(f">{n}H", c, CELL_IDS)
 
 
 def read_fiz(d):
@@ -692,7 +707,8 @@ def retile_fiz(files, dx, dz):
     world's, cut again for the combined grid's cell of the same number: the triangles of it
     and of its neighbours (files[1:]) that reach the new square (the old one moved by -dx, -dz;
     a cell holds its 100 m and 8 m round it), their vertices, and the 12 x 12 squares' lists
-    made again. Its second part stays. F&F's grid starts 12.72 m north of FH2's: with F&F's
+    made again. The cells' id lists are not the same (cell_ids): the new cell's is the ids its
+    triangles select, and each triangle's bits are set again for it. Its second part stays. F&F's grid starts 12.72 m north of FH2's: with F&F's
     cells as they were, the car fell through the road in a strip at every row's edge."""
     first = files[0]
     c = first[0x20:]
@@ -704,8 +720,13 @@ def retile_fiz(files, dx, dz):
     verts, vert_at, tris, seen = [], {}, [], set()
     for d in files:
         _, vs, ts = read_fiz(d)
+        own = cell_ids(d[0x20:])
         for fl, corners, normal, word in ts:
             pts = [vs[k][0] for k in corners]
+            if (fl & ID_BITS) >> len(own):
+                raise ValueError("a collision triangle selects an id its cell's list has not")
+            ids = frozenset(own[k] for k in range(len(own)) if fl >> k & 1)
+            fl = (fl & ~ID_BITS, ids)
             key = (fl, tuple(sorted((round(q[0], 2), round(q[1], 2), round(q[2], 2)) for q in pts)))
             if key in seen or not fm4_col.overlaps([(q[0], q[2]) for q in pts], x0, z0, x1, z1):
                 continue
@@ -731,6 +752,10 @@ def retile_fiz(files, dx, dz):
                     lists[r * gx + cc].append(i)
     if len(tris) > 0xFFFF:
         raise ValueError("a collision cell of more than 65,535 triangles")
+    id_list = sorted(set().union(*(t[0][1] for t in tris)))     # as the games' own lists: ascending
+    if len(id_list) > 15:
+        raise ValueError("a collision cell cut again selects more than 15 ids")
+    bit = {v: 1 << k for k, v in enumerate(id_list)}
     vbase = CELL_HEAD
     tbase = vbase + 16 * len(verts)
     gbase = tbase + 32 * len(tris)
@@ -743,10 +768,13 @@ def retile_fiz(files, dx, dz):
     struct.pack_into(">4I", out, 0, len(verts), len(tris), vbase, tbase)
     struct.pack_into(">4f", out, 0x18, x0, z0, x1, z1)
     struct.pack_into(">I", out, 0x38, gbase)
+    out[CELL_IDS:CELL_ID_COUNT] = bytes(CELL_ID_COUNT - CELL_IDS)
+    struct.pack_into(f">{len(id_list)}H", out, CELL_IDS, *id_list)
+    struct.pack_into(">H", out, CELL_ID_COUNT, len(id_list))
     for pos, word in verts:
         out += struct.pack(">3fI", *pos, word)
-    for fl, row, normal, word, _ in tris:
-        out += struct.pack(">4I3fI", fl, *[vbase + 16 * v for v in row], *normal, word)
+    for (fl, ids), row, normal, word, _ in tris:
+        out += struct.pack(">4I3fI", fl | sum(bit[v] for v in ids), *[vbase + 16 * v for v in row], *normal, word)
     out += struct.pack(f">{gx * gz}I", *offs) + blob
     out += bytes(-len(out) % 0x800)
     head = bytearray(first[:0x20])
@@ -823,12 +851,15 @@ def find_ci(root, *parts):
 # post-processing must be there; its AI lines are taken when they are
 OTHER_FILES = ((("media", "db", "gamedb.slt"), True), (("media", "physics.zip"), True),
                (("media", "dynamicpost.zip"), True), (("media", "aiopenworld.zip"), False))
-OUTPUT_ITEMS = ("media", "default.xex")       # all this writes into OUT_DISC
+OUTPUT_MARKER = ".fh2ff-combined"             # written into OUT_DISC: the folder is this tool's
+OUTPUT_ITEMS = ("media", "default.xex", OUTPUT_MARKER)   # all this writes into OUT_DISC
 
 
 def output_checked(ff_disc, fh2_disc, out_disc):
     """OUT_DISC's real path, refused when it is one of the inputs, in one or round one (it would
-    be written over the files being read), or holds anything but an earlier output."""
+    be written over the files being read), or holds anything but an earlier output (a folder
+    with this tool's marker file: it is taken away when the new one is complete, so a game's
+    folder of the same two entries must not pass for one)."""
     out = os.path.realpath(out_disc)
     for src in (ff_disc, fh2_disc):
         real = os.path.realpath(src)
@@ -839,9 +870,13 @@ def output_checked(ff_disc, fh2_disc, out_disc):
         if common in (os.path.normcase(real), os.path.normcase(out)):
             raise ValueError(f"OUT_DISC ({out_disc}) is, is in or holds an input folder ({src})")
     if os.path.isdir(out):
-        other = [n for n in os.listdir(out) if n.lower() not in OUTPUT_ITEMS]
+        have = os.listdir(out)
+        other = [n for n in have if n.lower() not in OUTPUT_ITEMS]
         if other:
             raise ValueError(f"OUT_DISC ({out_disc}) holds other files ({other[0]}): give an empty or new folder")
+        if have and OUTPUT_MARKER not in have:
+            raise ValueError(f"OUT_DISC ({out_disc}) holds files and no {OUTPUT_MARKER} of an earlier run: "
+                             "give an empty or new folder")
     elif os.path.exists(out):
         raise ValueError(f"OUT_DISC ({out_disc}) is a file")
     return out
@@ -885,6 +920,8 @@ def combine(ff_disc, fh2_disc, out_disc, similar=SIMILAR):
         xex = find_ci(ff_disc, "default.xex")
         if xex and os.path.isfile(xex):
             shutil.copyfile(xex, os.path.join(stage, "default.xex"))
+        with open(os.path.join(stage, OUTPUT_MARKER), "w", encoding="utf-8") as f:
+            f.write("Written by tools/fh2ff_combine.py: a later run with this folder as OUT_DISC replaces it.\n")
         old = None
         if os.path.isdir(out):
             old = out + ".old-" + os.path.basename(stage)[-8:]
@@ -928,7 +965,14 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
     cols = struct.unpack_from(">I", col_a, 0)[0]
     grid_dx = struct.unpack_from(">f", col_b, 8)[0] - struct.unpack_from(">f", col_a, 8)[0]
     grid_dz = struct.unpack_from(">f", col_b, 12)[0] - struct.unpack_from(">f", col_a, 12)[0]
-    retiled = {}                   # FH2 collision record -> its file, cut for F&F's grid
+    retiled = {}                   # FH2 collision record -> its file, cut for F&F's grid: where
+    #                                it is in `spool` (a file beside the output, not memory)
+    spool = C.spool = tempfile.TemporaryFile(dir=out_disc)     # closed with C, before the folder moves
+
+    def cut_cell(num):
+        at, size = retiled[num]
+        spool.seek(at)
+        return spool.read(size)
     if (abs(grid_dx) > 0.01 or abs(grid_dz) > 0.01) and "noretile" not in TESTS:
         if abs(grid_dx) >= 100 or abs(grid_dz) >= 100:
             raise ValueError("the two worlds' collision grids are a cell or more apart")
@@ -946,8 +990,11 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
             if first is None:
                 continue
             near = [cell_file(r[1] + dc + cols * dr) for dr in (-1, 0, 1) for dc in (-1, 0, 1) if dc or dr]
-            retiled[r[0]] = retile_fiz([first] + [d for d in near if d], grid_dx, grid_dz)
-            struct.pack_into(">I", col_b, 0x58 + 24 * k + 12, struct.unpack_from(">I", retiled[r[0]], 8)[0])
+            cut = retile_fiz([first] + [d for d in near if d], grid_dx, grid_dz)
+            spool.seek(0, os.SEEK_END)
+            retiled[r[0]] = (spool.tell(), len(cut))
+            spool.write(cut)
+            struct.pack_into(">I", col_b, 0x58 + 24 * k + 12, struct.unpack_from(">I", cut, 8)[0])
         progress(f"{len(retiled)} collision cells cut again for the base's grid ({grid_dx:.2f}, {grid_dz:.2f} m off)")
     col, col_new, col_taken = combine_collision(col_a, bytes(col_b), a_files, b_take)
     shadows_A = {n.lower() for n in A.names if n.lower().endswith(".sh")}
@@ -1098,7 +1145,9 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
         for m in list(c["models"]) + list(c.get("models2", [])) + [PA["instances"][v & 0x7FFFFFFF]["model"] for v in c["instances"]]:
             if m in A.model_entry:
                 a_ref.add(A.model_entry[m])
-    todo = [e for e in a_ref if A.names[e].lower().endswith(".pgeo")]
+    prune = bool(retired) and "noprune" not in TESTS
+    # every procedural geometry file that is written: the referenced ones, or all when none is left out
+    todo = [e for e in (a_ref if prune else range(len(A.names))) if A.names[e].lower().endswith(".pgeo")]
     while todo:
         d = A.zip.read(A.info_of[todo.pop()])
         pp = pgeo_parts(d)
@@ -1114,7 +1163,6 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
             m = PA["instances"][v]["model"]
             if m in A.model_entry:
                 a_ref.add(A.model_entry[m])
-    prune = bool(retired) and "noprune" not in TESTS
     a_old = [e for e, n in enumerate(A.names)
              if not prune or e in a_ref or not n.lower().endswith((".rmb.bin", ".pgeo"))]
     a_new = {e: k for k, e in enumerate(a_old)}
@@ -1403,6 +1451,8 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
         a_zone_files[a_index[base]] = write_cell_51(a_zone(c, zone_uid(info)), PA["g2"])
     b_zone_files = {a_index[f"__r00z{C.zone_new[uid]:05d}.pvsz"]: write_cell_51(b_zone(bz[uid]), PB["g2"])
                     for uid in C.b_zones}
+    if len(names) > 0xFFFF:
+        raise ValueError(f"{len(names)} files: the archive takes 65,535")
     rb = os.path.join(out_root, "Ribbon_00")
     wr = ff.TrackZipWriter(os.path.join(out_root, "bin.zip"))
     try:
@@ -1426,7 +1476,7 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
                     num = col_taken[int(n.split('.')[0])]
                     bi = B.info_of[B.entry[f"{num}.fiz"]]
                     if num in retiled:
-                        wr.add(info.filename, retiled[num])        # the region's collision
+                        wr.add(info.filename, cut_cell(num))       # the region's collision
                     else:
                         wr.add_raw(info.filename, bi, B.zip.raw(bi))
                 elif n.lower() in sh_take:
@@ -1443,7 +1493,7 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
             elif n.lower().endswith(".bundle"):
                 wr.add(folder + n, rewrite_bundle(B.zip.read(info), own_map))
             elif B.names[e].lower().endswith(".fiz") and int(B.names[e].split(".")[0]) in retiled:
-                wr.add(folder + n, retiled[int(B.names[e].split(".")[0])])
+                wr.add(folder + n, cut_cell(int(B.names[e].split(".")[0])))
             elif n.lower().endswith(".pgeo"):
                 d = B.zip.read(info)
                 d2 = rewrite_pgeo(d, lambda v: C.index.get(v, v), C.NPG, b_inst)
@@ -1540,8 +1590,8 @@ def main(argv):
         k = args.index("--similar")
         similar = float(args[k + 1])
         del args[k:k + 2]
-    if len(args) != 3 or not (similar == "all" or 0 <= similar <= 1):
-        print(__doc__)
+    if len(args) != 3 or len(argv) - 1 - len(args) > 2 or not (similar == "all" or 0 <= similar <= 1):
+        print(__doc__)             # --all and --similar are one choice: not both
         return 2
     for key, value in combine(*args, similar=similar).items():
         print(f"{key}: {value}")

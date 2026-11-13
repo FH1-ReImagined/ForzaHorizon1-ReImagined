@@ -161,6 +161,11 @@ it; `fh2ff_world.py build` then converts that folder as it converts either game'
     tools/fh2ff_combine.py FH2_DISC FF_DISC OUT_DISC
     tools/fh2ff_world.py build OUT_DISC FH1_DISC UPDATE_MEDIA_ZIP OUT --fh2 FH2_DISC
 
+OUT_DISC must be new, empty or an earlier output (the tool writes `.fh2ff-combined` into it and
+replaces only a folder that has it), and not one of the game folders or in one. The combine step
+takes about 4.7 GB of memory at its peak, with either choice (both worlds' zones are held read);
+the build step after it about 1.2 GB.
+
 With `--all`, F&F's zone is used in every cell F&F has one (1,132): F&F's version of its whole
 area, with its extra trees and detail, in FH2's world (see "The whole area" below).
 
@@ -194,6 +199,11 @@ FH2's (the index's header). F&F's cells are cut again for FH2's grid (`retile_fi
 of a cell and its neighbours that reach the new square, and the cell's 12 x 12 squares' lists made
 again; made in place, a cell's lists come out as the original's). With F&F's cells as they were,
 the car fell through the road in a strip at every row's edge (z = -1856.4, -1956.4, ...).
+A cell also has a list of ids (in both games a race's route number: its barriers), and a
+triangle's low flag bits select from its own cell's list; a triangle with 0x8000 is always there.
+The lists differ from cell to cell (1,136 of F&F's 3,964 cells have a neighbour with another
+list), so a cut cell's list is the ids its triangles select and their bits are set again for it;
+the largest such list is 10 ids of the 15 the bits allow. Free roam selects none of them.
 
 **What is merged.** In the 61 cells: F&F's collision cells and shadow squares; F&F's collision
 objects (`CollObjs.xml`; its road-closure fences there are left out, with their instances) in

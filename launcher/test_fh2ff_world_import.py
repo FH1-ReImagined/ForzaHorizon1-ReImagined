@@ -279,6 +279,30 @@ class Ui(WorldBase):
         self.assertEqual(len(started), 1)
         self.assertIn("Fast & Furious", card.message.text())
 
+    def test_the_combined_import_asks_which_and_can_be_cancelled(self):
+        import shiboken6
+        from forza_launcher.ui.fm4_tracks import Fm4TracksCard
+        page = mock.Mock()
+        page._game_running.return_value = False
+        card = Fm4TracksCard(self.cfg, page)
+        self.addCleanup(lambda: shiboken6.isValid(card) and shiboken6.delete(card))
+        started = []
+        card._start = lambda job, name, text, done: started.append(job)
+        folders = [str(self.t / "FH2"), str(self.t / "FF")]
+        # the box closed (Esc, its close button): no button was clicked, nothing starts
+        with mock.patch("PySide6.QtWidgets.QMessageBox.exec", return_value=0):
+            self.assertIsNone(card._which_combined())
+            with mock.patch("PySide6.QtWidgets.QFileDialog.getExistingDirectory", side_effect=list(folders)):
+                card._import_docks()
+        self.assertEqual(started, [])
+        with mock.patch("PySide6.QtWidgets.QFileDialog.getExistingDirectory", side_effect=list(folders)),                 mock.patch.object(card, "_which_combined", return_value=fh2ffworld.COMBINED_ALL),                 mock.patch.object(fh2ffworld, "build", return_value="done") as build:
+            card._import_docks()
+            task = mock.Mock()
+            task.cancelled.return_value = False
+            self.assertEqual(started[0](task), "done")
+        self.assertEqual(build.call_args[0][1:3], tuple(folders))
+        self.assertEqual(build.call_args[1]["key"], fh2ffworld.COMBINED_ALL)
+
 
 if __name__ == "__main__":
     unittest.main()

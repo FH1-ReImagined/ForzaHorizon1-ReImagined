@@ -329,16 +329,14 @@ class Fm4TracksCard(QWidget):
         if not ff:
             return
         try:
-            fh2ffworld.check_pair(fh2ffworld.fh2_root(fh2), fh2ffworld.disc_root(ff))
+            fh2ffworld.check_pair(fh2ffworld.fh2_root(fh2, optional=False), fh2ffworld.disc_root(ff))
         except fh2ffworld.Fh2ffError as e:
             self.message.setText(str(e))
             return
 
-        whole = self.page._confirm("Fast & Furious's whole area?", "Yes: Fast & Furious's version of its whole "
-                                   "area (Nice and the coast, with its extra trees and detail, the docks and the "
-                                   "airfield) in Forza Horizon 2's world. No: only its docks; the rest stays "
-                                   "Forza Horizon 2's. Both can be imported, one after the other.")
-        key = fh2ffworld.COMBINED_ALL if whole else fh2ffworld.COMBINED
+        key = self._which_combined()
+        if key is None:
+            return
 
         def job(task):
             try:
@@ -349,6 +347,23 @@ class Fm4TracksCard(QWidget):
                 raise InstallError(f"Import FH2 + F&F stopped: {exc}") from exc
         self._start(job, "import FH2 + F&F", "Combining and converting the two worlds (about 10 minutes)… An "
                     "earlier import stays until the new one is complete.", self._build_done)
+
+    def _which_combined(self):
+        """Asks which of the two combined worlds: its key, or None when the player closes the box."""
+        from PySide6.QtWidgets import QMessageBox
+        box = QMessageBox(self)
+        box.setWindowTitle("Import FH2 + F&F")
+        box.setText("How much of Fast & Furious's world?")
+        box.setInformativeText("Whole area: Fast & Furious's version of its whole area (Nice and the coast, with "
+                               "its extra trees and detail, the docks and the airfield) in Forza Horizon 2's "
+                               "world. Docks only: its docks; the rest stays Forza Horizon 2's. Both can be "
+                               "imported, one after the other.")
+        whole = box.addButton("Whole area", QMessageBox.AcceptRole)
+        docks = box.addButton("Docks only", QMessageBox.AcceptRole)
+        box.addButton(QMessageBox.Cancel)
+        box.exec()
+        clicked = box.clickedButton()
+        return fh2ffworld.COMBINED_ALL if clicked is whole else fh2ffworld.COMBINED if clicked is docks else None
 
     def _import_fh2(self):
         """Forza Horizon 2's own world (fh2ffworld.py, key fh2): its files' folder."""

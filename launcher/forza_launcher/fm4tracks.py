@@ -60,6 +60,7 @@ MOD_PREFIX = ".fm4-track-"
 MERGED_MOD = ".fm4-track-db"      # the track's database rows over another mod's database
 FORMAT = 1
 FREE_ROAM_TRACK = 317             # TU4's Tracks row free roam loads (fm4_track_mod.py --free-roam)
+WORLD_KINDS = ("fh2ff", "fh2", "fh2docks", "fh2ffall")   # track.json kinds of an FH2 world (fh2ffworld.py)
 DEFAULT = ""                      # the choice "FH1's Colorado"
 COLORADO = "FH1's Colorado (default)"
 SPAWN_BACK = 15.0                 # metres behind the start line (tools/fm4_spawn.py)
@@ -180,7 +181,7 @@ def select(cfg, key: str):
 
 def choices(cfg) -> list:
     """[(key, label)] for the picker: Colorado first."""
-    return [(DEFAULT, COLORADO)] + [(i["key"], f"{i['name']} ({'FH2 world' if i.get('kind') in ('fh2ff', 'fh2', 'fh2docks', 'fh2ffall') else 'FM4'}, "
+    return [(DEFAULT, COLORADO)] + [(i["key"], f"{i['name']} ({'FH2 world' if i.get('kind') in WORLD_KINDS else 'FM4'}, "
                                                "experimental)") for i in installed(cfg)]
 
 
@@ -450,7 +451,7 @@ def laps(cfg, key: str) -> list:
 
 def lap_circuits(cfg) -> list:
     """[(key, name)] of the imported circuits and of those with laps (removed since), by name."""
-    names = {i["key"]: i.get("name", i["key"]) for i in installed(cfg) if i.get("kind") not in ("fh2ff", "fh2", "fh2docks", "fh2ffall")}  # no lap timer in a world
+    names = {i["key"]: i.get("name", i["key"]) for i in installed(cfg) if i.get("kind") not in WORLD_KINDS}  # no lap timer in a world
     try:
         for p in (store(cfg) / LAPS).glob("*.jsonl"):
             lower = {k.lower(): v for k, v in NAMES.items()}
@@ -755,7 +756,7 @@ def configure(cfg, env: dict, args: list, unset: list, notes: list, write=True):
     if info is None:
         return None
     folder = Path(info["path"])
-    world = info.get("kind") in ("fh2ff", "fh2", "fh2docks", "fh2ffall")  # an FH2 world (fh2ffworld.py): its own switches
+    world = info.get("kind") in WORLD_KINDS  # an FH2 world (fh2ffworld.py): its own switches
     if write and not world:
         spawn_file = folder / SPAWN_FILE
         try:

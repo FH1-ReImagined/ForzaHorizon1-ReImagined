@@ -284,9 +284,10 @@ class RibbonObjects(unittest.TestCase):
         self.assertNotIn("Other", out)
 
 
-def fiz(x0, z0, tris, tail=b"OWBB"):
+def fiz(x0, z0, tris, tail=b"OWBB", ids=(), select=()):
     """A collision cell file: a 116 m square from (x0, z0), 12 x 12 squares of 10 m, the triangles
-    ((x, y, z) corners) with no square lists (retile_fiz makes them), a second part."""
+    ((x, y, z) corners) with no square lists (retile_fiz makes them), a second part. `ids`: its
+    id list; `select`: a triangle's low flag bits (0x8000, always there, when not given)."""
     verts = [p for t in tris for p in t]
     hs, nv, nt = 0x90, len(verts), len(tris)
     toff = hs + 16 * nv
@@ -297,9 +298,12 @@ def fiz(x0, z0, tris, tail=b"OWBB"):
     struct.pack_into(">4f", head, 0x18, x0, z0, x0 + 116, z0 + 116)
     struct.pack_into(">4f", head, 0x28, 10.0, 10.0, 0.1, 0.1)
     struct.pack_into(">I", head, 0x38, goff)
+    struct.pack_into(f">{len(ids)}H", head, 0x3C, *ids)
+    struct.pack_into(">HH", head, 0x7A, len(ids), 0x8000)
+    low = list(select) + [0x8000] * (nt - len(select))
     cell = bytes(head) + b"".join(struct.pack(">3fI", *p, 0x7F) for p in verts)
-    cell += b"".join(struct.pack(">4I3fI", 0x0E028000, *[hs + 16 * (3 * k + j) for j in range(3)], 0.0, 1.0, 0.0, 0)
-                     for k in range(nt))
+    cell += b"".join(struct.pack(">4I3fI", 0x0E020000 | low[k], *[hs + 16 * (3 * k + j) for j in range(3)],
+                                 0.0, 1.0, 0.0, 0) for k in range(nt))
     cell += bytes(4 * 144)
     cell += bytes(-len(cell) % 0x800)
     return b"fiz " + struct.pack(">7I", 1, len(cell), len(tail), 0x779, 0, 0, 0) + cell + tail
@@ -328,6 +332,32 @@ class CollisionGrid(unittest.TestCase):
         listed = struct.unpack_from(f">{n}H", cell, offs[k] + 2)
         self.assertEqual([sorted(verts[v][0] for v in tris[i][1])[0][2] for i in listed], [-9.0])
         self.assertEqual(sum(1 for o in offs if o), 5)            # near: 3 squares; below: 2
+
+    def test_the_cells_id_lists_are_merged(self):
+        # a triangle's low bits select ids of its own cell's list; the cells' lists differ
+        near = [(10, 0, 20), (20, 0, 20), (10, 0, 30)]
+        wall = [(30, 0, 20), (40, 0, 20), (30, 0, 30)]
+        gone = [(10, 0, 110), (20, 0, 110), (10, 0, 114)]         # outside the new square
+        below = [(10, 0, -9), (20, 0, -9), (10, 0, -5)]
+        both = [(30, 0, -9), (40, 0, -9), (30, 0, -5)]
+        first = fiz(0.0, 0.0, [near, wall, gone], ids=(8001, 9000), select=(0x8000, 0x1, 0x2))
+        south = fiz(0.0, -100.0, [below, both, wall], ids=(2472, 6692, 8001), select=(0x1, 0x6, 0x4))
+        out = fc.retile_fiz([first, south], 0.0, 12.72)
+        self.assertEqual(fc.cell_ids(out[0x20:]), (2472, 6692, 8001))   # 9000's triangle is not kept
+        self.assertEqual(struct.unpack_from(">H", out, 0x20 + 0x7C)[0], 0x8000)
+        _, verts, tris = fc.read_fiz(out)
+        got = {min(verts[k][0] for k in t[1]): t[0] for t in tris}
+        self.assertEqual(got, {(10.0, 0.0, 20.0): 0x0E028000,       # always there
+                               (30.0, 0.0, 20.0): 0x0E020004,       # 8001: bit 0 in its cell, bit 2 here,
+                               (10.0, 0.0, -9.0): 0x0E020001,       # and the neighbour's copy is the same one
+                               (30.0, 0.0, -9.0): 0x0E020006})
+        with self.assertRaisesRegex(ValueError, "its cell's list has not"):
+            fc.retile_fiz([fiz(0.0, 0.0, [near], ids=(5,), select=(0x2,))], 0.0, 12.72)
+        many = [[(10 + k, 0, 20), (11 + k, 0, 20), (10 + k, 0, 21)] for k in range(8)]
+        a = fiz(0.0, 0.0, many, ids=range(100, 108), select=[1 << k for k in range(8)])
+        b = fiz(0.0, -100.0, many, ids=range(200, 208), select=[1 << k for k in range(8)])
+        with self.assertRaisesRegex(ValueError, "more than 15 ids"):
+            fc.retile_fiz([a, b], 0.0, 12.72)
 
     def test_unmoved_keeps_every_triangle(self):
         d = fiz(50.0, 50.0, [[(60, 0, 60), (70, 0, 60), (60, 0, 70)]])
@@ -431,11 +461,26 @@ class Output(unittest.TestCase):
             self.assertEqual(fc.output_checked(a, b, new), os.path.realpath(new))
             with mock.patch.object(os.path, "commonpath", side_effect=ValueError("another drive")):
                 fc.output_checked(a, b, new)                        # inputs on another drive: fine
-            os.makedirs(os.path.join(new, "media"))                 # an earlier output: fine
+            os.makedirs(new)                                        # an empty folder: fine
+            fc.output_checked(a, b, new)
+            os.makedirs(os.path.join(new, "media"))                 # a game's folder of only that:
+            open(os.path.join(new, "default.xex"), "w").close()     # not an earlier output
+            with self.assertRaisesRegex(ValueError, "no .fh2ff-combined"):
+                fc.output_checked(a, b, new)
+            open(os.path.join(new, fc.OUTPUT_MARKER), "w").close()  # an earlier output: fine
             fc.output_checked(a, b, new)
             open(os.path.join(new, "notes.txt"), "w").close()       # anything else: refused
             with self.assertRaisesRegex(ValueError, "other files"):
                 fc.output_checked(a, b, new)
+
+    def test_all_and_similar_are_one_choice(self):
+        with mock.patch.object(fc, "combine") as combine, mock.patch("builtins.print"):
+            self.assertEqual(fc.main(["x", "A", "B", "OUT", "--all", "--similar", "0.2"]), 2)
+            self.assertEqual(fc.main(["x", "A", "B", "OUT", "--similar", "0.2", "--all"]), 2)
+            combine.assert_not_called()
+            combine.return_value = {}
+            self.assertEqual(fc.main(["x", "A", "B", "OUT", "--all"]), 0)
+            combine.assert_called_once_with("A", "B", "OUT", similar="all")
 
     def test_missing_inputs_are_named_and_nothing_is_written(self):
         with tempfile.TemporaryDirectory() as d:
