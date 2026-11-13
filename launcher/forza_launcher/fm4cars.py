@@ -18,7 +18,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from . import datafolder, mods, paths
+from . import __version__, datafolder, mods, paths
 from .fetch import Cancelled
 
 MOD = "reimagined-fm4-cars"
@@ -37,6 +37,14 @@ def _tools():
     paths.ensure_tools_importable()
     import fm4_cars
     return fm4_cars
+
+
+def import_version():
+    """What the mod's version says (#853): the launcher's version, and its commit when it runs
+    from source, so the Mods page tells which launcher made the import."""
+    from . import game
+    commit = game.source_commit()
+    return f"{__version__} ({commit})" if commit else __version__
 
 
 def _package(cfg):
@@ -1170,6 +1178,8 @@ def _build(cfg, tools, target, backup, work, disc1, disc2, progress, cancelled, 
         update = _update_root(cfg)
         fh1 = tools.FH1(str(cfg.game_files()), str(update) if update else None, str(dlc_root))
         conv = (converter or tools.Converter)(fm4, fh1, str(staged), str(staged_pack))
+        version = import_version()
+        conv.mod_version = version
         candidates = conv.candidates()
         ids = [cid for cid, _, reason in candidates if not reason]
         dlc_ids = getattr(fm4, "dlc_car_ids", set())
@@ -1199,7 +1209,7 @@ def _build(cfg, tools, target, backup, work, disc1, disc2, progress, cancelled, 
     # engine_tuning 2: FM4's own engine tuning where FH1's is a cut traffic car's (#840)
     info = {"format": 1, "banks": True, "engine_tuning": 2, "cars": [c[1] for c in report["cars"]],
             "skipped": [s[1] for s in report["skipped"]],
-            "dlc": _dlc(cfg)}
+            "dlc": _dlc(cfg), "launcher": version}
     if dlc_packs or dlc:
         info["fm4_dlc"] = {"packs": [name for _, name in dlc_packs],
                            "cars": [c[1] for c in report.get("dlc_cars", [])], "notes": notes}
