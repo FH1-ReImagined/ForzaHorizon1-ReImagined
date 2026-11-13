@@ -35,6 +35,7 @@
 // tu_address_map: TU4 addresses
 
 #include "../debug/d3d_trace.h"
+#include "native_device.h"
 #include "../platform/guest_addr.h"
 #include "../platform/guest_memory.h"
 #include "../platform/scene_resolution.h"
@@ -398,6 +399,9 @@ extern "C" REX_FUNC(CreateDevice) {
 // code: they follow the scene while it runs (the hooks below).
 extern "C" REX_FUNC(ShadowMask) {
   FORZA_D3D_TRACE_SCOPE(ShadowMask);  // the D3D trace counts the hook too
+#if FORZA_TU4
+  forza::native_device::ShadowMaskBegin(ctx, base);  // the native renderer's shadow mode
+#endif
   if (!forza::g_width.load(std::memory_order_relaxed) || forza::g_drawing_shadow_mask) {
     OriginalShadowMask(ctx, base);
     return;
