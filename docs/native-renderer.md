@@ -151,7 +151,7 @@ more than 0.1 ms of render thread time; speed targets apply from M4.
 | --- | --- | --- | --- |
 | M0 | Tools, baselines, inventory: the pass map and the groups of passes, the transfer list, the origin of every class of foreign command list, the bin mask meaning, the CPU readers | the pass map and groups exist for all scenes; every class of foreign list has a known writer; every transfer says whether its data is read; baselines recorded | no |
 | M1 | Build-time shaders (below; ReIGlue 0590, 0600) | pack SPIR-V byte-identical to a fresh translation; a stale pack ignored; warm start at most 0.1 s plus the pack read; render test passes, benchmark unchanged | **yes**, on its own: faster starts |
-| M2 | The host device in shadow mode: draw records built from the shadow state and the converted lists, compared field by field with the command processor's own state at each draw | 100% of draws match over a race, a free roam and the M0 scenes; record building at most 0.3 ms a frame on the render thread | no |
+| M2 | The host device in shadow mode: draw records built from the shadow state and the converted lists, compared field by field with the command processor's own state at each draw (first group, the shadow mask: below; ReIGlue 0610, 0620) | 100% of draws match over a race, a free roam and the M0 scenes; record building at most 0.3 ms a frame on the render thread | no |
 | M3 | The first native group end to end: the shadow mask (clear, 11 cascade passes, blurs, the world pass's sampling), render scale above 1 and world AO included | compare mode in budget at dawn and in photo mode; render test passes; GPU zones not worse in two pairs on both machines | behind a switch |
 | M4 | Shadow maps, the depth pre-pass and the 3D scene (one 4x MSAA image, no tiles, model lists converted), the reflection cube, post-processing, the HUD and menus | on the 1650 Ti: transfers from 3.2 to at most 0.5 ms, loads and resolves from 3.6 to at most 1.5 ms; fps up beyond the noise; command processor CPU down at least 30% at 30 fps | opt-in |
 | M5 | The whole frame native: no per-frame PM4, no EDRAM buffer, no render target cache | soak; frame pacing not worse; RAM/VRAM not above emulated on 8 GB; decoder and recorder CPU at most half of today's | opt-in, experimental |
@@ -227,6 +227,174 @@ covers the race) and created the same 12 pipelines; the frame rate was the same 
 
 Listed shaders were already translated in the warm-up before M1, so play translates only pairs
 outside it, as before: the gain is at start. GPU time is unchanged (the SPIR-V is the same bytes).
+
+### M2: shadow mode, the first group of passes (the shadow mask)
+
+The host device layer exists, behind a switch, and records what it would draw without drawing
+it: `--native_render=shadow` (testing; `off` is the default). It covers one group of passes
+first, the sun's shadow mask, the one the prototype started on. Nothing drawn changes: the guest's
+D3D calls all run as before, and the GPU plugin only compares.
+
+- **The flush points (game, `src/hooks/native_device.cpp`).** 16 TU4 functions are hooked:
+  DrawVertices, DrawIndexedVertices, BeginVertices, DrawVerticesUP, DrawIndexedVerticesUP, Resolve,
+  the clear, predication, tiling, the segment kick, the fence, the three waits and the swap, and
+  RunCommandBuffer through the hook `cockpit_gauges.cpp` already had. Off, each is one load and
+  one branch before the original call.
+- **The group.** From the shadow mask function (`sub_824829D8`) to the world pass's resolve of
+  the mask (`sub_824933E0` returning to `0x8242A538`), every flush call makes a draw record. A
+  frame's group is 19 calls: 2 clears, the 11 cascade passes, 3 UP draws (a quad and the
+  horizontal and vertical blurs, with the softer filter), and 3 resolves.
+- **A record** (`src/platform/native_shadow_record.h`) holds what a native renderer would draw
+  from, read from the D3D device's shadow state when the call returns:
+  - the 161 registers the device shadows (8 blocks, device +10112) and the 32 fetch constants;
+  - the call's own arguments (primitive, count, the index address, an UP draw's first vertices)
+    and the bound shader objects;
+  - the ALU constants as a native renderer would upload them: all 512 in the group's first
+    record (the seed), then only the chunks of 4 constants the device had marked dirty when the
+    call started (device +0 and +8, bit 63 the first chunk);
+  - the shader literal constants the draw loads from the shader object (D3D's
+    LOAD_ALU_CONSTANT, `sub_82441B80`, inside the draw's flush), which the device shadow does not
+    hold (below).
+- **How it travels.** A record and its constants go into a 2 MB ring in guest memory; one 6-word
+  host packet (ReIGlue 0610: a type-3 NOP whose first word is "FH1N") behind the call's own words
+  in the device's command buffer points at them. D3D guarantees only 40 words of room past its
+  soft limit, and making space there does not always start a new segment, so the 400-2,600-word
+  records cannot go into the command buffer itself: the first build lost 1-3% of them that way.
+- **What the plugin checks** (ReIGlue 0610, `fh1_native_shadow.cpp`), in stream order, so with the
+  register file exactly as the guest's packets before the record left it:
+  - registers, fetch constants and ALU constants, those the bound shaders read (the shader
+    analysis: texture and vertex bindings, the float constant map; render targets 1-3 and their
+    blending only when the pixel shader writes them; the alpha reference only with the alpha test
+    on) apart from the others;
+  - one draw executed since the previous record for a draw call (a copy for a resolve), with the
+    record's primitive type, count and index address;
+  - a guest shader object is always the same microcode;
+  - per group: the draws and copies executed against the game's calls.
+  A resolve is compared on its source surface and copy registers, and a clear not at all (both
+  draw with their own state, below).
+- **Contents, at a low rate** (ReIGlue 0620): every `native_shadow_compare_every` groups (60, about
+  one a second at 60 fps), the plugin also computes the softer blur from the records alone (the
+  mask's fetch constant and the quad from the horizontal blur's record, the depth from the cascade
+  records) with the prototype's compute shaders into a private buffer, and after the world pass's
+  resolve compares it on the GPU with the mask the emulated passes produced. The counts are read
+  back from that submission.
+
+Off, a player's game is the same as without M2 apart from the hooks' one branch. The log in shadow
+mode: `native_render shadow:` lines from the game every 600 frames (records, their cost on the
+render thread, the flush points a frame), `FH1 native shadow` from the plugin every 300 groups
+(agreement, what differed and the first values, the check's cost) and `FH1 native shadow compare`
+every 50 compares.
+
+**What the records found** **[M]** (benchmark race and free roam):
+
+1. **Shader literal constants are not in the device's shadow.** The first runs agreed on 31.6% of
+   the records: the pixel constants c252-c255 (c508-c511) that the cascade and blur shaders read
+   (values such as -0.5, 2 pi, 1 and 0.22) are written by D3D at the draw from the shader object
+   (LOAD_ALU_CONSTANT), not through the device's constant shadow. With the literal loads in the
+   record, every record agrees. A native renderer must take a shader's literals from its object.
+2. **The cascade passes draw through DrawIndexedVerticesUP** (`sub_8242A040`, indices and vertices
+   copied into the command buffer), which the M0 map listed only as a nested writer
+   (`sub_82438B20`): with five draw functions hooked, the group's counts were 5 draw calls against 16 draws executed. With it,
+   the counts agree in every group.
+3. **A clear and a resolve draw with their own state.** The mask's clear sets its own surface
+   (RB_SURFACE_INFO 0A020280: pitch 640 with 4x MSAA over the mask's 1280x720 tiles, against the
+   shadow's 14000500), its own shaders and constants; a resolve likewise, except for its copy
+   registers and source surface, which match the shadow. Natively, both are built from the call's
+   arguments, not from the shadow.
+4. **The shadow holds values the GPU never sees, which nothing in the group reads:**
+   RB_COLOR1_INFO and RB_COLOR2_INFO (render targets not bound), RB_ALPHA_REF (alpha test off),
+   RB_HIZ_CLEAR, the fetch constants of samplers 3, 6 and 7, and ALU constants the shaders do not
+   read. So "agrees on everything" is 26.3% (the clears and resolves), "agrees on what the shaders
+   read" 100%: a native renderer has to read exactly what the bound shaders use.
+5. **The ALU constants a native renderer would upload are enough:** the seed, then the dirty
+   chunks and the literals, give every constant the shaders read, in every record. Only the shadow
+   mask group is shown so far; model lists (RunCommandBuffer) write constants D3D does not track.
+6. **UP draws read their vertices from the command buffer** through fetch constant 31, which
+   BeginVertices writes past the shadow (it clears the constant's dirty bit): a native UP draw takes
+   the vertices from the call.
+7. **Shader identity:** 12 shader objects in the group, each always the same microcode.
+
+**Measured** **[M]** (RX 9060 XT, RADV, 8 cores; 1280x720, render scale 1, softer shadow filter,
+world AO off; the benchmark race uncapped, its window 60-130 s; free roam standing at 30 fps,
+window 90-150 s; each run alone with the benchmark lock, hidden display, no `forza.toml`):
+
+| Benchmark race | Runs | fps | 1% low | p99 ms | CPU ms a frame (all threads) | Command processor | Recorder |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| M1 (game and plugin) | 5 | 181.7 (174.2-186.0) | 122 | 7.31 | 16.2 | 2.45 | 4.17 |
+| M2, `native_render=off` | 5 | 173.1 (164.0-183.0) | 117 | 7.67 | 16.8 | 2.58 | 4.35 |
+| M2, `shadow` | 2 | 175.8 (172.7-178.9) | 114 | 7.75 | 16.5 | 2.49 | 4.29 |
+| M2, `shadow`, first build (shared call counters) | 3 | 174.4 (170.7-177.6) | 122 | 7.37 | 17.0 | 2.61 | 4.38 |
+
+| Free roam, 30 fps, standing | Runs | CPU ms a frame (all threads) | Command processor | Recorder |
+| --- | ---: | ---: | ---: | ---: |
+| M2, `native_render=off` | 2 | 22.2 | 2.00 | 3.65 |
+| M2, `shadow` | 2 | 21.5 | 1.92 | 3.60 |
+
+Shadow mode costs nothing measurable against off: in the race it is within the spread of the
+runs, and at a fixed 30 fps (where CPU time a frame is steadier than fps) it was 0.7 ms lower, also
+within the noise.
+
+**Off must cost nothing.** Structurally it is one load and one branch, plus one more call level
+than the alias the hooks replace, at each of about 3,100 flush calls a frame in the race (the
+counts below), a few microseconds a frame **[I]**. Measured, it is not settled yet:
+
+| Off A/B (the race, interleaved) | Runs | fps | CPU ms a frame |
+| --- | ---: | ---: | ---: |
+| M1 game, M1 plugin | 5 + 3 | 181.7 / 177.8 (167.4-193.6) | 16.2 / 16.8 |
+| M2 game off, M1 plugin | 3 | 171.6 (167.1-175.4) | 16.9 |
+| M2 game off, M2 plugin | 5 + 2 | 173.1 / 170.1 (163.6-183.0) | 16.8 / 17.1 |
+
+The M2 builds averaged 3-5% fewer fps than M1, with run-to-run spreads of 20-26 fps in each mode
+(a two-sided t test of the first 5 + 5 runs: t = 2.1). The second A/B was stopped after 8 of 12
+runs to free the PC. More alternating runs are needed before this can be called zero or not
+**[M]**.
+
+Flush points a frame, the race (shadow mode's counters): DrawVertices 387, DrawIndexedVertices
+464, BeginVertices 15, DrawVerticesUP 9, DrawIndexedVerticesUP 11, Resolve 41, the clear 16,
+RunCommandBuffer 929, predication 807, tiling 2, segment kick 49, fence 7, waits 5, swap 1.
+
+The shadow mode's own work, from its counters:
+
+| | Race | Free roam |
+| --- | ---: | ---: |
+| Groups (runs) | 123,300 (5) | 7,800 (2) |
+| Records, 19 a group | 2,342,700 | 148,200 |
+| Agree on what the shaders read | **100%** | **100%** |
+| Agree on everything (the clears and resolves) | 26.3% | 26.3% |
+| Groups whose draws and copies match the calls | **100%** | **100%** |
+| Record building, render thread | 5.6-6.2 us a frame (0.30-0.33 us a record) | 6.3 us a frame |
+| The check, recorder thread | 0.93-1.08 us a record (about 19 us a frame) | 1.0-1.1 us a record |
+| Command buffer words a frame (the 6-word packets, begin and end) | 135 | 135 |
+| Content compares | 2,000 (one group in 60) | 100 |
+| Mask pixels bit-identical | 98.71% of 1.84 G | 98.07% of 92 M |
+| Off by 1/255 | 1.29% | 1.93% |
+| Off by 2/255 / by more | 44 / 5 pixels | 1 / 0 pixels |
+
+- The record building is far below the M2 budget (0.3 ms a frame for the whole frame): at
+  0.3 us a record, the race's ~850 D3D draws a frame would cost about 0.25 ms. RunCommandBuffer's
+  ~930 calls a frame and the model lists they run are not recorded yet.
+- **Contents:** within the plan's budget (98% identical, 1/255 on 99.99%). The 1/255 differences
+  are the prototype's (the native blur's fp32 rounds up where the host's filtered fetch and 8-bit
+  target round down). The 5 pixels off by 3/255 or more in 1.84 G (the largest 27/255, one pixel
+  in one compare: emulated FF, native E4, depth test passing natively) are taken to be a depth
+  test decided differently at a tie: natively the quad's z against the resolved 20e4 depth, in
+  the emulator against the host depth buffer **[I]**.
+- **The render test's scenes** (title, free roam at midday and dawn, cockpit, photo mode, race
+  start; the console filter, so its one box blur): 6,300 groups in 9 shapes (the group shrinks to
+  2, 5, 8, 11 or 14 draws on some frames: fewer cascades), all 107,280 records agree on what is
+  read and every group's counts match.
+
+With `--native_render=shadow`, one session, the check passed 1 of 6 scenes (title); the five
+others differ in world state (other AI drivers' names, the race timer 13.18 s against 13.81 s, a
+car that is not in the baseline), not in the shadows: the world moved on differently in that
+session, as in one of M1's write sessions (its PR, #860). The control (the same build with shadow
+mode off, and the session repeated) is still to run.
+
+**Not done yet** (the rest of M2): records for every flush call of the frame (the scene's ~850
+DrawVertices and DrawIndexedVertices a frame in the race) and the converter for the model lists
+RunCommandBuffer runs (about 930 calls a frame), checked the same way; the M0 scene set beyond the
+render test's (menus, garage, photo capture, online, FM4 circuits); world AO on and render scale
+above 1 (the content compare refuses a scaled mask; the state check runs).
 
 ## Tools
 
