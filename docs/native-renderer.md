@@ -384,11 +384,12 @@ The shadow mode's own work, from its counters:
   2, 5, 8, 11 or 14 draws on some frames: fewer cascades), all 107,280 records agree on what is
   read and every group's counts match.
 
-With `--native_render=shadow`, one session, the check passed 1 of 6 scenes (title); the five
-others differ in world state (other AI drivers' names, the race timer 13.18 s against 13.81 s, a
-car that is not in the baseline), not in the shadows: the world moved on differently in that
-session, as in one of M1's write sessions (its PR, #860). The control (the same build with shadow
-mode off, and the session repeated) is still to run.
+Render test against the M0 baselines, the same M2 build: **6/6 with the mode off and 6/6 in
+shadow mode comparing every group** (a second shadow session: 7,500 groups, all 127,671 records
+agree on what is read, every group's counts match). The first shadow session passed 1 of 6 scenes
+(title); the five others differed in world state (other AI drivers' names, the race timer 13.18 s
+against 13.81 s, a car that is not in the baseline), not in the shadows: the world moved on
+differently in that session, as in one of M1's write sessions (#860). Nothing presented changes.
 
 **Not done yet** (the rest of M2): records for every flush call of the frame (the scene's ~850
 DrawVertices and DrawIndexedVertices a frame in the race) and the converter for the model lists
