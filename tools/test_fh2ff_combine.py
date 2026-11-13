@@ -4,6 +4,7 @@ import hashlib
 import os
 import struct
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -149,6 +150,7 @@ class Collision(unittest.TestCase):
         self.assertEqual(recs[0][2], start)
         for a, b in zip(recs, recs[1:]):
             self.assertEqual(b[2], a[5])                  # laid out one after another
+        self.assertEqual(recs[-1][5], 0)                  # the last record's end, as the games' own
         _, _, kept = fc.combine_collision(colA, colB, a_files={0, 1})
         self.assertEqual(kept, {})                        # without b_take the base's file stays
 
@@ -268,6 +270,9 @@ class RibbonObjects(unittest.TestCase):
         self.assertIn("</Obj2>", out)
         self.assertTrue(out.startswith('<?xml version="1.0" ?>\n<CollObjs>\n\t<Obj0 '))
         self.assertTrue(out.rstrip().endswith("</CollObjs>"))
+        odd = a.replace("</CollObjs>", '<Obj9 Physics="x"><Pos x="1" y="1" z="1"/></Obj9></CollObjs>')
+        with self.assertRaisesRegex(ValueError, "not read"):     # an object the pattern misses
+            fc.merge_collobjs(odd, b, lambda x, z: x < 0)
 
     def test_smashable_effects(self):
         a = '<Track>\n  <FileEffectPair smashableName="bin" system_name="Dust" />\n</Track>\n'
@@ -405,6 +410,40 @@ class Region(unittest.TestCase):
         dynamic = {"pos": (-3430.0, 2.0, -6196.0)}
         self.assertEqual(fc.placed_at(P, 0x80000000, static), (-3696.0, -5952.0, 195.0))
         self.assertEqual(fc.placed_at(P, 1, dynamic), (-3430.0, -6196.0, 1.0))
+
+
+class Output(unittest.TestCase):
+    def test_inputs_are_found_whatever_their_case(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "Media", "Tracks", "ANTHEM", "ribbon_00"))
+            self.assertEqual(fc.find_ci(d, "media", "tracks", "Anthem", "Ribbon_00"),
+                             os.path.join(d, "Media", "Tracks", "ANTHEM", "ribbon_00"))
+            self.assertIsNone(fc.find_ci(d, "media", "db", "gamedb.slt"))
+
+    def test_the_output_is_never_an_input(self):
+        with tempfile.TemporaryDirectory() as d:
+            a, b = os.path.join(d, "FH2"), os.path.join(d, "FF")
+            os.makedirs(os.path.join(a, "media")); os.makedirs(b)
+            for out in (a, b, os.path.join(a, "media", "out"), d):
+                with self.assertRaisesRegex(ValueError, "input folder"):
+                    fc.output_checked(a, b, out)
+            new = os.path.join(d, "OUT")
+            self.assertEqual(fc.output_checked(a, b, new), os.path.realpath(new))
+            with mock.patch.object(os.path, "commonpath", side_effect=ValueError("another drive")):
+                fc.output_checked(a, b, new)                        # inputs on another drive: fine
+            os.makedirs(os.path.join(new, "media"))                 # an earlier output: fine
+            fc.output_checked(a, b, new)
+            open(os.path.join(new, "notes.txt"), "w").close()       # anything else: refused
+            with self.assertRaisesRegex(ValueError, "other files"):
+                fc.output_checked(a, b, new)
+
+    def test_missing_inputs_are_named_and_nothing_is_written(self):
+        with tempfile.TemporaryDirectory() as d:
+            a, b, out = os.path.join(d, "FH2"), os.path.join(d, "FF"), os.path.join(d, "OUT")
+            os.makedirs(a); os.makedirs(b)
+            with self.assertRaisesRegex(ValueError, "media/tracks/Anthem"):
+                fc.combine(a, b, out)
+            self.assertEqual(sorted(os.listdir(d)), ["FF", "FH2"])
 
 
 class Hex(unittest.TestCase):

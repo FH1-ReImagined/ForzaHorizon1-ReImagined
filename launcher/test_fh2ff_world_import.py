@@ -174,7 +174,8 @@ class World(WorldBase):
         os.environ["FH2FF_COMBINE_TEST"] = "share"       # a test switch never reaches a player's import
         self.addCleanup(os.environ.pop, "FH2FF_COMBINE_TEST", None)
         msg, calls = self.import_world(fh2=self.t / "FF", key="fh2docks", src=self.t / "FH2")
-        (combine, env), (build, _) = calls
+        (combine, env), (build, build_env) = calls
+        self.assertFalse([k for k in build_env if k.startswith("FH2FF_")])   # nor the second step
         self.assertEqual(Path(combine[1]).name, "fh2ff_combine.py")
         self.assertEqual(combine[2:4], [str(self.fh2), str(self.ff)])    # FH2 the base, F&F added
         self.assertFalse([k for k in env if k.startswith("FH2FF_")])
@@ -193,6 +194,10 @@ class World(WorldBase):
         with self.assertRaises(fh2ffworld.Fh2ffError):
             self.import_world(fh2=self.t / "FH2", key="fh2docks", src=self.t / "FH2")   # FH2 given as F&F
         self.assertNotIn("--all", combine)
+        with self.assertRaisesRegex(fh2ffworld.Fh2ffError, "same folder"):
+            fh2ffworld.check_pair(self.fh2, self.t / "FH2")
+        mod = self.cfg.data_home() / "mods" / ".fm4-track-fh2docks"
+        self.assertIn("Made by Import FH2 + F&F from", (mod / "mod.toml").read_text())
         # Fast & Furious's whole area: the same with --all, kept beside the docks one
         msg, calls = self.import_world(fh2=self.t / "FF", key="fh2ffall", src=self.t / "FH2")
         self.assertEqual(calls[0][0][-1], "--all")

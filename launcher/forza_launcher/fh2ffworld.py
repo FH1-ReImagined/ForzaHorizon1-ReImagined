@@ -102,6 +102,15 @@ def fh2_root(folder):
     return root
 
 
+def check_pair(fh2, ff):
+    """The two games' folders for a combined world must be two folders: FH2's given as Fast &
+    Furious's too (a copy without its default.xex names no game) would import a world with
+    nothing of Fast & Furious's in it."""
+    if Path(fh2).resolve() == Path(ff).resolve():
+        raise Fh2ffError("The same folder was chosen for both games. Choose Forza Horizon 2's files, then "
+                         "Forza Horizon 2 Presents Fast & Furious's.")
+
+
 def installed(cfg, key=KEY):
     info = fm4tracks.find(cfg, key)
     return info if info and info.get("kind") == WORLDS[key][0] else None
@@ -117,6 +126,7 @@ def build(cfg, ff_folder, fh2_folder=None, progress=lambda f, text: None, cancel
     if key in COMBINED_KEYS:          # FH2's files (ff_folder) lead, F&F's (fh2_folder) give the docks
         src = fh2 = fh2_root(ff_folder)
         added = disc_root(fh2_folder, "anthem")
+        check_pair(src, added)
     elif key == "fh2":
         src = fh2 = fh2_root(ff_folder)
     else:
@@ -142,19 +152,20 @@ def build(cfg, ff_folder, fh2_folder=None, progress=lambda f, text: None, cancel
     def say(line):
         lines[0] += 1  # the tool prints some 25 lines; the bar moves with them
         progress(min(0.95, lines[0] / (50 if added else 30)), line[:120])
+    # the converters' own test switches (FH2FF_...) never reach a player's import
+    env = {k: v for k, v in fm4tracks._tool_env().items() if not k.startswith("FH2FF_")}
     try:
         out = work / "out"
         if added:
             progress(0.0, "Putting Fast & Furious's " + ("area" if key == COMBINED_ALL else "docks")
                      + " into Forza Horizon 2's world (a few minutes)…")
-            env = {k: v for k, v in fm4tracks._tool_env().items() if not k.startswith("FH2FF_")}
             runner(fm4tracks.tool_command("fh2ff_combine.py", src, added, work / "combined",
                                           *(("--all",) if key == COMBINED_ALL else ())), env, say, cancelled)
             src = work / "combined"
-        progress(0.4 if added else 0.0, f"Converting {name}'s world (a few minutes)…")
+        progress(0.4 if added else 0.0, f"Converting {name}…" if added else f"Converting {name}'s world (a few minutes)…")
         runner(fm4tracks.tool_command("fh2ff_world.py", "build", src, game, Path(update) / "media.zip", out,
                                       *(("--fh2", fh2) if fh2 else ())),
-               fm4tracks._tool_env(), say, cancelled)
+               env, say, cancelled)
         staged = out / "fm4-tracks" / TOOL_KEY
         mod = out / "mods" / TOOL_MOD
         if not fm4cars._find_ci(staged, "media", "tracks", FOLDER) or not (mod / "media" / "db" / "gamedb.slt").is_file():
@@ -163,7 +174,8 @@ def build(cfg, ff_folder, fh2_folder=None, progress=lambda f, text: None, cancel
             spawn = (staged / fm4tracks.SPAWN_FILE).read_text(encoding="utf-8").splitlines()[0].strip()
         except (OSError, IndexError):
             raise Fh2ffError("The converter found no start on the world's roads.") from None
-        (mod / "mod.toml").write_text(f'name = "{name} world"\ndescription = "Made by Import {name} from '
+        label = "Import FH2 + F&F" if added else f"Import {name}"
+        (mod / "mod.toml").write_text(f'name = "{name} world"\ndescription = "Made by {label} from '
                                       'your own copies of the games. Never share it."\n', encoding="utf-8")
         info = {"format": FORMAT, "kind": kind, "key": key, "folder": FOLDER, "name": name, "ribbon": 0,
                 "spawn": spawn, "fh2": fh2 is not None, "imported": time.strftime("%Y-%m-%d %H:%M"),

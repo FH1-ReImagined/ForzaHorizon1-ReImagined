@@ -329,8 +329,7 @@ class Fm4TracksCard(QWidget):
         if not ff:
             return
         try:
-            fh2ffworld.fh2_root(fh2)
-            fh2ffworld.disc_root(ff)
+            fh2ffworld.check_pair(fh2ffworld.fh2_root(fh2), fh2ffworld.disc_root(ff))
         except fh2ffworld.Fh2ffError as e:
             self.message.setText(str(e))
             return

@@ -18,7 +18,7 @@ stands for the base (A) and "FH2" for the added world (B), as first written. --s
 only the cells the base has no zone in.
 
 OUT_DISC gets media/tracks/Anthem (the combined world), and the base's database, physics and AI
-lines. What is combined (fnf_map/COMBINED_MAP_PLAN.md has the measurements):
+lines. What is combined (docs/fh2ff-world.md has the measurements):
 
 - The region: FH2's zones in the cells F&F has none in and in those round them FH2 rebuilt;
   F&F's everywhere else. Round the region, F&F's zones lose their instances and procedural
@@ -52,6 +52,7 @@ import re
 import shutil
 import struct
 import sys
+import tempfile
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -363,6 +364,9 @@ class Combined:
         self.hexB, self.gridB = hex_cells(rb(fh2_root, f"{NAME}_00.hex"))
         if self.gridA[1:4] != self.gridB[1:4]:
             raise ValueError("the two worlds' hex grids differ")
+        for key in ("g1", "g2", "g3", "a2", "ribbon", "prefix", "b184", "b216", "b228"):
+            if self.A.P[key] != self.B.P[key]:
+                raise ValueError(f"the two worlds' layouts differ in {key}: {self.A.P[key]!r}, {self.B.P[key]!r}")
         PA, PB = self.A.P, self.B.P
         self.NM = len(PA["models"])
         self.NPG = PA["pgeo"]
@@ -519,6 +523,9 @@ def merge_collobjs(xml_a, xml_b, inside):
     def in_a(t, x, z):
         return any(abs(ox - x) < 1.0 and abs(oz - z) < 1.0 for dx in (-1, 0, 1) for dz in (-1, 0, 1)
                    for ox, oz in at_a.get((t.lower(), round(x) + dx, round(z) + dz), ()))
+    for name, xml in (("the base's", xml_a), ("the added world's", xml_b)):
+        if len(re.findall(r"<Obj\d+[ >]", xml)) != sum(1 for _ in _COLLOBJ.finditer(xml)):
+            raise ValueError(f"{name} CollObjs.xml holds an object in a form not read: it would be left out")
     kept, closures = [], []
     for m in _COLLOBJ.finditer(xml_a):
         if not inside(float(m.group(5)), float(m.group(7))):
@@ -787,6 +794,7 @@ def combine_collision(colA, colB, a_files, b_take=()):
     for r in ra:
         r[2], r[5] = at, at + r[3]
         at += r[3]
+    ra[-1][5] = 0                  # the last record's, as in both games' own index
     out = bytearray(colA[:0x58])
     struct.pack_into(">I", out, 0x4C, len(ra))
     struct.pack_into(">I", out, 0x54, start)
@@ -797,19 +805,101 @@ def combine_collision(colA, colB, a_files, b_take=()):
     return bytes(out), new, taken
 
 
+def find_ci(root, *parts):
+    """root/parts with each part found whatever its case (the games' folders are named in
+    several: Media, media); None when one is missing."""
+    path = root
+    for part in parts:
+        if not os.path.isdir(path):
+            return None
+        at = {n.lower(): n for n in os.listdir(path)}
+        if part.lower() not in at:
+            return None
+        path = os.path.join(path, at[part.lower()])
+    return path
+
+
+# the base's other files the build reads (fh2ff_world.py): its database, physics and
+# post-processing must be there; its AI lines are taken when they are
+OTHER_FILES = ((("media", "db", "gamedb.slt"), True), (("media", "physics.zip"), True),
+               (("media", "dynamicpost.zip"), True), (("media", "aiopenworld.zip"), False))
+OUTPUT_ITEMS = ("media", "default.xex")       # all this writes into OUT_DISC
+
+
+def output_checked(ff_disc, fh2_disc, out_disc):
+    """OUT_DISC's real path, refused when it is one of the inputs, in one or round one (it would
+    be written over the files being read), or holds anything but an earlier output."""
+    out = os.path.realpath(out_disc)
+    for src in (ff_disc, fh2_disc):
+        real = os.path.realpath(src)
+        try:
+            common = os.path.normcase(os.path.commonpath([real, out]))
+        except ValueError:         # on another drive: neither holds the other
+            continue
+        if common in (os.path.normcase(real), os.path.normcase(out)):
+            raise ValueError(f"OUT_DISC ({out_disc}) is, is in or holds an input folder ({src})")
+    if os.path.isdir(out):
+        other = [n for n in os.listdir(out) if n.lower() not in OUTPUT_ITEMS]
+        if other:
+            raise ValueError(f"OUT_DISC ({out_disc}) holds other files ({other[0]}): give an empty or new folder")
+    elif os.path.exists(out):
+        raise ValueError(f"OUT_DISC ({out_disc}) is a file")
+    return out
+
+
 def combine(ff_disc, fh2_disc, out_disc, similar=SIMILAR):
     """ff_disc: the base world's game folder; fh2_disc: the added world's; similar: how alike
     (0 to 1) a cell's two zones must be for the base's to stay round the cells it lacks (0:
-    only those cells are the added world's)."""
-    ff_root = os.path.join(ff_disc, "media", "tracks", NAME)
-    fh2_root = os.path.join(fh2_disc, "media", "tracks", NAME)
-    out_root = os.path.join(out_disc, "media", "tracks", NAME)
-    os.makedirs(os.path.join(out_root, "Ribbon_00"), exist_ok=True)
-    C = Combined(ff_root, fh2_root, similar)
+    only those cells are the added world's; "all": every cell the added world has).
+    Written into a folder beside OUT_DISC and put in its place when complete: a run that fails
+    leaves an earlier output as it was."""
+    roots = []
+    for disc in (ff_disc, fh2_disc):
+        root = find_ci(disc, "media", "tracks", NAME)
+        if root is None or find_ci(root, "Ribbon_00") is None or find_ci(root, "bin.zip") is None:
+            raise ValueError(f"{disc} holds no media/tracks/{NAME} with its bin.zip and Ribbon_00")
+        roots.append(root)
+    others = []
+    for rel, needed in OTHER_FILES:
+        src = find_ci(ff_disc, *rel)
+        if src is None and needed:
+            raise ValueError(f"{ff_disc} holds no {'/'.join(rel)}")
+        if src is None:
+            print(f"note: no {'/'.join(rel)} in {ff_disc}: left out", file=sys.stderr)
+        else:
+            others.append((rel, src))
+    out = output_checked(ff_disc, fh2_disc, out_disc)
+    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+    stage = tempfile.mkdtemp(prefix=".fh2ff-combine-", dir=os.path.dirname(out) or ".")
     try:
-        return _combine(C, ff_disc, fh2_disc, out_disc, out_root)
+        out_root = os.path.join(stage, "media", "tracks", NAME)
+        os.makedirs(os.path.join(out_root, "Ribbon_00"))
+        C = Combined(roots[0], roots[1], similar)
+        try:
+            report = _combine(C, ff_disc, fh2_disc, stage, out_root)
+        finally:
+            C.close()
+        for rel, src in others:
+            os.makedirs(os.path.dirname(os.path.join(stage, *rel)), exist_ok=True)
+            shutil.copyfile(src, os.path.join(stage, *rel))
+        xex = find_ci(ff_disc, "default.xex")
+        if xex and os.path.isfile(xex):
+            shutil.copyfile(xex, os.path.join(stage, "default.xex"))
+        old = None
+        if os.path.isdir(out):
+            old = out + ".old-" + os.path.basename(stage)[-8:]
+            os.rename(out, old)
+        try:
+            os.rename(stage, out)
+        except OSError:
+            if old:
+                os.rename(old, out)
+            raise
+        if old:
+            shutil.rmtree(old, ignore_errors=True)
+        return report
     finally:
-        C.close()
+        shutil.rmtree(stage, ignore_errors=True)
 
 
 def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
@@ -833,7 +923,7 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
     col_b = bytearray(open(os.path.join(rbB, f"{NAME}_track_00.col"), "rb").read())
     # FH2's collision grid against F&F's (the index's header: columns, rows, the origin): its
     # cells the region's zones name are cut again for F&F's grid when the origins differ
-    if col_a[:8] != col_b[:8] or col_a[0x18:0x20] != col_b[0x18:0x20]:
+    if col_a[:8] != col_b[:8] or col_a[0x18:0x28] != col_b[0x18:0x28] or col_a[0x2C:0x4C] != col_b[0x2C:0x4C]:
         raise ValueError("the two worlds' collision grids differ in size")
     cols = struct.unpack_from(">I", col_a, 0)[0]
     grid_dx = struct.unpack_from(">f", col_b, 8)[0] - struct.unpack_from(">f", col_a, 8)[0]
@@ -969,10 +1059,9 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
     # retired nothing loads those: the road drew black and so many textures streamed one by one
     # that the next zone's collision came late (the car fell through at each zone's edge).
     own_map = dict(C.index)
-    bundle_data = {}
-    for e in [e for e in needed if B.names[e].lower().endswith(".bundle")]:
-        bundle_data[e] = rewrite_bundle(B.zip.read(B.info_of[e]), own_map)
-        if bundle_data[e] is None:
+    bundles = [e for e in needed if B.names[e].lower().endswith(".bundle")]
+    for e in bundles:              # (rewritten again when written: none is held meanwhile)
+        if not any(t in own_map for t, _, _ in bundle_entries(B.zip.read(B.info_of[e]))):
             needed.discard(e)
     for e, n in enumerate(B.names):
         low = n.lower()
@@ -1092,6 +1181,14 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
                 a_res.setdefault((a_new[f[3]], f[2]), (f[0], f[1]))
     OWN9 = len(A.names) + len(B.names)     # ids of FH2's preload records: past F&F's (its entries)
 
+    a_self = {}
+    for cell, uid in C.hexA.items():
+        if cell not in C.region:
+            for f in az[uid]["files"] + az[uid].get("files2", []):
+                if f[2] in (ZONE, SOUNDSCAPE) and f[0] == uid:
+                    a_self[(cell, f[2])] = f
+    b_cell = {uid: cell for cell, uid in C.hexB.items()}
+
     # Resource numbers (a record's second field) in the combined world. Both worlds number a
     # zone's file resource as the zone (every type 1 record of F&F's 6,560 and FH2's 17,332),
     # its zones first, then the rest, no number naming two files. Here: the zones (F&F's and
@@ -1112,6 +1209,11 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
 
     def b_record(f):
         own, res, kind, e = f
+        if kind in (ZONE, SOUNDSCAPE) and own not in C.zone_new:
+            # a neighbour outside the region: F&F's zone of that cell (FH2's zones name 4 to 7
+            # neighbours; F&F's own name only themselves)
+            g = a_self.get((b_cell.get(own), kind))
+            return a_record(g) if g else None
         if e not in b_to:
             return None
         if kind == PGEO and f"nopgeo{B.kind(e)}" in TESTS:   # a test: one procedural type left out
@@ -1273,6 +1375,13 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
                                        for k in C.own]
     models = list(PA["models"]) + [dict(m, textures=[C.tex(t) for t in m["textures"]],
                                          shaders=[smap[s] for s in m["shaders"]]) for m in PB["models"]]
+    if len(models) > 0xFFFF:       # an instance's and a zone's model numbers are 16 bits
+        raise ValueError(f"{len(models)} models: the layout takes 65,535")
+    if len(PA["names"]) + len(PB["names"]) >= 0xFFFF:
+        raise ValueError("more named instances than the layout's 16-bit name numbers take")
+    for key in ("cells", "always", "dynamic", "models_a", "models_b"):
+        if PB[key] or (PA[key] and not a_whole):   # they name instances and models by number
+            raise ValueError(f"the layout's {key} list is not empty: not renumbered here")
     instances = [PA["instances"][v] for v in sorted(a_used)]
     for v in sorted(b_used):
         i = PB["instances"][v]
@@ -1332,7 +1441,7 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
             if k in b_zone_files:
                 wr.add(folder + n, b_zone_files[k])
             elif n.lower().endswith(".bundle"):
-                wr.add(folder + n, bundle_data[e])
+                wr.add(folder + n, rewrite_bundle(B.zip.read(info), own_map))
             elif B.names[e].lower().endswith(".fiz") and int(B.names[e].split(".")[0]) in retiled:
                 wr.add(folder + n, retiled[int(B.names[e].split(".")[0])])
             elif n.lower().endswith(".pgeo"):
@@ -1409,19 +1518,9 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
     per = len(sA) // nzA
     open(os.path.join(out_root, "PVSZoneSpeeds.dat"), "wb").write(
         sA + b"".join(sB[uid * per:(uid + 1) * per] for uid in C.b_zones))
-    # the game's other files the build reads: F&F's
-    for rel in (("media", "db", "gamedb.slt"), ("media", "physics.zip"), ("media", "aiopenworld.zip"),
-                ("media", "dynamicpost.zip")):
-        src = os.path.join(ff_disc, *rel)
-        if os.path.isfile(src):
-            os.makedirs(os.path.dirname(os.path.join(out_disc, *rel)), exist_ok=True)
-            shutil.copyfile(src, os.path.join(out_disc, *rel))
-    xex = os.path.join(ff_disc, "default.xex")
-    if os.path.isfile(xex):
-        shutil.copyfile(xex, os.path.join(out_disc, "default.xex"))
     return {"zones": f"{len(PA['zones'])} base + {len(C.b_zones)} added", "files": len(names),
             "models": len(models), "textures": len(textures), "added textures that are the base's": C.twins,
-            "bundles": f"{len(bundle_data)} named, {sum(1 for d in bundle_data.values() if d is None)} left out",
+            "bundles": f"{len(bundles)} named, {sum(1 for e in bundles if e not in needed)} left out",
             "base files left out (only retired zones used them)": report_pruned,
             "instances": len(instances),
             "region": f"{len(C.region)} cells, {sum(1 for c in C.region if c in C.hexA)} of the base's replaced",
