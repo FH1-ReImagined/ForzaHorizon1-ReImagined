@@ -152,7 +152,7 @@ more than 0.1 ms of render thread time; speed targets apply from M4.
 | M0 | Tools, baselines, inventory: the pass map and the groups of passes, the transfer list, the origin of every class of foreign command list, the bin mask meaning, the CPU readers | the pass map and groups exist for all scenes; every class of foreign list has a known writer; every transfer says whether its data is read; baselines recorded | no |
 | M1 | Build-time shaders (below; ReIGlue 0590, 0600) | pack SPIR-V byte-identical to a fresh translation; a stale pack ignored; warm start at most 0.1 s plus the pack read; render test passes, benchmark unchanged | **yes**, on its own: faster starts |
 | M2 | The host device in shadow mode: draw records built from the shadow state and the converted lists, compared field by field with the command processor's own state at each draw (first group, the shadow mask: below; ReIGlue 0610, 0620) | 100% of draws match over a race, a free roam and the M0 scenes; record building at most 0.3 ms a frame on the render thread | no |
-| M3 | The first native group end to end: the shadow mask (clear, 11 cascade passes, blurs, the world pass's sampling), render scale above 1 and world AO included | compare mode in budget at dawn and in photo mode; render test passes; GPU zones not worse in two pairs on both machines | behind a switch |
+| M3 | The first native group end to end: the shadow mask (clear, 11 cascade passes, blurs, the world pass's sampling), render scale above 1 and world AO included (in progress: the blurs and their resolves, below) | compare mode in budget at dawn and in photo mode; render test passes; GPU zones not worse in two pairs on both machines | behind a switch |
 | M4 | Shadow maps, the depth pre-pass and the 3D scene (one 4x MSAA image, no tiles, model lists converted), the reflection cube, post-processing, the HUD and menus | on the 1650 Ti: transfers from 3.2 to at most 0.5 ms, loads and resolves from 3.6 to at most 1.5 ms; fps up beyond the noise; command processor CPU down at least 30% at 30 fps | opt-in |
 | M5 | The whole frame native: no per-frame PM4, no EDRAM buffer, no render target cache | soak; frame pacing not worse; RAM/VRAM not above emulated on 8 GB; decoder and recorder CPU at most half of today's | opt-in, experimental |
 | M6 | VR true stereo, DLSS (exact input sizes), FSR 3, HDR, SMAA, ultrawide, the split HUD raster, texture packs, world AO, FM4 tracks, Big Shot and photo upload; Windows and NVIDIA | every feature passes its existing test; the 1650 Ti on Windows passes the common set | default, emulated one setting away |
@@ -410,6 +410,168 @@ DrawVertices and DrawIndexedVertices a frame in the race) and the converter for 
 RunCommandBuffer runs (about 930 calls a frame), checked the same way; the M0 scene set beyond the
 render test's (menus, garage, photo capture, online, FM4 circuits); world AO on and render scale
 above 1 (the content compare refuses a scaled mask; the state check runs).
+
+### M3: the shadow mask natively (first part: its blurs and resolves)
+
+`--native_render=hybrid` (testing; `off` stays the default) records the shadow mask group as shadow
+mode does, and the GPU plugin draws part of it natively: **the mask's blurs and the mask's resolves
+after them** are no longer made as D3D calls. Everything else in the frame, the mask's clear and its
+11 cascade passes included, stays emulated. `--native_shadow_mask=false` keeps the whole group
+emulated in hybrid mode. Off, nothing changes (the hooks' one branch, as in M2).
+
+- **The flush points skip the call.** Inside the blur hook (`src/hooks/shadow_filter.cpp`, the
+  shadow renderer's own mask only) a `BlurScope` marks the records of the blur's DrawVerticesUP with
+  `kRecordBlur` and the blur's kind; a `MaskResolveScope` marks the resolves of the mask after the
+  group's first blur (`kRecordMaskResolve`): the Softer filter's resolve between its passes, photo
+  mode's, and the world pass's. In a native group those flush points build their record and do not
+  call D3D (`kRecordNative`). The D3D setters still run, so the device's shadow state stays what
+  later game code reads; the dirty bits the skipped flushes would have cleared are flushed by the
+  next emulated draw.
+- **Decided before anything is skipped.** At the group's first blur (`ShadowMaskBlurNative`), and
+  kept for the group: hybrid mode, `native_shadow_mask` on, the plugin's status bit set, world AO
+  off, and a blur quad that covers the screen (the no-sun path at dawn blurs a zeroed quad after a
+  clear, and the world pass's resolve must copy that clear: the prototype's dawn failure). The
+  status word is guest memory the game passes in each group's begin packet; the plugin writes it at
+  each begin (ReIGlue 0630): set when it can draw the blurs with the current settings (Vulkan, any
+  integer render scale; no fractional raster, no independent scene size). D3D12, ReGPU and older
+  plugins never set it, so the game draws the group itself there. A plugin that cannot draw a record
+  although the game skipped the call (settings changed in the last frame or two) leaves the mask the
+  cascades resolved, unblurred, and clears its bit for 300 groups.
+- **What the plugin draws** (`fh1_native_shadow_compare.cpp`): each blur is one compute dispatch in
+  stream order, from its record alone: the mask's fetch constant (fetch constant 1) and the quad from
+  the blur's record, the depth test from the record's RB_DEPTHCONTROL (LEQUAL, no writes), the depth
+  pre-pass resolve from the cascade passes' records. All of the game's blurs: the console filter's
+  2x2 box (`58CE51CE56247C16`, four bilinear taps), photo mode's 4-tap pair (`85C2871B0E0A740B`,
+  `F6EE736B656E5942`) and the 6-tap pair Softer uses (`DBD55E02669D5CB1`, `D9A1FFC33C029F54`); every tap
+  is at a half texel of a one-to-one quad, at any render scale (the translator scales the offsets),
+  so each is the mean of two or four neighbours. A pass reads the mask from guest memory or a
+  private buffer and writes the other; when its input is a private buffer it writes the mask's own
+  memory and marks it resolved, as a resolve does (render scale above 1: in the scaled resolve
+  buffer, with the scaled texture loads' addressing). A resolve only says where the mask is from
+  then on, and at the group's end the mask is copied to its memory if it is not there. Softer is two
+  dispatches (the horizontal pass into a private buffer, the vertical one into the mask), the console
+  box one and a copy.
+- **Compare mode** is shadow mode's (`--native_render=shadow --native_shadow_compare_every=N`): the
+  game makes every call, and the same dispatches run into private buffers only; after the world
+  pass's resolve a compare dispatch counts the pixels where they differ from the emulated mask. It
+  now covers every blur kind and render scale above 1, and checks the blurs' weights against the
+  literals the guest's draws load (`blur H loads c255 = (0.27272728, 0.045454547, 0.18181819, 0)`,
+  the box `(0.25, 0, 0, 0)`, the 4-tap pair `(0.2, 0.3, 0, 0)`).
+- **Logs:** `native_render hybrid:` every 600 frames from the game (groups drawn natively, calls
+  skipped, groups the game drew itself and why); `FH1 native shadow mask` from the plugin (groups,
+  blurs by kind, refusals) and the state check's `drawn natively` count. GPU time: the profile zone
+  `fh1 native shadow mask`.
+
+**Measured** **[M]** (RX 9060 XT, RADV; 1280x720, hidden display, no `forza.toml`; one game and
+plugin build for every mode, only the flags differ):
+
+| Compare mode (shadow mode, every group) | Compares | Pixels | Identical | Off by 1/255 | Off by 2 / by 3+ |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Race, Softer (6-tap pair), scale 1 | 10,550 | 9.72 G | 98.64% | 1.36% | 473 / 12 |
+| Race, console (box), scale 1 | 11,650 | 10.74 G | 99.80% | 0.20% | 0 / 6 (after the first compare) |
+| Race, Softer, render scale 2 (2560x1440) | 2,100 | 7.74 G | 98.62% | 1.36% | 238,246 / 570,582 |
+| Render test scenes, console: free roam at midday | 544 | 501 M | 99.66% | 0.34% | 0 / 4 |
+| ... at dawn | 6 | 5.5 M | 99.66% | 0.34% | 0 / 0 |
+| ... cockpit | 750 | 691 M | 98.50% | 1.50% | 4 / 2 |
+| ... photo mode (the 4-tap pair) | 1,300 | 1.20 G | 99.23% | 0.77% | 606 / 4 |
+| ... race start | 4,300 | 3.96 G | 99.69% | 0.31% | 0 / 2 |
+
+- **In the plan's budget everywhere at render scale 1** (98% identical, 1/255 on 99.99%). The
+  1/255 differences are the prototype's (fp32 rounding against the host's filtered fetch and 8-bit
+  target). The few pixels off by 3/255 or more are single pixels (12 in 9.7 G in the race), taken
+  to be the depth test decided differently at a tie, as in M2 **[I]**.
+- **The first compare of a session is not counted** in the box row: its emulated blur draws were
+  skipped while their pipelines were still being built (the log's "draws skipped" line at that
+  frame; the scratch caches start cold), so the emulated mask there is the unblurred one (92,818
+  pixels differ, up to 191/255). The Softer race's first compare differs the same way in the two
+  bytes the blur writes as constants (713,484 pixels, red identical).
+- **Render scale 2 is in budget but not as close:** 99.993% of the pixels within 1/255, and every
+  logged pixel off by 3/255 or more (252 of 252 samples) is in the mask's first column or first row:
+  the emulated sampling of the scaled mask at its top and left edges, which the native pass clamps
+  differently **[I]**; to match in a follow-up.
+- **At dawn** the no-sun path blurs a zeroed quad after clearing the mask: the game keeps those
+  groups emulated (721 groups in a render test session, "quad"), and the 6 compares are the frames
+  with sun shadows before it.
+- **The compare found a wrong constant:** photo mode's 4-tap pair loads c255 = (0.2, 0.3), not the
+  0.25 first assumed; before the fix photo mode's compare had 94.7% identical and 23 M pixels off by
+  3/255 or more, yet the render test passed photo mode (dssim 0.0072 against 0.016). Compare mode is
+  the check that catches a native pass's arithmetic.
+- **Hybrid in the race:** every group native after the plugin's first status (2 groups emulated at
+  the start), 4 calls skipped a group with Softer (2 blurs, 2 resolves), 2 with the console box, 0 refusals, 0
+  calls made inside a native blur, and the state check still agrees on everything read in every
+  record and on every group's counts. At render scale 2: 6,000 groups, 0 refusals. With world AO
+  on, every group stays emulated ("world AO").
+
+Render test against the M0 baselines, the same game build: **hybrid 6/6 in all four sessions, off
+4/6, 6/6, 6/6, shadow mode comparing every group 5/6, 6/6** (the last two hybrid sessions, one off
+and the second compare session with the final plugin). In a hybrid session the plugin drew the box
+(about 4,960 groups), the 4-tap pair (about 1,040 each) and the game kept 721 dawn groups emulated.
+The off session at 4/6 failed free roam at midday (0.0058 against 0.005) and at dawn (0.0101 against
+0.010), and the first compare session midday (0.0061): neither draws anything natively, so this is
+the world moving on differently between sessions, as in M2's off sessions (#860). The first two
+hybrid sessions ran photo mode's first, wrong weights and still passed.
+
+The A/B: the same game and plugin, `native_render=off` (O) against `hybrid` (H), six alternating
+rounds (the order flipped every round), each run alone with the benchmark lock; the race uncapped
+with Softer (its window 60-130 s), free roam standing at 30 fps (90-150 s). One free roam pair was
+run again: the first H run of round 3 had other processes busy on 1.8 cores (25.1 ms a frame).
+
+| Race, 6 rounds | O | H | H against O |
+| --- | ---: | ---: | ---: |
+| fps (result.json) | 170.5 (159.6-185.1) | 173.0 (161.2-186.3) | +1.4% (t = 0.44; paired +2.5, se 7.0) |
+| Window fps | 182.1 | 182.4 | +0.2% (t = 0.05) |
+| 1% low / p99 ms | 108.9 / 7.94 | 109.3 / 7.91 | t = 0.07 / -0.13 |
+| CPU ms a frame (the game's) | 16.88 | 16.84 | -0.3% (t = -0.12) |
+| Render thread / GPU recorder / decoder, ms a frame | 3.19 / 4.49 / 2.51 | 3.25 / 4.44 / 2.50 | within one sd (0.25 / 0.24 / 0.06) |
+| **Free roam, 30 fps: CPU ms a frame** | 22.06 | 22.16 | +0.5% (t = 0.24) |
+
+| GPU zones, race, ms a frame (windows 60-130 s) | O pair 1 | H pair 1 | O pair 2 | H pair 2 |
+| --- | ---: | ---: | ---: | ---: |
+| The blur's two render passes (`ps DBD55E02...`, `ps D9A1FFC3...`) | 0.046 | 0 | 0.049 | 0 |
+| Loads of 1280x720 k_8_8_8_8 textures (the mask's among them) | 0.105 | 0.068 | 0.106 | 0.066 |
+| `fh1 native shadow mask` (two dispatches) | 0 | 0.088 | 0 | 0.090 |
+| All resolves (about 24 a frame, two of them skipped in H) | 0.618 | 0.613 | 0.671 | 0.635 |
+| **Sum** | **0.769** | **0.769** | **0.826** | **0.791** |
+| The 11 cascade passes (still emulated) | 0.089 | 0.097 | 0.097 | 0.099 |
+
+- **No gain survives the noise, and none was expected from this part alone:** the fps, CPU and
+  thread differences are all below one standard error. The GPU work of the group is the same within
+  0.005 ms without the resolves (removed 0.084-0.089 ms of render passes and texture loads, added
+  0.088-0.090 ms of dispatches) and 0.000-0.035 ms less with them; the busy totals differ by the
+  scene. Not worse, as M3 asks, on this PC.
+- **Room in the dispatches:** each pass is 0.044 ms at 1280x720 (the prototype's estimate for the two
+  fused in one dispatch, the row in shared memory, is about 0.02 ms). The saving M3 is for comes
+  with the cascades: their 11 passes and the mask's EDRAM render target go native too.
+
+**Seams with other work.** The plugin's `Fh1NativeShadowMaskSceneSupported` is where M3 meets
+independent scene dimensions (ReIGlue #56, `fh1_native_scene_width`/`height`, not in this build):
+with a fractional raster or a scene size set it does not set the status bit, so the game keeps the
+group emulated; with that work merged, the check becomes a size check there. The one call that
+registers M3's writes as a resolve is the plugin's `MarkRangeAsResolved` after each pass into the
+mask's memory, where #56's resolve provenance would tag the range as the scene's resolve of the
+mask, as the emulated world pass's resolve does. World AO is the other seam: its factor is
+multiplied into the mask by a draw inside the blur's render pass (`fh1_world_ao.cpp`), which a
+native blur does not have; until the plugin can apply the factor in its own pass, AO on keeps the
+group emulated (decided by the game, before anything is skipped).
+
+**Not done yet** (the rest of M3):
+
+1. **The mask's clear and its 11 cascade passes natively.** They are the game's ApplyShadows
+   shaders (7 pixel shaders, one vertex shader), drawn through DrawIndexedVerticesUP, reading the
+   pre-pass depth and the cascade's shadow map, and testing against the scene's depth and stencil
+   in EDRAM (with two depth/stencil clears between them). They need what this part does not have:
+   **a general draw executor** (a draw from a record with the M1 pack's translated shaders, the
+   system constants the translator expects, texture bindings from the record's fetch constants),
+   **host images** for the mask's target and for that depth and stencil (or an explicit copy), and
+   the **exit state written back** for the next emulated draw. M4's native passes (the shadow maps,
+   then the scene's model lists) are planned on that same executor, so it is the next step, not a
+   shadow-mask special case like the compute blurs here.
+2. **The world pass sampling the mask as a host image** instead of from guest memory and the
+   texture cache (today the native mask goes through memory as a resolve's does, and the world
+   pass loads it as a texture).
+3. **World AO in the native pass** (today AO on keeps the group emulated).
+4. **The top and left edges at render scale 2** (above), and the two dispatches fused.
+5. **The GTX 1650 Ti laptop:** the measurements above are this PC's only.
 
 ## Tools
 
