@@ -155,9 +155,15 @@ void Create(PPCContext& ctx, uint8_t* base, PPCFunc* original, Creator creator) 
   int32_t stock = 0;
   if (!QueryInteger(ctx, base, db, cpf::StockPartSql(creator, type, parent), &o.found, &stock)) {
     if (FirstReport(o.car, type, part)) {
-      REXLOG_ERROR("Car {}: its {} part {} doesn't belong to its {} {}, and the stock part could "
-                   "not be looked up (#836)",
-                   o.car, cpf::PartName(type), part, cpf::ParentColumn(creator), parent);
+      if (o.missing) {
+        REXLOG_ERROR("Car {}: its {} part {} is not in the game's database, and the stock part "
+                     "could not be looked up (#862)",
+                     o.car, cpf::PartName(type), part);
+      } else {
+        REXLOG_ERROR("Car {}: its {} part {} doesn't belong to its {} {}, and the stock part "
+                     "could not be looked up (#836)",
+                     o.car, cpf::PartName(type), part, cpf::ParentColumn(creator), parent);
+      }
     }
     return;
   }

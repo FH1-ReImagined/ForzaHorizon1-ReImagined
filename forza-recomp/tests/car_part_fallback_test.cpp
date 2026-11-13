@@ -106,10 +106,10 @@ int main() {
             "SELECT DrivetrainID FROM List_UpgradeDrivetrain WHERE Ordinal=1516 AND IsStock=1 "
             "ORDER BY Id LIMIT 1",
         "the car's stock drivetrain");
-  Check(cpf::CarParentSql(Creator::kEngine, 788) ==
-            "SELECT EngineID FROM List_UpgradeEngine WHERE Ordinal=788 AND IsStock=1 ORDER BY Id "
+  Check(cpf::CarParentSql(Creator::kEngine, 1328) ==
+            "SELECT EngineID FROM List_UpgradeEngine WHERE Ordinal=1328 AND IsStock=1 ORDER BY Id "
             "LIMIT 1",
-        "the car's stock engine");
+        "the car's stock engine (the Veyron's, EngineID 788)");
   Check(cpf::CarParentSql(Creator::kCarBody, 1516).find("SELECT CarBodyID FROM "
                                                         "List_UpgradeCarBody WHERE Ordinal=1516") == 0,
         "the car's stock car body");
