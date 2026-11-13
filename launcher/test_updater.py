@@ -140,7 +140,8 @@ class DownloadCleanupTests(unittest.TestCase):
         others = [
             put(self.updates, "v0.3.0", "notes.txt"),                                  # not ours
             put(self.updates, "v0.3.0", "ForzaHorizon1-ReImagined-linux-x86_64.tar.gz"),
-            put(self.updates, "v0.3.0", "forzahorizon1-reimagined-setup-0.3.0.exe"),   # not our exact name
+            # Not our exact name. Its own folder: on Windows it would be the same file as the Setup above.
+            put(self.updates, "v0.2.8", "forzahorizon1-reimagined-setup-0.2.8.exe"),
             put(self.updates, "v0.3.0", setup_name("0.3.0", ".bak")),
             put(self.updates, "v0.3.1", setup_name("0.2.9")),           # not in its own tag's folder
             put(self.updates, "notes", setup_name("0.1.0")),            # not a tag folder
