@@ -60,6 +60,7 @@ are Infineon 5-6's grey road, Indianapolis 7's pale sand and Top Gear 3's orange
 | `FORZA_TRACK_NO_TRAFFIC=1` | the other cars go far below the circuit |
 | `FORZA_AUTOPILOT=LINE[,scale]` | drives the line (pure pursuit, speed from the line x scale) |
 | `FORZA_AUTOPILOT_TRACE=FILE`, `_DELAY=s`, `_GAIN=k` | 10 Hz wheel/input trace, a start delay, the steering gain |
+| `FORZA_AUTOPILOT_SHIFT=0` | the autopilot leaves B and X alone (it shifts up near the redline and down under 40% of it; with manual shifting it stayed in first gear) |
 | `FORZA_ZONE_TRACE=1` | zones made live/dropped with the pools in use |
 | `FORZA_FIZ_TRACE=1` | collision queries, depot reads, teleport orientation |
 | `FORZA_PVS_TRACE=FILE` | every read of the PVS reader (layout work) |
