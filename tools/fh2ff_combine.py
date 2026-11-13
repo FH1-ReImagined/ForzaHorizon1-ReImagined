@@ -918,10 +918,9 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
                 b_to[e] = a_index[n.lower()]
 
     # F&F's own record ids and resource numbers of its files (for FH2's records that name them)
-    a_ids, a_res = {}, {}
+    a_res = {}
     for _, c in A.zones():
         for f in c["files"] + c.get("files2", []):
-            a_ids.setdefault(f[3], (f[0], f[1]))
             a_res.setdefault((f[3], f[2]), (f[0], f[1]))
 
     # Resource numbers (a record's second field) in the combined world. Both worlds number a
@@ -953,10 +952,11 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
         if ne < len(A.names):    # F&F's file: F&F's numbers
             if kind == FIZ:
                 own = int(names[ne].split(".")[0])
-            if (ne, kind) in a_res and TESTS & {"apgeo", "abundles", "aall", "amodels"}:   # the self-merge tests
+            # F&F's own record of this file of the same type. (By the file alone, FH2's base
+            # gave a collision record the numbers of a preload record of the same file, whose
+            # id is the file's entry: the game broke its stream list as the zone went live.)
+            if (ne, kind) in a_res:
                 return a_record((*a_res[(ne, kind)], kind, ne))
-            if ne in a_ids:
-                return a_record((*a_ids[ne], kind, ne))
             return (own, res + B_RES, kind, ne)
         if kind in (ZONE, SOUNDSCAPE):
             own = C.zone_new.get(own, own)
