@@ -161,8 +161,12 @@ it; `fh2ff_world.py build` then converts that folder as it converts either game'
     tools/fh2ff_combine.py FH2_DISC FF_DISC OUT_DISC
     tools/fh2ff_world.py build OUT_DISC FH1_DISC UPDATE_MEDIA_ZIP OUT --fh2 FH2_DISC
 
-In the launcher: **Import FH2 + F&F docks…** on the Mods > FM4 tracks card asks for both games'
-folders and runs both steps (about 10 minutes); the world is kept as `fm4-tracks/fh2docks`.
+With `--all`, F&F's zone is used in every cell F&F has one (1,132): F&F's version of its whole
+area, with its extra trees and detail, in FH2's world (see "The whole area" below).
+
+In the launcher: **Import FH2 + F&F…** on the Mods > FM4 tracks card asks for both games' folders
+and whether to take F&F's whole area or only its docks, and runs both steps (about 10 minutes);
+the worlds are kept as `fm4-tracks/fh2ffall` and `fm4-tracks/fh2docks`.
 
 **Where the docks are.** The two worlds share a hex grid. F&F has zones in 24 cells FH2 has none
 in, and rebuilt 37 more round them, where FH2 has an older dock area of its own (a crane,
@@ -187,8 +191,9 @@ names one moves with them:
 
 **What is merged.** In the 61 cells: F&F's collision cells and shadow squares; F&F's collision
 objects (`CollObjs.xml`; its road-closure fences there are left out, with their instances) in
-place of FH2's; F&F's roads, joined to FH2's network where they cross the edge (3 places, each
-within a metre of an FH2 node). Round the 61 cells, FH2's zones lose FH2's old dock instances and
+place of FH2's; F&F's roads that FH2 has not, joined to FH2's network where they meet it (each
+within a metre of an FH2 node). A road both worlds have stays FH2's, with its types and traffic:
+F&F marks its roads near its edge closed and empty, and traffic stood still where they met FH2's. Round the 61 cells, FH2's zones lose FH2's old dock instances and
 procedural geometry and see F&F's docks as F&F's zone of the same cell does. The rest (lighting,
 races and arenas, map art) is FH2's; FH2's dock arenas' route files are byte for byte F&F's.
 
@@ -198,9 +203,20 @@ each, FH2's coast road across the docks' edge for 200 s with traffic, and FH2's 
 the map shows the dock roads. FH2 combined with itself over 22 cells also runs (a check that the
 renumbering alone changes nothing).
 
-**Not done:** F&F's lighting and its other changes outside the docks; a byte-identical texture
-in both worlds is stored twice (sharing FH2's record is a test switch: it faulted); bundles are
-stored uncompressed.
+**Textures.** 5,072 of F&F's 10,233 texture records are byte for byte one of FH2's under another
+id (files or bundled data, and the same record): those use FH2's record; the rest get records of
+their own.
+
+**The whole area (`--all`).** Outside the docks F&F changed the shared world a little everywhere:
+in the 1,071 cells both have, F&F's zones name 26% more vegetation files, 304 cells have a tenth
+more placements than FH2's and 149 a tenth fewer. With `--all`:
+- FH2's 1,108 zones under F&F's are written empty, and the 2,779 model and procedural geometry
+  files only they used are left out: 63,798 files in all (the archive format takes 65,535);
+- FH2's zones outside F&F's cells keep FH2's own view of the area, which changes to F&F's as the
+  car crosses in (no gap or pop seen on the road driven both ways);
+- F&F's models are not FH2's byte for byte (57 of 6,812 are), so both sets are kept: 1.25 GB.
+
+**Not done:** F&F's lighting; bundles are stored uncompressed.
 
 ## Checked
 

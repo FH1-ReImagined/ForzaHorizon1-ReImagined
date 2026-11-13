@@ -192,6 +192,12 @@ class World(WorldBase):
         self.assertEqual((plan.env["FORZA_FM4_COL"], plan.env["FORZA_TRACK_NO_TRAFFIC"]), ("0", "0"))
         with self.assertRaises(fh2ffworld.Fh2ffError):
             self.import_world(fh2=self.t / "FH2", key="fh2docks", src=self.t / "FH2")   # FH2 given as F&F
+        self.assertNotIn("--all", combine)
+        # Fast & Furious's whole area: the same with --all, kept beside the docks one
+        msg, calls = self.import_world(fh2=self.t / "FF", key="fh2ffall", src=self.t / "FH2")
+        self.assertEqual(calls[0][0][-1], "--all")
+        self.assertEqual(fh2ffworld.installed(self.cfg, "fh2ffall")["kind"], "fh2ffall")
+        self.assertEqual({k for k, _ in fm4tracks.choices(self.cfg)}, {"", "fh2docks", "fh2ffall"})
 
     def test_a_circuit_named_anthem_is_not_replaced(self):
         self.import_world()

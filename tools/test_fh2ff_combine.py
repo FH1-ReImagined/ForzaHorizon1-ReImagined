@@ -184,11 +184,11 @@ class SharedTextures(unittest.TestCase):
     def combined(self, a_files, a_recs, b_files, b_recs, share=True):
         C = fc.Combined.__new__(fc.Combined)
         C.A, C.B = FakeWorld(a_files, a_recs), FakeWorld(b_files, b_recs)
-        with mock.patch.object(fc, "TESTS", {"share"} if share else set()):
+        with mock.patch.object(fc, "TESTS", set() if share else {"noshare"}):
             C.match_textures()
         return C
 
-    def test_by_default_every_added_texture_is_its_own(self):
+    def test_noshare_every_added_texture_is_its_own(self):
         C = self.combined({"_0x00001080.bix": b"concrete"}, [record(5, 0), record(0x1080, 1)],
                           {"_0x00001052.bix": b"concrete"}, [record(5, 0), record(0x1052, 1)], share=False)
         self.assertEqual(C.index, {0: 2, 1: 3})
@@ -279,6 +279,59 @@ class RibbonObjects(unittest.TestCase):
         self.assertNotIn("Other", out)
 
 
+def fiz(x0, z0, tris, tail=b"OWBB"):
+    """A collision cell file: a 116 m square from (x0, z0), 12 x 12 squares of 10 m, the triangles
+    ((x, y, z) corners) with no square lists (retile_fiz makes them), a second part."""
+    verts = [p for t in tris for p in t]
+    hs, nv, nt = 0x90, len(verts), len(tris)
+    toff = hs + 16 * nv
+    goff = toff + 32 * nt
+    head = bytearray(hs)
+    struct.pack_into(">4I", head, 0, nv, nt, hs, toff)
+    struct.pack_into(">II", head, 0x10, 12, 12)
+    struct.pack_into(">4f", head, 0x18, x0, z0, x0 + 116, z0 + 116)
+    struct.pack_into(">4f", head, 0x28, 10.0, 10.0, 0.1, 0.1)
+    struct.pack_into(">I", head, 0x38, goff)
+    cell = bytes(head) + b"".join(struct.pack(">3fI", *p, 0x7F) for p in verts)
+    cell += b"".join(struct.pack(">4I3fI", 0x0E028000, *[hs + 16 * (3 * k + j) for j in range(3)], 0.0, 1.0, 0.0, 0)
+                     for k in range(nt))
+    cell += bytes(4 * 144)
+    cell += bytes(-len(cell) % 0x800)
+    return b"fiz " + struct.pack(">7I", 1, len(cell), len(tail), 0x779, 0, 0, 0) + cell + tail
+
+
+class CollisionGrid(unittest.TestCase):
+    def test_a_cell_cut_again_for_a_grid_12_m_off(self):
+        near = [(10, 0, 20), (20, 0, 20), (10, 0, 30)]            # inside both squares
+        far = [(10, 0, 110), (20, 0, 110), (10, 0, 114)]          # in the old square's far strip only
+        below = [(10, 0, -9), (20, 0, -9), (10, 0, -5)]           # in the neighbour: the new strip
+        first = fiz(0.0, 0.0, [near, far])
+        south = fiz(0.0, -100.0, [below, near])                   # holds a copy of `near` too
+        out = fc.retile_fiz([first, south], 0.0, 12.72)
+        bounds, verts, tris = fc.read_fiz(out)
+        self.assertEqual([round(v, 2) for v in bounds], [0.0, -12.72, 116.0, 103.28])
+        got = sorted(tuple(sorted(verts[k][0] for k in t[1])) for t in tris)
+        self.assertEqual(got, sorted(tuple(sorted(map(lambda p: tuple(map(float, p)), t))) for t in (near, below)))
+        self.assertTrue(out.endswith(b"OWBB"))
+        self.assertEqual(struct.unpack_from(">I", out, 8)[0] % 0x800, 0)
+        cell = out[0x20:]
+        goff = struct.unpack_from(">I", cell, 0x38)[0]
+        offs = struct.unpack_from(">144I", cell, goff)
+        # `below` (z -9 to -5) is in the first row of squares (z -12.72 to -2.72), column 1
+        k = 0 * 12 + 1
+        n = struct.unpack_from(">H", cell, offs[k])[0]
+        listed = struct.unpack_from(f">{n}H", cell, offs[k] + 2)
+        self.assertEqual([sorted(verts[v][0] for v in tris[i][1])[0][2] for i in listed], [-9.0])
+        self.assertEqual(sum(1 for o in offs if o), 5)            # near: 3 squares; below: 2
+
+    def test_unmoved_keeps_every_triangle(self):
+        d = fiz(50.0, 50.0, [[(60, 0, 60), (70, 0, 60), (60, 0, 70)]])
+        _, verts, tris = fc.read_fiz(fc.retile_fiz([d], 0.0, 0.0))
+        self.assertEqual((len(verts), len(tris)), (3, 1))
+        with self.assertRaises(ValueError):
+            fc.read_fiz(b"nope" + bytes(64))
+
+
 class RoadNetwork(unittest.TestCase):
     def test_region_ways_join_the_base(self):
         import fm4_routes
@@ -308,6 +361,21 @@ class RoadNetwork(unittest.TestCase):
         self.assertEqual(tags[0], {"road_type": "b"})
         self.assertEqual(tags[2], {"road_type": "b", "traffic_density": "freeway"})
         self.assertEqual(tags[3], {"road_type": "none"})
+
+    def test_a_road_both_worlds_have_stays_the_base(self):
+        import fm4_routes
+        a = fm4_routes.read_nav(fm4_routes.nav_of(
+            [(0, 0, 0), (100, 0, 0), (200, 0, 0), (300, 0, 0)], [([0, 1, 2, 3], {"road_type": "a"})]))
+        b = fm4_routes.read_nav(fm4_routes.nav_of(
+            [(100.3, 0, 0), (200.2, 0, 0), (300, 0, 0.4), (200, 0, 60), (200, 0, 120)],
+            [([0, 1, 2], {"road_type": "blocked"}), ([1, 3, 4], {"road_type": "none"})]))
+        net = fc.merge_nav(a, b, lambda x, z: x > 150)
+        pos = [(round(n[1]), round(n[3])) for n in net["nodes"]]
+        ways = [[pos[k] for k in net["node_list"][f:f + c]] for c, f, _, _ in net["ways"]]
+        tags = [{net["keys"][t]: net["values"][v] for t, v in net["tags"][tf:tf + tc]} for _, _, tc, tf in net["ways"]]
+        self.assertEqual(ways, [[(0, 0), (100, 0), (200, 0), (300, 0)],     # whole, the base's
+                                [(200, 0), (200, 60), (200, 120)]])         # the added world's own
+        self.assertEqual(tags, [{"road_type": "a"}, {"road_type": "none"}])
         self.assertEqual(net["keys"], sorted(net["keys"]))          # the game searches them sorted
         self.assertEqual(net["values"], sorted(net["values"]))
         self.assertTrue(all(n[7] == 0 for n in net["nodes"] if not n[6]))

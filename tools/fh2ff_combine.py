@@ -24,9 +24,9 @@ lines. What is combined (fnf_map/COMBINED_MAP_PLAN.md has the measurements):
   F&F's everywhere else. Round the region, F&F's zones lose their instances and procedural
   geometry standing in it and see FH2's there as FH2's zone of the same cell does.
 - The layout: F&F's tables (its instances whole when they fit), then FH2's after them. Shaders
-  are shared by name. FH2's texture records are records of their own after F&F's, their ids
-  moved (TEXTURE_ID_STEP); sharing F&F's record for a texture that is byte for byte one of
-  F&F's (4,749 of F&F's 10,233 against FH2's) is a test switch, it faulted (match_textures).
+  are shared by name. An FH2 texture that is byte for byte one of F&F's (5,072 of F&F's 10,233
+  against FH2's) is F&F's record; the rest are records of their own, their ids moved
+  (TEXTURE_ID_STEP).
 - FH2's files take numbers and ids after F&F's where their name holds one: model files
   (aout.NNNNN.rmb.bin), procedural geometry (__r00gNNNNN.pgeo), textures of its own (_0x<id>.bix,
   _B.bix, .bin), bundles (_0x1000NNNN.bundle, with only its own textures), zones (__R00ZNNNNN.pvsz,
@@ -56,6 +56,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import fm4_col  # noqa: E402
 import fm4_pvs  # noqa: E402
 import fm4_routes  # noqa: E402
 import fh2ff_world as ff  # noqa: E402
@@ -65,8 +66,8 @@ TEXTURE_ID_STEP = 0x2900       # FH2's texture ids move this far: past F&F's (to
                                # under 21,000 as Colorado's are (to 20,519). Moved 0x10000 (to 75,800),
                                # FH1 corrupted its memory near F&F's edge (a list of the main loop, lr 82C12C10)
 REC = ">6I"                    # a collision index record: number, cell, offset, size, 0, end
-# Test switches (FH2FF_COMBINE_TEST, comma list): "share" the added textures that are one of the
-# base's byte for byte use the base's record (faulted: see match_textures), "noseam" the base's
+# Test switches (FH2FF_COMBINE_TEST, comma list): "noshare" every added texture a record of its
+# own, "noprune" the base's files of retired zones kept, "noseam" the base's
 # zones round the region as they are, "nosh" the base's shadow squares kept, "nocol" the base's
 # collision files kept, "noobj" the base's CollObjs.xml and SmashableEffects.xml as they are
 TESTS = set(filter(None, os.environ.get("FH2FF_COMBINE_TEST", "").split(",")))
@@ -242,8 +243,8 @@ def bundle_entries(d):
 
 
 def rewrite_bundle(d, record_map):
-    """A bundle with only the textures record_map names, each under its record's new number;
-    None when none is left. Moved by the ids' step instead, F&F's later textures (their records
+    """A bundle with the textures record_map names, each under its record's new number; None
+    when none is left. Moved by the ids' step instead, F&F's later textures (their records
     past 9,977) were registered past the end of FH1's streaming resource table, which has a
     12-byte entry a texture record: it wrote over what follows, and the game faulted in its
     stream list (sub_82DD9388) as soon as the docks' bundles loaded."""
@@ -397,18 +398,15 @@ class Combined:
             raise ValueError("the base's texture ids reach the added world's moved ones")
 
     def match_textures(self):
-        """FH2's texture records in the combined world: records of their own after F&F's, their
-        ids moved by TEXTURE_ID_STEP (FH1 streams their full mips once their zones are live).
-        With the "share" test switch, one that is F&F's byte for byte (the same files, or the same
-        bundled data, and the same record: rectangle and flags; 4,749 of F&F's 10,233 are FH2's
-        under another id) is F&F's record instead. That faulted as soon as F&F's docks went live
-        (a pending stream block's list broken, sub_82DD9388): a texture's resident mips come from
-        the bundles its zones name (nearly every texture with files has a bundle copy too), and
-        F&F's records' copies are in F&F's bundles, which FH2's zones never name.
+        """FH2's texture records in the combined world. One that is F&F's byte for byte (the
+        same files, or the same bundled data, and the same record: rectangle and flags; 5,072
+        of F&F's 10,233 are FH2's under another id) is F&F's record; the rest are records of
+        their own after F&F's, their ids moved by TEXTURE_ID_STEP. ("noshare", a test: all of
+        them their own.)
         Sets index ({FH2 record: combined record}), ids ({FH2 id: combined id}), own (FH2's
         records kept, in order) and twins (how many are F&F's)."""
         PA, PB = self.A.P, self.B.P
-        if "share" not in TESTS:   # every added texture a record of its own (see the docstring)
+        if "noshare" in TESTS:     # a test: every added texture a record of its own
             n = len(PA["textures"])
             self.index = {k: n + k for k in range(len(PB["textures"]))}
             self.ids = {t[0]: t[0] + TEXTURE_ID_STEP for t in PB["textures"]}
@@ -577,15 +575,26 @@ def merge_nav(net_a, net_b, inside, join=1.5):
                     if d < join and (best is None or d < best[0]):
                         best = (d, k)
         return best and best[1]
+    pos_b = net_b["nodes"]
+    near_b = {}
+    for nd in pos_b:
+        near_b.setdefault((round(nd[1] / 4), round(nd[3] / 4)), []).append(nd)
+
+    def b_has(x, z):
+        return any(math.hypot(nd[1] - x, nd[3] - z) < join for dx in (-1, 0, 1) for dz in (-1, 0, 1)
+                   for nd in near_b.get((round(x / 4) + dx, round(z / 4) + dz), ()))
     ways = []                      # ([("a" or "b", node)], world, its tags)
     for idx, tags in ways_of(net_a):
-        keep = [not inside(pos_a[n][1], pos_a[n][3]) for n in idx]
+        # F&F's road stays where FH2 has the same road (a node of FH2's on it): its types and
+        # traffic. FH2's own marks its roads near its edge closed and empty, and traffic stood
+        # still where they met F&F's.
+        keep = [not inside(pos_a[n][1], pos_a[n][3]) or b_has(pos_a[n][1], pos_a[n][3]) for n in idx]
         for run in runs(idx, keep):
             if len(run) > 1:
                 ways.append(([("a", n) for n in run], "a", tags))
-    pos_b = net_b["nodes"]
     for idx, tags in ways_of(net_b):
-        ins = [inside(pos_b[n][1], pos_b[n][3]) for n in idx]
+        # FH2's roads in the region that F&F has not
+        ins = [inside(pos_b[n][1], pos_b[n][3]) and a_node_at(pos_b[n][1], pos_b[n][3]) is None for n in idx]
         if not any(ins):
             continue
         grow = [ins[k] or (k > 0 and ins[k - 1]) or (k + 1 < len(ins) and ins[k + 1]) for k in range(len(idx))]
@@ -648,6 +657,94 @@ def merge_smashable_effects(xml_a, xml_b):
              for m in pair.finditer(xml_b) if m.group(1).lower() not in have]
     end = xml_a.rindex("</Track>")
     return xml_a[:end] + "".join(extra) + xml_a[end:]
+
+
+CELL_HEAD = 0x90               # a collision cell's header (tools/fm4_col.py has the layout)
+
+
+def read_fiz(d):
+    """A collision cell file (.fiz: a 0x20 header with the sizes of its two parts, FH1's cell,
+    then a second part, "OWBB") as (bounds (x0, z0, x1, z1), [(position, packed normal)] its
+    vertices, [(flags, three vertex numbers, normal, word)] its triangles)."""
+    if d[:4] != b"fiz ":
+        raise ValueError("not a collision cell file")
+    c = d[0x20:]
+    nv, nt, hs, toff = struct.unpack_from(">4I", c, 0)
+    if hs != CELL_HEAD or toff != hs + 16 * nv:
+        raise ValueError("a collision cell not in FH1's layout")
+    verts = [(struct.unpack_from(">3f", c, hs + 16 * i), struct.unpack_from(">I", c, hs + 16 * i + 12)[0]) for i in range(nv)]
+    tris = []
+    for i in range(nt):
+        fl, a, b, e, nx, ny, nz, word = struct.unpack_from(">4I3fI", c, toff + 32 * i)
+        tris.append((fl, tuple((v - hs) // 16 for v in (a, b, e)), (nx, ny, nz), word))
+    return struct.unpack_from(">4f", c, 0x18), verts, tris
+
+
+def retile_fiz(files, dx, dz):
+    """files[0], a collision cell of a world whose 100 m grid starts (dx, dz) from the combined
+    world's, cut again for the combined grid's cell of the same number: the triangles of it
+    and of its neighbours (files[1:]) that reach the new square (the old one moved by -dx, -dz;
+    a cell holds its 100 m and 8 m round it), their vertices, and the 12 x 12 squares' lists
+    made again. Its second part stays. F&F's grid starts 12.72 m north of FH2's: with F&F's
+    cells as they were, the car fell through the road in a strip at every row's edge."""
+    first = files[0]
+    c = first[0x20:]
+    size1, size2 = struct.unpack_from(">II", first, 8)
+    gx, gz = struct.unpack_from(">II", c, 0x10)
+    x0, z0, x1, z1 = struct.unpack_from(">4f", c, 0x18)
+    x0, z0, x1, z1 = x0 - dx, z0 - dz, x1 - dx, z1 - dz
+    side_x, side_z = struct.unpack_from(">2f", c, 0x28)
+    verts, vert_at, tris, seen = [], {}, [], set()
+    for d in files:
+        _, vs, ts = read_fiz(d)
+        for fl, corners, normal, word in ts:
+            pts = [vs[k][0] for k in corners]
+            key = (fl, tuple(sorted((round(q[0], 2), round(q[1], 2), round(q[2], 2)) for q in pts)))
+            if key in seen or not fm4_col.overlaps([(q[0], q[2]) for q in pts], x0, z0, x1, z1):
+                continue
+            seen.add(key)
+            row = []
+            for k in corners:
+                if vs[k] not in vert_at:
+                    vert_at[vs[k]] = len(verts)
+                    verts.append(vs[k])
+                row.append(vert_at[vs[k]])
+            tris.append((fl, row, normal, word, [(q[0], q[2]) for q in pts]))
+    lists = [[] for _ in range(gx * gz)]
+    for i, t in enumerate(tris):
+        tri2 = t[4]
+        c0 = max(0, int((min(q[0] for q in tri2) - x0) // side_x))
+        c1 = min(gx - 1, int((max(q[0] for q in tri2) - x0) // side_x))
+        r0 = max(0, int((min(q[1] for q in tri2) - z0) // side_z))
+        r1 = min(gz - 1, int((max(q[1] for q in tri2) - z0) // side_z))
+        for r in range(r0, r1 + 1):
+            for cc in range(c0, c1 + 1):
+                bx, bz = x0 + cc * side_x, z0 + r * side_z
+                if fm4_col.overlaps(tri2, bx, bz, bx + side_x, bz + side_z):
+                    lists[r * gx + cc].append(i)
+    if len(tris) > 0xFFFF:
+        raise ValueError("a collision cell of more than 65,535 triangles")
+    vbase = CELL_HEAD
+    tbase = vbase + 16 * len(verts)
+    gbase = tbase + 32 * len(tris)
+    blob, offs = bytearray(), []
+    for lst in lists:
+        offs.append(gbase + 4 * gx * gz + len(blob) if lst else 0)
+        if lst:
+            blob += struct.pack(f">H{len(lst)}H", len(lst), *lst)
+    out = bytearray(c[:CELL_HEAD])
+    struct.pack_into(">4I", out, 0, len(verts), len(tris), vbase, tbase)
+    struct.pack_into(">4f", out, 0x18, x0, z0, x1, z1)
+    struct.pack_into(">I", out, 0x38, gbase)
+    for pos, word in verts:
+        out += struct.pack(">3fI", *pos, word)
+    for fl, row, normal, word, _ in tris:
+        out += struct.pack(">4I3fI", fl, *[vbase + 16 * v for v in row], *normal, word)
+    out += struct.pack(f">{gx * gz}I", *offs) + blob
+    out += bytes(-len(out) % 0x800)
+    head = bytearray(first[:0x20])
+    struct.pack_into(">I", head, 8, len(out))
+    return bytes(head) + bytes(out) + first[0x20 + size1:0x20 + size1 + size2]
 
 
 _START = time.monotonic()
@@ -732,9 +829,37 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
                 sh_take.add(B.names[f[3]].lower())
     if "nocol" in TESTS:
         b_take = set()
-    col, col_new, col_taken = combine_collision(open(os.path.join(rbA, f"{NAME}_track_00.col"), "rb").read(),
-                                                open(os.path.join(rbB, f"{NAME}_track_00.col"), "rb").read(),
-                                                a_files, b_take)
+    col_a = open(os.path.join(rbA, f"{NAME}_track_00.col"), "rb").read()
+    col_b = bytearray(open(os.path.join(rbB, f"{NAME}_track_00.col"), "rb").read())
+    # FH2's collision grid against F&F's (the index's header: columns, rows, the origin): its
+    # cells the region's zones name are cut again for F&F's grid when the origins differ
+    if col_a[:8] != col_b[:8] or col_a[0x18:0x20] != col_b[0x18:0x20]:
+        raise ValueError("the two worlds' collision grids differ in size")
+    cols = struct.unpack_from(">I", col_a, 0)[0]
+    grid_dx = struct.unpack_from(">f", col_b, 8)[0] - struct.unpack_from(">f", col_a, 8)[0]
+    grid_dz = struct.unpack_from(">f", col_b, 12)[0] - struct.unpack_from(">f", col_a, 12)[0]
+    retiled = {}                   # FH2 collision record -> its file, cut for F&F's grid
+    if (abs(grid_dx) > 0.01 or abs(grid_dz) > 0.01) and "noretile" not in TESTS:
+        if abs(grid_dx) >= 100 or abs(grid_dz) >= 100:
+            raise ValueError("the two worlds' collision grids are a cell or more apart")
+        nb = struct.unpack_from(">I", col_b, 0x4C)[0]
+        b_recs = [struct.unpack_from(REC, col_b, 0x58 + 24 * k) for k in range(nb)]
+        at_cell = {r[1]: r[0] for r in b_recs}
+
+        def cell_file(cell):
+            e = B.entry.get(f"{at_cell[cell]}.fiz") if cell in at_cell else None
+            return B.zip.read(B.info_of[e]) if e is not None else None
+        for k, r in enumerate(b_recs):
+            if r[0] not in b_take:
+                continue
+            first = cell_file(r[1])
+            if first is None:
+                continue
+            near = [cell_file(r[1] + dc + cols * dr) for dr in (-1, 0, 1) for dc in (-1, 0, 1) if dc or dr]
+            retiled[r[0]] = retile_fiz([first] + [d for d in near if d], grid_dx, grid_dz)
+            struct.pack_into(">I", col_b, 0x58 + 24 * k + 12, struct.unpack_from(">I", retiled[r[0]], 8)[0])
+        progress(f"{len(retiled)} collision cells cut again for the base's grid ({grid_dx:.2f}, {grid_dz:.2f} m off)")
+    col, col_new, col_taken = combine_collision(col_a, bytes(col_b), a_files, b_take)
     shadows_A = {n.lower() for n in A.names if n.lower().endswith(".sh")}
     sh_take &= shadows_A           # a square F&F has too: FH2's in F&F's name
     if "nosh" in TESTS:
@@ -839,8 +964,11 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
     for k in pgeo_tex:
         if k < len(PB["textures"]) and PB["textures"][k][0] in C.own_ids:
             needed.update(tex_files.get(PB["textures"][k][0], ()))
-    # bundles: only FH2's own textures in them; a bundle of F&F's textures alone is left out
-    own_map = {k: C.index[k] for k in C.own}
+    # bundles: every texture kept, under its combined record (F&F's record for one that is
+    # F&F's). With those left out, F&F's bundles had to supply them, and where F&F's zones are
+    # retired nothing loads those: the road drew black and so many textures streamed one by one
+    # that the next zone's collision came late (the car fell through at each zone's edge).
+    own_map = dict(C.index)
     bundle_data = {}
     for e in [e for e in needed if B.names[e].lower().endswith(".bundle")]:
         bundle_data[e] = rewrite_bundle(B.zip.read(B.info_of[e]), own_map)
@@ -1068,8 +1196,13 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
         """F&F's zone: its instances renumbered; round the region, its own instances and
         procedural geometry standing in the region out and FH2's region (as FH2's zone of the
         cell sees it) in, with their models and textures; the region's zones its neighbours."""
-        if uid in retired:               # replaced: no cell is its; an empty zone
-            return {k: [] for k in c}
+        if uid in retired:
+            # replaced: the hex gives its cell to FH2's zone, but its own record in the hex still
+            # says that cell. Empty but for the collision cells of the zone in its place:
+            # written with none, the car fell through at some zones' edges.
+            out = {k: [] for k in c}
+            out["files"] = [r for r in (b_record(f) for f in bz[C.hexB[az_cell[uid]]]["files"] if f[2] == FIZ) if r]
+            return out
 
         def mine(files):
             return a_neighbours([r for r in (a_record(f) for f in files) if r])
@@ -1181,8 +1314,12 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
                     else:
                         wr.add(info.filename, d2)
                 elif n.lower().endswith(".fiz") and int(n.split(".")[0]) in col_taken:
-                    bi = B.info_of[B.entry[f"{col_taken[int(n.split('.')[0])]}.fiz"]]
-                    wr.add_raw(info.filename, bi, B.zip.raw(bi))   # the region's collision
+                    num = col_taken[int(n.split('.')[0])]
+                    bi = B.info_of[B.entry[f"{num}.fiz"]]
+                    if num in retiled:
+                        wr.add(info.filename, retiled[num])        # the region's collision
+                    else:
+                        wr.add_raw(info.filename, bi, B.zip.raw(bi))
                 elif n.lower() in sh_take:
                     bi = B.info_of[B.entry[n.lower()]]
                     wr.add_raw(info.filename, bi, B.zip.raw(bi))   # the region's shadow squares
@@ -1196,6 +1333,8 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
                 wr.add(folder + n, b_zone_files[k])
             elif n.lower().endswith(".bundle"):
                 wr.add(folder + n, bundle_data[e])
+            elif B.names[e].lower().endswith(".fiz") and int(B.names[e].split(".")[0]) in retiled:
+                wr.add(folder + n, retiled[int(B.names[e].split(".")[0])])
             elif n.lower().endswith(".pgeo"):
                 d = B.zip.read(info)
                 d2 = rewrite_pgeo(d, lambda v: C.index.get(v, v), C.NPG, b_inst)

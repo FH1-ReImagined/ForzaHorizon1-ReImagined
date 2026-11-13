@@ -124,9 +124,10 @@ class Fm4TracksCard(QWidget):
                                    "(experimental). " + fh2ffworld.EXPERIMENTAL)
         self.fh2_button.clicked.connect(self._import_fh2)
         row.addWidget(self.fh2_button)
-        self.docks_button = QPushButton("Import FH2 + F&F docks…")
-        self.docks_button.setToolTip("Forza Horizon 2's whole world with Fast & Furious's docks in it, from your "
-                                     "own copies of both games (experimental). " + fh2ffworld.EXPERIMENTAL)
+        self.docks_button = QPushButton("Import FH2 + F&F…")
+        self.docks_button.setToolTip("Forza Horizon 2's whole world with Fast & Furious's docks in it, or with "
+                                     "Fast & Furious's version of its whole area, from your own copies of both "
+                                     "games (experimental). " + fh2ffworld.EXPERIMENTAL)
         self.docks_button.clicked.connect(self._import_docks)
         row.addWidget(self.docks_button)
         self.remove_button = QPushButton("Remove circuit")
@@ -315,7 +316,8 @@ class Fm4TracksCard(QWidget):
                     "until the new one is complete.", self._build_done)
 
     def _import_docks(self):
-        """FH2's world with Fast & Furious's docks (fh2ffworld.py, key fh2docks): both games' folders."""
+        """FH2's world with Fast & Furious's docks, or its whole area (fh2ffworld.py, keys fh2docks
+        and fh2ffall): both games' folders."""
         from PySide6.QtWidgets import QFileDialog
         if self.page._game_running():
             self.message.setText("Close the game before importing.")
@@ -333,14 +335,20 @@ class Fm4TracksCard(QWidget):
             self.message.setText(str(e))
             return
 
+        whole = self.page._confirm("Fast & Furious's whole area?", "Yes: Fast & Furious's version of its whole "
+                                   "area (Nice and the coast, with its extra trees and detail, the docks and the "
+                                   "airfield) in Forza Horizon 2's world. No: only its docks; the rest stays "
+                                   "Forza Horizon 2's. Both can be imported, one after the other.")
+        key = fh2ffworld.COMBINED_ALL if whole else fh2ffworld.COMBINED
+
         def job(task):
             try:
                 return fh2ffworld.build(self.cfg, fh2, ff, lambda f, text: task.progress.emit(f, text), task.cancelled,
-                                        key=fh2ffworld.COMBINED)
+                                        key=key)
             except (OSError, ValueError) as exc:
                 from ..installer import InstallError
-                raise InstallError(f"Import FH2 + F&F docks stopped: {exc}") from exc
-        self._start(job, "import FH2 + F&F docks", "Combining and converting the two worlds (about 10 minutes)… An "
+                raise InstallError(f"Import FH2 + F&F stopped: {exc}") from exc
+        self._start(job, "import FH2 + F&F", "Combining and converting the two worlds (about 10 minutes)… An "
                     "earlier import stays until the new one is complete.", self._build_done)
 
     def _import_fh2(self):

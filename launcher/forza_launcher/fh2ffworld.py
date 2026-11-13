@@ -37,8 +37,12 @@ FF_TITLE, FH2_TITLE = 0x4D530AB5, 0x4D530AA4
 # key: (track.json kind, name, the game's title id)
 WORLDS = {"anthem": ("fh2ff", "Fast & Furious", FF_TITLE), "fh2": ("fh2", "Forza Horizon 2", FH2_TITLE),
           # FH2's world with Fast & Furious's docks in it (tools/fh2ff_combine.py); FH2's files lead
-          "fh2docks": ("fh2docks", "Forza Horizon 2 + Fast & Furious docks", FH2_TITLE)}
+          "fh2docks": ("fh2docks", "Forza Horizon 2 + Fast & Furious docks", FH2_TITLE),
+          # and with Fast & Furious's version of its whole area (fh2ff_combine.py --all)
+          "fh2ffall": ("fh2ffall", "Forza Horizon 2 + Fast & Furious", FH2_TITLE)}
 COMBINED = "fh2docks"
+COMBINED_ALL = "fh2ffall"
+COMBINED_KEYS = (COMBINED, COMBINED_ALL)
 KINDS = {kind for kind, _, _ in WORLDS.values()}
 KEY = "anthem"                    # F&F's (the first import)
 KIND = WORLDS[KEY][0]
@@ -110,7 +114,7 @@ def build(cfg, ff_folder, fh2_folder=None, progress=lambda f, text: None, cancel
     earlier import of it (kept until the new one is complete). Returns a message for the player."""
     kind, name, _ = WORLDS[key]
     added = None
-    if key == COMBINED:               # FH2's files (ff_folder) lead, F&F's (fh2_folder) give the docks
+    if key in COMBINED_KEYS:          # FH2's files (ff_folder) lead, F&F's (fh2_folder) give the docks
         src = fh2 = fh2_root(ff_folder)
         added = disc_root(fh2_folder, "anthem")
     elif key == "fh2":
@@ -131,7 +135,7 @@ def build(cfg, ff_folder, fh2_folder=None, progress=lambda f, text: None, cancel
         raise Fh2ffError(f"An imported circuit is named {key} already: remove it first.")
     # FH2's archive stores a file once for each zone that streams it: the world takes about a
     # third of it; F&F's about its size
-    fm4tracks._need_space(root, fm4tracks._tree_size(_world(src)) * {"fh2": 1, COMBINED: 2}.get(key, 3))
+    fm4tracks._need_space(root, fm4tracks._tree_size(_world(src)) * {"fh2": 1, COMBINED: 2, COMBINED_ALL: 2}.get(key, 3))
     work = Path(tempfile.mkdtemp(prefix=".work-", dir=root))
     lines = [0]
 
@@ -141,9 +145,11 @@ def build(cfg, ff_folder, fh2_folder=None, progress=lambda f, text: None, cancel
     try:
         out = work / "out"
         if added:
-            progress(0.0, "Putting Fast & Furious's docks into Forza Horizon 2's world (a few minutes)…")
+            progress(0.0, "Putting Fast & Furious's " + ("area" if key == COMBINED_ALL else "docks")
+                     + " into Forza Horizon 2's world (a few minutes)…")
             env = {k: v for k, v in fm4tracks._tool_env().items() if not k.startswith("FH2FF_")}
-            runner(fm4tracks.tool_command("fh2ff_combine.py", src, added, work / "combined"), env, say, cancelled)
+            runner(fm4tracks.tool_command("fh2ff_combine.py", src, added, work / "combined",
+                                          *(("--all",) if key == COMBINED_ALL else ())), env, say, cancelled)
             src = work / "combined"
         progress(0.4 if added else 0.0, f"Converting {name}'s world (a few minutes)…")
         runner(fm4tracks.tool_command("fh2ff_world.py", "build", src, game, Path(update) / "media.zip", out,
