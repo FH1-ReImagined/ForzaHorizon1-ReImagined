@@ -555,6 +555,12 @@ Installation behavior:
 
 * **Windows:** after downloading, choose **Open installer**, close the launcher and follow
   the installer. Packaged launchers pass their current install directory, including custom locations.
+  The installer is saved as `%APPDATA%\ForzaReImagined\updates\<tag>\ForzaHorizon1-ReImagined-Setup-<version>.exe`.
+  The updated launcher deletes it when it opens (and again when it closes, in case Setup was still
+  open), together with any older Setup it downloaded there, and removes the emptied `<tag>` folder.
+  A Setup for a newer version than the one running is kept, because that update has not been
+  installed yet (it failed, was cancelled or is still running). Nothing else in that folder, and no
+  Setup downloaded by hand, is touched.
 * **Linux archive:** **Update and restart** rechecks the downloaded archive's size and digest,
   extracts it safely into a private sibling of the install folder, and checks the new executable's
   version. A detached helper waits for the current launcher to exit, keeps the old folder as
