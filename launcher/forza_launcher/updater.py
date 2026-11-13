@@ -1,6 +1,7 @@
 """Stable GitHub releases and verified update downloads; never writes the installed app."""
 import hashlib
 import json
+import os
 import re
 import urllib.error
 import urllib.parse
@@ -8,10 +9,12 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import GITHUB_URL, __version__, fetch
+from . import GITHUB_URL, __version__, fetch, paths
 
 API_URL = "https://api.github.com/repos/FH1-ReImagined/ForzaHorizon1-ReImagined/releases/latest"
 TIMEOUT = 15
+# The Windows installer's release asset name (asset_for), the only file name cleanup_downloads removes.
+SETUP_NAME = re.compile(r"ForzaHorizon1-ReImagined-Setup-((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))\.exe(\.part)?")
 
 
 class UpdateError(Exception):
@@ -103,6 +106,56 @@ def check():
         raise UpdateError(str(exc)) from exc
     except (OSError, ValueError) as exc:
         raise UpdateError("Could not check for updates. Check your connection and try again.") from exc
+
+
+def downloads_dir() -> Path:
+    """Where the launcher saves release downloads, one folder per tag (Flatpak bundles go to the
+    system's Downloads folder instead). Windows: %APPDATA%\\ForzaReImagined\\updates."""
+    return paths.config_dir() / "updates"
+
+
+def cleanup_downloads(directory=None, current=None):
+    """Remove Windows Setup files this launcher downloaded for its own version or an older one (#865).
+
+    The launcher saves ForzaHorizon1-ReImagined-Setup-<version>.exe in <directory>/v<version>/ and the
+    installer cannot delete itself, so the launcher that starts after it does. A Setup for a newer
+    version is kept: that update has not been installed yet (still running, cancelled or failed).
+    Only files named exactly as that asset (or its leftover .part), inside the folder of the same tag,
+    are touched; anything else, links included, is left alone. A file that cannot be removed yet,
+    such as a Setup still open on Windows, is kept for the next start. Returns (removed, kept).
+    """
+    directory = downloads_dir() if directory is None else Path(directory)
+    installed = version_key(__version__ if current is None else current)
+    removed, kept = [], []
+    if installed is None:   # a development build cannot tell which updates it already has
+        return removed, kept
+    try:
+        folders = [e for e in os.scandir(directory) if e.is_dir(follow_symlinks=False)]
+    except OSError:
+        return removed, kept
+    for folder in folders:
+        tag = version_key(folder.name)
+        if tag is None or tag > installed:
+            continue
+        try:
+            files = list(os.scandir(folder.path))
+        except OSError:
+            continue
+        for entry in files:
+            match = SETUP_NAME.fullmatch(entry.name)
+            if not match or version_key(match.group(1)) != tag or not entry.is_file(follow_symlinks=False):
+                continue
+            path = Path(entry.path)
+            try:
+                path.unlink()
+                removed.append(path)
+            except OSError:
+                kept.append(path)
+        try:
+            os.rmdir(folder.path)   # only when nothing else is left in it
+        except OSError:
+            pass
+    return removed, kept
 
 
 def download(asset: Asset, directory: Path, progress=lambda d, t: None, cancelled=lambda: False):

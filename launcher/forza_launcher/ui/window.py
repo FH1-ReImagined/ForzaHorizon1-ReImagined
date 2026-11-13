@@ -263,6 +263,7 @@ class MainWindow(QMainWindow):
         if sys.platform == "win32":
             QTimer.singleShot(600, self.setup.offer_move)
         update_result = self.show_update_result()
+        self.cleanup_update_downloads()
         self._update_check_due = not paths.in_checkout() and not update_result
         if ask_online:   # the update check waits for the answer
             QTimer.singleShot(0, self.ask_online_features)
@@ -284,6 +285,16 @@ class MainWindow(QMainWindow):
         self.settings.flush()
         self.about.updates.automatic.setChecked(bool(self.cfg.d["check_updates"]))
         self._start_update_check()
+
+    def cleanup_update_downloads(self):
+        """Delete the Windows Setup of an update that is now installed, and older ones (#865). Runs at
+        start and again at exit: the installer starts the new launcher while Setup is still open, and
+        Windows does not let an open file be deleted."""
+        from .. import updater
+        try:
+            updater.cleanup_downloads()
+        except Exception as exc:   # tidying up never stops the launcher
+            paths.log_error("update download cleanup", exc)
 
     def show_update_result(self):
         from .. import linux_update
@@ -557,6 +568,7 @@ class MainWindow(QMainWindow):
             return
         if not self.about.updates.restarting:
             self.settings.flush()
+        self.cleanup_update_downloads()
         super().closeEvent(e)
 
     def _gallery_idle(self):
