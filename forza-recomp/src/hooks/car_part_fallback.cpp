@@ -9,8 +9,14 @@
 // creator runs again with it, so the record is the one an unmodified car of that parent has.
 // The creator releases the database reference its caller handed it (r4) before it returns:
 // the retry gets a new one (AddRef, vtable slot 8). A warning names the car, the part, the
-// foreign part id and the stock part, once per car and part. A record that was made is
-// untouched: the hook then does nothing but the call.
+// foreign part id and the stock part, once per car and part.
+//
+// A record that was made is untouched, with one exception (#862): a record with no row (row
+// count 0: the part id is not in the database) of a part every car has (cpf::Required) is
+// released as the creator releases a mismatched one and made again with the stock part. A
+// sub-part whose expected parent has no stock part of its kind, because that parent is not in
+// the database (2147483647, from an empty Drivetrain or CarBody record) or lacks a required
+// part, gets the car's own stock parent's part (the parent passed with it is that one).
 //
 // The car's id for that line comes from the two callers, the car physics loader (base
 // sub_82BF4FB0, TU4 sub_82CB4500: r5 points to it) and the car's wheel and tyre geometry (base
@@ -121,50 +127,84 @@ bool FirstReport(int32_t car, uint32_t type, int32_t part) {
   return reported.size() < 256 && reported.emplace(car, type, part).second;
 }
 
+// The number of rows of a record (the loader's own test of the Engine and Motor records).
+int32_t Rows(const PPCContext& ctx, uint8_t* base, uint32_t record) {
+  return int32_t(Virtual(ctx, base, record, kRowCountSlot, {record}));
+}
+
 // Creator(out, database holder, type, parent, part, callback); the creator releases the holder.
 void Create(PPCContext& ctx, uint8_t* base, PPCFunc* original, Creator creator) {
   const uint32_t out = ctx.r3.u32, holder = ctx.r4.u32, type = ctx.r5.u32, callback = ctx.r8.u32;
   const int32_t parent = ctx.r6.s32, part = ctx.r7.s32;
   const uint32_t db = holder ? Read(base, holder) : 0;
   original(ctx, base);
-  if (!out || Read(base, out) || !db || !cpf::Handles(creator, type)) return;
+  if (!out || !db || !cpf::Handles(creator, type)) return;
+  // A record with no row: the part id is not in the database (a removed mod's part, or -1).
+  // Only a part every car has is replaced then (#862); an optional part's -1 stays empty.
+  const uint32_t record = Read(base, out);
+  if (record && (!cpf::Required(type) || Rows(ctx, base, record) > 0)) return;
 
-  // The creator's caller still holds the database (its own reference); the retry needs one.
-  const int32_t car = creator == Creator::kCar ? parent : current_car;
-  const std::string sql = cpf::StockPartSql(creator, type, parent);
-  bool found = false;
+  cpf::Outcome o;
+  o.car = creator == Creator::kCar ? parent : current_car;
+  o.creator = creator;
+  o.type = type;
+  o.part = part;
+  o.parent = parent;
+  o.missing = record != 0;
+  o.used_parent = parent;
   int32_t stock = 0;
-  if (!QueryInteger(ctx, base, db, sql, &found, &stock)) {
-    if (FirstReport(car, type, part)) {
-      REXLOG_ERROR("Car {}: its {} part {} doesn't belong to its {} {}, and the stock part could "
-                   "not be looked up (#836)",
-                   car, cpf::PartName(type), part, cpf::ParentColumn(creator), parent);
+  if (!QueryInteger(ctx, base, db, cpf::StockPartSql(creator, type, parent), &o.found, &stock)) {
+    if (FirstReport(o.car, type, part)) {
+      if (o.missing) {
+        REXLOG_ERROR("Car {}: its {} part {} is not in the game's database, and the stock part "
+                     "could not be looked up (#862)",
+                     o.car, cpf::PartName(type), part);
+      } else {
+        REXLOG_ERROR("Car {}: its {} part {} doesn't belong to its {} {}, and the stock part "
+                     "could not be looked up (#836)",
+                     o.car, cpf::PartName(type), part, cpf::ParentColumn(creator), parent);
+      }
     }
     return;
   }
-  const int32_t replacement = cpf::Replacement(found, stock);
+  if (!o.found && creator != Creator::kCar) {
+    // The parent from an empty car-level record (2147483647), or one without this part: the
+    // car's own stock parent's part (#862).
+    int32_t any = 0;
+    QueryInteger(ctx, base, db, cpf::ParentSql(creator, parent), &o.parent_known, &any);
+    bool has_parent = false;
+    int32_t car_parent = 0;
+    if (cpf::UseCarParent(creator, type, o.parent_known) && o.car > 0 &&
+        QueryInteger(ctx, base, db, cpf::CarParentSql(creator, o.car), &has_parent, &car_parent) &&
+        has_parent && car_parent != parent &&
+        QueryInteger(ctx, base, db, cpf::StockPartSql(creator, type, car_parent), &o.found,
+                     &stock) &&
+        o.found) {
+      o.used_parent = car_parent;
+    }
+  }
+  // An empty record with nothing better to load (an optional part, or no stock part): as it is.
+  if (o.missing && !o.found) return;
+  o.replacement = cpf::Replacement(o.found, stock);
+  if (record) {
+    // The empty record goes, as the caller's smart pointer would let it go.
+    Virtual(ctx, base, record, kReleaseSlot, {record});
+    Write(base, out, 0);
+  }
+  // The creator's caller still holds the database (its own reference); the retry needs one.
   Virtual(ctx, base, db, kAddRefSlot, {db});
   Write(base, holder, db);
   ctx.r3.u64 = out;
   ctx.r4.u64 = holder;
   ctx.r5.u64 = type;
-  ctx.r6.s64 = parent;
-  ctx.r7.s64 = replacement;
+  ctx.r6.s64 = o.used_parent;
+  ctx.r7.s64 = o.replacement;
   ctx.r8.u64 = callback;
   original(ctx, base);
-  const bool made = Read(base, out) != 0;
-  if (FirstReport(car, type, part)) {
-    if (found) {
-      REXLOG_WARN("Car {}: its {} part {} doesn't belong to its {} {}: loaded with the stock "
-                  "part {} instead{} (#836)",
-                  car, cpf::PartName(type), part, cpf::ParentColumn(creator), parent, replacement,
-                  made ? "" : ", which failed too");
-    } else {
-      REXLOG_WARN("Car {}: its {} part {} doesn't belong to its {} {}, which has no stock {}: "
-                  "loaded without one{} (#836)",
-                  car, cpf::PartName(type), part, cpf::ParentColumn(creator), parent,
-                  cpf::PartName(type), made ? "" : ", which failed too");
-    }
+  o.made = Read(base, out) != 0;
+  if (FirstReport(o.car, type, part)) {
+    const std::string line = cpf::Describe(o);
+    REXLOG_WARN("{}", line);
   }
 }
 
