@@ -31,6 +31,7 @@ FOLDER = "Anthem"                 # both worlds' folder (FH2's codename); the ga
 TOOL_KEY = "anthem"               # the tool's output: fm4-tracks/anthem and mods/fh2ff-anthem
 TOOL_MOD = "fh2ff-anthem"
 FORMAT = 1
+STREAM_BLOCKS = "fm4_stream_blocks.txt"   # in the world's folder: the converter's count for the game
 FF_TITLE, FH2_TITLE = 0x4D530AB5, 0x4D530AA4
 
 # key: (track.json kind, name, the game's title id)
@@ -68,6 +69,7 @@ def disc_root(folder, key=KEY) -> Path:
     _, name, title = WORLDS[key]
     game = "Forza Horizon 2 Presents Fast & Furious" if key == "anthem" else name
     p = Path(folder)
+    wrong = None
     for root in [p] + ([c for c in sorted(p.iterdir()) if c.is_dir()] if p.is_dir() else []):
         world = _world(root)
         if not (world and (world / "bin.zip").is_file() and fm4cars._find_ci(world, "Ribbon_00")
@@ -75,22 +77,27 @@ def disc_root(folder, key=KEY) -> Path:
             continue
         found = _title(root)
         if found is not None and found != title:
-            other = next((n for _, n, t in WORLDS.values() if t == found), f"another game (title id {found:08X})")
-            raise Fh2ffError(f"{p} holds {other}'s files, not {game}'s.")
+            # the other game's folder: the one asked for may be beside it in the chosen folder
+            wrong = wrong or next((n for _, n, t in WORLDS.values() if t == found),
+                                  f"another game (title id {found:08X})")
+            continue
         return root
+    if wrong:
+        raise Fh2ffError(f"{p} holds {wrong}'s files, not {game}'s.")
     raise Fh2ffError(f"{p} does not hold {game}'s files (media/tracks/Anthem with its bin.zip and "
                      "Ribbon_00, and media/db/gamedb.slt). Choose the folder of the game's files, as "
                      "extracted from your own copy.")
 
 
-def fh2_root(folder):
-    """FH2's own files (for its road types and map art), or None when the player chose none."""
+def fh2_root(folder, optional=True):
+    """FH2's own files (for its road types and map art), or None when the player chose none
+    (`optional`: Fast & Furious's import can do without them; FH2's own cannot)."""
     if not folder:
         return None
     root = disc_root(folder, "fh2")
     if fm4cars._find_ci(root, "media", "ui", "textures", "Horizon.zip") is None:
         raise Fh2ffError(f"{folder} does not look like Forza Horizon 2's files (no media/ui/textures/Horizon.zip). "
-                         "Choose FH2's folder, or none.")
+                         + ("Choose FH2's folder, or none." if optional else "Choose the folder of FH2's files."))
     return root
 
 
@@ -106,7 +113,7 @@ def build(cfg, ff_folder, fh2_folder=None, progress=lambda f, text: None, cancel
     earlier import of it (kept until the new one is complete). Returns a message for the player."""
     kind, name, _ = WORLDS[key]
     if key == "fh2":
-        src = fh2 = fh2_root(ff_folder)
+        src = fh2 = fh2_root(ff_folder, optional=False)
     else:
         src, fh2 = disc_root(ff_folder), fh2_root(fh2_folder)
     game = Path(cfg.game_files())
@@ -169,5 +176,10 @@ def configure(info, env: dict, notes: list):
         env["FORZA_TRACK_SPAWN"] = info["spawn"]
     env["FORZA_FM4_COL"] = "0"
     env["FORZA_TRACK_NO_TRAFFIC"] = "0"
+    # the game reads those two "0"s as off only in a world that has its streaming-block count
+    # (hooks/fm4_track.cpp); an import from before the converter wrote it has none
+    if info.get("path") and not fm4cars._find_ci(Path(info["path"]), "media", "tracks", FOLDER, STREAM_BLOCKS):
+        notes.append(f"{info.get('name', NAME)}'s world was imported by an earlier version and has no "
+                     "collision or traffic that way: import it again on the Mods page.")
     notes.append(f"Starting in {info.get('name', NAME)}'s world (experimental, offline). Choose FH1's "
                  "Colorado on the Play page to drive in Colorado again.")

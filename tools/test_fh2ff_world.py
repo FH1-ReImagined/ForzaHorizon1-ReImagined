@@ -265,6 +265,14 @@ class RoadNetwork(unittest.TestCase):
         ff.retype_blocked(mine, theirs)
         self.assertEqual(mine["values"], ["a", "blocked", "dirt", "freeway"])
         self.assertEqual([mine["values"][mine["tags"][ft][1]] for _, _, _, ft in mine["ways"]], ["dirt", "freeway"])
+        # two types put in, before and after "blocked": the later blocked roads are still found
+        mine = net([([3, 4], {"road_type": "blocked"}), ([0, 1, 2], {"road_type": "blocked"}),
+                    ([3, 4], {"road_type": "blocked"}), ([1, 2], {"road_type": "freeway"})], nodes,
+                   ["road_type"], ["blocked", "freeway"])
+        self.assertEqual(ff.retype_blocked(mine, theirs), {"b (no FH2 road there)": 2, "dirt (FH2's)": 1})
+        self.assertEqual(mine["values"], ["b", "blocked", "dirt", "freeway"])
+        self.assertEqual([mine["values"][mine["tags"][ft][1]] for _, _, _, ft in mine["ways"]],
+                         ["b", "dirt", "b", "freeway"])
 
     def test_tag_names(self):
         n = net([], [], ["ai_disabled", "oneway_forward", "road_type", "traffic_density_name"], ["x"])
@@ -303,6 +311,18 @@ class RoadNetwork(unittest.TestCase):
         w.info_of = [mock.Mock(file_size=(k + 1) * 1024) for k in range(4)]
         # the centre cell (1, 1) holds zone 2; its neighbours (1, 0), (0, 1), (2, 1) the others
         self.assertEqual(w.stream_blocks(hexd), 1 + 2 + 3 + 4)
+        # which diagonal is a neighbour: an odd column's are its own row and the next one. Zone 1
+        # at column 0, row 2 is next to zone 0 at (1, 1) only that way round
+        cells = [-1, -1, -1,
+                 -1, 0, -1,
+                 1, -1, -1]
+        hexd = struct.pack(">4sifffiii", b"HEXY", 101, 100.0, 0.0, 0.0, 4, 3, 3) + struct.pack(">9i", *cells)
+        self.assertEqual(w.stream_blocks(hexd), 1 + 2)
+        cells = [1, -1, -1,
+                 -1, 0, -1,
+                 -1, -1, -1]
+        hexd = struct.pack(">4sifffiii", b"HEXY", 101, 100.0, 0.0, 0.0, 4, 3, 3) + struct.pack(">9i", *cells)
+        self.assertEqual(w.stream_blocks(hexd), 2)
 
     def test_keep_right(self):
         line = ff.keep_right([(0, 1, 0), (10, 1, 0)], 2.0)
@@ -382,8 +402,10 @@ class Routes(unittest.TestCase):
                 z.writestr("anthem/Ribbon_00/Route12.owt", d)
                 z.writestr("anthem/Ribbon_00/Route13.owt", d)      # no Tracks row: left out
                 z.writestr("anthem/Ribbon_00/Route3001.owt", b"OWTM" + b"\0" * 40)   # does not read
+                z.writestr("anthem/Ribbon_00/Route3002.owt", b"OWTM" + struct.pack(">I", 2))   # cut short
+                z.writestr("other/Ribbon_00/Route12.owt", d[:-20])     # another world's: not looked at
             out = os.path.join(tmp, "out")
-            self.assertEqual(ff.ai_lines(src, {12, 3001}, out), {"looped": 1, "not read": 1})
+            self.assertEqual(ff.ai_lines(src, {12, 3001, 3002}, out), {"looped": 1, "not read": 2})
             self.assertEqual(os.listdir(out), ["route_012.owt"])
 
     def test_rows_with_a_route_file(self):
@@ -393,7 +415,12 @@ class Routes(unittest.TestCase):
             os.mkdir(rb)
             for n in ("TrackRoute012.xml", "TrackRoute3001.xml"):
                 open(os.path.join(rb, n), "w").write(ARENA_XML)
-            src = os.path.join(tmp, "src.slt")
+            os.mkdir(os.path.join(tmp, "a#b %41"))      # a folder name a URI would read another way
+            src = os.path.join(tmp, "a#b %41", "src.slt")
+            self.assertEqual(ff.read_only_uri(src).count("#") + ff.read_only_uri(src).count(" "), 0)
+            if os.name == "nt":
+                self.assertEqual(ff.read_only_uri(r"\\server\share\g#\gamedb.slt"),
+                                 "file:////server/share/g%23/gamedb.slt?mode=ro")
             con = sqlite3.connect(src)
             con.execute("CREATE TABLE Tracks (id INTEGER, DisplayName TEXT, ShortDisplayName TEXT, MediaName TEXT, "
                         "RibbonIndex INTEGER, RibbonConfiguration INTEGER, RouteId INTEGER, EnvironmentId INTEGER, "
