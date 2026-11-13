@@ -178,6 +178,7 @@ set(FORZA_SOURCES
     src/hooks/car_detail.cpp
     src/hooks/livery_bake.cpp
     src/hooks/shadow_filter.cpp
+    src/hooks/native_device.cpp
     src/hooks/ai_catchup.cpp
     src/hooks/physics_loader_check.cpp
     src/hooks/resource_data_release.cpp

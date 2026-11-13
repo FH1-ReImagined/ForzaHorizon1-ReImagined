@@ -269,6 +269,11 @@ jobs:
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/shadow_filter_test.cpp -o "$RUNNER_TEMP/shadow-filter-test"
           "$RUNNER_TEMP/shadow-filter-test"
       - if: runner.os == 'Linux'
+        name: Native renderer shadow mode records
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/native_shadow_record_test.cpp -o "$RUNNER_TEMP/native-shadow-record-test"
+          "$RUNNER_TEMP/native-shadow-record-test"
+      - if: runner.os == 'Linux'
         name: CPU drivers without rubber banding
         run: |
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/ai_catchup_test.cpp -o "$RUNNER_TEMP/ai-catchup-test"
