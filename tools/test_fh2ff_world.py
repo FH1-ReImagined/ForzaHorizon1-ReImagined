@@ -259,6 +259,12 @@ class RoadNetwork(unittest.TestCase):
         self.assertEqual(counts, {"dirt (FH2's)": 1, "b (no FH2 road there)": 1})
         types = [mine["values"][mine["tags"][ft][1]] for _, _, _, ft in mine["ways"]]
         self.assertEqual(types, ["dirt", "b", "a"])
+        # a type the table has not is put in its sorted place, the other tags following
+        mine = net([([0, 1, 2], {"road_type": "blocked"}), ([1, 2], {"road_type": "freeway"})], nodes,
+                   ["road_type"], ["a", "blocked", "freeway"])
+        ff.retype_blocked(mine, theirs)
+        self.assertEqual(mine["values"], ["a", "blocked", "dirt", "freeway"])
+        self.assertEqual([mine["values"][mine["tags"][ft][1]] for _, _, _, ft in mine["ways"]], ["dirt", "freeway"])
 
     def test_tag_names(self):
         n = net([], [], ["ai_disabled", "oneway_forward", "road_type", "traffic_density_name"], ["x"])
@@ -283,7 +289,7 @@ class RoadNetwork(unittest.TestCase):
         self.assertEqual([t.get("road_type") for t in tags], ["a", "b", "freeway", None])
         self.assertEqual(n["values"], sorted(set(n["values"])))
         self.assertNotIn("a_high", n["values"])
-        fm4_routes.check_network(fm4_routes.write_nav(n))
+        self.assertEqual(fm4_routes.check_network(fm4_routes.write_nav(n)), [])
 
     def test_streaming_blocks_of_a_cell_and_its_neighbours(self):
         # a 3 x 3 hex grid, zones 0..3 in four cells; zone k has model k, of (k + 1) KB
@@ -421,6 +427,8 @@ class Lighting(unittest.TestCase):
         self.assertEqual(ff.track_settings_64(v64), v64)
         with self.assertRaises(ValueError):
             ff.track_settings_64('<TrackSettings Version="70">')
+        with self.assertRaisesRegex(ValueError, "TintColor"):       # not on a line of its own
+            ff.track_settings_64('<TrackSettings Version="66"><TintColor r="1"/></TrackSettings>')
 
     def test_missing_grading_maps(self):
         with tempfile.TemporaryDirectory() as d:
@@ -574,6 +582,19 @@ class OutputSafety(unittest.TestCase):
             with self.assertRaises(FileNotFoundError):
                 ff.build(root / "missing", root, root / "media.zip", root)
             self.assert_contents(root, "previous")
+
+    def test_a_leftover_publish_folder_is_explained(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d).resolve()
+            self.populate(root, "previous")
+            (root / ".fh2ff-publish").mkdir()
+            with mock.patch.object(ff, "_build_into", side_effect=lambda a, b, c, stage, e: self.populate(stage, "new")):
+                with self.assertRaisesRegex(ValueError, "interrupted"):
+                    ff.build(root, root, root / "media.zip", root)
+            for path in self.paths:                         # the old output and the folder stay
+                self.assertEqual((root / path / "marker").read_text(), "previous")
+            self.assertTrue((root / ".fh2ff-publish").is_dir())
+            self.assertFalse(list(root.glob(".fh2ff-build-*")))
 
     def test_publish_rolls_back_if_second_install_fails(self):
         with tempfile.TemporaryDirectory() as d:
