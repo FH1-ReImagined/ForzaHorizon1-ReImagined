@@ -548,6 +548,48 @@ class Interface(ServiceTest):
         d.accept()
         self.assertEqual(view.closed, 1)
 
+    def gap(self, d, above, below):
+        """Pixels between the bottom of `above` and the top of `below` in the shown dialog."""
+        d.layout().activate()
+        self.app.processEvents()
+        return below.mapTo(d, below.rect().topLeft()).y() - above.mapTo(d, above.rect().bottomLeft()).y()
+
+    def test_after_use_my_browser_instead_the_buttons_are_under_the_question(self):
+        # #856: the dialog was sized for the page; the buttons stayed at its bottom, far below
+        view = self.fake_view()
+        d, _ = self.dialog(view)
+        d.show()
+        self.spin(lambda: view.loaded)
+        d.browser_button.click()
+        self.app.processEvents()
+        self.assertLess(d.height(), 520)                  # no longer the page's size
+        self.assertLess(self.gap(d, d.text, d.close_button), 120)   # only the code in between
+        self.svc.claim(d.request["id"])
+        self.spin(lambda: d.claimed is not None)
+        self.assertLess(self.gap(d, d.text, d.link_button), 40)
+        d.resize(980, 820)                                # made big again: the room goes below
+        self.assertLess(self.gap(d, d.text, d.link_button), 40)
+        self.assertGreater(d.height() - d.link_button.mapTo(d, d.link_button.rect().bottomLeft()).y(), 300)
+
+    def test_with_the_page_the_question_moves_down_to_the_buttons(self):
+        view = self.fake_view()
+        d, _ = self.dialog(view)
+        d.show()
+        self.spin(lambda: view.loaded)
+        self.assertGreater(self.gap(d, d.text, view), -1)  # "Sign in below" stays above the page
+        self.svc.claim(d.request["id"])
+        self.spin(lambda: d.claimed is not None)
+        self.assertTrue(view.isVisibleTo(d))
+        self.assertGreater(self.gap(d, view, d.text), -1)  # the question now under the page
+        self.assertLess(self.gap(d, d.text, d.link_button), 40)
+
+    def test_without_the_page_the_buttons_are_under_the_text(self):
+        d, opened = self.dialog(None)
+        d.show()
+        self.spin(lambda: d.request is not None and d.code.text())
+        d.resize(980, 820)
+        self.assertLess(self.gap(d, d.text, d.close_button), 120)
+
     def test_a_window_that_stops_falls_back_to_the_browser(self):
         view = self.fake_view()
         d, opened = self.dialog(view)

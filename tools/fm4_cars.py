@@ -41,6 +41,7 @@ import os
 import re
 import sqlite3
 import struct
+import subprocess
 import sys
 import tempfile
 import time
@@ -1553,6 +1554,8 @@ class Converter:
     mod: the mod overlay holds at most 4 GB in all, and a full import is about 9 GB
     uncompressed (3 GB with FM4's textures kept compressed, as a pack's zips can)."""
 
+    mod_version = None  # mod.toml's version; the launcher sets its own (#853), else source_version()
+
     def __init__(self, fm4, fh1, out, package=None):
         self.fm4, self.fh1, self.out = fm4, fh1, out
         self.fm4db, self.fh1db = fm4.db(), fh1.db()
@@ -2005,10 +2008,31 @@ class Converter:
         os.makedirs(dbdir, exist_ok=True)
         write_full_db(self.fh1.db_file, self.fh1db, rows, os.path.join(dbdir, "gamedb.slt"))
         with open(os.path.join(self.out, "mod.toml"), "w", encoding="utf-8") as f:
-            f.write('name = "%s"\nversion = "1"\ndescription = "%d Forza Motorsport 4 cars, '
-                    'converted on this PC from your own FM4 discs%s"\n'
-                    % (MOD_NAME, len(done), " and DLC" if report["dlc_cars"] else ""))
+            f.write(mod_manifest(len(done), bool(report["dlc_cars"]), self.mod_version or source_version()))
         return report
+
+
+def _toml_string(text):
+    return '"%s"' % str(text).replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+
+
+def mod_manifest(cars, dlc, version):
+    """The FM4 cars mod's mod.toml. version: what made the import (the launcher's version, and
+    its commit when it runs from source, #853), shown on the Mods page; nothing reads it back."""
+    return ('name = %s\nversion = %s\ndescription = "%d Forza Motorsport 4 cars, '
+            'converted on this PC from your own FM4 discs%s"\n'
+            % (_toml_string(MOD_NAME), _toml_string(version or "1"), cars, " and DLC" if dlc else ""))
+
+
+def source_version():
+    """This script's version when it runs on its own: "source <commit>" in a git checkout, else "1"."""
+    try:
+        out = subprocess.run(["git", "-C", os.path.dirname(os.path.abspath(__file__)), "rev-parse", "--short",
+                              "HEAD"], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return "1"
+    commit = out.stdout.strip() if out.returncode == 0 else ""
+    return "source " + commit if commit else "1"
 
 
 def main(argv=None):

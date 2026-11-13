@@ -180,7 +180,9 @@ class FakeConverter:
         FakeConverter.runs.append(list(ids))
         (self.out / "media/cars/BUG_Veyron_09").mkdir(parents=True)
         (self.out / "media/cars/BUG_Veyron_09/carattribs.xml").write_text("<CarAttributes/>")
-        (self.out / "mod.toml").write_text('name = "FM4 cars"\n')
+        tools = fm4cars._tools()  # the tool's own manifest, with the version the launcher set
+        (self.out / "mod.toml").write_text(tools.mod_manifest(1, False, getattr(self, "mod_version", None)),
+                                           encoding="utf-8")
         (self.package / "Media/DLCZips").mkdir(parents=True)
         (self.package / "Media/DLCZips/fm4cars1_pri_60.zip").write_bytes(b"PK")
         header = self.package.parent.parent / "Headers/00000002" / (self.package.name + ".header")
@@ -238,6 +240,22 @@ class Fm4ImportTests(_Setup, unittest.TestCase):
         self.assertFalse(package.exists())
         self.assertFalse(header.exists())
         self.assertIsNone(fm4cars.status(self.cfg))
+
+    def test_the_mods_version_is_the_launchers_that_made_it(self):
+        # #853: not a fixed "1": the Mods page tells which launcher made the import
+        with patch("forza_launcher.game.source_commit", lambda: ""), \
+                patch.object(fm4cars, "__version__", "0.2.7"):
+            self.build()
+        target = mods.mods_dir(self.cfg) / fm4cars.MOD
+        self.assertEqual(mods.read_mod(target).version, "0.2.7")
+        self.assertEqual(fm4cars.status(self.cfg)["launcher"], "0.2.7")
+        with patch("forza_launcher.game.source_commit", lambda: "abc1234"), \
+                patch.object(fm4cars, "__version__", "0.1.0"):
+            self.build()  # from source: the commit too
+        mod = mods.read_mod(target)
+        self.assertEqual(mod.version, "0.1.0 (abc1234)")
+        self.assertEqual(mod.name, "FM4 cars")
+        self.assertEqual(fm4cars.status(self.cfg)["launcher"], "0.1.0 (abc1234)")
 
     def test_a_second_import_replaces_the_first(self):
         self.build()

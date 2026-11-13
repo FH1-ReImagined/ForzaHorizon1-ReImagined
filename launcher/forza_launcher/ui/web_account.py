@@ -61,7 +61,8 @@ class LinkDialog(QDialog):
     the page, and confirms under it. Elsewhere, after "Use my browser instead" or when the window
     stops, it opens in the player's browser as before. The code for another device is always shown,
     with Copy link, until the account is claimed; when the browser did not open, the link itself is
-    shown too (#815)."""
+    shown too (#815). What the dialog asks for (Link or Not me) sits right above the buttons that
+    answer it, with or without the page (#856)."""
 
     def __init__(self, identity, parent=None, base=web_account.SERVICE, browser=False):
         super().__init__(parent)
@@ -120,6 +121,9 @@ class LinkDialog(QDialog):
         self.not_me.clicked.connect(self.reject)
         self.close_button.clicked.connect(self._close)
         lay.addLayout(buttons)
+        self.buttons = buttons
+        # without the page, the room left over goes below the buttons, not between them and the text
+        lay.addStretch(0 if self.web is not None else 1)
         self._run(self._start_call, self._started, "web account link")
 
     def _fit(self):
@@ -209,6 +213,25 @@ class LinkDialog(QDialog):
         if web is not None:
             web.hide()
             web.close_down()
+            if self.active:
+                self._compact()
+
+    def _compact(self):
+        """The page gone (Use my browser instead, a window that stopped): the dialog shrinks to
+        its text and buttons, and any room left over goes below the buttons (#856)."""
+        lay = self.layout()
+        lay.setStretch(lay.count() - 1, 1)
+        self.setMinimumSize(520, 0)
+        lay.activate()
+        self.adjustSize()
+
+    def _ask_above_the_buttons(self):
+        """The question next to the buttons that answer it: with the page shown, the text moves
+        from above the page to just above the buttons (#856)."""
+        lay = self.layout()
+        lay.removeWidget(self.text)
+        at = next(i for i in range(lay.count()) if lay.itemAt(i).layout() is self.buttons)
+        lay.insertWidget(at, self.text)
 
     def _waited(self, task, ok, msg):
         if not ok:
@@ -220,6 +243,8 @@ class LinkDialog(QDialog):
         if state == "claimed" and isinstance(doc.get("account"), dict):
             self.claimed = doc
             self.text.setText(web_account.confirm_question(doc))
+            if self.web is not None:
+                self._ask_above_the_buttons()
             self.code.hide()
             self.note.hide()
             self.browser_button.hide()
