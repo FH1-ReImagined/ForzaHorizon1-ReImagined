@@ -1425,9 +1425,10 @@ mask's shadow off (`FH1_FM4_SHADOW_FLOOR=1`), at Le Mans's grid the mask darkene
 middle third of the picture before and 0.2% after (the bottom third, the car's own shadow:
 9.9% and 9.8%).
 
-What is left: the dark stretches of road under the trees (Le Mans's Mulsanne at 4.6 to 5.8
-km, Suzuka's 3.9 km) are there before and after, and with the mask's shadow off: they are
-FM4's own baked lighting, not the shadow mask. They were not compared with FM4 itself. The
+What is left: the dark stretches of road, mostly under trees (Le Mans's Mulsanne at 4.6 to
+5.8 km, Suzuka at 1.5 and 3.9 km), are there before and after, and in a drive of each circuit
+with the mask's shadow off, where only the car's shadow is missing: they are FM4's own baked
+lighting, not the shadow mask. They were not compared with FM4 itself. The
 circuit's buildings and trees still cast no shadow of FH1's (see below). ReGPU and D3D12 have
 no marked fetch and draw no shadow on a circuit, as before; the converter's half was not run
 there.
