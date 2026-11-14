@@ -402,6 +402,13 @@ Dropdowns use up/down and A to select, B to close.
 File pickers use Qt dialogs so controller focus works there too. Text entry still needs a
 keyboard or the system's on-screen keyboard. Steam Input users should select a gamepad
 layout; a mouse/keyboard layout continues to work through normal Qt input.
+Settings > Advanced > Launcher > **Use the system's file dialogs**
+(`advanced.system_file_dialogs` in `launcher.json`, off by default, #884) opens the system's file
+dialog instead: Windows' own, and on Linux the desktop's where Qt has one for it (where it has
+none, Qt's own stays). A controller cannot move in those. It applies to the next dialog opened.
+The Flatpak keeps the launcher's own whatever the setting says, because the portal's dialog gives
+the sandbox only the file picked and a Games on Demand package needs its `.data` folder
+(`ui/file_dialogs.py`).
 
 Input is ignored while the launcher is inactive or the game is running, and from a device
 that the Controls page is binding or calibrating. Reconnects, returning to the launcher and
