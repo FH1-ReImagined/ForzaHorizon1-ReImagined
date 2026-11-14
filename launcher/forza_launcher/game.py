@@ -685,7 +685,7 @@ def _build_plan(cfg: Config, game: GameInstall, write, refresh_xenia, log, saver
     args += mods.launch_args(cfg, named)
     from . import loading_tips  # ReImagined loading-screen tips (Settings > Gameplay), first in the order
     loading_tips.launch_args(cfg, args, write, log)
-    from . import upload_site  # the Big Shot's texts name forza.dyotson.dev when Play goes online (#875)
+    from . import upload_site  # the photo and movie upload texts name forza.dyotson.dev when Play goes online (#875)
     upload_site.launch_args(cfg, args, write, log)
     args += texture_packs.launch_args(cfg, named)  # the packs turned on, in order (#384)
     # An imported FM4 circuit chosen on the Play page (#648, experimental): its game folder, mods

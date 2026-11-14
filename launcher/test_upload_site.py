@@ -1,5 +1,5 @@
-"""The Big Shot upload's texts name forza.dyotson.dev (#875): the carflow.str rewrite, the hidden
-mod and the launch arguments. Synthetic string tables only (no game files)."""
+"""The photo and movie upload texts name forza.dyotson.dev (#875): the carflow.str and main.str
+rewrite, the hidden mod and the launch arguments. Synthetic string tables only (no game files)."""
 import json
 import os
 import sys
@@ -15,29 +15,64 @@ from forza_launcher import game, loading_tips, mods, upload_site  # noqa: E402
 from forza_launcher.config import Config  # noqa: E402
 from test_loading_tips import TABLE as TIPS, lsb2, strings  # noqa: E402
 
-# A carflow.str in small: the five Big Shot entries (the old name in both of the game's
-# spellings), the movie upload's and the storefront's, which stay.
-EN = [("IDS_Photo_Upload_Success", "Your photo was successfully uploaded to the Forza Horizon Storefront."),
-      ("IDS_BigShot_Upload_Failure", "Your Big Shot photo was NOT successfully uploaded to the ForzaMotorsport.net "
-                                     "server. Make sure you have a connection to Xbox LIVE, and try again later."),
-      ("IDS_Photo_Upload_Confirm_Overwrite", "You have already uploaded a big shot photo to Forzamotorsport.net. "
-                                             "Do you want to overwrite it?"),
-      ("IDS_BigShot_Upload_Failure_Lsp", "The Forza Horizon service is not available. Please try again later."),
-      ("IDS_Photo_ConfirmExport_Msg", "You are about to create a large photo and upload it to ForzaMotorsport.net.  "
-                                      "This process can take a bit of time.  Are you sure you want to continue?"),
-      ("IDS_Movie_Upload_Success", "Your movie was successfully uploaded to Forzamotorsport.net."),
-      ("IDS_BigShot_Upload_Success", "Your Big Shot photo was successfully uploaded to the ForzaMotorsport.net "
-                                     "server. You can retrieve it from there later."),
-      ("IDS_Photo_BigShot_Msg", "This photo will be automatically uploaded to ForzaMotorsport.net where you can "
-                                "access and download it.")]
-DE = [("IDS_Photo_BigShot_Msg", "Dieses Foto wird automatisch bei ForzaMotorsport.net hochgeladen, wo Sie darauf "
-                                "zugreifen und es herunterladen können."),
-      ("IDS_BigShot_Upload_Success", "Ihre Großaufnahme wurde erfolgreich auf den ForzaMotorsport.net-Server "
-                                     "hochgeladen."),
-      ("IDS_Movie_Upload_Success", "Ihr Film wurde erfolgreich auf Forzamotorsport.net hochgeladen.")]
-JP = [("IDS_Photo_BigShot_Msg", "このフォトは自動的に ForzaMotorsport.net "
-                                "にアップロードされます")]
-IDS = upload_site.ENTRIES["carflow"]
+SITE = "forza.dyotson.dev"
+# A carflow.str in small: the Big Shot's five entries and the movie upload's four (the old name
+# in both of the game's spellings), and the storefront's and the service's, which stay.
+CARFLOW = [
+    ("IDS_Photo_Upload_Success", "Your photo was successfully uploaded to the Forza Horizon Storefront."),
+    ("IDS_BigShot_Upload_Failure", "Your Big Shot photo was NOT successfully uploaded to the ForzaMotorsport.net "
+                                   "server. Make sure you have a connection to Xbox LIVE, and try again later."),
+    ("IDS_Photo_Upload_Confirm_Overwrite", "You have already uploaded a big shot photo to Forzamotorsport.net. "
+                                           "Do you want to overwrite it?"),
+    ("IDS_Movie_Upload_Failure", "Your movie was NOT successfully uploaded to Forzamotorsport.net."),
+    ("IDS_BigShot_Upload_Failure_Lsp", "The Forza Horizon service is not available. Please try again later."),
+    ("IDS_Photo_ConfirmExport_Msg", "You are about to create a large photo and upload it to ForzaMotorsport.net.  "
+                                    "This process can take a bit of time.  Are you sure you want to continue?"),
+    ("IDS_Movie_Upload_Success", "Your movie was successfully uploaded to Forzamotorsport.net."),
+    ("IDS_Movie_Upload_Confirm", "Would you like to share this movie with others by uploading it to "
+                                 "Forzamotorsport.net?"),
+    ("IDS_Movie_Upload_Title", "UPLOAD MOVIE"),
+    ("IDS_Movie_Upload_Confirm_Overwrite", "You have already uploaded a movie or big shot to Forzamotorsport.net. "
+                                           "Do you want to overwrite it?"),
+    ("IDS_BigShot_Upload_Success", "Your Big Shot photo was successfully uploaded to the ForzaMotorsport.net "
+                                   "server. You can retrieve it from there later."),
+    ("IDS_Photo_BigShot_Msg", "This photo will be automatically uploaded to ForzaMotorsport.net where you can "
+                              "access and download it.")]
+# A main.str in small: the movie list's two entries, and IDS_InstallBestResults3, which names the
+# old site too but is about news, not an upload: it must stay.
+MAIN = [
+    ("IDS_LoadSave_WatchMovie_Msg", "In order to watch your movies, you must first upload them to "
+                                    "ForzaMotorsport.net. This requires an Xbox LIVE Gold Membership."),
+    ("IDS_LoadSave_Upload", "UPLOAD TO FORZA HORIZON STOREFRONT"),
+    ("IDS_InstallBestResults3", "Visit ForzaMotorsport.net for all the latest Forza Horizon news and "
+                                "community events."),
+    ("IDS_LoadSave_WatchMovie_Title", "HOW TO WATCH MOVIES"),
+    ("IDS_LoadSave_Upload_to_Server", "Upload to ForzaMotorsport.net")]
+CARFLOW_DE = [
+    ("IDS_Photo_BigShot_Msg", "Dieses Foto wird automatisch bei ForzaMotorsport.net hochgeladen, wo Sie darauf "
+                              "zugreifen und es herunterladen können."),
+    ("IDS_BigShot_Upload_Success", "Ihre Großaufnahme wurde erfolgreich auf den ForzaMotorsport.net-Server "
+                                   "hochgeladen."),
+    ("IDS_Movie_Upload_Success", "Ihr Film wurde erfolgreich auf Forzamotorsport.net hochgeladen."),
+    ("IDS_Livery_Upload_Success", "Ihr Design wurde erfolgreich in den Forza Horizon-Shop hochgeladen.")]
+MAIN_DE = [
+    ("IDS_LoadSave_Upload_to_Server", "Auf ForzaMotorsport.net hochladen"),
+    ("IDS_InstallBestResults3", "Auf ForzaMotorsport.net finden Sie alle Neuigkeiten zu Forza Horizon.")]
+# The upload action in capitals (Hungarian), and with the game's own slip in the name (French).
+MAIN_HU = [("IDS_LoadSave_Upload_to_Server", "FELTÖLTÉS A FORZAMOTORSPORT.NET WEBHELYRE"),
+           ("IDS_LoadSave_WatchMovie_Msg", "A filmeket a megtekintés előtt fel kell tölteni a ForzaMotorsport.net "
+                                           "webhelyre.")]
+MAIN_FR = [("IDS_LoadSave_Upload_to_Server", "ENVOYER À FORZAMOTOSPORT.NET"),
+           ("IDS_LoadSave_WatchMovie_Msg", "Pour regarder vos films, commencez par les envoyer à "
+                                           "ForzaMotorsport.net. Abonnement Xbox LIVE Gold requis.")]
+CARFLOW_JP = [("IDS_Photo_BigShot_Msg", "このフォトは自動的に ForzaMotorsport.net にアップロードされます"),
+              ("IDS_Movie_Upload_Success", "Forzamotorsport.net にムービーをアップロードしました")]
+TABLES = {"carflow": CARFLOW, "main": MAIN}
+IDS = upload_site.ENTRIES
+
+
+def rewritten(table, entries):
+    return dict(strings(upload_site.rewrite(lsb2(entries), IDS[table])))
 
 
 def loc():
@@ -47,63 +82,115 @@ def loc():
     return bytes(data)
 
 
+class Entries(unittest.TestCase):
+    def test_the_big_shots_the_movies_and_the_movie_lists(self):
+        self.assertEqual(sorted(IDS), ["carflow", "main"])
+        self.assertEqual(len(IDS["carflow"]), 9)
+        self.assertEqual(len([i for i in IDS["carflow"] if "Movie" in i]), 4)
+        self.assertEqual(sorted(IDS["main"]), ["IDS_LoadSave_Upload_to_Server", "IDS_LoadSave_WatchMovie_Msg"])
+        # the fixtures hold every entry, so the tests below see each of them change
+        for table, entries in TABLES.items():
+            self.assertLessEqual(set(IDS[table]), {k for k, _ in entries}, table)
+
+
 class Rewrite(unittest.TestCase):
     def test_only_the_site_name_in_only_those_entries(self):
-        data = lsb2(EN)
-        out = upload_site.rewrite(data, IDS)
-        self.assertEqual([k for k, _ in strings(out)], [k for k, _ in EN])  # the ids and their order stay
-        new, old = dict(strings(out)), dict(EN)
-        changed = {k for k in old if new[k] != old[k]}
-        self.assertEqual(changed, set(IDS))
-        for k in IDS:
-            self.assertNotIn("motorsport.net", new[k].lower())
-            self.assertEqual(new[k].count("forza.dyotson.dev"), 1)
-            # the rest of the text is the game's
-            self.assertEqual(new[k].replace("forza.dyotson.dev", "@"),
-                             upload_site.OLD.sub("@", old[k]))
+        for table, entries in TABLES.items():
+            with self.subTest(table):
+                out = upload_site.rewrite(lsb2(entries), IDS[table])
+                self.assertEqual([k for k, _ in strings(out)], [k for k, _ in entries])  # the ids and their order stay
+                new, old = dict(strings(out)), dict(entries)
+                self.assertEqual({k for k in old if new[k] != old[k]}, set(IDS[table]))
+                for k in IDS[table]:
+                    self.assertNotIn("motorsport.net", new[k].lower())
+                    self.assertEqual(new[k].count(SITE), 1)
+                    # the rest of the text is the game's
+                    self.assertEqual(new[k].replace(SITE, "@"), upload_site.OLD.sub("@", old[k]))
+
+    def test_the_texts(self):
+        new = rewritten("carflow", CARFLOW)
         self.assertEqual(new["IDS_BigShot_Upload_Success"],
                          "Your Big Shot photo was successfully uploaded to the forza.dyotson.dev server. "
                          "You can retrieve it from there later.")
         self.assertEqual(new["IDS_Photo_Upload_Confirm_Overwrite"],
                          "You have already uploaded a big shot photo to forza.dyotson.dev. "
                          "Do you want to overwrite it?")
-        # the movie upload's and the storefront's texts are not this flow's
-        self.assertEqual(new["IDS_Movie_Upload_Success"], "Your movie was successfully uploaded to Forzamotorsport.net.")
-        self.assertIn("Storefront", new["IDS_Photo_Upload_Success"])
+        self.assertEqual(new["IDS_Movie_Upload_Confirm"],
+                         "Would you like to share this movie with others by uploading it to forza.dyotson.dev?")
+        self.assertEqual(new["IDS_Movie_Upload_Confirm_Overwrite"],
+                         "You have already uploaded a movie or big shot to forza.dyotson.dev. "
+                         "Do you want to overwrite it?")
+        self.assertEqual(new["IDS_Movie_Upload_Success"], "Your movie was successfully uploaded to forza.dyotson.dev.")
+        self.assertEqual(new["IDS_Movie_Upload_Failure"],
+                         "Your movie was NOT successfully uploaded to forza.dyotson.dev.")
+        # the storefront's and the service's texts name no site and stay
+        for k in ("IDS_Photo_Upload_Success", "IDS_BigShot_Upload_Failure_Lsp", "IDS_Movie_Upload_Title"):
+            self.assertEqual(new[k], dict(CARFLOW)[k])
+        new = rewritten("main", MAIN)
+        self.assertEqual(new["IDS_LoadSave_Upload_to_Server"], "Upload to forza.dyotson.dev")
+        self.assertEqual(new["IDS_LoadSave_WatchMovie_Msg"],
+                         "In order to watch your movies, you must first upload them to forza.dyotson.dev. "
+                         "This requires an Xbox LIVE Gold Membership.")
+        # an entry that names the old site but is not about an upload stays as it is
+        self.assertEqual(new["IDS_InstallBestResults3"], dict(MAIN)["IDS_InstallBestResults3"])
+        self.assertIn("ForzaMotorsport.net", new["IDS_InstallBestResults3"])
+        self.assertEqual(new["IDS_LoadSave_Upload"], "UPLOAD TO FORZA HORIZON STOREFRONT")
 
     def test_a_table_round_trip(self):
-        data = lsb2(EN)
-        self.assertEqual(upload_site.texts(data), dict(EN))
-        out = upload_site.rewrite(data, IDS)
-        self.assertEqual(upload_site.texts(out), dict(strings(out)))
-        self.assertEqual(loading_tips.string_ids(out), loading_tips.string_ids(data))
-        # what follows the text section (the ids and the other sections) is the game's, byte for byte
-        tail = data[data.index(b"IDS_Photo_Upload_Success") - 8 * len(EN) - 8:]
-        self.assertTrue(out.endswith(tail))
-        self.assertEqual(len(data) - len(out), 2 * len(IDS) * (len("ForzaMotorsport.net") - len("forza.dyotson.dev")))
+        for table, entries in TABLES.items():
+            with self.subTest(table):
+                data = lsb2(entries)
+                self.assertEqual(upload_site.texts(data), dict(entries))
+                out = upload_site.rewrite(data, IDS[table])
+                self.assertEqual(upload_site.texts(out), dict(strings(out)))
+                self.assertEqual(loading_tips.string_ids(out), loading_tips.string_ids(data))
+                # what follows the text section (the ids and the other sections) is the game's, byte for byte
+                tail = data[data.index(entries[0][0].encode()) - 8 * len(entries) - 8:]
+                self.assertTrue(out.endswith(tail))
+                self.assertEqual(len(data) - len(out),
+                                 2 * len(IDS[table]) * (len("ForzaMotorsport.net") - len(SITE)))
 
     def test_every_language_keeps_its_own_wording(self):
-        out = dict(strings(upload_site.rewrite(lsb2(DE), IDS)))
+        out = rewritten("carflow", CARFLOW_DE)
         self.assertEqual(out["IDS_Photo_BigShot_Msg"], "Dieses Foto wird automatisch bei forza.dyotson.dev "
                                                         "hochgeladen, wo Sie darauf zugreifen und es herunterladen können.")
         self.assertEqual(out["IDS_BigShot_Upload_Success"], "Ihre Großaufnahme wurde erfolgreich auf den "
                                                              "forza.dyotson.dev-Server hochgeladen.")
-        self.assertEqual(out["IDS_Movie_Upload_Success"], dict(DE)["IDS_Movie_Upload_Success"])
-        out = dict(strings(upload_site.rewrite(lsb2(JP), IDS)))
-        self.assertEqual(out["IDS_Photo_BigShot_Msg"], dict(JP)["IDS_Photo_BigShot_Msg"]
-                         .replace("ForzaMotorsport.net", "forza.dyotson.dev"))
+        self.assertEqual(out["IDS_Movie_Upload_Success"], "Ihr Film wurde erfolgreich auf forza.dyotson.dev hochgeladen.")
+        self.assertEqual(out["IDS_Livery_Upload_Success"], dict(CARFLOW_DE)["IDS_Livery_Upload_Success"])
+        out = rewritten("carflow", CARFLOW_JP)
+        for k, text in CARFLOW_JP:
+            self.assertEqual(out[k], upload_site.OLD.sub(SITE, text))
+        out = rewritten("main", MAIN_DE)
+        self.assertEqual(out["IDS_LoadSave_Upload_to_Server"], "Auf forza.dyotson.dev hochladen")
+        self.assertEqual(out["IDS_InstallBestResults3"], dict(MAIN_DE)["IDS_InstallBestResults3"])
+
+    def test_in_capitals_where_the_old_name_was_and_the_french_slip(self):
+        out = rewritten("main", MAIN_HU)
+        self.assertEqual(out["IDS_LoadSave_Upload_to_Server"], "FELTÖLTÉS A FORZA.DYOTSON.DEV WEBHELYRE")
+        self.assertEqual(out["IDS_LoadSave_WatchMovie_Msg"],
+                         "A filmeket a megtekintés előtt fel kell tölteni a forza.dyotson.dev webhelyre.")
+        out = rewritten("main", MAIN_FR)
+        self.assertEqual(out["IDS_LoadSave_Upload_to_Server"], "ENVOYER À FORZA.DYOTSON.DEV")
+        self.assertEqual(out["IDS_LoadSave_WatchMovie_Msg"], "Pour regarder vos films, commencez par les envoyer à "
+                                                              "forza.dyotson.dev. Abonnement Xbox LIVE Gold requis.")
 
     def test_nothing_to_change(self):
-        self.assertIsNone(upload_site.rewrite(lsb2(TIPS), IDS))              # a table without the entries
-        self.assertIsNone(upload_site.rewrite(lsb2([("IDS_Movie_Upload_Success", "to Forzamotorsport.net.")]), IDS))
-        self.assertIsNone(upload_site.rewrite(upload_site.rewrite(lsb2(EN), IDS), IDS))  # already changed
+        for table in IDS:
+            with self.subTest(table):
+                self.assertIsNone(upload_site.rewrite(lsb2(TIPS), IDS[table]))      # a table without the entries
+                done = upload_site.rewrite(lsb2(TABLES[table]), IDS[table])
+                self.assertIsNone(upload_site.rewrite(done, IDS[table]))            # already changed
+                self.assertIsNone(upload_site.rewrite(loc(), IDS[table]))           # the LOC placeholder
+        # the old name only in entries that are not about an upload
+        self.assertIsNone(upload_site.rewrite(lsb2([("IDS_InstallBestResults3", "Visit ForzaMotorsport.net.")]),
+                                              IDS["main"]))
         self.assertEqual(upload_site.texts(loc()), {})
-        self.assertIsNone(upload_site.rewrite(loc(), IDS))                  # the LOC placeholder
 
     def test_not_a_table(self):
-        for bad in (b"NOPE" + bytes(40), b"LSB2", lsb2(EN)[:60]):
+        for bad in (b"NOPE" + bytes(40), b"LSB2", lsb2(CARFLOW)[:60]):
             with self.assertRaises(upload_site.SiteError, msg=bad[:8]):
-                upload_site.rewrite(bad, IDS)
+                upload_site.rewrite(bad, IDS["carflow"])
 
 
 class ModAndLaunch(unittest.TestCase):
@@ -116,12 +203,14 @@ class ModAndLaunch(unittest.TestCase):
         self.cfg.settings[loading_tips.SETTING] = False
         self.tables = t / "game" / "media" / "stringtables"
         self.tables.mkdir(parents=True)
-        for lang, table in (("EN", EN), ("DE", DE)):
+        for lang, carflow, main in (("EN", CARFLOW, MAIN), ("DE", CARFLOW_DE, MAIN_DE)):
             with zipfile.ZipFile(self.tables / f"{lang}.zip", "w") as z:
-                z.writestr("CarFlow.str", lsb2(table))
+                z.writestr("CarFlow.str", lsb2(carflow))
+                z.writestr("Main.str", lsb2(main))
                 z.writestr("Tips.str", lsb2(TIPS))
         with zipfile.ZipFile(self.tables / "LOC.zip", "w") as z:
             z.writestr("CarFlow.str", loc())
+            z.writestr("Main.str", loc())
         self.cfg.d["game_root"] = str(t / "game")
         # the game Play starts: its own folder, so that no build of this checkout is looked at
         (t / "rt").mkdir()
@@ -138,79 +227,104 @@ class ModAndLaunch(unittest.TestCase):
     def mods_arg(self, write=True):
         return next(a for a in self.args(write) if a.startswith("--forza_mods=")).split("=", 1)[1]
 
-    def table(self, lang):
-        return dict(strings((self.built / "media" / "stringtables" / lang / "carflow.str").read_bytes()))
+    def table(self, lang, table="carflow"):
+        return dict(strings((self.built / "media" / "stringtables" / lang / f"{table}.str").read_bytes()))
 
-    def player_mod(self, name="Mine"):
-        p = mods.mods_dir(self.cfg) / name / "media" / "stringtables" / "en" / "carflow.str"
+    def files(self):
+        root = self.built / "media" / "stringtables"
+        return sorted(p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file())
+
+    def player_mod(self, name, table, entry):
+        p = mods.mods_dir(self.cfg) / name / "media" / "stringtables" / "en" / f"{table}.str"
         p.parent.mkdir(parents=True)
-        p.write_bytes(lsb2([("IDS_Photo_BigShot_Msg", "My own text.")]))
+        p.write_bytes(lsb2([entry]))
 
-    def test_online_by_default_and_a_players_mod_wins(self):
+    def aged(self):
+        """The marker's time after setting it to a day in 2001: a rebuild writes a new marker."""
+        marker = self.built / upload_site.MARKER
+        os.utime(marker, (10**9, 10**9))
+        return marker.stat().st_mtime_ns
+
+    def test_online_by_default_and_a_players_mods_win(self):
         self.assertEqual(self.cfg.online["mode"], "public")
-        self.player_mod()
-        # a later mod wins: the player's carflow.str is the one the game reads
-        self.assertEqual(self.mods_arg(), ".reimagined-upload-site|Mine")
-        stringtables = self.built / "media" / "stringtables"
-        # only the tables that change, and only carflow.str (the LOC placeholder has nothing to change)
-        self.assertEqual(sorted(p.relative_to(stringtables).as_posix() for p in stringtables.rglob("*") if p.is_file()),
-                         ["de/carflow.str", "en/carflow.str"])
+        self.player_mod("Mine", "carflow", ("IDS_Photo_BigShot_Msg", "My own text."))
+        self.player_mod("Titles", "main", ("IDS_LoadSave_Upload_to_Server", "My own label"))
+        # a later mod wins: the player's carflow.str and main.str are the ones the game reads
+        self.assertEqual(self.mods_arg(), ".reimagined-upload-site|Mine|Titles")
+        # only the tables that change, both of each language (the LOC placeholder has nothing to change)
+        self.assertEqual(self.files(), ["de/carflow.str", "de/main.str", "en/carflow.str", "en/main.str"])
         self.assertEqual(self.table("en")["IDS_Photo_BigShot_Msg"],
                          "This photo will be automatically uploaded to forza.dyotson.dev where you can "
                          "access and download it.")
+        self.assertEqual(self.table("en")["IDS_Movie_Upload_Success"],
+                         "Your movie was successfully uploaded to forza.dyotson.dev.")
         self.assertIn("auf den forza.dyotson.dev-Server", self.table("de")["IDS_BigShot_Upload_Success"])
-        self.assertIn("Forzamotorsport.net", self.table("en")["IDS_Movie_Upload_Success"])
-        self.assertEqual(json.loads((self.built / upload_site.MARKER).read_text())["languages"], ["de", "en"])
+        self.assertEqual(self.table("en", "main")["IDS_LoadSave_Upload_to_Server"], "Upload to forza.dyotson.dev")
+        self.assertEqual(self.table("de", "main")["IDS_LoadSave_Upload_to_Server"], "Auf forza.dyotson.dev hochladen")
+        # the entry that is not about an upload keeps the game's text, in the mod's copy too
+        self.assertIn("ForzaMotorsport.net", self.table("en", "main")["IDS_InstallBestResults3"])
+        self.assertIn("Storefront", self.table("en")["IDS_Photo_Upload_Success"])
+        marker = json.loads((self.built / upload_site.MARKER).read_text())
+        self.assertEqual((marker["languages"], marker["tables"]), (["de", "en"], 4))
         # the Mods page does not list it
-        self.assertEqual([m.folder for m in mods.scan(mods.mods_dir(self.cfg))], ["Mine"])
+        self.assertEqual([m.folder for m in mods.scan(mods.mods_dir(self.cfg))], ["Mine", "Titles"])
         self.assertEqual(self.logged, [])
 
     def test_with_the_loading_tips_both_before_the_players_mods(self):
         self.cfg.settings[loading_tips.SETTING] = True
-        self.player_mod()
+        self.player_mod("Mine", "main", ("IDS_LoadSave_Upload_to_Server", "My own label"))
         order = self.mods_arg().split("|")
         self.assertEqual(sorted(order[:2]), [".reimagined-tips", ".reimagined-upload-site"])
         self.assertEqual(order[2:], ["Mine"])
         self.assertTrue((mods.mods_dir(self.cfg) / loading_tips.MOD / "media/stringtables/en/tips.str").is_file())
-        self.assertFalse((self.built / "media/stringtables/en/tips.str").exists())
+        self.assertNotIn("en/tips.str", self.files())
 
     def test_built_once_and_again_when_the_game_tables_change(self):
         self.args()
         marker = self.built / upload_site.MARKER
-
-        def aged():
-            """The marker's time after setting it to a day in 2001: a rebuild writes a new marker."""
-            os.utime(marker, (10**9, 10**9))
-            return marker.stat().st_mtime_ns
-        old = aged()
+        old = self.aged()
         with mock.patch.object(upload_site, "rewrite", side_effect=AssertionError("rebuilt")):
             self.assertEqual(self.mods_arg(), ".reimagined-upload-site")
         self.assertEqual(marker.stat().st_mtime_ns, old)
         self.assertEqual(self.logged, [])
-        # another table of the game (another title update, another language): rebuilt
+        # another table of the game (another language): rebuilt, with the tables it has
         with zipfile.ZipFile(self.tables / "JP.zip", "w") as z:
-            z.writestr("CarFlow.str", lsb2(JP))
+            z.writestr("CarFlow.str", lsb2(CARFLOW_JP))
         self.assertEqual(self.mods_arg(), ".reimagined-upload-site")
         self.assertNotEqual(marker.stat().st_mtime_ns, old)
-        self.assertIn("forza.dyotson.dev", self.table("jp")["IDS_Photo_BigShot_Msg"])
+        self.assertIn(SITE, self.table("jp")["IDS_Movie_Upload_Success"])
+        self.assertEqual(self.files(), ["de/carflow.str", "de/main.str", "en/carflow.str", "en/main.str",
+                                        "jp/carflow.str"])
+        # a main.str that changed (another title update)
+        old = self.aged()
+        with zipfile.ZipFile(self.tables / "DE.zip", "w") as z:
+            z.writestr("CarFlow.str", lsb2(CARFLOW_DE))
+            z.writestr("Main.str", lsb2(MAIN_DE + [("IDS_New", "Neu")]))
+        self.args()
+        self.assertNotEqual(marker.stat().st_mtime_ns, old)
+        self.assertEqual(self.table("de", "main")["IDS_New"], "Neu")
         # and when the entries or the site change
-        old = aged()
+        old = self.aged()
         with mock.patch.object(upload_site, "SITE", "photos.example"):
             self.args()
             self.assertIn("uploaded to photos.example where", self.table("en")["IDS_Photo_BigShot_Msg"])
+            self.assertEqual(self.table("en", "main")["IDS_LoadSave_Upload_to_Server"], "Upload to photos.example")
         self.assertNotEqual(marker.stat().st_mtime_ns, old)
 
-    def test_the_title_updates_table_before_the_discs(self):
+    def test_the_title_updates_tables_before_the_discs(self):
         update = Path(self.tmp.name) / "rt" / "update"
         update.mkdir()
-        newer = [(k, "TU4: " + v) for k, v in EN]
         with zipfile.ZipFile(update / "media.zip", "w") as z:
-            z.writestr("stringtables/en/carflow.str", lsb2(newer))
+            z.writestr("stringtables/en/carflow.str", lsb2([(k, "TU4: " + v) for k, v in CARFLOW]))
+            z.writestr("stringtables/en/main.str", lsb2([(k, "TU4: " + v) for k, v in MAIN]))
         self.args()
         self.assertEqual(self.table("en")["IDS_Photo_BigShot_Msg"],
                          "TU4: This photo will be automatically uploaded to forza.dyotson.dev where you can "
                          "access and download it.")
-        self.assertFalse(self.table("de")["IDS_Photo_BigShot_Msg"].startswith("TU4"))  # the disc's, as the game
+        self.assertEqual(self.table("en", "main")["IDS_LoadSave_Upload_to_Server"], "TU4: Upload to forza.dyotson.dev")
+        # a language the title update does not have: the disc's, as the game
+        self.assertFalse(self.table("de")["IDS_Photo_BigShot_Msg"].startswith("TU4"))
+        self.assertFalse(self.table("de", "main")["IDS_LoadSave_Upload_to_Server"].startswith("TU4"))
 
     def test_a_custom_server_too(self):
         self.cfg.online.update(mode="custom", custom_server="example.org:21200")
@@ -239,17 +353,28 @@ class ModAndLaunch(unittest.TestCase):
             z.unlink()
         self.assertEqual(self.mods_arg(), mods.NONE)       # no tables at all
         with zipfile.ZipFile(self.tables / "EN.zip", "w") as z:
-            z.writestr("CarFlow.str", upload_site.rewrite(lsb2(EN), IDS))
-        self.assertEqual(self.mods_arg(), mods.NONE)       # tables that name it no more
+            z.writestr("CarFlow.str", upload_site.rewrite(lsb2(CARFLOW), IDS["carflow"]))
+            z.writestr("Main.str", upload_site.rewrite(lsb2(MAIN), IDS["main"]))
+        self.assertEqual(self.mods_arg(), mods.NONE)       # tables that name it no more where it matters
         self.assertFalse(self.built.exists())
+        self.assertEqual(self.logged, [])
+
+    def test_one_table_of_the_two(self):
+        for z in self.tables.glob("*.zip"):
+            z.unlink()
+        with zipfile.ZipFile(self.tables / "EN.zip", "w") as z:
+            z.writestr("Main.str", lsb2(MAIN))             # no CarFlow.str in this archive
+        self.assertEqual(self.mods_arg(), ".reimagined-upload-site")
+        self.assertEqual(self.files(), ["en/main.str"])
         self.assertEqual(self.logged, [])
 
     def test_a_failure_starts_with_the_games_text(self):
         with mock.patch.object(upload_site, "sources", side_effect=ModuleNotFoundError("No module named 'x'")):
             self.assertEqual(self.mods_arg(), mods.NONE)
-        self.assertTrue(any("Photo upload site name" in m and "No module named" in m for m in self.logged))
+        self.assertTrue(any("Upload site name" in m and "No module named" in m for m in self.logged))
         with zipfile.ZipFile(self.tables / "EN.zip", "w") as z:
-            z.writestr("CarFlow.str", lsb2(EN)[:60])       # a broken table
+            z.writestr("CarFlow.str", lsb2(CARFLOW))
+            z.writestr("Main.str", lsb2(MAIN)[:60])        # a broken table
         self.assertEqual(self.mods_arg(), mods.NONE)
         self.assertFalse(self.built.exists())
 
