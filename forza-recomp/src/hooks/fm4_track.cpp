@@ -18,6 +18,8 @@
 //   FORZA_ZONE_TRACE=1        log zones made live and dropped, with the streaming blocks,
 //                             live instance objects and placements in use
 //   FORZA_FM4_ZONE_POOL=n     n times the live instance objects (a converted track's zones)
+//   FORZA_FM4_LOOKAHEAD=0     a converted track's scenery is not streamed further ahead of the
+//                             car at speed (on by default there, #824); =2: its zones logged
 // tu_address_map: TU4 addresses
 //
 // tools/fm4_track_mod.py --free-roam makes FH1's free roam load an FM4 circuit in place of
@@ -27,6 +29,7 @@
 // reset), facing (fx, 0, fz) when given, and logs every vehicle teleport. Called from the teleport hook in teleport_velocity.cpp.
 
 #include "fm4_file_error.h"
+#include "fm4_lookahead.h"
 
 #include "../platform/guest_addr.h"
 #include "../platform/guest_memory.h"
@@ -114,6 +117,7 @@ void OnTeleport(PPCContext& ctx, uint8_t* base) {
 // tu_address_map: TU4 addresses
 #if FORZA_TU4
 #include "../platform/guest_memory.h"
+#include "../platform/telemetry.h"
 
 #include <rex/ppc/func.h>
 #include <rex/filesystem.h>
@@ -1199,6 +1203,45 @@ extern "C" REX_FUNC(sub_82EAF1B0) {
 extern "C" REX_FUNC(__imp__sub_82D1B080);
 extern "C" REX_FUNC(sub_82D1B080) {
   static std::atomic<int> logged{0};
+  {  // TEMP824: FORZA_FM4_TEXLATE=<csv>: per model texture table, when it was first drawn and when every slot had a texture
+    static const char* out = std::getenv("FORZA_FM4_TEXLATE");
+    if (out) {
+      struct Seen { double first, done; uint32_t missing0, count; };
+      static std::mutex m;
+      static std::unordered_map<uint32_t, Seen> seen;
+      static std::FILE* f = std::fopen(out, "w");
+      static double last_line = 0;
+      static uint32_t draws = 0, draws_missing = 0;
+      const double t = std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
+      const uint32_t tbl = Load32(base, ctx.r3.u32 + 1192);
+      if (tbl && f) {
+        const uint32_t entries = Load32(base, tbl + 32), count = Load32(base, tbl + 36);
+        uint32_t missing = 0;
+        for (uint32_t j = 0; j < count && j < 24; ++j)
+          if (entries && !Load32(base, entries + 32 * j)) ++missing;
+        std::lock_guard<std::mutex> lock(m);
+        ++draws;
+        if (missing) ++draws_missing;
+        auto it = seen.find(tbl);
+        if (it == seen.end()) {
+          it = seen.emplace(tbl, Seen{t, missing ? 0.0 : t, missing, count}).first;
+          std::fprintf(f, "first,%.3f,%08X,%u,%u\n", t, tbl, count, missing);
+        } else if (!it->second.done && !missing) {
+          it->second.done = t;
+          std::fprintf(f, "done,%.3f,%08X,%.3f,%u\n", t, tbl, t - it->second.first, it->second.missing0);
+        } else if (it->second.done && missing && t - it->second.done > 5.0) {  // the table reused by another model
+          it->second = Seen{t, 0.0, missing, count};
+          std::fprintf(f, "first,%.3f,%08X,%u,%u\n", t, tbl, count, missing);
+        }
+        if (t - last_line >= 0.5) {
+          std::fprintf(f, "tick,%.3f,%u,%u,%zu\n", t, draws, draws_missing, seen.size());
+          std::fflush(f);
+          draws = draws_missing = 0;
+          last_line = t;
+        }
+      }
+    }
+  }
   if (std::getenv("FORZA_FM4_TEXDUMP") && logged.fetch_add(1) < 3) {
     const uint32_t self = ctx.r3.u32, binder = Load32(base, self + 1188);
     const uint32_t vt = binder && GuestReadable(binder) ? Load32(base, binder) : 0;
@@ -1382,6 +1425,10 @@ extern "C" REX_FUNC(sub_82E0B2A8) {
 // instances, where a converted FM4 track's hex zones hold only their own and 9 live ones can
 // need more objects than that (a null object written at +0x80, sub_82E2E750).
 // FORZA_FM4_ZONE_POOL=n makes the pool n times larger.
+// The two pools' sizes, as the track presentation made them (0: not made yet), for the second
+// streaming centre below (it stays within them).
+static std::atomic<uint32_t> fm4_instance_objects{0}, fm4_instance_placements{0};
+static bool FromPresentationSetup(uint32_t lr) { return lr > 0x82E296C0 && lr < 0x82E29A00; }
 extern "C" REX_FUNC(__imp__sub_82E11B60);
 extern "C" REX_FUNC(sub_82E11B60) {
   if (const char* p = std::getenv("FORZA_FM4_ZONE_POOL")) {
@@ -1392,6 +1439,7 @@ extern "C" REX_FUNC(sub_82E11B60) {
       ctx.r6.u64 = uint64_t(ctx.r6.u32) * n;
     }
   }
+  if (FromPresentationSetup(uint32_t(ctx.lr))) fm4_instance_objects = ctx.r6.u32;
   __imp__sub_82E11B60(ctx, base);
 }
 #endif
@@ -1676,7 +1724,228 @@ extern "C" REX_FUNC(sub_82CEDEE0) {
       ctx.r4.u64 = uint64_t(ctx.r4.u32) * n;
     }
   }
+  if (FromPresentationSetup(uint32_t(ctx.lr))) fm4_instance_placements = ctx.r4.u32;
   __imp__sub_82CEDEE0(ctx, base);
+}
+#endif
+
+#if FORZA_TU4
+// A converted FM4 circuit's scenery further ahead of the car (#824). The track presentation
+// keeps two streaming centres (presentation + 0xD9C0 and + 0xDAE0, 288 bytes each): each asks
+// for a zone and its six neighbours (its seven wanted zones at +0x50, the seven it has at
+// +0x34), and the game streams the zones of both (the 14 of sub_82E27480), makes them live and
+// draws the instances they list. Free roam uses the first one, on the camera; the second is
+// idle. A circuit's hex zones hold their own instances and their neighbours', so with one
+// centre the scenery reaches two hexes from the car's (260 to 430 m ahead on a straight), and
+// what the three zones asked for at each hex crossing add is drawn about a second after it:
+// at 255 to 300 km/h on Le Mans's Mulsanne the trees, fences and buildings came up 170 to 360 m
+// ahead of the car.
+//
+// On a converted track the second centre gets the hex two hexes ahead of the car, in its
+// direction of travel, and that hex's neighbours, while the car is at speed
+// (fm4_lookahead.h): the zones the car's next hexes need are live before it reaches them, and
+// the scenery reaches four hexes ahead. This replaces the per-frame update of that centre
+// (sub_82499690: r3 the centre, r4 the PVS at presentation + 0xD808, r7 the "streaming pass
+// in flight" flag, r3 out: asks for a pass); the game's own code fills the wanted list from the
+// centre (sub_82E2D300), streams, and takes the wanted zones as had (sub_82E2F720), as it does
+// for the first.
+//
+// What keeps it within the game's limits:
+// - The zones asked for since every wanted zone was last live are kept in an array of seven
+//   (presentation + 0xD994, count at + 0xD9B0, no check: sub_82E27480). The first centre's zones
+//   come first; the second's fill what is left, at most three new ones a pass.
+// - The streaming blocks (above), the live instance objects and the placements: it comes on
+//   below 60% of each in use and goes off above 85% (fm4_lookahead::Engaged).
+// - It leaves the centre alone when the game uses it itself (a zone or a camera of its own).
+// FORZA_FM4_LOOKAHEAD=0 turns it off, =2 logs its zones.
+// TEMP824: FORZA_FM4_STREAM_BUDGET_MS=<ms>: the streaming update's time budget (sub_82E2BE00's f1, 3 ms from 0x8339B078)
+extern "C" REX_FUNC(__imp__sub_82E2BE00);
+extern "C" REX_FUNC(sub_82E2BE00) {
+  static const double ms = std::getenv("FORZA_FM4_STREAM_BUDGET_MS") ? std::atof(std::getenv("FORZA_FM4_STREAM_BUDGET_MS")) : 0.0;
+  static std::atomic<int> shown{0};
+  if (shown.fetch_add(1) < 3)
+    REXLOG_INFO("FM4TRACK: streaming update: budget {} s, mode {}, presentation {:08X} vtable {:08X} +0x184 {:08X} +0x180 {:08X}", ctx.f1.f64,
+                ctx.r4.u32, ctx.r3.u32, Load32(base, ctx.r3.u32), Load32(base, Load32(base, ctx.r3.u32) + 0x184), Load32(base, Load32(base, ctx.r3.u32) + 0x180));
+  if (converted_track && ms > 0) ctx.f1.f64 = ms / 1000.0;
+  __imp__sub_82E2BE00(ctx, base);
+}
+
+extern "C" REX_FUNC(__imp__sub_82499690);
+namespace {
+int LookAheadMode() {
+  static const int mode = [] {
+    const char* p = std::getenv("FORZA_FM4_LOOKAHEAD");
+    return p ? std::atoi(p) : 1;
+  }();
+  return mode;
+}
+int32_t Word(uint8_t* base, uint32_t a) { return int32_t(Load32(base, a)); }
+float Float(uint8_t* base, uint32_t a) {
+  const uint32_t v = Load32(base, a);
+  float f;
+  std::memcpy(&f, &v, 4);
+  return f;
+}
+void Store(uint8_t* base, uint32_t a, int32_t value) {
+  const uint32_t v = uint32_t(value);
+  uint8_t* p = forza::GuestPtr(base, a);
+  p[0] = uint8_t(v >> 24); p[1] = uint8_t(v >> 16); p[2] = uint8_t(v >> 8); p[3] = uint8_t(v);
+}
+// A pool's objects in use (+12 of the pool) over its size.
+float PoolShare(uint8_t* base, uint32_t pool, uint32_t size) {
+  if (!size || !pool || !GuestReadable(pool + 12)) return 1.0f;  // not known: no room
+  return float(Load32(base, pool + 12)) / float(size);
+}
+struct LookAhead {
+  uint32_t pvs = 0;
+  bool on = false;
+  float x = 0, z = 0, dir_x = 0, dir_z = 0, speed = 0;
+  std::chrono::steady_clock::time_point at{};
+  bool sampled = false;
+  uint32_t passes = 0, logged = 0;
+};
+LookAhead look_ahead;
+}  // namespace
+
+extern "C" REX_FUNC(sub_82499690) {
+  constexpr uint32_t kCentre1 = 0x2D8, kCentre0 = 0x1B8;  // from the PVS
+  constexpr uint32_t kWanted = 0x50, kHad = 0x34;
+  const uint32_t centre = ctx.r3.u32, pvs = ctx.r4.u32;
+  if (LookAheadMode() >= 3) {  // TEMP diag
+    static std::atomic<int> shown{0};
+    if (shown.fetch_add(1) < 12 || shown.load() % 900 == 0)
+      REXLOG_INFO("FM4TRACK: centre {:08X} pvs {:08X} (+{:X}) converted {}: +0 {:08X} +4 {:08X} +8 {:08X} +12 {:08X} +16 {:08X} +20 {:02X} +24 {:08X} +28 {:08X} +118 {:02X} +120 {:02X} r7 {:X} r8 {:X}",
+                  centre, pvs, centre - pvs, converted_track, Load32(base, centre), Load32(base, centre + 4), Load32(base, centre + 8),
+                  Load32(base, centre + 12), Load32(base, centre + 16), *forza::GuestPtr(base, centre + 20), Load32(base, centre + 24),
+                  Load32(base, centre + 28), *forza::GuestPtr(base, centre + 118), *forza::GuestPtr(base, centre + 120), ctx.r7.u32, ctx.r8.u32);
+  }
+  if (!converted_track || LookAheadMode() <= 0 || centre != pvs + kCentre1 ||
+      !GuestReadable(centre + 0x78) ||
+      // the game's own use of the centre: a zone, a zone by number, a camera
+      Word(base, centre + 28) != -1 || Word(base, centre + 4) != -1 || Load32(base, centre + 8)) {
+    __imp__sub_82499690(ctx, base);
+    return;
+  }
+  if (ctx.r7.u32 & 0xFF) {  // a streaming pass is in flight: as the game's own, ask again
+    ctx.r3.u64 = 1;
+    return;
+  }
+  LookAhead& s = look_ahead;
+  if (s.pvs != pvs) s = LookAhead{.pvs = pvs};
+  const uint32_t pres = pvs - 0xD808;
+  // The car's speed and direction of travel, from its place over time.
+  float pos[3], fwd[3];
+  const bool car = forza::telemetry::LocalCarPose(base, pos, fwd);
+  const auto now = std::chrono::steady_clock::now();
+  if (!car) {
+    s.sampled = false;
+    s.speed = 0;
+  } else if (!s.sampled) {
+    s.x = pos[0]; s.z = pos[2]; s.at = now; s.sampled = true; s.speed = 0;
+  } else {
+    const float dt = std::chrono::duration<float>(now - s.at).count();
+    if (dt >= 0.1f) {
+      const float dx = pos[0] - s.x, dz = pos[2] - s.z, d = std::sqrt(dx * dx + dz * dz);
+      // a jump (a teleport, a rewind) is no speed
+      s.speed = d < 200.0f * dt + 5.0f && dt < 2.0f ? d / dt : 0.0f;
+      if (d > 0.5f) { s.dir_x = dx / d; s.dir_z = dz / d; }
+      s.x = pos[0]; s.z = pos[2]; s.at = now;
+    }
+  }
+  const float blocks = float(Load32(base, 0x835A0B48)) / float(std::max<uint32_t>(1, stream_blocks.load()));
+  const float objects = std::max(PoolShare(base, Load32(base, pres + 0x50), fm4_instance_objects.load()),
+                                 PoolShare(base, Load32(base, pvs + 0xE8), fm4_instance_placements.load()));
+  const bool was_on = s.on;
+  s.on = car && forza::fm4_lookahead::Engaged(s.on, s.speed, blocks, objects);
+
+  // The zones the first centre wants and how many of the seven places they take: one each that
+  // is in the array already or would be asked for (not loaded).
+  const uint32_t centre0 = pvs + kCentre0;
+  const uint32_t asked_at = pres + 0xD994;
+  const int32_t asked_n = std::clamp(Word(base, pres + 0xD9B0), 0, 7);
+  auto asked = [&](int32_t zone) {
+    for (int32_t i = 0; i < asked_n; ++i)
+      if (Word(base, asked_at + 4 * i) == zone) return true;
+    return false;
+  };
+  const uint32_t loaded_a = Load32(base, pres + 0xA08), loaded_b = Load32(base, pres + 0xA0C);
+  auto loaded = [&](int32_t zone) {
+    for (uint32_t p = loaded_a; p < loaded_b && p < loaded_a + 16 * 64; p += 16)
+      if (Word(base, p + 12) == zone) return true;
+    return false;
+  };
+  int32_t first[7];
+  int room = 7;
+  for (int i = 0; i < 7; ++i) {
+    first[i] = Word(base, centre0 + kWanted + 4 * i);
+    if (first[i] >= 0 && (asked(first[i]) || !loaded(first[i]))) --room;
+  }
+  auto in_first = [&](int32_t zone) { return std::find(first, first + 7, zone) != first + 7; };
+
+  // The hex two ahead of the car and those around it, as zones.
+  int32_t wanted[7];
+  std::fill(wanted, wanted + 7, -1);
+  int n = 0;
+  const uint32_t grid = Load32(base, pvs - 4);
+  if (s.on && grid && GuestReadable(grid + 8)) {
+    const uint32_t hex = Load32(base, grid + 4), table = Load32(base, grid + 8);
+    forza::fm4_lookahead::Grid g;
+    if (hex && table && GuestReadable(hex + 0x20) && Load32(base, hex) == 0x48455859 /* HEXY */) {
+      g.radius = Float(base, hex + 8);
+      g.origin_x = Float(base, hex + 12);
+      g.origin_z = Float(base, hex + 16);
+      g.columns = Word(base, hex + 0x18);
+      g.rows = Word(base, hex + 0x1C);
+    }
+    int32_t column, row;
+    if (g.Valid() && forza::fm4_lookahead::AheadCell(g, pos[0], pos[2], s.dir_x, s.dir_z, 2.0f, column, row)) {
+      std::array<std::array<int32_t, 2>, 7> cells;
+      const int count = forza::fm4_lookahead::Around(g, column, row, cells);
+      int fresh = 0;
+      for (int i = 0; i < count; ++i) {
+        const uint32_t at = table + 4 * uint32_t(cells[i][1] * g.columns + cells[i][0]);
+        if (!GuestReadable(at)) continue;
+        const int32_t zone = Word(base, at);
+        if (zone < 0 || in_first(zone) || std::find(wanted, wanted + n, zone) != wanted + n) continue;
+        const bool is_asked = asked(zone), is_loaded = loaded(zone);
+        if (is_asked || !is_loaded) {  // takes a place of the seven
+          if (room <= 0) continue;
+          if (!is_asked && !is_loaded && ++fresh > 3) continue;  // at most three new ones a pass
+          --room;
+        }
+        wanted[n++] = zone;
+      }
+    }
+  }
+  // Wanted; whether a pass is needed: the wanted zones are not the ones the centre has, or one
+  // of them is not live yet or newly live (as the game's own update ends).
+  bool pass = false;
+  for (int i = 0; i < 7; ++i) Store(base, centre + kWanted + 4 * i, wanted[i]);
+  Store(base, centre + 108, n);
+  *forza::GuestPtr(base, centre + 116) = 0;
+  int32_t had[7];
+  for (int i = 0; i < 7; ++i) had[i] = Word(base, centre + kHad + 4 * i);
+  for (int i = 0; i < 7; ++i) {
+    if (std::find(wanted, wanted + 7, had[i]) == wanted + 7) pass = true;
+    if (std::find(had, had + 7, wanted[i]) == had + 7) pass = true;
+  }
+  const uint32_t records = Load32(base, pvs + 0x1C);
+  for (int i = 0; i < n && !pass; ++i) {
+    const uint32_t record = records + 20 * uint32_t(wanted[i]);
+    if (!Load32(base, record) || *forza::GuestPtr(base, record + 16)) pass = true;
+  }
+  if (pass) {
+    uint8_t* p = forza::GuestPtr(base, centre + 36);
+    p[0] = p[1] = 0;
+  }
+  *forza::GuestPtr(base, centre + 119) = 1;
+  if (s.on != was_on || (LookAheadMode() >= 2 && pass && s.logged++ < 2000)) {
+    REXLOG_INFO("FM4TRACK: scenery ahead {}: {:.0f} km/h, zones {} {} {} {} {} {} {}, streaming blocks "
+                "{:.0f}%, instance objects {:.0f}%, {} asked for",
+                s.on ? "on" : "off", s.speed * 3.6f, wanted[0], wanted[1], wanted[2], wanted[3], wanted[4],
+                wanted[5], wanted[6], blocks * 100.0f, objects * 100.0f, asked_n);
+  }
+  ctx.r3.u64 = pass ? 1 : 0;
 }
 #endif
 
