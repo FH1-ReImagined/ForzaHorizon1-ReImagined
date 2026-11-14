@@ -12,6 +12,12 @@
 // Time attack: the best lap's trace is the ghost (<track>.ghost.txt beside the laps, kept
 // across sessions), and the HUD shows the time to it at the car's place on the lap as well.
 //
+// The lap guide (#877, fm4_track_guide, on): the game's own sat-nav leads round the lap. Its
+// destination is kept ahead of the car on the line (platform/fm4_lap.h Guide), set through the
+// game's own destination call (world_challenge.cpp SatNavGuide), so the minimap and the map
+// draw the game's green route along the circuit's road with the distance to go. The game
+// holds the destination as locked while the guide is on (the map offers no SET ROUTE then).
+//
 // FORZA_FM4_LAP=<lap.txt>[|<laps.jsonl>] times a circuit without the mount (development).
 #include "fm4_lap_timer.h"
 
@@ -19,6 +25,7 @@
 #include "../platform/fm4_lap.h"
 #include "../platform/telemetry.h"
 
+#include <rex/cvar.h>
 #include <rex/logging.h>
 
 #include <algorithm>
@@ -34,6 +41,14 @@
 #include <sstream>
 #include <string>
 
+REXCVAR_DEFINE_BOOL(fm4_track_guide, true, "Mods",
+                    "On an imported Forza Motorsport 4 circuit, the game's sat-nav leads round "
+                    "the lap: its green route on the minimap and the map, kept ahead of the car");
+
+namespace forza {
+bool SatNavGuide(PPCContext& ctx, uint8_t* base, float x, float y, float z);  // world_challenge.cpp
+}
+
 namespace forza::fm4_lap {
 namespace {
 
@@ -42,6 +57,9 @@ namespace fs = std::filesystem;
 struct State {
   Line line;
   std::unique_ptr<Timer> timer;
+  std::unique_ptr<Guide> guide;
+  double next_guide = 0;       // steady seconds: the destination is not asked for more often
+  bool guide_said = false;
   fs::path laps;
   double clock = 0;            // seconds of driving
   double last_frame = 0;       // steady seconds of the last world update
@@ -207,6 +225,7 @@ void Configure(const std::filesystem::path& lap_file, const std::filesystem::pat
     return;
   }
   s->timer = std::make_unique<Timer>(s->line);
+  s->guide = std::make_unique<Guide>(s->line);
   s->laps = laps_file;
   if (!laps_file.empty()) {
     s->timer->SetBest(BestOf(laps_file));
@@ -221,7 +240,24 @@ void Configure(const std::filesystem::path& lap_file, const std::filesystem::pat
   state = s.release();
 }
 
-void WorldFrame(uint8_t* base, bool driving, bool rewinding) {
+// The lap guide: the sat-nav's destination follows the car round the lap (twice a second at
+// most; the game says no until its road network is there).
+void Lead(State& s, PPCContext& ctx, uint8_t* base, double now) {
+  if (!REXCVAR_GET(fm4_track_guide) || !s.timer->on_line() || now < s.next_guide) return;
+  const int at = s.guide->Next(s.timer->along());
+  if (at < 0) return;
+  s.next_guide = now + 0.5;
+  const auto& p = s.line.points[size_t(at)];
+  if (!forza::SatNavGuide(ctx, base, p[0], p[1], p[2])) return;
+  s.guide->Set(at);
+  if (!s.guide_said) {
+    s.guide_said = true;
+    REXLOG_INFO("FM4 lap: the sat-nav leads round {} ({:.0f} m ahead of the car; fm4_track_guide)",
+                s.line.name, s.guide->ahead());
+  }
+}
+
+void WorldFrame(PPCContext& ctx, uint8_t* base, bool driving, bool rewinding) {
   static const bool from_env = [] {
     const char* v = std::getenv("FORZA_FM4_LAP");
     if (!v || !*v) return false;
@@ -248,6 +284,7 @@ void WorldFrame(uint8_t* base, bool driving, bool rewinding) {
   }
   Handle(s, s.timer->Update(s.clock, pos), now);
   Hud(s, now, false);
+  Lead(s, ctx, base, now);
 }
 
 }  // namespace forza::fm4_lap
