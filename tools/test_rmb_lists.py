@@ -33,11 +33,13 @@ def tile_block():
     return block + [0xC0006000, 0xFFFFFFFF, 0xC0006100, 0]
 
 
-def depth_list(stray=0x3F800000, tiles=False):
+def depth_list(stray=0x3F800000, tiles=False, shader_value=0x40):
     """A list in the shape of a depth pass: vertex constants, the vertex shader, state, the
     vertex buffer, one draw. Returns its PM4 (with the trailer), patch table, area C, records
     and entries. `stray` is one of the constants' words. With `tiles` it is in the shape of a
-    scene pass's instead: a tile block first, a render target write, and no window write."""
+    scene pass's instead: a tile block first, a render target write, and no window write.
+    `shader_value` is the value word of the shader address's entry (the files' are multiples
+    of 4)."""
     pm4 = (tile_block() + [2 << 16 | 0x2000, 0x21, 0x22, 0x23]) if tiles else []
     pm4 += [0x80000000] * 3
     pm4 += [15 << 16 | 0x4000] + [stray] + [0x40000000 + i for i in range(15)]
@@ -55,7 +57,7 @@ def depth_list(stray=0x3F800000, tiles=False):
     if not tiles:
         pm4 += [2 << 16 | 0x2080, 0, 0, 0x02D00500]
     # The shader's place and the two buffers'; the buffers are in area C too.
-    table = [0x88000000 | shader << 6, 0x40, 0x88000000 | fetch << 6 | 4, 0,
+    table = [0x88000000 | shader << 6, shader_value, 0x88000000 | fetch << 6 | 4, 0,
              0x88000000 | draw << 6, 0]
     area_c = [0x08000000 | fetch << 6 | 4, 0, 0x08000000 | draw << 6, 0]
     records = [9, 0x45000000, 1, 0x49000002, 2, 0x48000004]
@@ -164,7 +166,7 @@ class Check(unittest.TestCase):
         with zipfile.ZipFile(cls.archive, "w") as z:
             z.writestr("made_up.00001.rmb.bin", both)
             z.writestr("made_up.00002.rmb.bin", both)  # the archives repeat members
-            z.writestr("made_up.00003.rmb.bin", model({18: depth_list()}))
+            z.writestr("made_up.00003.rmb.bin", model({18: depth_list(shader_value=0x42)}))
             z.writestr("made_up.00004.rmb.bin", b"not a model")
             z.writestr("made_up.00005.rmb.bin", model({13: depth_list(tiles=True)}))
             z.writestr("made_up.00001.pgeo", b"another kind of member")
@@ -195,9 +197,12 @@ class Check(unittest.TestCase):
         self.assertEqual(c["census"]["one_register_packets"], {"057E": 4})
         self.assertEqual(c["census"]["subcode_62_63_entries"], 0)
         self.assertEqual(c["census"]["record_types"], {"1": 4, "2": 4, "9": 4})
+        # One of the four shader address entries has a value word that is no multiple of 4.
+        self.assertEqual((c["census"]["shader_address_entries"],
+                          c["census"]["shader_address_values_unaligned"]), (4, 1))
         conversion = c["conversion"]
         self.assertEqual((conversion["converted"], conversion["refused"]), (4, {"opcode": 2}))
-        self.assertEqual(conversion["distinct_keys"], 2)
+        self.assertEqual(conversion["distinct_keys"], 3)  # the value word is part of the key
         self.assertEqual(conversion["slots_by_type"], {"1": 4, "2": 4, "9": 4})
         self.assertEqual((conversion["record_places_checked"], conversion["record_places_agree"],
                           conversion["slots_no_record_names"]), (20, 20, 0))

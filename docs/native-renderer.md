@@ -613,23 +613,42 @@ Rules it keeps:
   be converted from its command buffer alone.
 - **The key** is 128 bits over those static words: the PM4 with every place as zero, the patch
   table, the buffer fixups, the ten masks and the flags without 0x2000 (which the texture and
-  surface fixups set at run time). One thing of a place stays in: the low two bits of a shader's
-  microcode address, the shader type, which every fixup keeps.
+  surface fixups set at run time). One thing of a place is taken as static and stays in: the low
+  two bits of a shader's microcode address, the shader type. That a fixup keeps them is read from
+  the code and the files, not from a run **[I]**: the game's two shader fixups write the entry's
+  value word plus the shader's address (with bit 0 set in it for a pixel shader's microcode), and
+  every such value word in the files is a multiple of 4 (table below), so the bits are the file's
+  as long as a shader's address is a multiple of 4 too. A live word with other bits would have
+  another key, and its list would run as PM4.
 - **The untiled form is the same template.** `scene_msaa=2x|off` and the game's 12- and 16-car
   races run the scene pass's lists with their tile-bound packets turned into NOPs
   (`src/hooks/scene_tiling.cpp`). The template records those packets' headers: the key takes a
   header or its NOP as the same word, and both views have an untiled mode that skips exactly those
   packets. A list is converted from its original words; one that is untiled at that moment is
-  refused as input.
+  refused as input. Which form a live list is in is read from its word 4, the first tile's window
+  write, as `scene_tiling.cpp` reads it (`Untiled()`). So a list recorded for the tiles has to
+  start with a tile block, as every one in the files does; one that starts otherwise is refused,
+  since that word could then be a value that only reads as the header.
 - **Everything outside what the files hold is refused, with a named reason** (25 of them, each
   with a test): another resource type or flag, more than one segment, a type-1 packet, another
-  opcode, a register outside the set above, a tile block of another shape, a draw, shader load or
-  literal load of another form, an address that is not a place, a place that lands on no known
-  field, a place with sub-code 62 or 63 (the path through the table at `cb+112`, not decoded). A
-  refused list runs as PM4, as today. And whatever is not refused must be right: the test also
-  changes words of its lists at random, and every changed list that still converts has to agree
-  with the interpreter (run by hand at 3 million changed lists, 1.58 million of them converted,
-  and at 450,000 under the address and undefined-behaviour sanitizers).
+  opcode, a register outside the set above, a tile block of another shape, a list recorded for
+  the tiles that does not start with one, a draw, shader load or literal load of another form, an
+  address that is not a place, a place that lands on no known field, a place with sub-code 62 or
+  63 (the path through the table at `cb+112`, not decoded). A refused list runs as PM4, as today.
+- **Whatever is not refused has to be right, also for a list no file has.** The test changes
+  words of its lists at random and cuts the lists short, and every one that still converts has to
+  agree with the interpreter. Each part of a list it hands to the converter ends at a page that
+  cannot be read, and CI runs it a second time unoptimized under the address and
+  undefined-behaviour sanitizers (an optimized build drops a read whose value goes unused), so a
+  read past a list's end fails it. This is evidence, not a proof: it holds for what the test
+  reaches. Run by hand **[M]**: with one check of the converter removed or weakened at a time (73
+  single changes), the unoptimized test fails on all 73; 3 million changed lists, 1.57 million of
+  them converted, all agree; and unoptimized under the sanitizers, 450,000 more (236,160
+  converted) and a separate fuzz of 430,032 changed, cut and made-up lists (168,316 converted),
+  with every part in a block of exactly its size, give no disagreement and no report. Nor does
+  that fuzz, under the sanitizers, over the 142,334 lists of the distinct models of Colorado, the
+  UI tracks, the DLC and six FM4 circuits, each list as it is, cut short nine ways and changed
+  four ways (1,992,676 lists, 321,582 converted).
 
 **Offline proof.** `tools/native_list_check.py` (below) reads every model of an archive, converts
 every list and runs both views beside a plain PM4 interpreter that knows nothing of templates
@@ -637,9 +656,10 @@ every list and runs both views beside a plain PM4 interpreter that knows nothing
 wrote, the bound shaders, the bin mask), every draw's arguments and whether its predicate lets it
 run, and the state after the list. Each list runs for the bin select of each of the three tiles,
 without tiling, and with a bin mask that excludes the bin; lists scene_msaa unties run all five
-again untiled (untiled by `scene_tiling.h`'s own function); and everything runs twice, with the
-words as they are in the file and with every place written with made-up values, as after the
-game's fixups. Counts, from the game's files on the test PC (2026-11-14) **[M]**:
+again untiled (untiled by `scene_tiling.h`'s own function, and replayed in the mode `Untiled()`
+reads from the words); and everything runs twice, with the words as they are in the file and
+with every place written with made-up values, as after the game's fixups. Counts, from the
+game's files on the test PC (2026-11-14) **[M]**:
 
 | | Colorado | UI tracks (5 archives) | Rally DLC (ColoradoDirt) | FM4 circuit (Suzuka, imported) |
 | --- | ---: | ---: | ---: | ---: |
@@ -653,7 +673,7 @@ game's fixups. Counts, from the game's files on the test PC (2026-11-14) **[M]**
 | Slots | 17,790,277 | 12,906 | 1,909,118 | 125,088 |
 | Places of the game's own records that are a slot of the record's type and length | 29,200,919 of 29,200,919 | 122,824 of 122,824 | 3,452,168 of 3,452,168 | 149,148 of 149,148 |
 | Slots no record names | 0 | 0 | 0 | 0 |
-| Lists scene_msaa unties; their tile-bound packets equal to `scene_tiling.h`'s | 104,221; 104,221 | 15; 15 | 10,490; 10,490 | 0 |
+| Lists scene_msaa unties; their tile-bound packets equal to `scene_tiling.h`'s; `Untiled()` right for both forms | 104,221; 104,221; 104,221 | 15; 15; 15 | 10,490; 10,490; 10,490 | 0 |
 | Runs beside the interpreter in which everything agrees (2 forms x 5 modes) | 4,106,390 of 4,106,390 | 410 of 410 | 410,260 of 410,260 | 32,870 of 32,870 |
 | ... the same, untiled | 1,042,210 of 1,042,210 | 150 of 150 | 104,900 of 104,900 | none |
 | Draws compared in those runs | 16,492,630 | 12,090 | 1,776,770 | 55,900 |
@@ -661,6 +681,7 @@ game's fixups. Counts, from the game's files on the test PC (2026-11-14) **[M]**
 | Key the same for the untiled list; that list refused as input | 104,221; 104,221 | 15; 15 | 10,490; 10,490 | none |
 | Another key after one changed PM4 word / table word / mask | 410,639 each | 41 each | 41,026 each | 3,287 each |
 | Table entries with sub-code 62 or 63 | 0 of 29,224,048 | 0 of 122,827 | 0 of 3,454,427 | 0 of 255,519 |
+| Table entries of a shader load's address whose value word is not a multiple of 4 | 0 of 7,632,010 | 0 of 56,262 | 0 of 1,026,154 | 0 of 43,084 |
 | Draws that load no vertex shader | 15 | 0 | 15 | 0 |
 | Distinct register deltas / fetch templates / exit sets / vertex constant blobs / pixel constant blobs | 397 / 97 / 242 / 20,018 / 1,552 | 36 / 8 / 16 / 123 / 65 | 380 / 86 / 220 / 16,536 / 1,190 | 151 / 25 / 97 / 1,001 / 166 |
 
@@ -710,12 +731,13 @@ What the files settled for the next steps:
   Whether the headers in memory are the files' needs a run.
 
 **Not done yet** (the rest of M4's list work, in order): a measurement build that answers what
-only a run can (RunCommandBuffer calls by device and pass group, the live header masks, the time
-the command processor spends inside list buffers); the registry (conversion when a model loads,
-invalidation by the game's one fixup dispatcher) with a shadow compare of every list draw in the
-running game; replay of the templates in the command processor; then native passes, which also
-need M3's executor and a path for the command buffers D3D records at run time (the cars). FM4's
-`SET_CONSTANT2` tile blocks are a decision for after that census.
+only a run can (RunCommandBuffer calls by device and pass group, the live header masks, whether
+a live shader address keeps the file's low two bits, the time the command processor spends inside
+list buffers); the registry (conversion when a model loads, invalidation by the game's one fixup
+dispatcher) with a shadow compare of every list draw in the running game; replay of the templates
+in the command processor; then native passes, which also need M3's executor and a path for the
+command buffers D3D records at run time (the cars). FM4's `SET_CONSTANT2` tile blocks are a
+decision for after that census.
 
 ## Tools
 
@@ -767,6 +789,9 @@ tools/native_list_check.py <archive> --distinct                  # one member pe
 - It also takes a DLC's track zip and the archive `tools/fm4_pvs.py` writes for an FM4 circuit.
 - Exit status 1 when anything disagrees; `--no-refusals` makes a refused list a failure too.
   `tools/test_rmb_lists.py` runs it on a made-up model (CI).
+- The checker keeps every part of a list in a block of exactly its size: built with
+  `-O0 -fsanitize=address,undefined -D_GLIBCXX_SANITIZE_VECTOR` and passed with `--checker`, it
+  also reports a read past a part (several minutes for Colorado's distinct members).
 
 ### Offline shader translation (SDK)
 

@@ -269,6 +269,8 @@ def report(c, problems):
     say("  buffer entries by type: %s" % census["entry_types"])
     say("  table entries %d; with sub-code 62 or 63: %d, in %d lists"
         % (census["table_entries"], census["subcode_62_63_entries"], census["subcode_62_63_lists"]))
+    say("    entries of a shader load's address %d; their value word not a multiple of 4: %d"
+        % (census["shader_address_entries"], census["shader_address_values_unaligned"]))
     refused = sum(conv["refused"].values())
     say("converted %d of %d, refused %d %s"
         % (conv["converted"], census["lists"], refused, conv["refused"] if refused else ""))

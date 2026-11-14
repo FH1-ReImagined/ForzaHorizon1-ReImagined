@@ -393,8 +393,11 @@ inline const uint32_t* Op(const uint32_t* t, uint32_t op) { return t + t[kTOps] 
 // The key of a list as it is now, by template t's slots and tile-bound packets: the header's
 // flags without kFlagFixedUp and its ten masks, the patch table, area C, and the PM4 with every
 // slot's words as zero and every tile-bound header as recorded, whether the live word is that
-// header or its NOP. One thing of a slot is static and stays in: the low two bits of a microcode
-// address, the shader's type, which a fixup keeps.
+// header or its NOP. One thing of a slot is taken as static and stays in: the low two bits of a
+// microcode address, the shader's type. The game's two shader fixups (TU4 sub_82AA8750 and
+// sub_82AA87D8) write the entry's value word plus the shader's address, with bit 0 set in the
+// address for a pixel shader's microcode: the bits are the file's as long as both are multiples
+// of 4. A live word with other bits has another key, and its list then runs as PM4.
 inline Key LiveKey(const uint32_t* t, const Input& in) {
   Hasher h;
   h.Add(kVersion);

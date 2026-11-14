@@ -136,6 +136,9 @@ struct Stats {
       one_register, record_types, entry_types, record_places, primitive, source_select;
   uint64_t packets[4] = {}, draws = 0, wide_indices = 0, draws_predicated = 0;
   uint64_t subcode_entries = 0, subcode_lists = 0, table_entries = 0, table_bad = 0;
+  // The entries that name an IM_LOAD's address word, and those whose value word (what the fixup
+  // adds the shader's address to) is not a multiple of 4: the key keeps that word's low two bits.
+  uint64_t shader_entries = 0, shader_values_unaligned = 0;
   // Conversion.
   uint64_t converted = 0, convert_ns = 0, template_words = 0, pool_words = 0, ops = 0,
            deltas_total = 0;
@@ -281,6 +284,12 @@ class Checker {
         if ((entry & 0x3F) >= 62) {
           ++s.subcode_entries;
           subcode = true;
+        }
+        const uint32_t dword = (entry >> 6) & 0xFFFFF;
+        if (length == 2 && i + 1 < words && (entry & 0x3F) == 0 && dword >= 1 && dword < n &&
+            (nl::Word(l.pm4.data(), dword - 1) & 0xFFFFFF00u) == 0xC0012700u) {
+          ++s.shader_entries;
+          s.shader_values_unaligned += (nl::Word(table->data(), i + 1) & 3) != 0;
         }
         i += length;
       }
@@ -674,6 +683,8 @@ int main(int argc, char** argv) {
   j.Num("table_bad", s.table_bad);
   j.Num("subcode_62_63_entries", s.subcode_entries);
   j.Num("subcode_62_63_lists", s.subcode_lists);
+  j.Num("shader_address_entries", s.shader_entries);
+  j.Num("shader_address_values_unaligned", s.shader_values_unaligned);
   j.Close();
 
   j.Open("conversion");

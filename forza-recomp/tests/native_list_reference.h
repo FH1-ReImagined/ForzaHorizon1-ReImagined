@@ -360,7 +360,8 @@ inline void StoreWord(uint8_t* guest, size_t index, uint32_t value) {
 }
 
 // Writes made-up values into every slot of the list, as the game's fixups would write real ones.
-// A microcode address keeps its low two bits (the shader type), as it does in the game.
+// A microcode address keeps its low two bits (the shader type): the converter takes them as
+// static (LiveKey says why), so a word with other bits is another list to it.
 inline void FixUp(const uint32_t* t, uint8_t* pm4, Random* random) {
   const uint32_t* slot = t + t[kTSlots];
   for (uint32_t s = 0; s < t[kTSlotCount]; ++s, slot += kSlotWords) {
