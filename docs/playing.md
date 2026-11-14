@@ -265,6 +265,12 @@ tools/run_forza.sh 120        # a two-minute test run; logs in ${XDG_RUNTIME_DIR
   other photo (1280x720 in `photo/<name>/`, listed in the launcher's gallery), and the game then
   offers its storefront upload as usual. The website's community photos still come only from a
   Big Shot, which needs single player.
+- **Replay movies (#880):** after a race, **View Replay** shows the replay controls (A); signed in,
+  they have **MAKE MOVIE** (the film button). The movie starts where the replay is paused: pick
+  the quality (WEB 640x360 or LARGE 1280x720), the length and the game speed, CREATE MOVIE, and
+  name the file. The game shows PLEASE WAIT while it renders and encodes every frame (a 15 s WEB
+  movie takes about half a minute), then offers to upload it. Movies made before this fix had
+  sound but a black picture ([why](rendering.md#a-replay-movie-was-four-black-frames-880)).
 - **Hitches:** a frame that takes over 200 ms logs `FORZA_STALL` lines in `forza.log` with
   what the game was doing, and a game database query of 50 ms or more a `FORZA_SQL` line; attach
   them to an issue ([details](perf.md#long-frames-forza_stall)). Title Update 4 builds up to

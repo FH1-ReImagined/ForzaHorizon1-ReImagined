@@ -818,6 +818,65 @@ SHUTTER SPEED 100 focused on the car is the car sharp on a smeared background. T
 photo mode release the range (log lines `Photo focus:`). The same FOCUS sequence at render
 scale 2 (the reporter's) is right too.
 
+## A replay movie was four black frames (#880)
+
+Report: 0.3.6, Vulkan, a Radeon. A movie made from a replay (the film button of the replay
+controls, MAKE MOVIE, signed in) and uploaded arrived whole, with its title and tags and with its
+sound, but without a picture: a 15.3 s ASF file whose VC-1 stream (640x360) held four key frames of
+1,045 bytes, all black. Reproduced on main (TU4, RADV on an RX 9060 XT, render scale 1, 30 fps, a
+private server on the same PC): the same four packets of 1,045 bytes at 0, 4.066, 8.133 and
+12.2 s.
+
+How the game makes a movie (TU4 addresses; the disc build's are in
+`src/hooks/replay_movie.cpp`). CREATE MOVIE takes a QUALITY (WEB 640x360, LARGE 1280x720), a
+LENGTH in steps of 5 s and a GAME SPEED, asks for a file name, and `CExportWMVComponent`
+(`sub_826C3AF8`) starts `CWMVVideoCodec` (`sub_82696900`: `cache:\Forza<digits>.wmv` and
+`cache:\video.tmp`, 30 frames a second, 4,096 kbit/s for WEB and 15,360 for LARGE). From then
+on:
+
+- The game steps the replay by 1/30 s a frame, however long the frame takes, and waits for the
+  render thread every frame (`sub_825F35C0`), so the movie has every frame at any `frame_rate`:
+  450 for 15 s. The main loop (`sub_8241D948`) draws each frame twice: the replay with the Forza
+  Horizon logo for the movie, then the black PLEASE WAIT screen that is shown.
+- After the first of the two the render thread copies the picture (`sub_82600710`): it sets a
+  temporary render target, draws the frame's front buffer into it with one quad, and resolves that
+  into an X8R8G8B8 texture whose memory is the renderer's scratch block (the address at
+  0x833D4728 + 28; physical 0x1CA95000 here, 640x384 tiled for WEB: 983,040 bytes). Then it locks
+  the texture (the lock waits for the GPU's fence), untiles it into the capture's CPU buffer
+  (`sub_82B010D8`) and tells the game thread, whose callback (`sub_826CEC80`) hands the buffer to
+  the encoder with the frame's time (`sub_82F40310`).
+- The encoder writes a frame to `video.tmp` only when it encodes to more than one byte. A frame
+  equal to the one before is a one-byte skipped frame and is left out; a key frame comes at least
+  every 4 s (every 122 frames).
+- The sound is not recorded as it plays: the audio engine logs its commands during those frames
+  (`cache:\audiodeferred.bin`), renders them afterwards (`cache:\wmvaudio.bin`), and the encoder
+  joins both into the file. UPLOAD sends it with `LargeFileUpload.Create` and `Content.UploadContent`
+  (the file without its last 32 bytes), and both files are deleted.
+
+Two things made the picture black, each of them enough to spoil it:
+
+1. `readback_resolve = some` copies a resolve back to guest memory only when its key is new. The
+   capture texture is the same memory every frame, so it was copied back once, for the first
+   frame (`Readback miss (some): frame 10791, 1CA95000 +983040 bytes, color0 format 6 640x360
+   endian 0, first seen`), and never again. `FORZA_MOVIE_TRACE=1` logs what the capture reads:
+   450 frames, the same bytes 450 times. So the encoder got one picture, and the file its four
+   key frames (frames 0, 122, 244 and 366) and none of the 446 skipped frames.
+2. That one picture was black. The quad that draws the front buffer into the capture's target
+   uses a pipeline nothing else uses; with `async_shader_compilation` it was still being built
+   and the first frame's draw was skipped (the log's pipeline line went from 439 built and 2,486
+   draws skipped to 440 and 2,487 on that frame). With the readback alone fixed, the movie's
+   first frame stayed black and the other 449 were the replay.
+
+Fix: `src/hooks/replay_movie.cpp` hooks the capture's start, frame and end on the render thread
+(`sub_82606930`, `sub_82600710`, `sub_826006E0`). While a capture runs, the capture texture (from
+the scratch block's address and the movie's size) is in `readback_resolve_wait_range`, as the
+front buffers are for a Big Shot: its resolve waits for the GPU and is copied back every frame.
+It is one more owner in `src/platform/readback_wait.h`. And the movie's frames hold
+`sync_pipeline_creation` (`thumbnail_sync.cpp`, as photo mode's do): a draw waits for its real
+pipeline instead of being skipped, the capture's quad and whatever the replay shows for the first
+time. Nothing changes outside a capture. `FORZA_MOVIE_READBACK=0` and `FORZA_MOVIE_SYNC=0` switch
+the two off.
+
 ## Festival video flashes purple (#91, open)
 
 Report: RX 9070 XT, Windows 11, Vulkan, v0.1.12, `frame_rate` 240, render scale 2, AF 16x,
