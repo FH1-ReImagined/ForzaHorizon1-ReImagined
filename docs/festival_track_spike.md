@@ -1166,6 +1166,16 @@ its width, the racing line's place on it):
   the vector across, FM4's racing line as the factor). A file of the game's aiopenworld
   archive, so the import keeps it with the circuit's database mod.
 
+- `media/ui/MapProfileMinimap.xml` and `MapProfileFullscreen.xml`, in the circuit's mod: FH1's
+  own two map profiles (the player's files, which say how each kind of map entity is drawn)
+  with one change. A road group (`<Filter tag="road_type" .../>`) has two colours: the first
+  until the player has driven the road, the second after. The minimap's first is the grey
+  (122, 122, 122) and it has no background, so on a circuit the road ahead was a grey line on
+  grey tarmac and read as no road at all (#877); there is nothing to discover on a circuit, so
+  the first colour becomes the second (white on the minimap, 200 grey on the map). The files
+  load with the circuit's mod only, so Colorado's maps are as they were. A circuit imported
+  before gets them at its next start (`fm4tracks._ensure_map_profiles`).
+
 What FH1 needs of a road network, found on TU4 before this converter, with Suzuka loaded as
 a track of its own in a package:
 

@@ -87,8 +87,11 @@ Works:
   (walls and the ground). A circuit imported with an earlier launcher loads its scenery only a
   short way ahead of the car, so at speed it appears as you drive: import it again.
 - Timed laps with sectors, the best-lap ghost and the laps page.
-- The circuit's road on the minimap, from FM4's AI line. A circuit imported with an earlier
-  launcher has none: import it again.
+- The circuit's road on the minimap and on the map (the Back button), from FM4's AI line,
+  drawn in white all the way round from the first metre. (FH1 draws a road you have not
+  driven yet in grey, which is lost on a circuit's tarmac; a circuit imported before this
+  gets the white road at its next start, without importing again.) A circuit imported
+  before the road network (0.3.2 and earlier) has no road at all: import it again.
 - All 24 circuits of Disc 1 convert and load. Suzuka is the most tested one.
 - The road's painted lines and edges and the rubber on it (FM4 draws them over the road, as
   decals). A circuit imported with an earlier launcher has none: import it again.
@@ -103,7 +106,8 @@ Not yet:
 - **Shadows of the circuit's own buildings and trees.** Your car's shadow is drawn on the
   circuit with the Vulkan renderer (with ReGPU, the D3D12 renderer, circuits have no shadows
   yet). A circuit imported with an earlier launcher has none: import it again.
-- **The map and GPS** (FH1's map is Colorado's).
+- **A route to follow.** The map shows the circuit's road and your car, with Colorado's
+  pins on it, and no background. There is no driving line and no GPS route round the lap yet.
 - **1000 Club challenges.** They use Colorado's roads and locations. Play in Colorado to run them.
 - **Online play** on a circuit.
 
@@ -131,7 +135,7 @@ Where the files are, in the game's data folder (`%LOCALAPPDATA%\ForzaReImagined`
 | `fm4-tracks/<circuit>/` | the converted circuit |
 | `fm4-tracks/laps/<circuit>.jsonl` | your laps there, one a line |
 | `fm4-tracks/laps/<circuit>.ghost.txt` | the best lap's ghost |
-| `mods/.fm4-track-<circuit>/` | its database and race route, a mod the Mods page does not list |
+| `mods/.fm4-track-<circuit>/` | its database, race route and map colours, a mod the Mods page does not list |
 
 ## How it works
 
