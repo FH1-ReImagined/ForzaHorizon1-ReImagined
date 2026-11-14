@@ -1913,6 +1913,118 @@ def draw_decals(converted, bin_dir):
     return done, left
 
 
+# FH1 draws a model's pass group 0 in its depth pre-pass: the main view's depth and stencil,
+# which the sun's shadow mask is drawn from (the car's shadow on a circuit, tools/fm4_shaders.py
+# FH1_SHADOWS) and the ambient occlusion with it. Of FM4's models only the roads, the shoulders
+# and some road edges have a group 0, FM4's own depth pass over them, and its command buffer
+# ends by writing PA_SC_WINDOW_OFFSET and PA_SC_WINDOW_SCISSOR_TL/BR (0x2080-0x2082: 0, 0 and
+# 256 x 256) with no scissor fixup (record type 6) for the game to fill, as its colour passes
+# have. FH1 sets the scissor once for its pre-pass and its own buffers never write it, so after
+# the first road piece everything else of the pre-pass was cut to the 256 x 256 corner: the
+# other roads' depth, and the pre-pass's resolve into the depth texture the shadow mask reads
+# (it kept the frame before's scene depth outside that corner). The car's shadow then fell on
+# one road piece only and from a frame-old depth (#827). The write becomes NOPs; the buffer
+# keeps its size. FM4_PVS_PREPASS_SCISSOR=0 leaves it.
+PREPASS_SCISSOR = os.environ.get("FM4_PVS_PREPASS_SCISSOR", "1") == "1"
+WINDOW_SCISSOR = range(0x2080, 0x2083)
+PM4_NOP = 0x80000000
+
+
+def prepass_scissor(data):
+    """The model file with the window offset and scissor writes of its group 0 command buffer
+    made NOPs (see PREPASS_SCISSOR), or None: no group 0, no such write, a scissor fixup of the
+    group (the game fills it), a packet that writes other registers with them or one the scan
+    does not read (type 3), a patch place or a buffer fixup inside the packet, or a header or
+    buffer not laid out as expected."""
+    k = data.rfind(b".fx")
+    if k < 0:
+        return None
+    p = k + 3
+    if p + 32 > len(data):
+        return None
+    head = struct.unpack_from(">8I", data, p)
+    if head[0] != 1:
+        return None
+    g = pass_groups(data, p + 32)
+    if not g or not any(g[0][3]):
+        return None
+    for r in range(g[0][2]):
+        if struct.unpack_from(">I", data, g[0][0] + 8 + 8 * r)[0] & 0xF == 6:
+            return None
+    pop = [x for x in g if any(x[3])]
+    if sum(x[3][0] for x in pop) != head[3] or sum(x[3][2] for x in pop) != head[5]:
+        return None
+    A = g[-1][1]
+    B = A + head[3]
+    C = B + head[4]
+    o = 0
+    for x in pop:
+        o = (o + 31) & ~31
+        o += x[3][1]
+    if o != head[4] or C + head[5] > len(data):
+        return None
+    s0, s1, s2 = g[0][3]                               # group 0 is the first populated one
+    blk, buf = data[A:A + s0], bytearray(data[B:B + s1])
+    packets = _pm4_packets(bytes(buf))
+    if packets is None or s0 < 0xC8 or s2 % 8:
+        return None
+    # the words the game writes into the buffer: the patch table's places and the fixups'
+    count, table_at = struct.unpack_from(">I", blk, 0x7C)[0], struct.unpack_from(">I", blk, 0x90)[0]
+    if table_at + 4 * count > s0:
+        return None
+    patched, t = set(), 0
+    while t < count:
+        e = struct.unpack_from(">I", blk, table_at + 4 * t)[0]
+        kind = (e >> 26) & 3
+        if not e >> 31 or kind not in (1, 2):
+            return None
+        patched.add((e >> 6) & 0xFFFFF)
+        t += 2 if kind == 2 else 1
+    for off in range(C, C + s2, 8):
+        patched.add((struct.unpack_from(">I", data, off)[0] >> 6) & 0xFFFFF)
+    done = 0
+    for at, w in packets:
+        if w >> 30 == 3:
+            regs = _pm4_type3_registers(buf, at, w)
+            if any(r in regs for r in WINDOW_SCISSOR[1:]):
+                return None
+            continue
+        if w >> 30:                                    # type 1 (registers below 0x800), type 2
+            continue
+        reg, n = w & 0x7FFF, ((w >> 16) & 0x3FFF) + 1
+        last = reg if w & 0x8000 else reg + n - 1      # bit 15: every value to register reg
+        if last < WINDOW_SCISSOR[1] or reg > WINDOW_SCISSOR[-1]:
+            continue
+        if reg < WINDOW_SCISSOR[0] or last > WINDOW_SCISSOR[-1]:
+            return None
+        if any(at // 4 <= q <= at // 4 + n for q in patched):
+            return None
+        struct.pack_into(f">{n + 1}I", buf, at, *([PM4_NOP] * (n + 1)))
+        done += 1
+    if not done:
+        return None
+    return data[:B] + bytes(buf) + data[B + s1:]
+
+
+def fix_prepass_scissors(bin_dir):
+    """prepass_scissor over every model file of the track's bin folder; how many changed."""
+    if not PREPASS_SCISSOR:
+        return 0
+    done = 0
+    for n in sorted(os.listdir(bin_dir)):
+        if not n.lower().endswith(".rmb.bin"):
+            continue
+        path = os.path.join(bin_dir, n)
+        with open(path, "rb") as f:
+            data = f.read()
+        out = prepass_scissor(data)
+        if out is not None:
+            with open(path, "wb") as f:
+                f.write(out)
+            done += 1
+    return done
+
+
 def convert_mod(mod, fh1_disc, loose):
     tracks = os.path.join(mod, "media", "tracks")
     (track,) = [d for d in os.listdir(tracks) if os.path.isdir(os.path.join(tracks, d))]
@@ -1996,6 +2108,9 @@ def convert_mod(mod, fh1_disc, loose):
         print(f"{track}: {n_decals} decal models (road lines, road edges) drawn in FH1's opaque and transparent passes"
               + (f"; {n_left} left undrawn (flagged both ways or neither, or their buffer's state or layout"
                  " is not as their flag needs)" if n_left else ""))
+    n_prepass = fix_prepass_scissors(bin_dir)
+    if n_prepass:
+        print(f"{track}: {n_prepass} models (roads, shoulders) keep FH1's scissor in its depth pre-pass")
     need = max(stream_blocks(c[2], c[4], c[5], bin_dir) for c in converted) if converted else 0
     order = archive_order(files + [zn for c in converted for zn in c[6]])
     index = {p: i for i, p in enumerate(order)}
