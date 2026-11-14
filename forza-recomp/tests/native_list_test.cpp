@@ -461,8 +461,25 @@ std::vector<uint32_t> Proven(const List& list) {
   List flagged = list;
   flagged.flags |= nl::kFlagFixedUp;
   CHECK(Converted(flagged.Build()) == t);
-  // Any static word changes the key: a register value, a table word, a mask, a flag.
+  // No bit of a slot's words is in the key, but for the low two of a microcode address: the
+  // shader's type.
   Built other = b;
+  for (uint32_t s = 0; s < t[nl::kTSlotCount]; ++s) {
+    const uint32_t* slot = &t[t[nl::kTSlots] + s * nl::kSlotWords];
+    const uint32_t type = slot[0] & 0xFF;
+    const bool microcode =
+        (type == nl::kSlotVertexShader || type == nl::kSlotPixelShader) && (slot[0] >> 8) == 0;
+    for (uint32_t d = slot[1]; d < slot[1] + slot[3]; ++d) {
+      const uint32_t w = nl::Word(other.pm4.data(), d);
+      for (uint32_t bit = 0; bit < 32; ++bit) {
+        ref::StoreWord(other.pm4.data(), d, w ^ (1u << bit));
+        const bool same = nl::LiveKey(t.data(), other.input()) == nl::TemplateKey(t.data());
+        CHECK(same == !(microcode && bit < 2));
+      }
+      ref::StoreWord(other.pm4.data(), d, w);
+    }
+  }
+  // Any static word changes the key: a register value, a table word, a mask, a flag.
   for (uint32_t d = 0; d < other.pm4.size() / 4; ++d) {
     const uint32_t w = nl::Word(other.pm4.data(), d);
     if (w >> 30 == 0 && (w & 0x7FFF) == 0x2205) {
@@ -608,6 +625,31 @@ int main() {
     AllModes(pt, pb);
     CHECK(harness.Check(pt.data(), pb.pm4.data(), uint32_t(plain.pm4.size()), run).all());
     CHECK(harness.interpreted().Holds(nl::kRegDmaBase, 3, last));
+    // A shader load's stage is the low bits of its address word. With bit 0 set the first load
+    // is a pixel shader's: another list, with another key and another template.
+    Built staged = list.Build();
+    uint32_t load = 0;
+    while (nl::Word(staged.pm4.data(), load) != 0xC0012700u) ++load;
+    CHECK(nl::Word(staged.pm4.data(), load + 1) == kPlaceholder);
+    ref::StoreWord(staged.pm4.data(), load + 1, kPlaceholder | 1);
+    CHECK(nl::LiveKey(t.data(), staged.input()) != nl::TemplateKey(t.data()));
+    const std::vector<uint32_t> st = Converted(staged);
+    CHECK(nl::TemplateKey(st.data()) != nl::TemplateKey(t.data()));
+    CHECK(Slots(st, nl::kSlotVertexShader) == 1 && Slots(st, nl::kSlotPixelShader) == 1);
+    AllModes(st, staged);
+    std::vector<uint32_t> staged_pool(st[nl::kTPoolWords]);
+    nl::Resolve(st.data(), staged.pm4.data(), staged_pool.data());
+    const nl::DrawView staged_first = nl::Draw(st.data(), staged_pool.data(), 0),
+                       staged_second = nl::Draw(st.data(), staged_pool.data(), 1);
+    CHECK(!staged_first.shader[0] && staged_first.shader[1]);
+    CHECK(staged_first.shader_address[1] == (kPlaceholder | 1) &&
+          staged_first.shader_size[1] == 21);
+    CHECK(staged_second.shader[0] && staged_second.shader[1]);  // its own, and the first's
+    // The same word with bit 1 is no shader the list format has.
+    ref::StoreWord(staged.pm4.data(), load + 1, kPlaceholder | 2);
+    CHECK(nl::LiveKey(t.data(), staged.input()) != nl::TemplateKey(t.data()));
+    std::vector<uint32_t> none;
+    CHECK(nl::Convert(staged.input(), &none).refuse == R::kShader);
   }
 
   // A draw that sets nothing but the index offset: it keeps the previous draw's shader, texture
@@ -797,6 +839,16 @@ int main() {
   CHECK(refused(R::kFlags, [](List& l) { l.flags |= 0x20; }));
   CHECK(Refused([](List& l) { l.flags |= nl::kFlagFixedUp; }) == R::kNone);
   CHECK(refused(R::kListSize, [](List& l) { l.pm4.clear(); }));
+  // A place names its dword with 20 bits: a list of that many words converts, one more does not.
+  const auto padding_only = [](uint32_t words) {
+    return [words](List& l) {
+      l.pm4.assign(words, 0x80000000u);
+      l.table.clear();
+      l.area_c.clear();
+    };
+  };
+  CHECK(Refused(padding_only(nl::kMaxListWords)) == R::kNone);
+  CHECK(refused(R::kListSize, padding_only(nl::kMaxListWords + 1)));
   CHECK(refused(R::kSegments, [](List& l) { l.segment_count = 2; }));
   CHECK(refused(R::kSegments, [](List& l) { l.segment_next = 0x40001000; }));
   CHECK(refused(R::kSegments, [](List& l) { l.segment_words = int32_t(l.pm4.size()) - 1; }));
@@ -822,6 +874,41 @@ int main() {
   CHECK(refused(R::kPlaceField, [](List& l) {  // a vertex buffer pair outside fetch constant 31
     l.Buffer({l.Regs(nl::kRegFetch, Values(6, 1)), 4, 0});
   }));
+  CHECK(refused(R::kPlaceField, [](List& l) {  // a texture's place on fetch constant 31
+    l.Chain({{l.Regs(nl::kRegVertexFetch, Values(6, 1)), 0}});
+  }));
+  CHECK(refused(R::kPlaceField, [](List& l) {  // a constant block of no words
+    l.Chain({{l.Regs(0x45D0, Values(48, 1)), 0, 0x00}});
+  }));
+  CHECK(Refused([](List& l) { l.Chain({{l.Regs(0x45D0, Values(48, 1)), 0, 0x10}}); }) == R::kNone);
+  // A surface sub-code belongs to one register, and so does each corner of the scissor.
+  {
+    const std::pair<uint32_t, uint32_t> surfaces[] = {{0x2000, nl::kSurfaceInfo},
+                                                      {0x2001, nl::kSurfaceColorInfo},
+                                                      {0x2002, nl::kSurfaceDepthInfo},
+                                                      {0x2301, nl::kSurfaceAaConfig},
+                                                      {0x2203, nl::kSurfaceHiZ}};
+    for (const auto& on : surfaces) {
+      for (const auto& of : surfaces) {
+        const uint32_t reg = on.first, sub = of.second;
+        const R got = Refused([reg, sub](List& l) {
+          // 0x2000-0x2002 and 0x2200-0x2203 as the lists write them; the place on `reg`.
+          const uint32_t first = reg == 0x2203 ? 0x2200 : reg == 0x2301 ? 0x2301 : 0x2000;
+          const uint32_t count = first == 0x2200 ? 4 : first == 0x2301 ? 1 : 3;
+          l.Chain({{l.Regs(first, Values(count, 1)) + (reg - first), sub}});
+        });
+        CHECK(got == (sub == on.second ? R::kNone : R::kPlaceField));
+      }
+    }
+    for (uint32_t reg = nl::kRegWindowOffset; reg <= nl::kRegWindowOffset + 2; ++reg) {
+      for (uint32_t sub = 0; sub < 2; ++sub) {
+        const R got = Refused([reg, sub](List& l) {
+          l.Chain({{l.Regs(nl::kRegWindowOffset, {0, 0, 0}) + (reg - nl::kRegWindowOffset), sub}});
+        });
+        CHECK(got == (reg == nl::kRegWindowOffset + 1 + sub ? R::kNone : R::kPlaceField));
+      }
+    }
+  }
   CHECK(refused(R::kPlaceField, [](List& l) {  // a constant block in c0-c7
     l.Chain({{l.Regs(0x4400, Values(16, 1)), 0, 0x40}});
   }));
