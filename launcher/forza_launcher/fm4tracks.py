@@ -805,18 +805,21 @@ def configure(cfg, env: dict, args: list, unset: list, notes: list, write=True):
             have = [] if a == "--forza_mods=" + mods.NONE else a.split("=", 1)[1].split("|")
             args[i] = "--forza_mods=" + "|".join([m for m in have if m not in extra] + extra)
     args.append(f"--fm4_track_dir={folder}")
-    # Other players are in Colorado: a circuit plays offline, and nothing of it goes online. No
-    # server (so no online play, challenges or co-op results), no Discord activity (it would name
-    # an area of Colorado), and the window skips the session's shader-list upload (fm4_track).
-    env["FORZA_SERVER"] = ""
-    if "FORZA_SERVER" in unset:
-        unset.remove("FORZA_SERVER")
+    # No Discord activity (it would name an area of Colorado), and the window skips the
+    # session's shader-list upload (fm4_track).
     if not any(a.startswith("--discord_presence") for a in args):
         args.append("--discord_presence=false")
     if world:
+        # an FH2 world keeps the server the Online settings chose: single player and online
+        # free roam both start on the world's road, in a room of the world's own
         from . import fh2ffworld
-        fh2ffworld.configure(info, env, notes)
+        fh2ffworld.configure(info, env, notes, room=str(cfg.settings.get("live_room", "") or ""))
         return info
+    # Other players are in Colorado: a circuit plays offline, and nothing of it goes online. No
+    # server (so no online play, challenges or co-op results).
+    env["FORZA_SERVER"] = ""
+    if "FORZA_SERVER" in unset:
+        unset.remove("FORZA_SERVER")
     notes.append(f"Starting on the Forza Motorsport 4 circuit {info['name']} (experimental, offline). "
                  "Choose FH1's Colorado on the Play page to drive in Colorado again.")
     return info

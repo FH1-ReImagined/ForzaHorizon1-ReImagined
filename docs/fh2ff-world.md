@@ -9,7 +9,7 @@ own and is never shared.
 
 ## In the launcher
 
-Mods > Mods > Forza Motorsport 4 tracks > **Import Fast & Furious…** (experimental) asks for the
+Mods > Mods > Forza Horizon 2 worlds (a card of their own) > **Import Fast & Furious…** (experimental) asks for the
 folder of F&F's files and, optionally, FH2's (for its map art and road types), and runs `build`
 (`launcher/forza_launcher/fh2ffworld.py`); **Import Forza Horizon 2…** asks for FH2's and builds
 its world. Each game's `default.xex` (title 4D530AB5 F&F, 4D530AA4 FH2) tells them apart. A world
@@ -17,7 +17,8 @@ is kept where the imported FM4 circuits are, `<data>/fm4-tracks/anthem` or `.../
 `track.json` of kind `fh2ff` or `fh2`), with its mod as `<data>/mods/.fm4-track-<key>`, so the
 Play page's picker offers "Fast & Furious (FH2 world)" and "Forza Horizon 2 (FH2 world)" and
 Remove takes one out. A start in one mounts the folder as a circuit's (`--fm4_track_dir`), loads
-the mod last and plays offline, with the world's own switches, set by the launcher:
+the mod last, with the world's own switches, set by the launcher (the server of the Online
+settings stays, see "Online free roam" below; a circuit's start is offline):
 `FORZA_INSECURE_FILES` and `FORZA_TRACK_SPAWN`, and `FORZA_FM4_COL=0` and
 `FORZA_TRACK_NO_TRAFFIC=0`: the world's `fm4_stream_blocks.txt` (below) is the converter's marker
 the game gives a circuit's switches by, and a 0 turns one off. So the world's collision streams
@@ -116,6 +117,19 @@ wrong picture:
   writes the largest union of a hex cell's zone's model files and its six neighbours', in KB,
   1.25 times over (FH2 50,234 and 62,793 asked for; F&F 52,089, capped at 65,536 less the
   rounding, 65,111; F&F drove on the game's own pool before, so the measure is generous).
+- **Online free roam.** Single player's free roam is FH1's Tracks row 317, pointed at the world.
+  Online free roam is other rows: the lobby's start locations, FH1's nine of
+  RibbonConfiguration 5 (1101 to 1111: the festival and eight more), each with a Colorado route
+  file of eight start places (`start_location_00` to `_07`). With only row 317 changed, a
+  Horizon World session opened from a world loaded Colorado's festival. Both games have a row
+  of the same kind (id 0, "ANTHEM") with route 0, and their `TrackRoute000.xml` holds their
+  own eight start places (F&F's in Nice, FH2's at its festival): FH1's nine rows are pointed
+  at the world and route 0, the file's facings made unit vectors (`online_free_roam`). All
+  nine of the lobby's start locations are that one place, under FH1's names.
+  The launcher keeps the Online settings' server for a start in a world and gives the world a
+  room of its own on it (`FORZA_ROOM`, the player's room and `+anthem` or `+fh2`,
+  `fh2ffworld.world_room`): players meet only others in their room, so those in a world meet
+  each other and never the players in Colorado, whose sessions are another map.
 - **Races and playground arenas** (data only: not tried in a lobby yet). FH1's races and its King,
   Infected and Cat & Mouse arenas are Tracks rows (RibbonConfiguration 0 a circuit, 2 point to
   point, 7 an arena) with a `TrackRouteNNN.xml` in the ribbon. F&F's and FH2's databases have the
@@ -177,6 +191,12 @@ a save for every run, the dev autopilot:
 - a closed road driven 1.3 km past the edge of the zones: no reset;
 - a closure in Nice: the barrier line and cones across the road are gone;
 - with the world's races and arenas in the database (208 rows): F&F loads and drives, 150 s;
+- online, one player with the launcher's local server (its "This PC" mode), each world imported
+  by the launcher and started with its plan: signed in from the world, pause menu > Multiplayer
+  > Find Game > Horizon World loads the world's own start place (F&F: Nice, by the Ferris wheel,
+  -467, -5808; FH2: under its festival's arch, 5637, -5912) with the co-op challenge prompt and
+  the player's tag, 60 s there, no fault; before the change the same steps loaded Colorado's
+  festival. Two players in one world's session were not tried;
 - animated scenes in: 5 minutes along the spawn's road (where a build with them faulted at 27 s
   before the fix), and the Nice fairground drawn with its rides moving (the SkyMaster's arms);
 - the minimap draws the formerly closed roads; the full map (Start, Map) shows FH2's art under

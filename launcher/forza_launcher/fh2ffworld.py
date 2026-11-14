@@ -45,12 +45,14 @@ EXPERIMENTAL = ("Experimental. What works: free roam in Fast & Furious's world (
                 "coast) or Forza Horizon 2's whole world, with their roads, buildings, lighting and "
                 "collision, traffic on their roads, the minimap and, with FH2's files, the full map. Not "
                 "yet: their own events and sounds (FH1's Colorado ones stand in), and FH2's far east "
-                "(past about 8 km east of its centre FH1 does not stream it). A start in one plays "
-                "offline, and your save is backed up first.")
+                "(past about 8 km east of its centre FH1 does not stream it). Single player, or online "
+                "free roam with players who chose the same world (Online settings as for Colorado). Your "
+                "save is backed up first.")
 
 
 EXPERIMENTAL_SHORT = ("Experimental: free roam in the world, with traffic (no events of its own yet; FH1's "
-                      "sounds stand in). It plays offline, and your save is backed up first.")
+                      "sounds stand in). Single player, or online free roam with players who chose the same world. "
+                      "Your save is backed up first.")
 
 
 class Fh2ffError(fm4tracks.Fm4TrackError):
@@ -173,8 +175,18 @@ def build(cfg, ff_folder, fh2_folder=None, progress=lambda f, text: None, cancel
             + ". Choose it on the Play page to drive it (experimental).")
 
 
-def configure(info, env: dict, notes: list):
-    """A start in a world (fm4tracks.configure calls this for its kinds): its own switches."""
+def world_room(room: str, key: str) -> str:
+    """The server room of a world: the player's own room (Settings > Online, "" the default one)
+    with the world's key. Players meet only others in their room, so those in a world meet each
+    other and never the players in Colorado (the game takes 32 characters)."""
+    return (room[:31 - len(key)] + "+" + key)[:32]
+
+
+def configure(info, env: dict, notes: list, room=""):
+    """A start in a world (fm4tracks.configure calls this for its kinds): its own switches. The
+    server chosen in the Online settings stays: the game's Single Player and its online free
+    roam both start on the world's road (the game's teleport hook places the car, hooks/
+    fm4_track.cpp). Online the world has a room of its own (world_room)."""
     env["FORZA_INSECURE_FILES"] = "zipmanifest.xml|\\tracks\\" + FOLDER.lower() + "\\"
     if info.get("spawn"):
         env["FORZA_TRACK_SPAWN"] = info["spawn"]
@@ -185,5 +197,10 @@ def configure(info, env: dict, notes: list):
     if info.get("path") and not fm4cars._find_ci(Path(info["path"]), "media", "tracks", FOLDER, STREAM_BLOCKS):
         notes.append(f"{info.get('name', NAME)}'s world was imported by an earlier version and has no "
                      "collision or traffic that way: import it again on the Mods page.")
-    notes.append(f"Starting in {info.get('name', NAME)}'s world (experimental, offline). Choose FH1's "
-                 "Colorado on the Play page to drive in Colorado again.")
+    online = bool(env.get("FORZA_SERVER"))
+    if online:
+        env["FORZA_ROOM"] = world_room(room, str(info.get("key", KEY)))
+    notes.append(f"Starting in {info.get('name', NAME)}'s world (experimental, "
+                 + ("online: Multiplayer's free roam meets only players who started in this world too"
+                    if online else "offline") + "). Choose FH1's Colorado on the Play page to drive in "
+                 "Colorado again.")

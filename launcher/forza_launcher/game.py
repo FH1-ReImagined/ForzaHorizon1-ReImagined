@@ -692,8 +692,8 @@ def _build_plan(cfg: Config, game: GameInstall, write, refresh_xenia, log, saver
     # and switches, offline. Colorado (the default) changes nothing here.
     from . import fm4tracks
     track = fm4tracks.configure(cfg, env, args, unset, notes, write)
-    if track is not None:
-        server_argv = None
+    if track is not None and not env.get("FORZA_SERVER"):
+        server_argv = None     # a circuit is offline; an FH2 world keeps the Online settings' server
     args += extra
     env.update(parse_env(cfg.advanced.get("extra_env", "")))
 

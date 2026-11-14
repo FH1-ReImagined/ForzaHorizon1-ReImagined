@@ -451,6 +451,32 @@ class Routes(unittest.TestCase):
             got = db.execute("SELECT id, DisplayName, MediaName, EnvironmentId, RouteId FROM Tracks WHERE id > 5000").fetchall()
             self.assertEqual(got, [(5001, "Anthem Route 12", "Anthem", 70, 12), (5002, "NEW DOCK PLAY 3001", "Anthem", 70, 3001)])
 
+    def test_online_free_roam_starts_in_the_world(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as rb:
+            db = sqlite3.connect(":memory:")
+            db.execute("CREATE TABLE Tracks (id INTEGER, MediaName TEXT, RibbonIndex INTEGER, RibbonConfiguration INTEGER, "
+                       "RouteId INTEGER, EnvironmentId INTEGER)")
+            db.executemany("INSERT INTO Tracks VALUES (?, ?, ?, ?, ?, ?)",
+                           [(317, "Anthem", 0, -1, 0, 70),            # single player's free roam, changed already
+                            (1101, "Colorado", 0, 5, 21, 63), (1111, "Colorado", 0, 5, 31, 63),   # the lobby's start locations
+                            (16, "Colorado", 0, 2, 16, 101),          # a race of Colorado's: left
+                            (320, "ColoradoPG", 0, -1, 0, 66)])
+            self.assertEqual(ff.online_free_roam(db, rb), 0)          # no route 0 in the ribbon: nothing changes
+            starts = "".join(f"<NamedTransform name='start_location_{k:02d}'>\n<Transform pos.x='{k}' pos.y='0' pos.z='0' "
+                             "facing.x='-3.0' facing.y='0.0' facing.z='4.0'/>\n</NamedTransform>\n" for k in range(8))
+            path = os.path.join(rb, "TrackRoute000.xml")
+            open(path, "w").write("<TrackRoute>\n<NamedTransforms>\n" + starts.replace("_07", "_x7") + "</NamedTransforms>\n</TrackRoute>\n")
+            self.assertEqual(ff.online_free_roam(db, rb), 0)          # seven start places: not FH1's eight
+            open(path, "w").write("<TrackRoute>\n<NamedTransforms>\n" + starts + "</NamedTransforms>\n</TrackRoute>\n")
+            self.assertEqual(ff.online_free_roam(db, rb), 2)
+            self.assertEqual(db.execute("SELECT id, MediaName, RouteId, EnvironmentId FROM Tracks ORDER BY id").fetchall(),
+                             [(16, "Colorado", 16, 101), (317, "Anthem", 0, 70), (320, "ColoradoPG", 0, 66),
+                              (1101, "Anthem", 0, 70), (1111, "Anthem", 0, 70)])
+            text = open(path).read()
+            self.assertIn("facing.x='-0.6' facing.y='0' facing.z='0.8'", text)      # unit vectors, as FH1's
+            self.assertEqual(text.count("start_location_"), 8)
+
 
 class Lighting(unittest.TestCase):
     def test_track_settings_as_64(self):

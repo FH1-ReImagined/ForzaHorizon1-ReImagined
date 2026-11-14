@@ -667,6 +667,34 @@ def add_world_routes(db, rows):
     return dict(counts)
 
 
+ONLINE_FREE_ROAM = 5       # Tracks.RibbonConfiguration: a start location of online free roam
+ONLINE_ROUTE = 0           # both worlds' own online free roam row (id 0, "ANTHEM") names route 0
+
+
+def online_free_roam(db, ribbon_dir):
+    """FH1's online free roam in the world. The lobby's start locations are FH1's Tracks rows of
+    configuration 5 (1101 to 1111: the festival and eight more), each a Colorado route file of
+    eight start places (start_location_00 to _07); single player's free roam is row 317 alone,
+    so with only that one changed a Horizon World session loaded Colorado's festival. Both
+    worlds have a row of the same kind with route 0, whose TrackRoute000.xml holds their own
+    eight start places: FH1's rows are pointed at the world and that route, the file's facings
+    made unit vectors as for the races'. Returns how many rows (0: no such file, none changed)."""
+    path = route_file(ribbon_dir, ONLINE_ROUTE)
+    if path is None:
+        return 0
+    with open(path, encoding="utf-8-sig", newline="") as f:
+        text = f.read()
+    if len(re.findall(r"<NamedTransform name='start_location_\d+'", text)) < 8:
+        return 0
+    new = route_xml(text)
+    if new != text:
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            f.write(new)
+    cur = db.execute("UPDATE Tracks SET MediaName=?, EnvironmentId=?, RibbonIndex=0, RouteId=? "
+                     "WHERE RibbonConfiguration=? AND MediaName='Colorado'", (NAME, ENVIRONMENT, ONLINE_ROUTE, ONLINE_FREE_ROAM))
+    return cur.rowcount
+
+
 NONE = 0xDEADBEEF
 
 
@@ -1232,6 +1260,7 @@ def _build_into(ff_disc, fh1_disc, update_zip, out, fh2_disc):
                 with open(path, "w", encoding="utf-8", newline="") as f:
                     f.write(new)
         print("races and arenas (Tracks rows by configuration):", add_world_routes(db, routes))
+        print("online free roam start locations now the world's:", online_free_roam(db, rb))
         print("AI lines:", ai_lines(os.path.join(ff_disc, "media", "aiopenworld.zip"), {r["RouteId"] for r in routes},
                                     os.path.join(mod, "media", "aiopenworld", NAME.lower(), "ribbon_00")))
         db.commit()

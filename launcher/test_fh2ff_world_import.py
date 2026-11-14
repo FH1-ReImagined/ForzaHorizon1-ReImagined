@@ -147,8 +147,28 @@ class World(WorldBase):
         # the world's fm4_stream_blocks.txt (the streaming pool) would turn these on: off
         self.assertEqual((plan.env["FORZA_FM4_COL"], plan.env["FORZA_TRACK_NO_TRAFFIC"]), ("0", "0"))
         self.assertNotIn("FORZA_FM4_STX", plan.env)
-        self.assertEqual(plan.env["FORZA_SERVER"], "")  # offline
+        # the Online settings' server stays (a circuit's start is offline; a world's is not): the
+        # game's single player and its online free roam both start on the world's road, and the
+        # world has a room of its own on the server, so its players never meet Colorado's
+        self.cfg.online["mode"] = "offline"
+        plan = self.plan()
+        self.assertFalse(plan.env.get("FORZA_SERVER"))
+        self.assertNotIn("FORZA_ROOM", plan.env)
         self.assertTrue(any("Fast & Furious" in n and "offline" in n for n in plan.notes))
+        self.cfg.online["mode"], self.cfg.online["custom_server"] = "custom", "example.test:21200"
+        plan = self.plan()
+        self.assertEqual(plan.env["FORZA_SERVER"], "example.test:21200")
+        self.assertEqual(plan.env["FORZA_ROOM"], "+anthem")
+        self.assertTrue(any("Fast & Furious" in n and "online" in n for n in plan.notes))
+        self.cfg.settings["live_room"] = "club"
+        self.assertEqual(self.plan().env["FORZA_ROOM"], "club+anthem")
+        self.assertEqual(fh2ffworld.world_room("r" * 40, "fh2"), "r" * 28 + "+fh2")     # 32 at most
+        self.assertEqual(len(fh2ffworld.world_room("r" * 40, "anthem")), 32)
+        self.cfg.settings["live_room"] = ""
+        self.cfg.advanced["extra_env"] = "FORZA_ROOM=mine"                       # a developer's own wins
+        self.assertEqual(self.plan().env["FORZA_ROOM"], "mine")
+        self.cfg.advanced["extra_env"] = ""
+        self.cfg.online["mode"] = "offline"
         # the game reads those "0"s only with the world's block count: an import without it says so
         self.assertTrue(any("import it again" in n for n in plan.notes))
         (folder / "media" / "tracks" / "Anthem" / fh2ffworld.STREAM_BLOCKS).write_text("1000\n")
