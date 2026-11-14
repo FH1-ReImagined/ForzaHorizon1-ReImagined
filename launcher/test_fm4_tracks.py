@@ -79,6 +79,8 @@ def fake_converter(calls):
                 (mod / "media" / "tracks" / t / "Ribbon_00" / "trackroute101.xml").write_text("<TrackRoute/>")
                 (mod / "media" / "aiopenworld" / t / "ribbon_00").mkdir(parents=True)
                 (mod / "media" / "aiopenworld" / t / "ribbon_00" / "route_101.owt").write_bytes(b"OWTM")
+                (mod / "media" / "ui").mkdir()       # FH1's map profiles, the roads in their driven colour
+                (mod / "media" / "ui" / "MapProfileMinimap.xml").write_bytes(b"<converted/>")
             on_line("4932 bin.zip members")
         elif script == "fm4_pvs.py":
             mod, out = Path(args[1]), Path(args[3])
@@ -205,6 +207,9 @@ class Import(Base):
         # the race route is a file of the game's aiopenworld archive: it goes with the mod
         self.assertTrue((m / "media" / "aiopenworld" / "suzuka" / "ribbon_00" / "route_101.owt").is_file())
         self.assertFalse((root / "media" / "aiopenworld").exists())
+        # and so do the map profiles: they load with the circuit, Colorado's maps stay as they are
+        self.assertEqual((m / "media" / "ui" / "MapProfileMinimap.xml").read_bytes(), b"<converted/>")
+        self.assertFalse((root / "media" / "ui").exists())
         self.assertGreater(info["size"], 0)
         # the Mods page does not list it, and no mod is turned on by it
         self.assertEqual(mods.scan(mods.mods_dir(self.cfg)), [])
@@ -343,6 +348,45 @@ class Start(Base):
         fm4tracks.remove(self.cfg, "suzuka")
         self.assertFalse(folder.exists())
         self.assertEqual((self.t / "game" / "media" / "cars" / "abc" / "car.zip").read_bytes(), b"car")
+
+    def test_a_circuit_imported_earlier_gets_its_map_profiles_at_the_start(self):
+        profile = (b'<Profile><Group name="a roads" ><Symbolizer type="line_coloured" >'
+                   b'<ColourPrimary r="122" g="122" b="122" a="255" /><ColourSecondary r="255" g="255" b="255" a="255" />'
+                   b'</Symbolizer><Filter tag="road_type" value="a" /></Group></Profile>')
+        game_ui = self.t / "game" / "media" / "UI"
+        game_ui.mkdir()
+        (game_ui / "MapProfileMinimap.xml").write_bytes(profile)
+        self.build()
+        fm4tracks.select(self.cfg, "suzuka")
+        ui = mods.mods_dir(self.cfg) / ".fm4-track-suzuka" / "media" / "ui"
+        shutil.rmtree(ui)                    # as an import made before the profiles
+        self.plan(write=False)
+        self.assertFalse(ui.exists())        # looking at the plan writes nothing
+        self.plan(write=True)
+        made = (ui / "MapProfileMinimap.xml").read_bytes()
+        self.assertIn(b'<ColourPrimary r="255" g="255" b="255" a="255" />', made)
+        self.assertNotIn(b'r="122"', made)
+        self.assertEqual((game_ui / "MapProfileMinimap.xml").read_bytes(), profile)   # the game's own: untouched
+        self.assertEqual([p.name for p in ui.parent.iterdir() if p.name.startswith(".ui-")], [])
+        # an import that has them keeps them as they are
+        (ui / "MapProfileMinimap.xml").write_bytes(b"<kept/>")
+        self.plan(write=True)
+        self.assertEqual((ui / "MapProfileMinimap.xml").read_bytes(), b"<kept/>")
+
+    def test_a_start_goes_on_without_map_profiles(self):
+        self.build()
+        fm4tracks.select(self.cfg, "suzuka")
+        ui = mods.mods_dir(self.cfg) / ".fm4-track-suzuka" / "media" / "ui"
+        shutil.rmtree(ui)
+        plan = self.plan(write=True)         # this game folder has no media/ui: nothing to make them of
+        self.assertFalse(ui.exists())
+        self.assertEqual(plan.fm4_track, "suzuka")
+        (self.t / "game" / "media" / "ui").mkdir()
+        (self.t / "game" / "media" / "ui" / "MapProfileMinimap.xml").write_bytes(b"<Group><Filter tag='road_type'/>")
+        with mock.patch.object(fm4tracks.tempfile, "mkdtemp", side_effect=OSError("read-only")):
+            plan = self.plan(write=True)     # whatever goes wrong making them
+        self.assertEqual(plan.fm4_track, "suzuka")
+        self.assertFalse(ui.exists())
 
     def test_the_track_mod_loads_last(self):
         self.build()

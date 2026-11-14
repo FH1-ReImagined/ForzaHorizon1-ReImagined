@@ -85,10 +85,14 @@ surface map.
 ## Findings worth keeping
 
 - FH1's collision cell: 0x90-byte header (route ids at +0x3C, count +0x7A, mask +0x7C), 16-byte
-  vertices with a packed normal (z, x signed 11 bits, y 10 bits), 32-byte triangles
-  (flags 0xTTMM8000: TT 0x0E ground, 0x08 walls; MM surface), 12x12 squares of u16 lists.
-- The wheels follow the vertex normals: true (tilted) normals lifted the front wheels at fixed
-  spots and launched the car; upright ground normals fixed it (bank no longer felt).
+  vertices with a packed normal (x and y signed 11 bits, z signed 10 bits: Direct3D's HEND3N),
+  32-byte triangles (flags 0xTTMM8000: TT 0x0E ground, 0x08 walls; MM surface), 12x12 squares
+  of u16 lists.
+- The wheels follow the vertex normals. An earlier reading of the word (z 11 bits from bit 21,
+  y 10 bits) set y's sign bit for every normal whose z came out odd, a normal lying flat for
+  the game: the car was lifted and thrown at fixed spots, so ground normals were made upright.
+  That hid the tilt but not its cost, see "The road under the wheels (#876)" below. The word is
+  now packed as the game reads it and carries FM4's own vertex normal.
 - A triangle's last word 0x00FFFFFF made walls throw the car; FM4's 0 is kept.
 - Zone pools are sized 3 x (largest zone + 128) + dynamic instances; hex zones need more.
 - Meshes placed by their model (road, terrain, kerbs, buildings: placement at 0, 0, 0) hold
@@ -1166,6 +1170,16 @@ its width, the racing line's place on it):
   the vector across, FM4's racing line as the factor). A file of the game's aiopenworld
   archive, so the import keeps it with the circuit's database mod.
 
+- `media/ui/MapProfileMinimap.xml` and `MapProfileFullscreen.xml`, in the circuit's mod: FH1's
+  own two map profiles (the player's files, which say how each kind of map entity is drawn)
+  with one change. A road group (`<Filter tag="road_type" .../>`) has two colours: the first
+  until the player has driven the road, the second after. The minimap's first is the grey
+  (122, 122, 122) and it has no background, so on a circuit the road ahead was a grey line on
+  grey tarmac and read as no road at all (#877); there is nothing to discover on a circuit, so
+  the first colour becomes the second (white on the minimap, 200 grey on the map). The files
+  load with the circuit's mod only, so Colorado's maps are as they were. A circuit imported
+  before gets them at its next start (`fm4tracks._ensure_map_profiles`).
+
 What FH1 needs of a road network, found on TU4 before this converter, with Suzuka loaded as
 a track of its own in a package:
 
@@ -1323,6 +1337,53 @@ blocks are the file's (the largest of all layouts, with the margin):
 To check in the game: frame time and draw count over a Le Mans lap at speed, and how far ahead
 the scenery appears. A circuit imported before this change keeps its old zones until it is
 imported again.
+
+## The road under the wheels (#876)
+
+A player's report: on Le Mans the car now and then shakes hard, as if the surface were rocks,
+on smooth tarmac. Measured with a dev trace of the player car's wheels on every physics step
+(not in the tree: suspension travel, contact, and the surface number the game holds for the
+triangle under each wheel; the wheel block's +336 is that triangle's flags word), the dev
+autopilot on FM4's line.
+Three things in `tools/fm4_col.py`, all in the converted collision:
+
+- **Upright ground normals.** With every ground normal (0, 1, 0), the suspension answered a
+  road rising or falling under the car in proportion to the rate, 78 mm of travel per m/s,
+  which is what a damper gives for a travel rate (damping / spring rate): as if FH1's dampers
+  took the car's speed along the road's normal for suspension travel. On Le Mans's first
+  2.1 km (the climb to the Dunlop curve, then down to the Esses) all four wheels sat on their
+  bump stops for 37 % of the steps above 50 km/h and a wheel hung at full droop for 24 %.
+  Mean travel against the road's rise rate (speed x gradient): 1 mm where it falls faster
+  than 0.5 m/s, 44 mm on the level, 102 mm (the stops) where it rises faster than 0.5 m/s;
+  0.75 m/s is 3 % at 90 km/h or 1 % at 270. With FM4's own normals: 43 to 45 mm at every
+  rise rate, no step on the stops, none hanging.
+- **The packed normal.** See above: x and y 11 bits, z 10 bits. Checked on Colorado's cells
+  (20,601 ground vertices: 0.10 degrees at the median from the mean normal of their
+  triangles; bit 21, y's sign, clear in 20,920 of 20,922). FM4's vertices carry their normal
+  in the same packing with y and z the other way round (Le Mans: 0.06 degrees at the median),
+  so the converter keeps FM4's own instead of making one.
+- **The surface numbers.** A triangle's surface is its number in the game's list
+  (`media/physics/surfaceTypes.xml`). The reader of FM4's list took entries by their
+  indentation and missed 7 of the 61 (4 indented with spaces, one a tab deeper, 2 more with
+  spaces), so every FM4 surface from 30 on got the number of another: Le Mans's
+  BumpyAsphaltSlight (2.5 km of the Mulsanne's lanes) became FH1's BumpyConcreteModerate, its
+  BumpyAsphaltModerate (the Mulsanne's shoulders, the ground round its chicanes) became
+  BumpyConcreteExtreme (3 cm ridges), FoamBarrier (Suzuka's 5,632 wall triangles) became
+  Concrete2Slow. FM4's numbers 54 and 55 (SmoothBlacktop, Infineon's drag strip, and
+  InvisibleTeleportingBorder, the 1.2 km2 of Top Gear's airfield round the track) were kept
+  as numbers: FH1's Leaf5 and GravelBits. The two lists agree up to 48. One name does not
+  mean the same in both: FM4's SlowAsphault is smooth run-off tarmac, FH1's has its grass's
+  5 cm bumps, so it goes to FH1's ConcreteSlow.
+
+FH1's own cells hold a byte per edge in a triangle's last word: 0xFF, or 255 x the cosine of
+half the angle to the triangle across the edge where that one falls away by 10 degrees or
+more (84,541 ground edges of Colorado: 82,767 exact, all but 6 of the rest 1 off).
+`FM4_COL_EDGES=fh1` writes them for the ground; on Le Mans's first 2.1 km the wheels rode the
+same with them as with FM4's 0, so the default stays 0 (the walls' reason for 0 is above).
+
+Not looked at: FH1's SlowGrass has friction 0.30 where FM4's has 0.75 (Le Mans and Suzuka
+have some beside the road), and FH1's Grass, Dirt, Gravel and Quicksand are bumpier than
+FM4's. They are off the road and keep their names.
 
 ## Open
 
