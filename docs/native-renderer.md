@@ -626,7 +626,10 @@ Rules it keeps:
   opcode, a register outside the set above, a tile block of another shape, a draw, shader load or
   literal load of another form, an address that is not a place, a place that lands on no known
   field, a place with sub-code 62 or 63 (the path through the table at `cb+112`, not decoded). A
-  refused list runs as PM4, as today.
+  refused list runs as PM4, as today. And whatever is not refused must be right: the test also
+  changes words of its lists at random, and every changed list that still converts has to agree
+  with the interpreter (run by hand at 3 million changed lists, 1.58 million of them converted,
+  and at 450,000 under the address and undefined-behaviour sanitizers).
 
 **Offline proof.** `tools/native_list_check.py` (below) reads every model of an archive, converts
 every list and runs both views beside a plain PM4 interpreter that knows nothing of templates
@@ -671,9 +674,10 @@ game's fixups. Counts, from the game's files on the test PC (2026-11-14) **[M]**
   them with 32-bit indices, none the first draw of its list. Such a draw continues the one before
   it with the same shader and vertex buffer, which the draw records carry forward (15 of 15). The
   DLC has 15 of the same kind, in 6 lists.
-- **Conversion costs about 15 ns a dword** on one thread (Colorado's 253.7 M dwords in 3.7 and
-  3.8 s in two runs), and a template is 2.06 words for each dword of its list (39% of it the
-  list's static words, 20% the ops, 16% the per-draw register runs, 14% the slots).
+- **Conversion costs 15 to 19 ns a dword** on one thread (Colorado's 253.7 M dwords in 3.7, 3.8
+  and 4.8 s in three runs on a PC doing other work), and a template is 2.06 words for each dword
+  of its list (39% of it the list's static words, 20% the ops, 16% the per-draw register runs,
+  14% the slots).
 - **The FM4 circuit is not covered in its scene passes.** FM4's models have their own lists for
   the two-tile and the one-pass scene (groups 9-11 and 15-17, which no Horizon model has), and
   their tile blocks set the window with `SET_CONSTANT2` and have two tiles in pass 3: all 2,798
@@ -683,8 +687,8 @@ game's fixups. Counts, from the game's files on the test PC (2026-11-14) **[M]**
   `tile-block`, 27 `register`. FM4's lists also have no SCRATCH_REG6 marks, name their vertex and
   index buffers in the buffer fixups only, and have all mask bits set in every pass. These
   circuits were imported before the importer began to turn the window write at the end of their
-  depth pre-pass lists into padding (#827): that changes the 154 group 0 lists of this circuit, to
-  packets the converter takes.
+  depth pre-pass lists into padding (#827). With that step applied in memory to this circuit's
+  models, 154 change, and their 154 group 0 lists convert and agree in 1,540 of 1,540 runs.
 
 What the files settled for the next steps:
 
@@ -698,7 +702,9 @@ What the files settled for the next steps:
   the tables can be walked without the game's records. A surfaces fixup's chain may start with an
   entry of sub-code 9 that names dword 0 and writes nothing (it changes how the chain's surface
   formats are read); 130 texture fetch constants in Colorado have no place at all and are the
-  file's words.
+  file's words. A Horizon list's patch table names its vertex and index buffers as the buffer
+  fixups do: all 410,639 Colorado lists, the DLC's 41,026 and the UI tracks' 41 get the same slots
+  with the buffer fixups left out. FM4's lists name them there only (0 of 3,287).
 - **In the files the inherited and the left-untouched masks are equal:** all bits set for passes
   1, 2 and 4, and `FFFFFFF7` in the third mask of both for passes 0 and 6, in all 410,639 lists.
   Whether the headers in memory are the files' needs a run.

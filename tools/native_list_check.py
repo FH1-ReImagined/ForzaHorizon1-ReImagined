@@ -283,6 +283,8 @@ def report(c, problems):
             "length; slots no record names: %d"
             % (conv["record_places_agree"], conv["record_places_checked"],
                conv["slots_no_record_names"]))
+        say("  lists with the same slots when the buffer fixups (area C) are left out: %d"
+            % conv["same_slots_without_area_c"])
         say("  lists scene_msaa unties: %d; tile-bound packets as scene_tiling.h's on %d "
             "(%d packets)" % (conv["tiled"], conv["tile_bound_agree"], conv["tile_bound_packets"]))
         say("against the PM4 interpreter (runs: all agree / state before every draw, ops and draw "
@@ -305,8 +307,9 @@ def report(c, problems):
                r["vertex_constant_blobs"], r["pixel_constant_blobs"]))
         o = c["draws_without_vertex_shader"]
         say("draws that load no vertex shader: %d in %d lists (per group %s): one state register "
-            "written %d, that register VGT_INDX_OFFSET %d, no fetch constant %d, 32-bit indices %d, "
-            "first draw of its list %d, shader and vertex buffer carried from the draw before %d"
+            "written %d, that register VGT_INDX_OFFSET %d, no fetch constant %d, 32-bit indices "
+            "%d, first draw of its list %d, shader and vertex buffer carried from the draw before "
+            "%d"
             % (o["draws"], o["lists"], o["by_group"], o["one_state_register"],
                o["only_vgt_indx_offset"],
                o["no_fetch_constant"], o["32bit_indices"], o["first_draw_of_list"],

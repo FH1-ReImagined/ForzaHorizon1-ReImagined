@@ -9,6 +9,7 @@
 // words, PM4 words, records, entries, flags (1 the header's end marker is there, 2 the list's
 // trailer is), then the bytes as they are in the file: the 0xC8-byte header, the patch table,
 // area C, the PM4 without its trailer, the group's records and entries (two words each).
+#include <algorithm>
 #include <chrono>
 #include <cinttypes>
 #include <cstdint>
@@ -141,6 +142,9 @@ struct Stats {
   uint64_t tiled = 0, tile_bound_agree = 0, tile_bound_packets = 0;
   // Slots against the game's own lookup records.
   uint64_t record_places_checked = 0, record_places_agree = 0, slots_total = 0, slots_unnamed = 0;
+  // Lists whose slots are the same without the buffer fixups (area C): the patch table names
+  // every buffer too.
+  uint64_t slots_without_area_c = 0;
   // The two views against the interpreter: [as in the file / every place written][mode], tiled
   // words and untiled.
   Agreement agree[2][kModeCount], agree_untiled[2][kModeCount];
@@ -356,6 +360,14 @@ class Checker {
         if (!(entry & 0x40000000u)) break;
         i += length;
       }
+    }
+    ListIn bare = l;
+    bare.area_c.clear();
+    if (converter_.Convert(bare.input(), &other_) &&
+        other_[nl::kTSlotCount] == t_[nl::kTSlotCount] &&
+        std::equal(slots, slots + t_[nl::kTSlotCount] * nl::kSlotWords,
+                   other_.data() + other_[nl::kTSlots])) {
+      ++s.slots_without_area_c;
     }
     for (uint32_t i = 0; i < t_[nl::kTSlotCount]; ++i) {
       ++s.slots_total;
@@ -673,6 +685,7 @@ int main(int argc, char** argv) {
   j.Num("record_places_checked", s.record_places_checked);
   j.Num("record_places_agree", s.record_places_agree);
   j.Num("slots_no_record_names", s.slots_unnamed);
+  j.Num("same_slots_without_area_c", s.slots_without_area_c);
   j.Num("tiled", s.tiled);
   j.Num("tile_bound_agree", s.tile_bound_agree);
   j.Num("tile_bound_packets", s.tile_bound_packets);

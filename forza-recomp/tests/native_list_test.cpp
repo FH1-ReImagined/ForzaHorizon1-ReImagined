@@ -370,6 +370,57 @@ std::vector<uint32_t> Proven(const List& list) {
   return t;
 }
 
+// Whatever the converter takes must agree with the interpreter, not only the lists the game
+// has: `base` with a few words of its PM4 and its tables changed at random, over and over.
+// Returns how many of the changed lists converted.
+uint32_t Mutations(const List& base, uint32_t rounds, uint64_t seed) {
+  ref::Random random(seed);
+  ref::Harness harness;
+  std::vector<uint32_t> t;
+  uint32_t converted = 0;
+  for (uint32_t round = 0; round < rounds; ++round) {
+    List l = base;
+    for (uint32_t change = random.Next() % 3; change < 3; ++change) {
+      std::vector<uint32_t>& words = random.Next() % 4   ? l.pm4
+                                     : random.Next() % 2 ? l.table
+                                                         : l.area_c;
+      uint32_t& word = words[random.Next() % words.size()];
+      switch (random.Next() % 4) {
+        case 0:  // another word of the list: a plausible header or value
+          word = l.pm4[random.Next() % l.pm4.size()];
+          break;
+        case 1:  // the predicate bit, the one-register bit, a register next door
+          word ^= 1u << (random.Next() % 16);
+          break;
+        default:
+          word ^= 1u << (random.Next() % 32);
+          break;
+      }
+    }
+    Built b = l.Build();
+    if (!nl::Convert(b.input(), &t)) continue;
+    ++converted;
+    for (int fixed = 0; fixed < 2; ++fixed) {
+      if (fixed) ref::FixUp(t.data(), b.pm4.data(), &random);
+      CHECK(nl::LiveKey(t.data(), b.input()) == nl::TemplateKey(t.data()));
+      for (const Mode& mode : kModes) {
+        nl::Run run;
+        run.bin_select = mode.select;
+        run.bin_mask = mode.mask;
+        CHECK(harness.Check(t.data(), b.pm4.data(), uint32_t(l.pm4.size()), run).all());
+      }
+      if (!(t[nl::kTFlags] & nl::kTemplateTiled)) continue;
+      Built untiled = b;
+      ref::Untile(untiled.pm4.data(), uint32_t(l.pm4.size()));
+      CHECK(nl::LiveKey(t.data(), untiled.input()) == nl::TemplateKey(t.data()));
+      nl::Run flat;
+      flat.untiled = true;
+      CHECK(harness.Check(t.data(), untiled.pm4.data(), uint32_t(l.pm4.size()), flat).all());
+    }
+  }
+  return converted;
+}
+
 nl::Refuse Refused(
     const std::function<void(List&)>& change,
     const std::function<List()>& base = [] { return DepthList(); }) {
@@ -714,6 +765,16 @@ int main() {
   }
   CHECK(std::string_view(nl::RefuseName(R::kLiteralsPlace)) == "literals-place");
   CHECK(std::string_view(nl::RefuseName(R::kWindowMix)) == "window-mix");
+
+  // Changed lists: most are refused; the ones that convert agree like the rest.
+  {
+    const uint32_t rounds = 3000;
+    const uint32_t depth = Mutations(DepthList(true), rounds, 1);
+    const uint32_t small = Mutations(SmallTargetList(), rounds, 2);
+    const uint32_t scene = Mutations(SceneList(), rounds, 3);
+    CHECK(depth > rounds / 20 && small > rounds / 20 && scene > rounds / 20);
+    CHECK(depth < rounds && small < rounds && scene < rounds);
+  }
 
   // The key: four words of the stream's hash; the count is part of it.
   {
