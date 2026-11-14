@@ -121,6 +121,8 @@ class Fm4TracksCard(QWidget):
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        for column in range(1, len(self.COLUMNS)):      # sizes, dates and laps shown whole
+            self.table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeToContents)
         self.table.itemSelectionChanged.connect(self._buttons)
         self.table.setMaximumHeight(220)
         self.table.setSizeAdjustPolicy(QTableWidget.AdjustToContents)
