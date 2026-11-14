@@ -222,12 +222,35 @@ F&F marks its roads near its edge closed and empty, and traffic stood still wher
 procedural geometry and see F&F's docks as F&F's zone of the same cell does. The rest (lighting,
 races and arenas, map art) is FH2's; FH2's dock arenas' route files are byte for byte F&F's.
 
+**Breakable objects.** A zone's placement of a sign, lamp post or fence names a key in the
+world's `PhysicsDefinitions.bin` (TU4 `sub_82E00038` reads it; the fields are the FH2 prototype
+PDB's): a count and flat records (version 13; a definition is a record and its children, which
+share its name hash), a table of keys to definitions, and a key's layout model numbers. Each
+world numbers its keys for itself (FH2: 145 keys over 139 definitions; F&F: 157 over 153; 135
+definitions shared by name hash). With FH2's file alone F&F's zones took other objects'
+definitions, and its keys from 145 on none: the game stopped on a null definition in F&F's
+hills and towns (three of eight survey lines). The files are merged: FH2's definitions, F&F's
+18 of its own after them (157 definitions, 454 records), F&F's keys after FH2's (302) with
+their models numbered for the combined layout, and every F&F placement's key moved by 145.
+`SmashableObjectTypes.xml` is the longer of the two (F&F's is FH2's with one more type).
+
+**Linked instances.** An object with models for several distances is an instance for each,
+linked in a ring by a signed 16-bit offset in the layout's instance table (the PDB's
+`m_LODParentPVSModelInstanceOffset`; an offset longer than 16 bits is stored cut, and the
+target is the one of the three readings inside the table). Leaving instances out and
+numbering the rest again broke the links: the instances a kept one is linked to are kept with
+it (663 more for the docks, 2,200 for the whole area) and every link is written for the new
+numbers.
+
 **Checked** (the rig of the runs above, every run's frames looked at). Docks only: the dock road
 for 100 s, two more dock roads for 90 s each, FH2's coast road across the docks' edge for 150 s
 with traffic. The whole area: the same four, 2.4 km through Nice in 200 s, and F&F's eastern
 border crossed both ways with traffic. No fault, fall or missing surface; the docks draw as in
 F&F's own world (ground, striped tanks, containers), and the map shows the dock roads. FH2 combined with itself over 22 cells also runs (a check that the
-renumbering alone changes nothing).
+renumbering alone changes nothing). With the merged physics table and the links: eight
+lines over the whole area at speed (170 s each, 2 to 3 km: Nice, the coast, the hills, three of
+which stopped the game before), the docks and seam drives again, and two stretches side by side
+with F&F's own world (the same picture).
 
 **Textures.** 5,072 of F&F's 10,233 texture records are byte for byte one of FH2's under another
 id (files or bundled data, and the same record): those use FH2's record; the rest get records of

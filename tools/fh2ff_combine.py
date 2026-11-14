@@ -833,6 +833,167 @@ def combine_collision(colA, colB, a_files, b_take=()):
     return bytes(out), new, taken
 
 
+def link_target(instance, number, count):
+    """The number of the instance this one is linked to in a layout's table of `count`, or None.
+
+    An object with models for several distances is an instance for each, linked in a ring: the
+    near one to the far one (+2), each other to the one before it (-1); many instances link to
+    one far back in the table (a shared parent). In the FH2 prototype's PDB it is
+    PVS::CPVSModelInstance::m_LODParentPVSModelInstanceOffset, a signed 16-bit offset in the
+    table (tools/fm4_pvs.py reads it as "u16"); 38,000 of FH2's 51,182 instances have one. An
+    offset of more than 32,767 is stored without its high bits (FH2's own has 760 such): the
+    target is then the one 65,536 further back or on."""
+    v = instance["u16"]
+    if not v:
+        return None
+    v -= 0x10000 if v & 0x8000 else 0
+    for t in (number + v, number + v - 0x10000, number + v + 0x10000):
+        if 0 <= t < count:
+            return t
+    return None
+
+
+def close_links(used, table, add):
+    """Every instance a used one links to, and so on, added (add(number)): an instance left out
+    of the table would leave its partners linked to another object."""
+    todo = list(used)
+    while todo:
+        t = link_target(table[todo[-1]], todo.pop(), len(table))
+        if t is not None and t not in used:
+            add(t)
+            todo.append(t)
+
+
+def relinked(instance, number, new, count):
+    """The instance with its link for the table numbered again (new: {old number: new}; count:
+    the old table's length), stored as the games store it: its low 16 bits."""
+    t = link_target(instance, number, count)
+    if t is None:
+        return instance
+    return dict(instance, u16=(new[t] - new[number]) & 0xFFFF)
+
+
+NO_PHYSICS = 0xFFFFFFFF         # a placement's physics key when it has none
+PHYS_VERSION = 13               # PhysicsDefinitionVersion::Version14 of the FH2 prototype's PDB
+PHYS_HEAD = 0x95                # a record's fixed part, before its collision shapes
+PHYS_CHILDREN, PHYS_UNIQUE, PHYS_HASH = 0x70, 0x8C, 0x90
+PHYS_SHAPES = {0: 16, 1: 80}    # a sphere's and a box's bytes after the shape's 6-byte head
+
+
+def read_physics(d):
+    """A world's PhysicsDefinitions.bin as ([(name hash, [its records' bytes])] its definitions,
+    [key -> definition], [a key's model numbers]).
+
+    The breakable objects (signs, lamp posts, fences): a zone's placement of one names a key,
+    and the game makes the object from the key's definition as the car comes near. The file
+    (TU4 sub_82E00038; CPhysicsDefinitionList, CCollObjPhysicsDefinition and CCollisionShape in
+    the FH2 prototype's PDB, the fields' order from the labels the game's reader passes):
+    - a count of definitions, then their records one after another. A record: version (13),
+      type (0, a collidable object), 0x8D bytes of fixed fields (the number of child records
+      at +0x70, the record's number in the file at +0x8C, the object's name hash at +0x90, its
+      SmashableObjectTypes.xml type at +0x94), a count of collision shapes and the shapes (a
+      type, 2 bytes of flags; a sphere 16 bytes, a box 80, a convex hull its size and that
+      many). A definition is a record and its children (the object's parts), which follow it
+      with its name hash;
+    - a count of keys ("global indices") and a u16 definition number for each: two keys of one
+      definition are one object in two liveries;
+    - for each key, a layout model number for each child of its definition (one when it has
+      none)."""
+    try:
+        return _read_physics(d)
+    except struct.error:
+        raise ValueError("PhysicsDefinitions.bin: cut short") from None
+
+
+def _read_physics(d):
+    n = struct.unpack_from(">I", d, 0)[0]
+    p, defs = 4, []
+    while len(defs) < n or (defs and len(defs[-1][1]) <= struct.unpack_from(">I", defs[-1][1][0], PHYS_CHILDREN)[0]):
+        if p + PHYS_HEAD + 4 > len(d) or struct.unpack_from(">II", d, p) != (PHYS_VERSION, 0):
+            raise ValueError(f"PhysicsDefinitions.bin: no version {PHYS_VERSION} object record at {p:#x}")
+        q = p + PHYS_HEAD + 4
+        for _ in range(struct.unpack_from(">I", d, p + PHYS_HEAD)[0]):
+            kind = struct.unpack_from(">I", d, q)[0]
+            q += 6
+            if kind == 2:
+                q += 4 + struct.unpack_from(">I", d, q)[0]
+            elif kind in PHYS_SHAPES:
+                q += PHYS_SHAPES[kind]
+            else:
+                raise ValueError(f"PhysicsDefinitions.bin: a collision shape of type {kind} at {q - 6:#x}")
+        name = struct.unpack_from(">I", d, p + PHYS_HASH)[0]
+        if defs and len(defs[-1][1]) <= struct.unpack_from(">I", defs[-1][1][0], PHYS_CHILDREN)[0]:
+            if name != defs[-1][0]:
+                raise ValueError(f"PhysicsDefinitions.bin: a child record at {p:#x} with another name than its parent's")
+            defs[-1][1].append(d[p:q])
+        else:
+            defs.append((name, [d[p:q]]))
+        p = q
+    count = struct.unpack_from(">I", d, p)[0]
+    keys = list(struct.unpack_from(f">{count}H", d, p + 4))
+    p += 4 + 2 * count
+    if any(k >= n for k in keys):
+        raise ValueError("PhysicsDefinitions.bin: a key of a definition the file has not")
+    models = []
+    for k in keys:
+        parts = max(len(defs[k][1]) - 1, 1)
+        models.append(list(struct.unpack_from(f">{parts}I", d, p)))
+        p += 4 * parts
+    if p != len(d):
+        raise ValueError(f"PhysicsDefinitions.bin: read {p} of {len(d)} bytes")
+    return defs, keys, models
+
+
+def write_physics(defs, keys, models):
+    """read_physics's parts as the file, the records numbered again in their order."""
+    out, number = [struct.pack(">I", len(defs))], 0
+    for _, records in defs:
+        for r in records:
+            out.append(r[:PHYS_UNIQUE] + struct.pack(">I", number) + r[PHYS_UNIQUE + 4:])
+            number += 1
+    out.append(struct.pack(f">I{len(keys)}H", len(keys), *keys))
+    out += [struct.pack(f">{len(m)}I", *m) for m in models]
+    return b"".join(out)
+
+
+def merge_physics(da, db, model_shift):
+    """The base world's PhysicsDefinitions.bin with the added world's keys after its own:
+    (the file, the number an added world's key moves by). Each world numbers its keys for
+    itself (FH2 has 145, F&F 157, in another order), so with the base's file alone an added
+    zone's object took another object's definition, or one past the end, and the game stopped
+    on it. An added key keeps its own models (moved by model_shift) and takes the base's
+    definition of its object (the same name hash and as many parts), or its own, put after the
+    base's: F&F has 18 that FH2 has not. The game takes the records from a pool of a fixed size
+    (both files whole were too many: it stopped reading them), so no definition is in twice."""
+    defs_a, keys_a, models_a = read_physics(da)
+    defs_b, keys_b, models_b = read_physics(db)
+    defs = list(defs_a)
+    at = {name: k for k, (name, _) in enumerate(defs_a)}
+    place = []
+    for name, records in defs_b:
+        if name in at and len(defs_a[at[name]][1]) == len(records):
+            place.append(at[name])
+        else:
+            place.append(len(defs))
+            defs.append((name, records))
+    keys = keys_a + [place[k] for k in keys_b]
+    if len(keys) >= 0xFFFF:
+        raise ValueError("more physics keys than 16 bits number")
+    models = models_a + [[m + model_shift for m in ms] for ms in models_b]
+    return write_physics(defs, keys, models), len(keys_a)
+
+
+def merge_smashable_types(xml_a, xml_b):
+    """SmashableObjectTypes.xml: a physics record names its type by its place in the list, so the
+    longer list must start with the shorter one (F&F's is FH2's with one more). Returns the
+    longer."""
+    types = [re.findall(r'<Object\s+type="([^"]*)"', x) for x in (xml_a, xml_b)]
+    short, long_ = sorted(types, key=len)
+    if long_[:len(short)] != short:
+        raise ValueError("the two worlds' SmashableObjectTypes.xml list their types in another order")
+    return xml_a if types[0] is long_ else xml_b
+
+
 def find_ci(root, *parts):
     """root/parts with each part found whatever its case (the games' folders are named in
     several: Media, media); None when one is missing."""
@@ -944,6 +1105,20 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
     PA, PB = A.P, B.P
     rbA, rbB = os.path.join(C.roots[0], "Ribbon_00"), os.path.join(C.roots[1], "Ribbon_00")
     bz = {zone_uid(info): c for info, c in B.zones()}            # FH2's zones, read once
+    # the breakable objects: the added world's keys after the base's, in one file
+    physics, key_shift = None, 0
+    phys = [find_ci(r, "PhysicsDefinitions.bin") for r in C.roots]
+    if all(phys) and "nophys" not in TESTS:
+        with open(phys[0], "rb") as fa, open(phys[1], "rb") as fb:
+            physics, key_shift = merge_physics(fa.read(), fb.read(), 0 if TESTS & {"aall", "amodels"} else C.NM)
+    elif any(phys):
+        raise ValueError("only one of the two worlds has a PhysicsDefinitions.bin")
+
+    def b_placement(e):
+        """An added zone's placement with its physics key in the combined file."""
+        if not key_shift or not e["extra"] or e["extra"][0] == NO_PHYSICS:
+            return e
+        return dict(e, extra=(e["extra"][0] + key_shift,) + tuple(e["extra"][1:]))
     az_cell = {uid: cell for cell, uid in C.hexA.items()}
     a_files = {int(n.split(".")[0]) for n in A.names if re.fullmatch(r"\d+\.fiz", n.lower())}
     b_take = set()                 # the collision records the region's zones name
@@ -1299,6 +1474,10 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
     # used ones fit, F&F's stays as it is; else only those F&F's zones use are kept (26,482 of
     # its 46,625), renumbered, and its Models files (procedural geometry naming instances by
     # number) with them.
+    # (the instances the kept ones are linked to stay with them: close_links)
+    before = len(b_used)
+    close_links(b_used, PB["instances"], use_instance)
+    linked = len(b_used) - before
     if len(PA["instances"]) + len(b_used) <= 0xFFFF:
         a_used = set(range(len(PA["instances"])))
     else:
@@ -1306,6 +1485,7 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
         for uid, c in az.items():
             if uid not in retired:
                 a_used.update(v & 0x7FFFFFFF for v in c["instances"])
+        close_links(a_used, PA["instances"], a_used.add)
     a_inst = {v: k for k, v in enumerate(sorted(a_used))}
     a_whole = len(a_inst) == len(PA["instances"])
     b_inst = {v: len(a_inst) + k for k, v in enumerate(sorted(b_used))}
@@ -1315,7 +1495,8 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
         b_inst, ZM, ztex = dict(a_inst), 0, (lambda t: t)
     if len(a_inst) + len(b_used) > 0xFFFF:
         raise ValueError(f"{len(a_inst) + len(b_used)} instances: FH1 takes 65,535")
-    report = {"base instances in the region left out of zones round it": 0,
+    report = {"added instances kept for the ones linked to them": linked,
+              "base instances in the region left out of zones round it": 0,
               "region instances joining zones round it": 0, "base procedural geometry entries left out": 0}
 
     # the zones a zone names (its own and its neighbours', type 1, with their soundscapes, type 4;
@@ -1376,7 +1557,7 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
             report["region instances joining zones round it"] += len(ks)
             out["instances"] += [(bc["instances"][k] & 0x80000000) | b_inst[bc["instances"][k] & 0x7FFFFFFF] for k in ks]
             out["drawn"] += [bc["drawn"][k] for k in ks]
-            out["placements"] += [bc["placements"][k] for k in ks]
+            out["placements"] += [b_placement(bc["placements"][k]) for k in ks]
             models, textures = list(out["models"]), list(out["textures"])
             have_m, have_t = set(models), set(textures)
             for k in ks:
@@ -1399,7 +1580,7 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
         keep = [k for k, v in enumerate(c["instances"]) if (v & 0x7FFFFFFF) not in drop_b]
         out["instances"] = [(c["instances"][k] & 0x80000000) | b_inst[c["instances"][k] & 0x7FFFFFFF] for k in keep]
         out["drawn"] = [c["drawn"][k] for k in keep]
-        out["placements"] = [c["placements"][k] for k in keep]
+        out["placements"] = [b_placement(c["placements"][k]) for k in keep]
         out["models"] = [m + ZM for m in c["models"]]
         out["textures"] = [ztex(t) for t in c["textures"]]
         out["files"] = [r for r in (b_record(f) for f in c["files"]) if r]
@@ -1430,9 +1611,10 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
     for key in ("cells", "always", "dynamic", "models_a", "models_b"):
         if PB[key] or (PA[key] and not a_whole):   # they name instances and models by number
             raise ValueError(f"the layout's {key} list is not empty: not renumbered here")
-    instances = [PA["instances"][v] for v in sorted(a_used)]
+    instances = [relinked(PA["instances"][v], v, a_inst, len(PA["instances"])) for v in sorted(a_used)]
+    b_order = {v: k for k, v in enumerate(sorted(b_used))}
     for v in sorted(b_used):
-        i = PB["instances"][v]
+        i = relinked(PB["instances"][v], v, b_order, len(PB["instances"]))
         j = dict(i, model=i["model"] + C.NM)
         if i["u8"] != 0xFFFFFFFF:
             j["idx"] = C.tex(i["idx"])      # the instance's own lightmap record
@@ -1554,6 +1736,19 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
         p = os.path.join(C.roots[0], f)
         if os.path.isfile(p) and f.lower() not in ("bin.zip", "pvszonespeeds.dat"):
             shutil.copyfile(p, os.path.join(out_root, f))
+    if physics is not None:
+        with open(os.path.join(out_root, os.path.basename(phys[0])), "wb") as f:
+            f.write(physics)
+        merged = read_physics(physics)
+        report["physics"] = (f"{len(merged[0])} definitions of {sum(len(r) for _, r in merged[0])} records, "
+                             f"{len(merged[1])} keys (the added world's from {key_shift})")
+    smash = [find_ci(r, "SmashableObjectTypes.xml") for r in C.roots]
+    if all(smash):
+        with open(smash[0], encoding="utf-8-sig", errors="replace") as fa, \
+                open(smash[1], encoding="utf-8-sig", errors="replace") as fb:
+            types = merge_smashable_types(fa.read(), fb.read())
+        with open(os.path.join(out_root, os.path.basename(smash[0])), "w", encoding="utf-8", newline="") as f:
+            f.write(types)
     # the road network: F&F's, with FH2's roads in the region
     with open(os.path.join(C.roots[0], f"{NAME}.nav"), "rb") as f:
         net_a = fm4_routes.read_nav(f.read())

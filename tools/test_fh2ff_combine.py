@@ -442,6 +442,95 @@ class Region(unittest.TestCase):
         self.assertEqual(fc.placed_at(P, 1, dynamic), (-3430.0, -6196.0, 1.0))
 
 
+class InstanceLinks(unittest.TestCase):
+    def test_linked_instances_stay_together_and_linked(self):
+        inst = lambda link: {"u16": link & 0xFFFF, "model": 0}
+        # 0: alone; 1, 2, 3: a ring (near -> far, far -> middle, middle -> near); 4: alone;
+        # 5, 6: a pair; 7: linked back to 0
+        table = [inst(0), inst(2), inst(-1), inst(-1), inst(0), inst(1), inst(-1), inst(-7)]
+        self.assertEqual([fc.link_target(i, k, 8) for k, i in enumerate(table)], [None, 3, 1, 2, None, 6, 5, 0])
+        used = {1, 7}
+        fc.close_links(used, table, used.add)
+        self.assertEqual(used, {0, 1, 2, 3, 7})                    # the ring's others, and 7's partner
+        new = {v: k for k, v in enumerate(sorted(used))}           # 4, 5 and 6 are left out
+        out = [fc.relinked(table[v], v, new, 8) for v in sorted(used)]
+        self.assertEqual([fc.link_target(i, k, 5) for k, i in enumerate(out)], [None, 3, 1, 2, 0])   # 7 is the fifth now
+        self.assertIs(fc.relinked(table[0], 0, new, 8), table[0])
+
+    def test_a_link_longer_than_16_bits(self):
+        # 40,000 back is stored as 25,536 on: the target is the one in the table
+        far = {"u16": (-40000) & 0xFFFF}
+        self.assertEqual(fc.link_target(far, 40005, 50000), 5)
+        self.assertIsNone(fc.link_target({"u16": 30000}, 100, 200))               # nowhere: left as it is
+        out = fc.relinked(far, 40005, {5: 2, 40005: 39000}, 50000)
+        self.assertEqual(out["u16"], (2 - 39000) & 0xFFFF)
+        self.assertEqual(fc.link_target(out, 39000, 45000), 2)
+
+
+def phys_record(name, children=0, shapes=((0, 16),), fill=1):
+    """A PhysicsDefinitions.bin record: its name hash, its child count, its shapes as (type, the
+    bytes after the shape's head; a convex hull's are its size and that many)."""
+    head = bytearray([fill]) * fc.PHYS_HEAD
+    struct.pack_into(">II", head, 0, 13, 0)
+    struct.pack_into(">I", head, fc.PHYS_CHILDREN, children)
+    struct.pack_into(">II", head, fc.PHYS_UNIQUE, 999, name)
+    body = b"".join(struct.pack(">IH", kind, 3) + (struct.pack(">I", size) if kind == 2 else b"") + bytes([kind + 7]) * size
+                    for kind, size in shapes)
+    return bytes(head) + struct.pack(">I", len(shapes)) + body
+
+
+def phys_file(defs, keys, models):
+    return (struct.pack(">I", len(defs)) + b"".join(b"".join(d) for d in defs)
+            + struct.pack(f">I{len(keys)}H", len(keys), *keys) + b"".join(struct.pack(f">{len(m)}I", *m) for m in models))
+
+
+class Physics(unittest.TestCase):
+    def setUp(self):
+        sign = [phys_record(0xAAAA, 2), phys_record(0xAAAA, shapes=((1, 80),)), phys_record(0xAAAA, shapes=((2, 9), (0, 16)))]
+        lamp = [phys_record(0xBBBB)]
+        cone = [phys_record(0xCCCC, fill=2)]
+        self.a = phys_file([sign, lamp], [0, 1, 1], [[10, 11], [12], [13]])            # the lamp in two liveries
+        # the added world: the lamp, a fence FH2 has not, and the sign with one part more
+        fence = [phys_record(0xDDDD, 1), phys_record(0xDDDD)]
+        sign3 = sign[:2] + [phys_record(0xAAAA), phys_record(0xAAAA)]
+        sign3[0] = phys_record(0xAAAA, 3)
+        self.b = phys_file([lamp, fence, sign3, cone], [3, 0, 1, 2], [[1], [2], [3], [4, 5, 6]])
+
+    def test_the_file_is_read_and_written_whole(self):
+        defs, keys, models = fc.read_physics(self.a)
+        self.assertEqual([(name, len(r)) for name, r in defs], [(0xAAAA, 3), (0xBBBB, 1)])
+        self.assertEqual((keys, models), ([0, 1, 1], [[10, 11], [12], [13]]))
+        out = fc.write_physics(defs, keys, models)
+        self.assertEqual(len(out), len(self.a))
+        self.assertEqual(fc.read_physics(out)[1:], (keys, models))
+        numbers = [struct.unpack_from(">I", r, fc.PHYS_UNIQUE)[0] for _, rs in fc.read_physics(out)[0] for r in rs]
+        self.assertEqual(numbers, [0, 1, 2, 3])                                          # numbered in their order
+        for bad, what in ((self.a[:-4], "cut short"), (self.a.replace(struct.pack(">IH", 1, 3), struct.pack(">IH", 5, 3)), "type 5")):
+            with self.assertRaisesRegex(ValueError, what):
+                fc.read_physics(bad)
+        with self.assertRaisesRegex(ValueError, "no version 13"):
+            fc.read_physics(self.a[:8] + b"\0\0\0\x0c" + self.a[12:])
+
+    def test_the_added_worlds_keys_go_after_the_bases(self):
+        merged, shift = fc.merge_physics(self.a, self.b, 1000)
+        self.assertEqual(shift, 3)                                    # an added key k is key 3 + k
+        defs, keys, models = fc.read_physics(merged)
+        # the lamp is the base's; the fence, the longer sign and the cone are put after
+        self.assertEqual([(name, len(r)) for name, r in defs], [(0xAAAA, 3), (0xBBBB, 1), (0xDDDD, 2), (0xAAAA, 4), (0xCCCC, 1)])
+        self.assertEqual(keys, [0, 1, 1, 4, 1, 2, 3])
+        self.assertEqual(models, [[10, 11], [12], [13], [1001], [1002], [1003], [1004, 1005, 1006]])
+        numbers = [struct.unpack_from(">I", r, fc.PHYS_UNIQUE)[0] for _, rs in defs for r in rs]
+        self.assertEqual(numbers, list(range(11)))
+
+    def test_smashable_types_keep_their_places(self):
+        a = '<SmashableObjectTypes>\n <Object type="Fence" />\n <Object type="Flyer" />\n</SmashableObjectTypes>\n'
+        b = a.replace("</Smash", ' <Object type="Derby" />\n</Smash')
+        self.assertEqual(fc.merge_smashable_types(a, b), b)
+        self.assertEqual(fc.merge_smashable_types(b, a), b)
+        with self.assertRaises(ValueError):
+            fc.merge_smashable_types(a, a.replace("Fence", "Gate"))
+
+
 class Output(unittest.TestCase):
     def test_inputs_are_found_whatever_their_case(self):
         with tempfile.TemporaryDirectory() as d:
