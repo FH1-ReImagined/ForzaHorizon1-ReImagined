@@ -125,8 +125,9 @@ Not yet:
 - **Shadows of the circuit's own buildings and trees.** Your car's shadow is drawn on the
   circuit with the Vulkan renderer (with ReGPU, the D3D12 renderer, circuits have no shadows
   yet). A circuit imported with an earlier launcher has none: import it again.
-- **A route to follow.** The map shows the circuit's road and your car, with Colorado's
-  pins on it, and no background. There is no driving line and no GPS route round the lap yet.
+- **A driving line.** The map shows the circuit's road and your car, with Colorado's
+  pins on it, and no background. There is no driving line on the road; the game's GPS can lead
+  round the lap instead, if you turn it on ([a route to follow](#a-route-to-follow-optional)).
 - **1000 Club challenges.** They use Colorado's roads and locations. Play in Colorado to run them.
 - **Online play** on a circuit.
 
