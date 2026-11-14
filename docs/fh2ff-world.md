@@ -156,14 +156,13 @@ wrong picture:
   cameras, reward boards, barn doors) have the flag or a physics key and stay.
   `FH2FF_MARKERS=keep` draws them (a test).
 - **What FH2 does not show.** FH2's instance flags (the prototype PDB's `PVS::ESubsetMask`) mark
-  objects as shadow only (bit 23: simplified shapes that just cast shadows) and cube map only
-  (bit 24: stand-ins for reflections). They are whole-world models placed at the origin and
-  listed in about a tenth of the zones each (F&F: 50 and 76 instances; 7,865 zone placements).
-  FH1 reads the bits as other things (Colorado never sets bit 23, and sets
+  objects as hidden (bit 0), shadow only (bit 23: simplified shapes that just cast shadows) and
+  cube map only (bit 24: stand-ins for reflections). They are whole-world models placed at the
+  origin and listed in about a tenth of the zones each (F&F: 239, 50 and 76 instances; 127,102
+  zone placements). FH1 reads the bits as other things (Colorado never sets bit 23, and sets
   bit 24 on its roads) and drew them over the world: the road black for a stretch after a
   motorway overpass, black walls in the coast towns, black guard rails. They are left out of the
-  zones; `FH2FF_UNSHOWN=keep` draws them (a test). The flag "hidden" (bit 0) is another matter:
-  its 239 instances are the roadside trees, fences and shrubs, and stay.
+  zones; `FH2FF_UNSHOWN=keep` draws them (a test).
 
 F&F's free-roam resets (the "hand of god" when leaving its area) are not in its data: no
 surface is a reset trigger, and the HandOfGodReset values are the races' off-track ones. With
