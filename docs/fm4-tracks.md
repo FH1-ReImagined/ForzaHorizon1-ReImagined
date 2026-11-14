@@ -92,6 +92,11 @@ Works:
 - All 24 circuits of Disc 1 convert and load. Suzuka is the most tested one.
 - The road's painted lines and edges and the rubber on it (FM4 draws them over the road, as
   decals). A circuit imported with an earlier launcher has none: import it again.
+- The road as FM4 built it under the wheels: its gradients, its banking and each stretch's
+  own surface. A circuit imported with an earlier launcher rides on its bump stops wherever
+  the road climbs and lets its wheels hang wherever it falls, which shakes the car on smooth
+  tarmac, and has some stretches rougher than they are (Le Mans's Mulsanne and its
+  chicanes' run-off): import it again.
 
 Not yet:
 
@@ -136,8 +141,9 @@ Where the files are, in the game's data folder (`%LOCALAPPDATA%\ForzaReImagined`
 ## How it works
 
 The launcher runs the converter (`tools/fm4_track_mod.py`, then `tools/fm4_pvs.py`) on each
-circuit: the track's files and layout in FH1's formats, its collision, its shaders adapted to
-FH1's, and the database rows that make free roam load it. `tools/fm4_timing.py` takes the lap's
+circuit: the track's files and layout in FH1's formats, its collision (with FM4's own road
+normals and each surface under FH1's number for it), its shaders adapted to FH1's, and the
+database rows that make free roam load it. `tools/fm4_timing.py` takes the lap's
 line and sectors from FM4's AI line and database, and `tools/fm4_routes.py` builds the circuit's
 road network (what the minimap draws) and a race route from the same line. A start on a circuit
 passes the game

@@ -25,9 +25,9 @@ LAT_ACC = 5.0
 DECEL = 4.0
 CLEARANCE = 3.5
 # Surfaces the line may use and what a metre on them costs: asphalt (0) first, then the
-# second and slow asphalt (5, 26) and kerbs (6), the pit lane (20, walled off the
-# start-finish straight) last.
-ROAD = {0: 1.0, 5: 1.5, 26: 1.5, 6: 2.0, 20: 4.0}
+# second and slow asphalt (5; 36, and 26 in a collision converted before #876) and kerbs (6),
+# the pit lane (20, walled off the start-finish straight) last.
+ROAD = {0: 1.0, 5: 1.5, 36: 1.5, 26: 1.5, 6: 2.0, 20: 4.0}
 
 
 WALLS = []  # (x1, z1, x2, z2, y low, y high) of the walls' triangles, seen from above
