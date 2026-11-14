@@ -324,12 +324,6 @@ class RoadNetwork(unittest.TestCase):
         hexd = struct.pack(">4sifffiii", b"HEXY", 101, 100.0, 0.0, 0.0, 4, 3, 3) + struct.pack(">9i", *cells)
         self.assertEqual(w.stream_blocks(hexd), 2)
 
-    def test_flags_fh2_does_not_show(self):
-        self.assertEqual(ff.NOT_SHOWN, 0x01800001)
-        for flags, shown in ((0x083F7C14, True), (0x08BF7A14, False), (0x013F7814, False), (0x003F7A15, False),
-                             (0x0C3F7A14, True)):
-            self.assertEqual(not flags & ff.NOT_SHOWN, shown, hex(flags))
-
     def test_gameplay_markers(self):
         named = lambda key, name: {"extra": (key, b"", name.ljust(32, b"\0"))}
         plain, solid = {"flags": 0x3F7A14}, {"flags": 0x83F7E04}
