@@ -439,6 +439,10 @@ class World:
         keep = [k for k, v in enumerate(c["instances"])
                 if inst[v & 0x7FFFFFFF]["model"] in self.model_entry and (v & 0x7FFFFFFF) not in self.drop]
         self.report["instances taken out (no model file, or a closure)"] += len(c["instances"]) - len(keep)
+        if os.environ.get("FH2FF_MARKERS") != "keep":       # a test: the markers drawn
+            shown = [k for k in keep if not is_marker(c["placements"][k], inst[c["instances"][k] & 0x7FFFFFFF])]
+            self.report["gameplay markers left out of the zones"] += len(keep) - len(shown)
+            keep = shown
         out = dict(c)
         out["instances"] = [c["instances"][k] for k in keep]
         out["drawn"] = [c["drawn"][k] for k in keep]
@@ -720,6 +724,22 @@ def ai_lines(zip_path, route_ids, out_dir):
                 f.write(fm4_routes.owt(pts, looped))
             counts["looped" if looped else "point to point"] += 1
     return dict(counts)
+
+
+NO_PHYSICS = 0xFFFFFFFF      # a placement's physics key when it has none
+CASTS_SHADOW = 0x08000000    # an instance's flag (the FH2 prototype's SubsetMask_CastCSMShadows): a named thing has it
+
+
+def is_marker(placement, instance):
+    """A gameplay marker: a placement the game shows or hides by its name (GameObjs.xml's
+    GameplayID, in the placement's last 32 bytes) that is no thing of the world. Both games
+    place their event starts (e465), bucket list spots (bl05), festival sites, town gates and
+    F&F's free-roam resets (freeroam_reset_09_left) as instances of a few plain shapes, with no
+    physics key and without the shadow-casting flag the named things (speed cameras, barn doors, reward
+    boards) have. FH1 has none of those names and drew them all, always: pink boxes, discs on
+    poles and tubes across the roads."""
+    extra = placement["extra"]
+    return bool(extra and extra[0] == NO_PHYSICS and extra[2].strip(b"\0") and not instance["flags"] & CASTS_SHADOW)
 
 
 STREAM_CAP = 65536   # the game's cap on streaming blocks (hooks/fm4_track.cpp kMaxBlocks)

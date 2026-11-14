@@ -324,6 +324,16 @@ class RoadNetwork(unittest.TestCase):
         hexd = struct.pack(">4sifffiii", b"HEXY", 101, 100.0, 0.0, 0.0, 4, 3, 3) + struct.pack(">9i", *cells)
         self.assertEqual(w.stream_blocks(hexd), 2)
 
+    def test_gameplay_markers(self):
+        named = lambda key, name: {"extra": (key, b"", name.ljust(32, b"\0"))}
+        plain, solid = {"flags": 0x3F7A14}, {"flags": 0x83F7E04}
+        self.assertTrue(ff.is_marker(named(ff.NO_PHYSICS, b"freeroam_reset_09_left"), plain))
+        self.assertTrue(ff.is_marker(named(ff.NO_PHYSICS, b"e465"), plain))
+        self.assertFalse(ff.is_marker(named(ff.NO_PHYSICS, b"barn_find_56"), solid))     # a thing: its flag
+        self.assertFalse(ff.is_marker(named(12, b"speedcamera_3"), plain))              # a thing: its physics
+        self.assertFalse(ff.is_marker(named(ff.NO_PHYSICS, b""), plain))                # no name
+        self.assertFalse(ff.is_marker({"extra": None}, plain))
+
     def test_keep_right(self):
         line = ff.keep_right([(0, 1, 0), (10, 1, 0)], 2.0)
         self.assertEqual(line, [(0.0, 1, -2.0), (10.0, 1, -2.0)])  # heading +x: right is -z
