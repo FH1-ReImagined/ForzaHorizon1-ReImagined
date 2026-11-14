@@ -262,7 +262,8 @@ def _into(base, rel):
 def add_routes(out, track, ribbon, ai_dir, fh1_disc):
     """The circuit's road network (<track>.nav, with Colorado's two small headers beside it as
     the circuit's) and its race route, from the AI line of the circuit's layout
-    (tools/fm4_routes.py; its other layouts' own roads are left out, see there).
+    (tools/fm4_routes.py; its other layouts' own roads are left out, see there), and the
+    map profiles that draw that road in its driven colour (media/ui, fm4_routes.map_profiles).
     All of them or none, and never an error: the step is optional, so whatever goes wrong in
     it (no AI line, a line or a network that is not what it should be, a build without
     tools/fm4_routes.py, a disk that fills) the circuit keeps the files it had and the import
@@ -284,6 +285,9 @@ def add_routes(out, track, ribbon, ai_dir, fh1_disc):
         files = fm4_routes.build(track, geo, os.path.join(colorado, "colorado.nav"))
         with open(os.path.join(colorado, "colorado.oww"), "rb") as f:
             files[f"tracks/{key}/{key}.oww"] = f.read()
+        # FH1's two map profiles with the roads in their driven colour (a road not driven yet
+        # is a grey the minimap loses on a circuit's tarmac): files of the circuit's mod
+        files.update(fm4_routes.map_profiles(_into(os.path.join(fh1_disc, "media"), "ui")))
         lap = fm4_routes.length(fm4_routes.ai_line(geo)) if any(n.endswith(".owt") for n in files) else None
         net = fm4_routes.read_nav(files[f"tracks/{key}/{key}.nav"])
         stage = tempfile.mkdtemp(prefix="fm4routes-", dir=os.path.dirname(os.path.abspath(out)))
