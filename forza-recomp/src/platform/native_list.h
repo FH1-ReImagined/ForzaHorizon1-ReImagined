@@ -429,16 +429,17 @@ inline Key LiveKey(const uint32_t* t, const Input& in) {
   return h.Finish();
 }
 
-// Whether a list recorded for the tiles is untiled now: its word 4, the first tile's window
-// write, is a NOP exactly while its tile-bound packets are.
+// Whether the template's list is untiled now: word 4 of a list recorded for the tiles, the
+// first tile's window write, is a NOP exactly while its tile-bound packets are.
 inline bool Untiled(const uint32_t* t, const uint8_t* pm4) {
   if (!(t[kTFlags] & kTemplateTiled)) return false;
   const uint32_t w = Word(pm4, 4);
   return w >> 30 == 3 && ((w >> 8) & 0x7F) == scene_tiling::kPm4Nop;
 }
 
-// The template's pool with every slot read from the live list (host order): `pool` has
-// t[kTPoolWords] words. To be done again when a fixup has touched the list.
+// The template's pool with every slot read from the live list (host order): `pm4` is the
+// template's list, t[kTListWords] words, and `pool` has t[kTPoolWords] words. To be done again
+// when a fixup has touched the list.
 inline void Resolve(const uint32_t* t, const uint8_t* pm4, uint32_t* pool) {
   if (t[kTPoolWords]) std::memcpy(pool, t + t[kTPool], t[kTPoolWords] * sizeof(uint32_t));
   const uint32_t* slot = t + t[kTSlots];
