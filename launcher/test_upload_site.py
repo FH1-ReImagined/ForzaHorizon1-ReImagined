@@ -153,7 +153,7 @@ class ModAndLaunch(unittest.TestCase):
         self.assertEqual(self.mods_arg(), ".reimagined-upload-site|Mine")
         stringtables = self.built / "media" / "stringtables"
         # only the tables that change, and only carflow.str (the LOC placeholder has nothing to change)
-        self.assertEqual(sorted(str(p.relative_to(stringtables)) for p in stringtables.rglob("*") if p.is_file()),
+        self.assertEqual(sorted(p.relative_to(stringtables).as_posix() for p in stringtables.rglob("*") if p.is_file()),
                          ["de/carflow.str", "en/carflow.str"])
         self.assertEqual(self.table("en")["IDS_Photo_BigShot_Msg"],
                          "This photo will be automatically uploaded to forza.dyotson.dev where you can "
@@ -177,23 +177,28 @@ class ModAndLaunch(unittest.TestCase):
     def test_built_once_and_again_when_the_game_tables_change(self):
         self.args()
         marker = self.built / upload_site.MARKER
-        os.utime(marker, ns=(1, 1))
+
+        def aged():
+            """The marker's time after setting it to a day in 2001: a rebuild writes a new marker."""
+            os.utime(marker, (10**9, 10**9))
+            return marker.stat().st_mtime_ns
+        old = aged()
         with mock.patch.object(upload_site, "rewrite", side_effect=AssertionError("rebuilt")):
             self.assertEqual(self.mods_arg(), ".reimagined-upload-site")
-        self.assertEqual(marker.stat().st_mtime_ns, 1)
+        self.assertEqual(marker.stat().st_mtime_ns, old)
         self.assertEqual(self.logged, [])
         # another table of the game (another title update, another language): rebuilt
         with zipfile.ZipFile(self.tables / "JP.zip", "w") as z:
             z.writestr("CarFlow.str", lsb2(JP))
         self.assertEqual(self.mods_arg(), ".reimagined-upload-site")
-        self.assertNotEqual(marker.stat().st_mtime_ns, 1)
+        self.assertNotEqual(marker.stat().st_mtime_ns, old)
         self.assertIn("forza.dyotson.dev", self.table("jp")["IDS_Photo_BigShot_Msg"])
         # and when the entries or the site change
-        os.utime(marker, ns=(1, 1))
+        old = aged()
         with mock.patch.object(upload_site, "SITE", "photos.example"):
             self.args()
             self.assertIn("uploaded to photos.example where", self.table("en")["IDS_Photo_BigShot_Msg"])
-        self.assertNotEqual(marker.stat().st_mtime_ns, 1)
+        self.assertNotEqual(marker.stat().st_mtime_ns, old)
 
     def test_the_title_updates_table_before_the_discs(self):
         update = Path(self.tmp.name) / "rt" / "update"
