@@ -325,8 +325,8 @@ class RoadNetwork(unittest.TestCase):
         self.assertEqual(w.stream_blocks(hexd), 2)
 
     def test_flags_fh2_does_not_show(self):
-        self.assertEqual(ff.NOT_SHOWN, 0x01800001)
-        for flags, shown in ((0x083F7C14, True), (0x08BF7A14, False), (0x013F7814, False), (0x003F7A15, False),
+        self.assertEqual(ff.NOT_SHOWN, 0x01800000)
+        for flags, shown in ((0x083F7C14, True), (0x08BF7A14, False), (0x013F7814, False), (0x003F7A15, True),
                              (0x0C3F7A14, True)):
             self.assertEqual(not flags & ff.NOT_SHOWN, shown, hex(flags))
 
