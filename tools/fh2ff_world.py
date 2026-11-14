@@ -439,10 +439,6 @@ class World:
         keep = [k for k, v in enumerate(c["instances"])
                 if inst[v & 0x7FFFFFFF]["model"] in self.model_entry and (v & 0x7FFFFFFF) not in self.drop]
         self.report["instances taken out (no model file, or a closure)"] += len(c["instances"]) - len(keep)
-        if os.environ.get("FH2FF_UNSHOWN") != "keep":       # a test: FH2's stand-ins drawn
-            left = [k for k in keep if not inst[c["instances"][k] & 0x7FFFFFFF]["flags"] & NOT_SHOWN]
-            self.report["instances FH2 does not show (shadow or cube map only) left out"] += len(keep) - len(left)
-            keep = left
         if os.environ.get("FH2FF_MARKERS") != "keep":       # a test: the markers drawn
             shown = [k for k in keep if not is_marker(c["placements"][k], inst[c["instances"][k] & 0x7FFFFFFF])]
             self.report["gameplay markers left out of the zones"] += len(keep) - len(shown)
@@ -732,16 +728,6 @@ def ai_lines(zip_path, route_ids, out_dir):
 
 NO_PHYSICS = 0xFFFFFFFF      # a placement's physics key when it has none
 CASTS_SHADOW = 0x08000000    # an instance's flag (the FH2 prototype's SubsetMask_CastCSMShadows): a named thing has it
-
-
-# Instance flags (the FH2 prototype PDB's PVS::ESubsetMask) of what FH2 never draws in the main
-# view: the simplified shapes that only cast shadows (bit 23) and the ones only its cube maps
-# (reflections) see (bit 24). They are whole-world models placed at the origin, in about a tenth
-# of the zones each (F&F: 50 shadow only, 76 cube map only). FH1 reads these bits as other
-# things (Colorado never sets bit 23 and sets bit 24 on its roads) and drew them: a black road
-# after an overpass, black walls and guard rails. Hidden (bit 0) is not among them: those 239
-# are the roadside trees, fences and shrubs, which went when they were left out.
-NOT_SHOWN = 0x00800000 | 0x01000000
 
 
 def is_marker(placement, instance):
