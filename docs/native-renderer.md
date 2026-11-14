@@ -573,6 +573,141 @@ group emulated (decided by the game, before anything is skipped).
 4. **The top and left edges at render scale 2** (above), and the two dispatches fused.
 5. **The GTX 1650 Ti laptop:** the measurements above are this PC's only.
 
+### M4: the model lists (first step: the converter and its offline proof)
+
+A track's models do not draw through DrawIndexedVertices. Each carries, per pass group (pass x 3 +
+layer), one **precompiled D3D command buffer** that RunCommandBuffer runs. The lists "with
+SET_CONSTANT" of the table at the top are the scene pass's (23.4% of the dwords the command
+processor read in the race **[M]**); the lists of the depth pre-pass, the shadow maps and the two
+256x256 passes are part of the class without it (25.3%), whose split between model lists and the
+command buffers D3D records at run time no trace has made yet. M4 starts by converting these lists;
+this first step is the converter alone, proven on the game's files. **Nothing runs in the game
+yet:** no hook, no switch, no change for a player.
+
+**What a list is [M, every list of the files below].** A 0xC8-byte header (the state masks it
+inherits and leaves, flags, one segment), a patch table, plain PM4 and a table of buffer fixups.
+The PM4 holds type-0 register writes, padding and six type-3 opcodes (`DRAW_INDX`, `IM_LOAD`,
+`LOAD_ALU_CONSTANT`, and in the scene pass `SET_BIN_MASK_LO/HI` with `SET_CONSTANT`): 34 state
+registers, VS c0-c11, PS c0-c7 and c116-c127, fetch constants 0-7 and 31, the shaders' literal
+blocks, and D3D's own marks. Every word the game changes after loading (buffer and shader
+addresses, textures, the viewport, the surfaces, the scissor, a block of pixel constants) is named
+by an entry of the two tables: a **place**.
+
+**The converter** (`src/platform/native_list.h`, pure functions, `tests/native_list_test.cpp` in
+CI) turns one list into a **template**, a block of words with two views of the list:
+
+- **the ops in list order** (register runs, tile blocks, shader loads, literal loads, draws):
+  replaying them writes what the packets write, in the same order. This is what a replay in the
+  command processor needs, tile blocks and predicate bits included;
+- **the draws**: per draw its arguments and predicate bit, the shaders, vertex buffer and textures
+  bound when it runs (carried forward when the draw sets none), and the registers written since
+  the previous draw, reduced to the last write of each. Folded, they give the list's own state at
+  draw k. This is what a native draw needs.
+
+Rules it keeps:
+
+- **Places are slots, never values.** A template holds where a patched word is in the live list
+  (fixup type, argument, dword), never what it holds; the words are read from the list when a
+  fixup has touched it. So a template is a function of the list's static words alone. The kind of
+  a place is read from the field it lands on, not from the game's lookup records, so a list can
+  be converted from its command buffer alone.
+- **The key** is 128 bits over those static words: the PM4 with every place as zero, the patch
+  table, the buffer fixups, the ten masks and the flags without 0x2000 (which the texture and
+  surface fixups set at run time). One thing of a place stays in: the low two bits of a shader's
+  microcode address, the shader type, which every fixup keeps.
+- **The untiled form is the same template.** `scene_msaa=2x|off` and the game's 12- and 16-car
+  races run the scene pass's lists with their tile-bound packets turned into NOPs
+  (`src/hooks/scene_tiling.cpp`). The template records those packets' headers: the key takes a
+  header or its NOP as the same word, and both views have an untiled mode that skips exactly those
+  packets. A list is converted from its original words; one that is untiled at that moment is
+  refused as input.
+- **Everything outside what the files hold is refused, with a named reason** (25 of them, each
+  with a test): another resource type or flag, more than one segment, a type-1 packet, another
+  opcode, a register outside the set above, a tile block of another shape, a draw, shader load or
+  literal load of another form, an address that is not a place, a place that lands on no known
+  field, a place with sub-code 62 or 63 (the path through the table at `cb+112`, not decoded). A
+  refused list runs as PM4, as today.
+
+**Offline proof.** `tools/native_list_check.py` (below) reads every model of an archive, converts
+every list and runs both views beside a plain PM4 interpreter that knows nothing of templates
+(`tests/native_list_reference.h`): the state before every draw (the whole register file the list
+wrote, the bound shaders, the bin mask), every draw's arguments and whether its predicate lets it
+run, and the state after the list. Each list runs for the bin select of each of the three tiles,
+without tiling, and with a bin mask that excludes the bin; lists scene_msaa unties run all five
+again untiled (untiled by `scene_tiling.h`'s own function); and everything runs twice, with the
+words as they are in the file and with every place written with made-up values, as after the
+game's fixups. Counts, from the game's files on the test PC (2026-11-14) **[M]**:
+
+| | Colorado | UI tracks (5 archives) | Rally DLC (ColoradoDirt) | FM4 circuit (Suzuka, imported) |
+| --- | ---: | ---: | ---: | ---: |
+| `.rmb.bin` members read (distinct by CRC and size) | 102,012 (14,231) | 15 (15) | 9,858 (9,851) | 1,393 (1,347) |
+| Lists | 410,639 | 41 | 41,026 | 6,087 |
+| PM4 dwords | 253,695,465 | 190,570 | 27,112,955 | 2,065,593 |
+| **Converted** | **410,639** | **41** | **41,026** | 3,287 |
+| **Refused** | **0** | **0** | **0** | 2,800 (2,798 `tile-block`, 2 `register`) |
+| Distinct keys | 51,633 | 41 | 36,899 | 2,874 |
+| Draws | 1,324,931 | 905 | 142,001 | 9,960 (5,590 in converted lists) |
+| Slots | 17,790,277 | 12,906 | 1,909,118 | 125,088 |
+| Places of the game's own records that are a slot of the record's type and length | 29,200,919 of 29,200,919 | 122,824 of 122,824 | 3,452,168 of 3,452,168 | 149,148 of 149,148 |
+| Slots no record names | 0 | 0 | 0 | 0 |
+| Lists scene_msaa unties; their tile-bound packets equal to `scene_tiling.h`'s | 104,221; 104,221 | 15; 15 | 10,490; 10,490 | 0 |
+| Runs beside the interpreter in which everything agrees (2 forms x 5 modes) | 4,106,390 of 4,106,390 | 410 of 410 | 410,260 of 410,260 | 32,870 of 32,870 |
+| ... the same, untiled | 1,042,210 of 1,042,210 | 150 of 150 | 104,900 of 104,900 | none |
+| Draws compared in those runs | 16,492,630 | 12,090 | 1,776,770 | 55,900 |
+| Key the same after fixups / same template after fixups / with flag 0x2000 | 410,639 each | 41 each | 41,026 each | 3,287 each |
+| Key the same for the untiled list; that list refused as input | 104,221; 104,221 | 15; 15 | 10,490; 10,490 | none |
+| Another key after one changed PM4 word / table word / mask | 410,639 each | 41 each | 41,026 each | 3,287 each |
+| Table entries with sub-code 62 or 63 | 0 of 29,224,048 | 0 of 122,827 | 0 of 3,454,427 | 0 of 255,519 |
+| Draws that load no vertex shader | 15 | 0 | 15 | 0 |
+| Distinct register deltas / fetch templates / exit sets / vertex constant blobs / pixel constant blobs | 397 / 97 / 242 / 20,018 / 1,552 | 36 / 8 / 16 / 123 / 65 | 380 / 86 / 220 / 16,536 / 1,190 | 151 / 25 / 97 / 1,001 / 166 |
+
+- **Colorado: every list converts, none is refused, and every comparison holds on all of them.**
+  The run reads every member, the archive's repeats included, in under a minute (47 and 50 s in
+  two runs with three reading processes).
+- The last row is what a list's draws reduce to when a place counts as its fixup type: Colorado's
+  1.3 M draws share 397 sets of state registers and 97 sets of fetch constants.
+- **The 15 draws that load no vertex shader** are in 6 lists (5 draws each in groups 0, 12 and
+  18): each writes only `VGT_INDX_OFFSET` before the draw, no fetch constant and no shader, 12 of
+  them with 32-bit indices, none the first draw of its list. Such a draw continues the one before
+  it with the same shader and vertex buffer, which the draw records carry forward (15 of 15). The
+  DLC has 15 of the same kind, in 6 lists.
+- **Conversion costs about 15 ns a dword** on one thread (Colorado's 253.7 M dwords in 3.7 and
+  3.8 s in two runs), and a template is 2.06 words for each dword of its list (39% of it the
+  list's static words, 20% the ops, 16% the per-draw register runs, 14% the slots).
+- **The FM4 circuit is not covered in its scene passes.** FM4's models have their own lists for
+  the two-tile and the one-pass scene (groups 9-11 and 15-17, which no Horizon model has), and
+  their tile blocks set the window with `SET_CONSTANT2` and have two tiles in pass 3: all 2,798
+  lists flagged 0x800 are refused as `tile-block`. Two lists write `RB_ALPHA_REF` (0x210E), outside
+  the register set. The other 3,287 (depth pre-pass, the 256x256 passes, the one-pass scene)
+  convert and agree. Six imported circuits together: 43,545 lists, 22,656 converted, 20,862
+  `tile-block`, 27 `register`. FM4's lists also have no SCRATCH_REG6 marks, name their vertex and
+  index buffers in the buffer fixups only, and have all mask bits set in every pass.
+
+What the files settled for the next steps:
+
+- **D3D's SCRATCH_REG6 marks are one-register packets** (type 0 with bit 15: every word goes to
+  the one register), 2,438,078 of them in Colorado, and the only use of that form. A walker that
+  reads them as a register range reaches 0x57F-0x581.
+- **A draw packet writes three registers itself** (`VGT_DRAW_INITIATOR`, `VGT_DMA_BASE`,
+  `VGT_DMA_SIZE`), so the register file after a list holds its last draw that ran; both views
+  carry that.
+- **A place's entry says its own length** (bits 26-29: one word, or two with a value word), so
+  the tables can be walked without the game's records. A surfaces fixup's chain may start with an
+  entry of sub-code 9 that names dword 0 and writes nothing (it changes how the chain's surface
+  formats are read); 130 texture fetch constants in Colorado have no place at all and are the
+  file's words.
+- **In the files the inherited and the left-untouched masks are equal:** all bits set for passes
+  1, 2 and 4, and `FFFFFFF7` in the third mask of both for passes 0 and 6, in all 410,639 lists.
+  Whether the headers in memory are the files' needs a run.
+
+**Not done yet** (the rest of M4's list work, in order): a measurement build that answers what
+only a run can (RunCommandBuffer calls by device and pass group, the live header masks, the time
+the command processor spends inside list buffers); the registry (conversion when a model loads,
+invalidation by the game's one fixup dispatcher) with a shadow compare of every list draw in the
+running game; replay of the templates in the command processor; then native passes, which also
+need M3's executor and a path for the command buffers D3D records at run time (the cars). FM4's
+`SET_CONSTANT2` tile blocks are a decision for after that census.
+
 ## Tools
 
 The M0 tools are build options: off, the game and the SDK are the same as without them.
@@ -600,6 +735,29 @@ What the command processor executes, counted by the D3D function that wrote it:
 Both sides must be the trace builds for tags; with only the SDK side every packet counts as
 foreign or primary ring. Run it as any test game (a hidden display, a scratch user data folder,
 `--audio_mute`), at a fixed frame rate: the counts are per frame, not timed.
+
+### Model list check (offline)
+
+`tools/native_list_check.py` converts every model list of a track archive and proves the result
+(M4, above). It reads the player's own files and writes a report of counts: no word of a list and
+no member name.
+
+```sh
+tools/native_list_check.py <game>/media/tracks/colorado/bin.zip --jobs 3 --no-refusals \
+    --expect-reduction 397,97,242,20018,1552 --json colorado.json
+tools/native_list_check.py <game>/media/tracks/ui*/bin.zip       # several archives, one report
+tools/native_list_check.py <archive> --distinct                  # one member per (CRC, size)
+```
+
+- `tools/rmb_lists.py` finds a model's lists (the 21 pass groups after its shader names, the
+  three areas); `tools/native_list_check.cpp`, built by the script with `$CXX` or g++, is the
+  census, the converter (`src/platform/native_list.h`) and the comparison with the interpreter
+  (`tests/native_list_reference.h`).
+- The archives' members are XMemCompress LZX: with `tools/unxmem` built (`tools/unxmem.c`) a full
+  Colorado run takes under a minute; without it Python decodes, slowly.
+- It also takes a DLC's track zip and the archive `tools/fm4_pvs.py` writes for an FM4 circuit.
+- Exit status 1 when anything disagrees; `--no-refusals` makes a refused list a failure too.
+  `tools/test_rmb_lists.py` runs it on a made-up model (CI).
 
 ### Offline shader translation (SDK)
 

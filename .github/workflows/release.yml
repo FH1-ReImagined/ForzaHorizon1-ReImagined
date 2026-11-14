@@ -99,6 +99,8 @@ jobs:
         run: python -m unittest discover -s tools -p 'test_resource_data_hooks.py' -v
       - name: FM4 circuits' road lines and edges (decals; synthetic models, no game files, #648)
         run: python -m unittest discover -s tools -p 'test_fm4_decals.py' -v
+      - name: Track model command lists and their offline check (a made-up model, no game files)
+        run: python -m unittest discover -s tools -p 'test_rmb_lists.py' -v
       - name: Thumbnail and photo sync renewal contracts (no game)
         shell: bash
         run: |
@@ -275,6 +277,11 @@ jobs:
         run: |
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/native_shadow_record_test.cpp -o "$RUNNER_TEMP/native-shadow-record-test"
           "$RUNNER_TEMP/native-shadow-record-test"
+      - if: runner.os == 'Linux'
+        name: Native renderer model list converter
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/native_list_test.cpp -o "$RUNNER_TEMP/native-list-test"
+          "$RUNNER_TEMP/native-list-test"
       - if: runner.os == 'Linux'
         name: CPU drivers without rubber banding
         run: |
