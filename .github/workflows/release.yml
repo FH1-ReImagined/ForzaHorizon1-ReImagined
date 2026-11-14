@@ -889,6 +889,15 @@ jobs:
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-26.08
       options: --privileged
+      # The image's flatpak installation in a volume: Docker fills a new volume with what the image
+      # has at that path (3.2 GB, about 20 s), so the runtimes are on the runner's disk and not in
+      # the image's layers. flatpak-builder updates the image's runtimes whenever Flathub has newer
+      # ones, and flatpak retires the old checkout of an updated runtime by renaming its directory.
+      # overlayfs renames a directory that comes from an image layer only with redirect_dir on, else
+      # "Invalid cross-device link": on with the kernel of GitHub's runners in Azure, off with the
+      # one of its runners in AWS, where every run of this job failed (#886).
+      volumes:
+        - /var/lib/flatpak
     steps:
       - uses: actions/checkout@v4
         with:
