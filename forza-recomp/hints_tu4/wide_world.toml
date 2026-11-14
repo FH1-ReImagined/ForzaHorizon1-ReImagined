@@ -1,0 +1,505 @@
+# A world past 8,192 m (src/hooks/wide_world.cpp; written and checked by
+# tools/wide_world_hooks.py). The game keeps camera-relative positions as 32-bit fixed point
+# with 18 fraction bits (Vec4Fixed<18>): +-8,192 m, saturating. Every conversion to or from
+# it is one of these vector instructions (float to fixed: vcfpsxws128, vctsxs; fixed to
+# float: vcsxwfp128, vcfsx; 18 in each). The hook before each returns false and the
+# instruction runs as it is, unless the wide world switch is on: then the hook converts with
+# 17 bits (+-16,384 m) and the instruction is jumped over.
+
+[[midasm_hook]]
+address = 0x8241345C
+name = "ForzaWideWorldToFloat"
+registers = ["fpscr", "v127", "v63"]
+jump_address_on_true = 0x82413460
+
+[[midasm_hook]]
+address = 0x8241349C
+name = "ForzaWideWorldToFloatInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x824134A0
+
+[[midasm_hook]]
+address = 0x82413AA8
+name = "ForzaWideWorldToFloat"
+registers = ["fpscr", "v1", "v63"]
+jump_address_on_true = 0x82413AAC
+
+[[midasm_hook]]
+address = 0x82413B70
+name = "ForzaWideWorldToFixed"
+registers = ["fpscr", "v0", "v63"]
+jump_address_on_true = 0x82413B74
+
+[[midasm_hook]]
+address = 0x82413B84
+name = "ForzaWideWorldToFloat"
+registers = ["fpscr", "v63", "v0"]
+jump_address_on_true = 0x82413B88
+
+[[midasm_hook]]
+address = 0x824865A4
+name = "ForzaWideWorldToFloat"
+registers = ["fpscr", "v59", "v12"]
+jump_address_on_true = 0x824865A8
+
+[[midasm_hook]]
+address = 0x824865BC
+name = "ForzaWideWorldToFloat"
+registers = ["fpscr", "v63", "v13"]
+jump_address_on_true = 0x824865C0
+
+[[midasm_hook]]
+address = 0x82486AC0
+name = "ForzaWideWorldToFloatInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x82486AC4
+
+[[midasm_hook]]
+address = 0x82486D6C
+name = "ForzaWideWorldToFloatInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x82486D70
+
+[[midasm_hook]]
+address = 0x8248A7B0
+name = "ForzaWideWorldToFloat"
+registers = ["fpscr", "v1", "v63"]
+jump_address_on_true = 0x8248A7B4
+
+[[midasm_hook]]
+address = 0x8248A928
+name = "ForzaWideWorldToFloat"
+registers = ["fpscr", "v58", "v12"]
+jump_address_on_true = 0x8248A92C
+
+[[midasm_hook]]
+address = 0x8248AAB4
+name = "ForzaWideWorldToFixed"
+registers = ["fpscr", "v0", "v62"]
+jump_address_on_true = 0x8248AAB8
+
+[[midasm_hook]]
+address = 0x8248AAF8
+name = "ForzaWideWorldToFloat"
+registers = ["fpscr", "v61", "v0"]
+jump_address_on_true = 0x8248AAFC
+
+[[midasm_hook]]
+address = 0x8251565C
+name = "ForzaWideWorldToFloat"
+registers = ["fpscr", "v1", "v63"]
+jump_address_on_true = 0x82515660
+
+[[midasm_hook]]
+address = 0x825189E8
+name = "ForzaWideWorldToFixed"
+registers = ["fpscr", "v0", "v63"]
+jump_address_on_true = 0x825189EC
+
+[[midasm_hook]]
+address = 0x825189F4
+name = "ForzaWideWorldToFixed"
+registers = ["fpscr", "v13", "v63"]
+jump_address_on_true = 0x825189F8
+
+[[midasm_hook]]
+address = 0x82520440
+name = "ForzaWideWorldToFixed"
+registers = ["fpscr", "v0", "v63"]
+jump_address_on_true = 0x82520444
+
+[[midasm_hook]]
+address = 0x82520454
+name = "ForzaWideWorldToFloat"
+registers = ["fpscr", "v62", "v0"]
+jump_address_on_true = 0x82520458
+
+[[midasm_hook]]
+address = 0x82531A58
+name = "ForzaWideWorldToFixedInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x82531A5C
+
+[[midasm_hook]]
+address = 0x82543FCC
+name = "ForzaWideWorldToFixed"
+registers = ["fpscr", "v63", "v127"]
+jump_address_on_true = 0x82543FD0
+
+[[midasm_hook]]
+address = 0x825E2370
+name = "ForzaWideWorldToFixedInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x825E2374
+
+[[midasm_hook]]
+address = 0x826EFD04
+name = "ForzaWideWorldToFixed"
+registers = ["fpscr", "v63", "v0"]
+jump_address_on_true = 0x826EFD08
+
+[[midasm_hook]]
+address = 0x826EFE84
+name = "ForzaWideWorldToFloatInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x826EFE88
+
+[[midasm_hook]]
+address = 0x826EFF54
+name = "ForzaWideWorldToFloatInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x826EFF58
+
+[[midasm_hook]]
+address = 0x826F01F8
+name = "ForzaWideWorldToFloatInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x826F01FC
+
+[[midasm_hook]]
+address = 0x826F3358
+name = "ForzaWideWorldToFixedInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x826F335C
+
+[[midasm_hook]]
+address = 0x826FA260
+name = "ForzaWideWorldToFloat"
+registers = ["fpscr", "v126", "v63"]
+jump_address_on_true = 0x826FA264
+
+[[midasm_hook]]
+address = 0x826FCEB8
+name = "ForzaWideWorldToFloatInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x826FCEBC
+
+[[midasm_hook]]
+address = 0x826FECDC
+name = "ForzaWideWorldToFloat"
+registers = ["fpscr", "v1", "v63"]
+jump_address_on_true = 0x826FECE0
+
+[[midasm_hook]]
+address = 0x826FED50
+name = "ForzaWideWorldToFloat"
+registers = ["fpscr", "v1", "v0"]
+jump_address_on_true = 0x826FED54
+
+[[midasm_hook]]
+address = 0x826FF48C
+name = "ForzaWideWorldToFloatInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x826FF490
+
+[[midasm_hook]]
+address = 0x8270681C
+name = "ForzaWideWorldToFloatInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x82706820
+
+[[midasm_hook]]
+address = 0x8271B8EC
+name = "ForzaWideWorldToFloatInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x8271B8F0
+
+[[midasm_hook]]
+address = 0x8290165C
+name = "ForzaWideWorldToFloatInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x82901660
+
+[[midasm_hook]]
+address = 0x829016D0
+name = "ForzaWideWorldToFixed"
+registers = ["fpscr", "v13", "v62"]
+jump_address_on_true = 0x829016D4
+
+[[midasm_hook]]
+address = 0x829016D4
+name = "ForzaWideWorldToFixed"
+registers = ["fpscr", "v0", "v63"]
+jump_address_on_true = 0x829016D8
+
+[[midasm_hook]]
+address = 0x82901728
+name = "ForzaWideWorldToFixedInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x8290172C
+
+[[midasm_hook]]
+address = 0x829017B4
+name = "ForzaWideWorldToFloatInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x829017B8
+
+[[midasm_hook]]
+address = 0x8290194C
+name = "ForzaWideWorldToFloatInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x82901950
+
+[[midasm_hook]]
+address = 0x82901D8C
+name = "ForzaWideWorldToFloatInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x82901D90
+
+[[midasm_hook]]
+address = 0x829028C4
+name = "ForzaWideWorldToFixed"
+registers = ["fpscr", "v63", "v0"]
+jump_address_on_true = 0x829028C8
+
+[[midasm_hook]]
+address = 0x82902BD0
+name = "ForzaWideWorldToFloatInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x82902BD4
+
+[[midasm_hook]]
+address = 0x82902CF8
+name = "ForzaWideWorldToFixedInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x82902CFC
+
+[[midasm_hook]]
+address = 0x82902D10
+name = "ForzaWideWorldToFixed"
+registers = ["fpscr", "v0", "v127"]
+jump_address_on_true = 0x82902D14
+
+[[midasm_hook]]
+address = 0x82903EC4
+name = "ForzaWideWorldToFloatInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x82903EC8
+
+[[midasm_hook]]
+address = 0x8290403C
+name = "ForzaWideWorldToFloat"
+registers = ["fpscr", "v61", "v0"]
+jump_address_on_true = 0x82904040
+
+[[midasm_hook]]
+address = 0x82904058
+name = "ForzaWideWorldToFixed"
+registers = ["fpscr", "v13", "v63"]
+jump_address_on_true = 0x8290405C
+
+[[midasm_hook]]
+address = 0x82904060
+name = "ForzaWideWorldToFloat"
+registers = ["fpscr", "v63", "v0"]
+jump_address_on_true = 0x82904064
+
+[[midasm_hook]]
+address = 0x829040CC
+name = "ForzaWideWorldToFloatInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x829040D0
+
+[[midasm_hook]]
+address = 0x82904194
+name = "ForzaWideWorldToFixed"
+registers = ["fpscr", "v13", "v63"]
+jump_address_on_true = 0x82904198
+
+[[midasm_hook]]
+address = 0x829042E4
+name = "ForzaWideWorldToFixedInPlace"
+registers = ["fpscr", "v0"]
+jump_address_on_true = 0x829042E8
+
+[[midasm_hook]]
+address = 0x8290431C
+name = "ForzaWideWorldToFloatInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x82904320
+
+[[midasm_hook]]
+address = 0x82905460
+name = "ForzaWideWorldToFloatInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x82905464
+
+[[midasm_hook]]
+address = 0x8290627C
+name = "ForzaWideWorldToFixedInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x82906280
+
+[[midasm_hook]]
+address = 0x82907188
+name = "ForzaWideWorldToFloat"
+registers = ["fpscr", "v62", "v13"]
+jump_address_on_true = 0x8290718C
+
+[[midasm_hook]]
+address = 0x82907190
+name = "ForzaWideWorldToFixed"
+registers = ["fpscr", "v13", "v63"]
+jump_address_on_true = 0x82907194
+
+[[midasm_hook]]
+address = 0x8290B124
+name = "ForzaWideWorldToFloat"
+registers = ["fpscr", "v1", "v63"]
+jump_address_on_true = 0x8290B128
+
+[[midasm_hook]]
+address = 0x8290D05C
+name = "ForzaWideWorldToFixed"
+registers = ["fpscr", "v13", "v63"]
+jump_address_on_true = 0x8290D060
+
+[[midasm_hook]]
+address = 0x8290D070
+name = "ForzaWideWorldToFloat"
+registers = ["fpscr", "v63", "v0"]
+jump_address_on_true = 0x8290D074
+
+[[midasm_hook]]
+address = 0x8290D204
+name = "ForzaWideWorldToFloatInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x8290D208
+
+[[midasm_hook]]
+address = 0x8290D30C
+name = "ForzaWideWorldToFloatInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x8290D310
+
+[[midasm_hook]]
+address = 0x8290E1E4
+name = "ForzaWideWorldToFixed"
+registers = ["fpscr", "v0", "v63"]
+jump_address_on_true = 0x8290E1E8
+
+[[midasm_hook]]
+address = 0x8290E20C
+name = "ForzaWideWorldToFloat"
+registers = ["fpscr", "v63", "v0"]
+jump_address_on_true = 0x8290E210
+
+[[midasm_hook]]
+address = 0x829104B8
+name = "ForzaWideWorldToFixedInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x829104BC
+
+[[midasm_hook]]
+address = 0x829105A8
+name = "ForzaWideWorldToFixedInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x829105AC
+
+[[midasm_hook]]
+address = 0x82911DD0
+name = "ForzaWideWorldToFixedInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x82911DD4
+
+[[midasm_hook]]
+address = 0x82912A0C
+name = "ForzaWideWorldToFixed"
+registers = ["fpscr", "v0", "v127"]
+jump_address_on_true = 0x82912A10
+
+[[midasm_hook]]
+address = 0x82912A24
+name = "ForzaWideWorldToFloat"
+registers = ["fpscr", "v63", "v0"]
+jump_address_on_true = 0x82912A28
+
+[[midasm_hook]]
+address = 0x82913A88
+name = "ForzaWideWorldToFloatInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x82913A8C
+
+[[midasm_hook]]
+address = 0x82913CB4
+name = "ForzaWideWorldToFixedInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x82913CB8
+
+[[midasm_hook]]
+address = 0x82913CB8
+name = "ForzaWideWorldToFloatInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x82913CBC
+
+[[midasm_hook]]
+address = 0x82961988
+name = "ForzaWideWorldToFloat"
+registers = ["fpscr", "v125", "v63"]
+jump_address_on_true = 0x8296198C
+
+[[midasm_hook]]
+address = 0x8297B5EC
+name = "ForzaWideWorldToFloat"
+registers = ["fpscr", "v127", "v63"]
+jump_address_on_true = 0x8297B5F0
+
+[[midasm_hook]]
+address = 0x8297F430
+name = "ForzaWideWorldToFloatInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x8297F434
+
+[[midasm_hook]]
+address = 0x829A2918
+name = "ForzaWideWorldToFloatInPlace"
+registers = ["fpscr", "v63"]
+jump_address_on_true = 0x829A291C
+
+[[midasm_hook]]
+address = 0x82A592F8
+name = "ForzaWideWorldToFloat"
+registers = ["fpscr", "v127", "v63"]
+jump_address_on_true = 0x82A592FC
+
+[[midasm_hook]]
+address = 0x82A5ABD0
+name = "ForzaWideWorldToFloat"
+registers = ["fpscr", "v127", "v63"]
+jump_address_on_true = 0x82A5ABD4
+
+[[midasm_hook]]
+address = 0x82A5B37C
+name = "ForzaWideWorldToFloat"
+registers = ["fpscr", "v127", "v63"]
+jump_address_on_true = 0x82A5B380
+
+[[midasm_hook]]
+address = 0x82E0D958
+name = "ForzaWideWorldToFixed"
+registers = ["fpscr", "v0", "v63"]
+jump_address_on_true = 0x82E0D95C
+
+[[midasm_hook]]
+address = 0x82E0D964
+name = "ForzaWideWorldToFloat"
+registers = ["fpscr", "v62", "v0"]
+jump_address_on_true = 0x82E0D968
+
+[[midasm_hook]]
+address = 0x82E91198
+name = "ForzaWideWorldToFixed"
+registers = ["fpscr", "v0", "v62"]
+jump_address_on_true = 0x82E9119C
+
+[[midasm_hook]]
+address = 0x82E911B0
+name = "ForzaWideWorldToFloat"
+registers = ["fpscr", "v62", "v0"]
+jump_address_on_true = 0x82E911B4
+
+[[midasm_hook]]
+address = 0x82E98424
+name = "ForzaWideWorldToFloat"
+registers = ["fpscr", "v63", "v0"]
+jump_address_on_true = 0x82E98428
