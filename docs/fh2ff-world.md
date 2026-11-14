@@ -146,6 +146,15 @@ wrong picture:
   own art is taken, renamed (FH2 names a tile high-row-col, FH1 high-col-row) into the mod with
   FH1's fullscreen profile set to FH2's background size and offset. The minimap has no
   background in either game.
+- **Gameplay markers.** Both games place their event starts (`e465`), bucket list spots (`bl05`),
+  festival sites, town hubs and resets (`freeroam_reset_09_left`) as instances of 15 plain
+  shapes, shown or hidden by name (the placement's last 32 bytes, `GameObjs.xml`'s GameplayID).
+  FH1 knows none of the names and drew them all, always: pink boxes, discs on poles and tubes
+  across the roads. A named placement with no physics key whose instance lacks the
+  shadow-casting flag (0x08000000, the FH2 prototype PDB's `SubsetMask_CastCSMShadows`) is left
+  out of the zones (F&F: 12,180 placements over its zones; FH2: 38,727). The named things (speed
+  cameras, reward boards, barn doors) have the flag or a physics key and stay.
+  `FH2FF_MARKERS=keep` draws them (a test).
 
 F&F's free-roam resets (the "hand of god" when leaving its area) are not in its data: no
 surface is a reset trigger, and the HandOfGodReset values are the races' off-track ones. With
