@@ -60,6 +60,7 @@ MOD_PREFIX = ".fm4-track-"
 MERGED_MOD = ".fm4-track-db"      # the track's database rows over another mod's database
 FORMAT = 1
 FREE_ROAM_TRACK = 317             # TU4's Tracks row free roam loads (fm4_track_mod.py --free-roam)
+WORLD_KINDS = ("fh2ff", "fh2", "fh2docks", "fh2ffall")   # track.json kinds of an FH2 world (fh2ffworld.py)
 DEFAULT = ""                      # the choice "FH1's Colorado"
 COLORADO = "FH1's Colorado (default)"
 SPAWN_BACK = 15.0                 # metres behind the start line (tools/fm4_spawn.py)
@@ -183,7 +184,8 @@ def select(cfg, key: str):
 
 def choices(cfg) -> list:
     """[(key, label)] for the picker: Colorado first."""
-    return [(DEFAULT, COLORADO)] + [(i["key"], f"{i['name']} (FM4, experimental)") for i in installed(cfg)]
+    return [(DEFAULT, COLORADO)] + [(i["key"], f"{i['name']} ({'FH2 world' if i.get('kind') in WORLD_KINDS else 'FM4'}, "
+                                               "experimental)") for i in installed(cfg)]
 
 
 def remove(cfg, key: str):
@@ -452,7 +454,7 @@ def laps(cfg, key: str) -> list:
 
 def lap_circuits(cfg) -> list:
     """[(key, name)] of the imported circuits and of those with laps (removed since), by name."""
-    names = {i["key"]: i.get("name", i["key"]) for i in installed(cfg)}
+    names = {i["key"]: i.get("name", i["key"]) for i in installed(cfg) if i.get("kind") not in WORLD_KINDS}  # no lap timer in a world
     try:
         for p in (store(cfg) / LAPS).glob("*.jsonl"):
             lower = {k.lower(): v for k, v in NAMES.items()}
@@ -677,8 +679,9 @@ def _gamedb_of(mod_dir: Path):
 
 
 def merge_db(base_db: Path, track_db: Path, out_db: Path):
-    """out_db: base_db (another mod's database) with the track's rows (its Environments row and
-    free roam's Tracks row, tools/fm4_track_mod.write_db) put in."""
+    """out_db: base_db (another mod's database) with the track's rows put in: its Environments row
+    and free roam's Tracks row (tools/fm4_track_mod.write_db), and the Tracks rows of its own
+    environment that are its alone (an FH2 world's races and arenas, tools/fh2ff_world.py)."""
     out_db.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(base_db, out_db)
     src = sqlite3.connect(f"file:{track_db.as_posix()}?mode=ro", uri=True)
@@ -689,6 +692,9 @@ def merge_db(base_db: Path, track_db: Path, out_db: Path):
             raise Fm4TrackError("The circuit's database has no free roam row: import it again.")
         cols = [r[1] for r in src.execute("PRAGMA table_info(Environments)")]
         env = src.execute("SELECT * FROM Environments WHERE Id=?", (row[1],)).fetchone()
+        tcols = [r[1] for r in src.execute("PRAGMA table_info(Tracks)")]
+        own = src.execute("SELECT * FROM Tracks WHERE EnvironmentId=? AND MediaName=? AND id<>?",
+                          (row[1], row[0], FREE_ROAM_TRACK)).fetchall()
     finally:
         src.close()
     db = sqlite3.connect(out_db)
@@ -700,6 +706,13 @@ def merge_db(base_db: Path, track_db: Path, out_db: Path):
                        f"({','.join('?' * len(pairs))})", [v for _, v in pairs])
         db.execute("UPDATE Tracks SET MediaName=?, EnvironmentId=?, RibbonIndex=? WHERE id=?",
                    (*row, FREE_ROAM_TRACK))
+        if own:
+            have = {r[1] for r in db.execute("PRAGMA table_info(Tracks)")}
+            keep = [i for i, c in enumerate(tcols) if c in have]
+            at = tcols.index("id")
+            db.execute(f"DELETE FROM Tracks WHERE id IN ({','.join('?' * len(own))})", [r[at] for r in own])
+            db.executemany(f"INSERT INTO Tracks ({','.join(tcols[i] for i in keep)}) VALUES "
+                           f"({','.join('?' * len(keep))})", [[r[i] for i in keep] for r in own])
         db.commit()
     finally:
         db.close()
@@ -774,7 +787,8 @@ def configure(cfg, env: dict, args: list, unset: list, notes: list, write=True):
     if info is None:
         return None
     folder = Path(info["path"])
-    if write:
+    world = info.get("kind") in WORLD_KINDS  # an FH2 world (fh2ffworld.py): its own switches
+    if write and not world:
         spawn_file = folder / SPAWN_FILE
         try:
             with spawn_file.open(encoding="utf-8") as f:
@@ -800,6 +814,10 @@ def configure(cfg, env: dict, args: list, unset: list, notes: list, write=True):
         unset.remove("FORZA_SERVER")
     if not any(a.startswith("--discord_presence") for a in args):
         args.append("--discord_presence=false")
+    if world:
+        from . import fh2ffworld
+        fh2ffworld.configure(info, env, notes)
+        return info
     notes.append(f"Starting on the Forza Motorsport 4 circuit {info['name']} (experimental, offline). "
                  "Choose FH1's Colorado on the Play page to drive in Colorado again.")
     return info

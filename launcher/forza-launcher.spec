@@ -58,7 +58,7 @@ hidden += ["sdl2dll"]
 # The title update step (a Python tool the frozen app runs itself with --run-script), Import FM4 cars
 # (fm4_*, carbin_dump, #648), Import FM4 tracks (fm4_track_mod, fm4_pvs and what they import, #648), and the shader
 # prebuild (#226), which imports pipeline_list, fxobj_shaders, xxh3, lzx_delta and apply_title_update.
-for _tool in ("apply_title_update.py", "fm4_cars.py", "fm4_carbin.py", "fm4_physdef.py", "carbin_dump.py", "lzx_delta.py", "xdc_decode.py", "extract_map_points.py", "livery_codec.py", "pipeline_list.py", "fxobj_shaders.py", "xxh3.py", "native_menu_scene.py", "offline_cars_flow.py", "native_tuning_assets.py", "fm4_track_mod.py", "fm4_pvs.py", "fm4_col.py", "fm4_shaders.py", "fm4_spawn.py", "fm4_timing.py", "fm4_routes.py"):
+for _tool in ("apply_title_update.py", "fm4_cars.py", "fm4_carbin.py", "fm4_physdef.py", "carbin_dump.py", "lzx_delta.py", "xdc_decode.py", "extract_map_points.py", "livery_codec.py", "pipeline_list.py", "fxobj_shaders.py", "xxh3.py", "native_menu_scene.py", "offline_cars_flow.py", "native_tuning_assets.py", "fm4_track_mod.py", "fm4_pvs.py", "fm4_col.py", "fm4_shaders.py", "fm4_spawn.py", "fm4_timing.py", "fm4_routes.py", "fh2ff_world.py", "fh2ff_combine.py"):
     if (repo / "tools" / _tool).is_file():
         datas.append((str(repo / "tools" / _tool), "tools"))
 datas.append((str(repo / "tools" / "native_menu" / "fh1_donors.json"), "tools/native_menu"))
@@ -83,7 +83,7 @@ a = Analysis(
     hiddenimports=hidden + ["PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "install_dlc", "xcontent_extract", "xiso_extract", "xdc_decode", "livery_codec", "tomllib", "pipeline_list",
                             "fxobj_shaders", "xxh3", "lzx_delta", "apply_title_update", "offline_cars_flow", "extract_map_points",
                             "fm4_cars", "fm4_carbin", "fm4_physdef", "carbin_dump",
-                            "fm4_spawn", "fm4_timing", "fm4_routes", "fm4_track_mod", "fm4_pvs", "fm4_col", "fm4_shaders", "sqlite3", "argparse", "zlib"],
+                            "fm4_spawn", "fm4_timing", "fm4_routes", "fh2ff_world", "fh2ff_combine", "hashlib", "fm4_track_mod", "fm4_pvs", "fm4_col", "fm4_shaders", "sqlite3", "argparse", "zlib"],
     # Qt WebEngine (PySide6_WebEngine in requirements-build.txt) is the website sign-in window,
     # ui/web_view.py, which imports it only when the window opens; it needs QtNetwork and
     # QtWebChannel. A build without it still works: the window then opens the player's browser.

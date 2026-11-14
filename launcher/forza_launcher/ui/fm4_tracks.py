@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QDialogBut
                                QHeaderView, QLabel, QListWidget, QListWidgetItem, QProgressBar, QPushButton,
                                QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
-from .. import fm4tracks
+from .. import fh2ffworld, fm4tracks
 from .widgets import card, label
 
 EXPERIMENTAL_TAG = "Experimental"
@@ -114,6 +114,22 @@ class Fm4TracksCard(QWidget):
         self.import_button = QPushButton("Import FM4 tracks…")
         self.import_button.clicked.connect(self._import)
         row.addWidget(self.import_button)
+        self.ff_button = QPushButton("Import Fast & Furious…")
+        self.ff_button.setToolTip("Free roam in Forza Horizon 2 Presents Fast & Furious's world, from your own "
+                                  "copy's files (experimental). " + fh2ffworld.EXPERIMENTAL)
+        self.ff_button.clicked.connect(self._import_ff)
+        row.addWidget(self.ff_button)
+        self.fh2_button = QPushButton("Import Forza Horizon 2…")
+        self.fh2_button.setToolTip("Free roam in Forza Horizon 2's whole world, from your own copy's files "
+                                   "(experimental). " + fh2ffworld.EXPERIMENTAL)
+        self.fh2_button.clicked.connect(self._import_fh2)
+        row.addWidget(self.fh2_button)
+        self.docks_button = QPushButton("Import FH2 + F&F…")
+        self.docks_button.setToolTip("Forza Horizon 2's whole world with Fast & Furious's docks in it, or with "
+                                     "Fast & Furious's version of its whole area, from your own copies of both "
+                                     "games (experimental). " + fh2ffworld.EXPERIMENTAL)
+        self.docks_button.clicked.connect(self._import_docks)
+        row.addWidget(self.docks_button)
         self.remove_button = QPushButton("Remove circuit")
         self.remove_button.clicked.connect(self._remove)
         row.addWidget(self.remove_button)
@@ -150,6 +166,9 @@ class Fm4TracksCard(QWidget):
     def _buttons(self):
         idle = self.task is None
         self.import_button.setEnabled(idle)
+        self.ff_button.setEnabled(idle)
+        self.fh2_button.setEnabled(idle)
+        self.docks_button.setEnabled(idle)
         self.remove_button.setEnabled(idle and bool(self.table.selectedItems()))
         self.remove_button.setVisible(self.table.rowCount() > 0)
 
@@ -261,6 +280,115 @@ class Fm4TracksCard(QWidget):
                 raise InstallError(f"Import FM4 tracks stopped: {exc}") from exc
         self._start(job, "import FM4 tracks", f"Converting {len(names)} circuit(s)… Circuits imported "
                     "before stay until each new one is complete.", self._build_done)
+
+    def _import_ff(self):
+        """Fast & Furious's world (fh2ffworld.py): its files' folder, then FH2's (optional)."""
+        from PySide6.QtWidgets import QFileDialog
+        if self.page._game_running():
+            self.message.setText("Close the game before importing.")
+            return
+        ff = QFileDialog.getExistingDirectory(self, "Forza Horizon 2 Presents Fast & Furious: the folder of its files")
+        if not ff:
+            return
+        try:
+            fh2ffworld.disc_root(ff)
+        except fh2ffworld.Fh2ffError as e:
+            self.message.setText(str(e))
+            return
+        fh2 = None
+        if self.page._confirm("Forza Horizon 2 (optional)", "Do you have Forza Horizon 2's files too? With them "
+                              "the full map shows FH2's map art and the roads Fast & Furious closed get "
+                              "FH2's road types. Choose No to import without them."):
+            fh2 = QFileDialog.getExistingDirectory(self, "Forza Horizon 2: the folder of its files") or None
+            try:
+                fh2ffworld.fh2_root(fh2)
+            except fh2ffworld.Fh2ffError as e:
+                self.message.setText(str(e))
+                return
+
+        def job(task):
+            try:
+                return fh2ffworld.build(self.cfg, ff, fh2, lambda f, text: task.progress.emit(f, text), task.cancelled)
+            except (OSError, ValueError) as exc:
+                from ..installer import InstallError
+                raise InstallError(f"Import Fast & Furious stopped: {exc}") from exc
+        self._start(job, "import Fast & Furious", "Converting Fast & Furious's world… An earlier import stays "
+                    "until the new one is complete.", self._build_done)
+
+    def _import_docks(self):
+        """FH2's world with Fast & Furious's docks, or its whole area (fh2ffworld.py, keys fh2docks
+        and fh2ffall): both games' folders."""
+        from PySide6.QtWidgets import QFileDialog
+        if self.page._game_running():
+            self.message.setText("Close the game before importing.")
+            return
+        fh2 = QFileDialog.getExistingDirectory(self, "Forza Horizon 2: the folder of its files")
+        if not fh2:
+            return
+        ff = QFileDialog.getExistingDirectory(self, "Forza Horizon 2 Presents Fast & Furious: the folder of its files")
+        if not ff:
+            return
+        try:
+            fh2ffworld.check_pair(fh2ffworld.fh2_root(fh2, optional=False), fh2ffworld.disc_root(ff))
+        except fh2ffworld.Fh2ffError as e:
+            self.message.setText(str(e))
+            return
+
+        key = self._which_combined()
+        if key is None:
+            return
+
+        def job(task):
+            try:
+                return fh2ffworld.build(self.cfg, fh2, ff, lambda f, text: task.progress.emit(f, text), task.cancelled,
+                                        key=key)
+            except (OSError, ValueError) as exc:
+                from ..installer import InstallError
+                raise InstallError(f"Import FH2 + F&F stopped: {exc}") from exc
+        self._start(job, "import FH2 + F&F", "Combining and converting the two worlds (about 10 minutes)… An "
+                    "earlier import stays until the new one is complete.", self._build_done)
+
+    def _which_combined(self):
+        """Asks which of the two combined worlds: its key, or None when the player closes the box."""
+        from PySide6.QtWidgets import QMessageBox
+        box = QMessageBox(self)
+        box.setWindowTitle("Import FH2 + F&F")
+        box.setText("How much of Fast & Furious's world?")
+        box.setInformativeText("Whole area: Fast & Furious's version of its whole area (Nice and the coast, with "
+                               "its extra trees and detail, the docks and the airfield) in Forza Horizon 2's "
+                               "world. Docks only: its docks; the rest stays Forza Horizon 2's. Both can be "
+                               "imported, one after the other.")
+        whole = box.addButton("Whole area", QMessageBox.AcceptRole)
+        docks = box.addButton("Docks only", QMessageBox.AcceptRole)
+        box.addButton(QMessageBox.Cancel)
+        box.exec()
+        clicked = box.clickedButton()
+        return fh2ffworld.COMBINED_ALL if clicked is whole else fh2ffworld.COMBINED if clicked is docks else None
+
+    def _import_fh2(self):
+        """Forza Horizon 2's own world (fh2ffworld.py, key fh2): its files' folder."""
+        from PySide6.QtWidgets import QFileDialog
+        if self.page._game_running():
+            self.message.setText("Close the game before importing.")
+            return
+        fh2 = QFileDialog.getExistingDirectory(self, "Forza Horizon 2: the folder of its files")
+        if not fh2:
+            return
+        try:
+            fh2ffworld.fh2_root(fh2, optional=False)
+        except fh2ffworld.Fh2ffError as e:
+            self.message.setText(str(e))
+            return
+
+        def job(task):
+            try:
+                return fh2ffworld.build(self.cfg, fh2, None, lambda f, text: task.progress.emit(f, text), task.cancelled,
+                                        key="fh2")
+            except (OSError, ValueError) as exc:
+                from ..installer import InstallError
+                raise InstallError(f"Import Forza Horizon 2 stopped: {exc}") from exc
+        self._start(job, "import Forza Horizon 2", "Converting Forza Horizon 2's world (about 5 minutes)… An "
+                    "earlier import stays until the new one is complete.", self._build_done)
 
     def _build_done(self, ok, message):
         self._end()
