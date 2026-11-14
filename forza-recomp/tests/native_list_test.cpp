@@ -3,16 +3,28 @@
 // 256x256 passes, the scene pass with its tile blocks, the same list untiled, a draw that sets
 // nothing, and every refusal. Each list runs beside a plain PM4 interpreter
 // (native_list_reference.h) for every tile's bin select, without tiling and with a bin mask that
-// lets no predicated packet through.
-//   g++ -std=c++20 -I forza-recomp/src forza-recomp/tests/native_list_test.cpp
+// lets no predicated packet through. Every part of a list handed to the converter ends at a page
+// that cannot be read (Part), so a read past a part stops the test. An optimizing compiler drops
+// a read whose value goes unused, so the test is also to be run unoptimized (CI does both):
+//   g++ -std=c++20 -O2 -I forza-recomp/src forza-recomp/tests/native_list_test.cpp
+//   g++ -std=c++20 -O0 -g -fsanitize=address,undefined -D_GLIBCXX_SANITIZE_VECTOR ... (the same)
 #include "platform/native_list.h"
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <functional>
 #include <set>
 #include <string_view>
+#include <utility>
 #include <vector>
+
+#if defined(__unix__) || defined(__APPLE__)
+#include <sys/mman.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#define NATIVE_LIST_TEST_FENCE 1
+#endif
 
 #include "native_list_reference.h"
 
@@ -43,8 +55,89 @@ struct Entry {
   int64_t value = -1;
 };
 
+// A part of a list (its header, a table, its PM4) as the converter gets it: exactly its bytes,
+// and nothing readable after them. The bytes end where a page without access begins, so a read
+// one word past the part ends the test with or without a sanitizer; an empty part's address is
+// that page. Without mmap the part is a block of exactly its size, which a sanitizer watches.
+class Part {
+ public:
+  Part() : Part(0) {}
+  explicit Part(size_t size) : size_(size) {
+#ifdef NATIVE_LIST_TEST_FENCE
+    const size_t page = size_t(sysconf(_SC_PAGESIZE));
+    const size_t body = (size + page - 1) / page * page;
+    mapped_ = body + page;
+    void* map = mmap(nullptr, mapped_, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    CHECK(map != MAP_FAILED);
+    map_ = static_cast<uint8_t*>(map);
+    CHECK(mprotect(map_ + body, page, PROT_NONE) == 0);
+    data_ = map_ + body - size;
+#else
+    map_ = data_ = new uint8_t[size]();
+#endif
+  }
+  Part(const Part& other) : Part(other.size_) {
+    if (size_) std::memcpy(data_, other.data_, size_);
+  }
+  Part& operator=(const Part& other) {
+    Part copy(other);
+    std::swap(map_, copy.map_);
+    std::swap(mapped_, copy.mapped_);
+    std::swap(data_, copy.data_);
+    std::swap(size_, copy.size_);
+    return *this;
+  }
+  ~Part() {
+#ifdef NATIVE_LIST_TEST_FENCE
+    munmap(map_, mapped_);
+#else
+    delete[] map_;
+#endif
+  }
+  uint8_t* data() { return data_; }
+  const uint8_t* data() const { return data_; }
+  size_t size() const { return size_; }
+  uint8_t& operator[](size_t i) { return data_[i]; }
+  bool operator==(const Part& other) const {
+    return size_ == other.size_ && (size_ == 0 || std::memcmp(data_, other.data_, size_) == 0);
+  }
+  bool operator!=(const Part& other) const { return !(*this == other); }
+
+ private:
+  uint8_t* map_ = nullptr;
+  uint8_t* data_ = nullptr;
+  size_t mapped_ = 0, size_ = 0;
+};
+
+Part Guest(const std::vector<uint32_t>& words) {
+  Part bytes(words.size() * 4);
+  for (size_t i = 0; i < words.size(); ++i) ref::StoreWord(bytes.data(), i, words[i]);
+  return bytes;
+}
+
+// The fence itself: a process that reads the byte after a part does not get past it.
+bool FenceHolds(size_t size) {
+#ifdef NATIVE_LIST_TEST_FENCE
+  const Part part(size);
+  const pid_t child = fork();
+  CHECK(child >= 0);
+  if (child == 0) {
+    close(STDERR_FILENO);  // a sanitizer build would report the fault at length
+    volatile uint8_t byte = part.data()[part.size()];
+    (void)byte;
+    _exit(0);
+  }
+  int status = 0;
+  CHECK(waitpid(child, &status, 0) == child);
+  return !(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+#else
+  (void)size;
+  return true;
+#endif
+}
+
 struct Built {
-  std::vector<uint8_t> header, table, area_c, pm4;
+  Part header, table, area_c, pm4;
   nl::Input input() const {
     nl::Input in;
     in.header = header.data();
@@ -57,13 +150,6 @@ struct Built {
     return in;
   }
 };
-
-std::vector<uint8_t> Guest(const std::vector<uint32_t>& words) {
-  std::vector<uint8_t> bytes(words.size() * 4 + 4);  // never empty
-  for (size_t i = 0; i < words.size(); ++i) ref::StoreWord(bytes.data(), i, words[i]);
-  bytes.resize(words.size() * 4);
-  return bytes;
-}
 
 // A list being written: packets, then the places of its two tables.
 struct List {
@@ -125,6 +211,33 @@ struct List {
   void Buffer(const Entry& e) {
     Add(&table, e, false, true);
     Add(&area_c, e, false, false);
+  }
+
+  // The table's entries that name a dword below `words`; each chain still ends.
+  static std::vector<uint32_t> Below(const std::vector<uint32_t>& table, uint32_t words) {
+    std::vector<uint32_t> out;
+    size_t last = SIZE_MAX;  // the chain's last entry kept
+    for (size_t i = 0; i < table.size();) {
+      const uint32_t entry = table[i], length = (entry >> 26) & 0xF;
+      if (((entry >> 6) & 0xFFFFF) < words) {
+        last = out.size();
+        out.insert(out.end(), table.begin() + i, table.begin() + i + length);
+      }
+      if (!(entry & 0x40000000u)) {
+        if (last != SIZE_MAX) out[last] &= ~0x40000000u;
+        last = SIZE_MAX;
+      }
+      i += length;
+    }
+    return out;
+  }
+  // The list's first `words` words, with the places that are in them.
+  List Prefix(uint32_t words) const {
+    List l = *this;
+    l.pm4.resize(words);
+    l.table = Below(table, words);
+    l.area_c = Below(area_c, words);
+    return l;
   }
 
   Built Build() const {
@@ -438,6 +551,9 @@ nl::Refuse Refused(
 int main() {
   using R = nl::Refuse;
 
+  // The parts' fence works here: whatever reads past a part, an empty one too, is stopped.
+  CHECK(FenceHolds(0) && FenceHolds(4) && FenceHolds(nl::kHeaderBytes));
+
   // Passes 0 and 6: two draws, the window scissor restored after them.
   {
     const List list = DepthList();
@@ -743,6 +859,8 @@ int main() {
   CHECK(refused(R::kShader, [](List& l) { l.Type3(nl::kPm4ImLoad, {kPlaceholder, 0}); }));
   CHECK(refused(R::kShader, [](List& l) { l.Type3(nl::kPm4ImLoad, {kPlaceholder, 0x10009}); }));
   CHECK(refused(R::kShader, [](List& l) { l.Type3(nl::kPm4ImLoad, {kPlaceholder, 9, 0}); }));
+  // One word, and the list ends with it: the size word that is not there must not be read.
+  CHECK(refused(R::kShader, [](List& l) { l.Type3(nl::kPm4ImLoad, {kPlaceholder}); }));
   CHECK(refused(R::kShaderPlace, [](List& l) { l.Shader(true, 9); }));
   CHECK(refused(R::kLiterals,
                 [](List& l) { l.Type3(nl::kPm4LoadAluConstant, {kPlaceholder, 0x100, 16}); }));
@@ -765,6 +883,51 @@ int main() {
   }
   CHECK(std::string_view(nl::RefuseName(R::kLiteralsPlace)) == "literals-place");
   CHECK(std::string_view(nl::RefuseName(R::kWindowMix)) == "window-mix");
+
+  // Nothing is read past a list's end (the parts' fence stops what tries). A list that ends
+  // with a packet of any kind a list can hold, or a NOP, cut to one word, two, ... five: each is
+  // refused, as none has a place.
+  {
+    const std::pair<uint32_t, std::vector<uint32_t>> packets[] = {
+        {nl::kPm4DrawIndx, {0, Initiator(kStrip, 3), kPlaceholder, 3, 0}},
+        {nl::kPm4ImLoad, {kPlaceholder, 9, 0, 0, 0}},
+        {nl::kPm4LoadAluConstant, {kPlaceholder, 0x3F0, nl::kLiteralWords, 0, 0}},
+        {nl::kPm4SetBinMaskLo, {nl::kTileMasks[0], 0, 0, 0, 0}},
+        {nl::kPm4SetBinMaskHi, {0, 0, 0, 0, 0}},
+        {forza::scene_tiling::kPm4SetConstant, {nl::kTileWindowTarget, 0, 0, 0, 0}},
+        {forza::scene_tiling::kPm4Nop, {0, 0, 0, 0, 0}},
+    };
+    for (const auto& packet : packets) {
+      const uint32_t opcode = packet.first;
+      for (uint32_t words = 1; words <= packet.second.size(); ++words) {
+        const std::vector<uint32_t> values(packet.second.begin(), packet.second.begin() + words);
+        for (const bool predicated : {false, true}) {
+          CHECK(Refused([&](List& l) { l.Type3(opcode, values, predicated); }) != R::kNone);
+        }
+      }
+    }
+    // Every prefix of every list here, with the places that are in it: most are refused (a
+    // packet cut, a draw or a shader load without its place); the ones that convert agree with
+    // the interpreter like any list.
+    uint32_t prefixes = 0, converted = 0;
+    for (const List& whole : {DepthList(), DepthList(true), SmallTargetList(), SceneList()}) {
+      for (uint32_t words = 0; words < whole.pm4.size(); ++words, ++prefixes) {
+        const List cut = whole.Prefix(words);
+        const Built b = cut.Build();
+        std::vector<uint32_t> t;
+        if (!nl::Convert(b.input(), &t)) continue;
+        ++converted;
+        CHECK(nl::LiveKey(t.data(), b.input()) == nl::TemplateKey(t.data()));
+        AllModes(t, b);
+        if (!(t[nl::kTFlags] & nl::kTemplateTiled)) continue;
+        Built untiled = b;
+        CHECK(ref::Untile(untiled.pm4.data(), words) >= nl::kTiles);
+        CHECK(nl::Untiled(t.data(), untiled.pm4.data()) && !nl::Untiled(t.data(), b.pm4.data()));
+        AllModes(t, untiled, true);
+      }
+    }
+    CHECK(converted > 100 && converted < prefixes);
+  }
 
   // Changed lists: most are refused; the ones that convert agree like the rest.
   {

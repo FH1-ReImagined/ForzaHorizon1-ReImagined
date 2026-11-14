@@ -735,11 +735,11 @@ class Converter {
         }
         case kPm4ImLoad: {
           if (predicated) return No(Refuse::kPredicate, d);
+          // Two words, and only then are both the list's: the packet may be its last.
+          if (count != 2) return No(Refuse::kShader, d);
           const uint32_t address = Word(in.pm4, d + 1), size = Word(in.pm4, d + 2);
           // Vertex (0) or pixel (1) in the address word's low bits; the size in words, from 0.
-          if (count != 2 || (address & 3) > 1 || size == 0 || size >> 16) {
-            return No(Refuse::kShader, d);
-          }
+          if ((address & 3) > 1 || size == 0 || size >> 16) return No(Refuse::kShader, d);
           const uint32_t op = AddOp(kOpShader | ((address & 3) ? kOpPixel : 0),
                                     uint32_t(pool_.size()), size, 0, d + 1);
           pool_.push_back(address);

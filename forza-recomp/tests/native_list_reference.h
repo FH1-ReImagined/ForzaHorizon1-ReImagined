@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <vector>
 
 #include "platform/native_list.h"
@@ -254,9 +255,11 @@ class Harness {
   // select and starting bin mask. `run.untiled` must say whether the words are untiled.
   Verdict Check(const uint32_t* t, const uint8_t* pm4, uint32_t words, const Run& run) {
     Verdict v;
-    pool_.resize(t[kTPoolWords] + 1);
-    Resolve(t, pm4, pool_.data());
-    const uint32_t* pool = pool_.data();
+    // A block of exactly the pool's size, new for each run: a sanitizer build then sees a view
+    // that reads a word past it.
+    const std::unique_ptr<uint32_t[]> resolved(new uint32_t[t[kTPoolWords]]);
+    Resolve(t, pm4, resolved.get());
+    const uint32_t* pool = resolved.get();
     interpreted_.Reset(run.bin_mask);
     replayed_.Reset(run.bin_mask);
     Interpreter interpreter(pm4, words, run.bin_select, &interpreted_);
@@ -334,7 +337,6 @@ class Harness {
   }
 
   Machine interpreted_, replayed_, folded_;
-  std::vector<uint32_t> pool_;
 };
 
 // A small generator for made-up fixup values (xorshift64*).

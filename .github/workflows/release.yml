@@ -284,6 +284,9 @@ jobs:
         run: |
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/native_list_test.cpp -o "$RUNNER_TEMP/native-list-test"
           "$RUNNER_TEMP/native-list-test"
+          # Once more unoptimized and under the sanitizers: -O2 drops a read whose value goes unused, and with it a read past a list's end
+          g++ -std=c++20 -O0 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -D_GLIBCXX_SANITIZE_VECTOR -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/native_list_test.cpp -o "$RUNNER_TEMP/native-list-test-checked"
+          "$RUNNER_TEMP/native-list-test-checked"
       - if: runner.os == 'Linux'
         name: CPU drivers without rubber banding
         run: |

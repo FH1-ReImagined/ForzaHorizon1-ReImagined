@@ -4,6 +4,8 @@
 // (tests/native_list_reference.h). It prints counts only, as JSON: no word of a list, no name.
 //   g++ -std=c++20 -O2 -I forza-recomp/src -I forza-recomp/tests tools/native_list_check.cpp
 //   native_list_check FILE|-        (the stream; - is standard input)
+// Every part of a list is a block of exactly its size, so a build with
+// -fsanitize=address,undefined -D_GLIBCXX_SANITIZE_VECTOR reports a read past any of them.
 //
 // Stream (little-endian words): "NLC1", then per list: 1, pass group, patch table words, area C
 // words, PM4 words, records, entries, flags (1 the header's end marker is there, 2 the list's
@@ -18,6 +20,7 @@
 #include <map>
 #include <string>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -507,14 +510,14 @@ class Checker {
       }
       Modes(live.pm4, false, s.agree[variant]);
       if (!tiled) continue;
-      untiled_ = live.pm4;
-      ref::Untile(untiled_.data(), uint32_t(untiled_.size() / 4));
-      Modes(untiled_, true, s.agree_untiled[variant]);
+      std::vector<uint8_t> untiled = live.pm4;  // a copy of exactly the list's size
+      ref::Untile(untiled.data(), uint32_t(untiled.size() / 4));
+      Modes(untiled, true, s.agree_untiled[variant]);
       if (!variant) continue;
-      ListIn flat = live;
-      flat.pm4 = untiled_;
-      s.key_untiled += nl::LiveKey(t, flat.input()) == key;
-      s.untiled_refused += converter_.Convert(flat.input(), &other_).refuse == nl::Refuse::kUntiled;
+      nl::Input flat = live.input();
+      flat.pm4 = untiled.data();
+      s.key_untiled += nl::LiveKey(t, flat) == key;
+      s.untiled_refused += converter_.Convert(flat, &other_).refuse == nl::Refuse::kUntiled;
     }
     // The key must see a change of any static word: a PM4 word outside every slot, a table word,
     // a mask.
@@ -547,10 +550,18 @@ class Checker {
   nl::Converter converter_;
   ref::Harness harness_;
   std::vector<uint32_t> t_, other_, host_;
-  std::vector<uint8_t> named_, slot_type_, untiled_;
+  std::vector<uint8_t> named_, slot_type_;
 };
 
 bool Read(std::FILE* f, void* to, size_t bytes) { return std::fread(to, 1, bytes, f) == bytes; }
+// The stream's next `bytes` as a list's part: a vector made for it, of exactly that size. With
+// no spare capacity behind the part, a sanitizer build sees a read past its end.
+bool ReadPart(std::FILE* f, size_t bytes, std::vector<uint8_t>* to) {
+  std::vector<uint8_t> part(bytes);
+  if (bytes && !Read(f, part.data(), bytes)) return false;
+  *to = std::move(part);
+  return true;
+}
 bool ReadWords(std::FILE* f, uint32_t* to, size_t count) {
   uint8_t raw[4];
   for (size_t i = 0; i < count; ++i) {
@@ -604,23 +615,12 @@ int main(int argc, char** argv) {
     l.records = head[5];
     l.entries = head[6];
     l.flags = head[7];
-    // One spare word each, so an empty part still has an address.
-    l.header.assign(nl::kHeaderBytes, 0);
-    l.table.assign(size_t(head[2]) * 4 + 4, 0);
-    l.area_c.assign(size_t(head[3]) * 4 + 4, 0);
-    l.pm4.assign(size_t(head[4]) * 4 + 4, 0);
-    l.record_words.assign((size_t(head[5]) + head[6]) * 8 + 4, 0);
-    if (!Read(f, l.header.data(), nl::kHeaderBytes) ||
-        !Read(f, l.table.data(), size_t(head[2]) * 4) ||
-        !Read(f, l.area_c.data(), size_t(head[3]) * 4) ||
-        !Read(f, l.pm4.data(), size_t(head[4]) * 4) ||
-        !Read(f, l.record_words.data(), (size_t(head[5]) + head[6]) * 8)) {
+    if (!ReadPart(f, nl::kHeaderBytes, &l.header) || !ReadPart(f, size_t(head[2]) * 4, &l.table) ||
+        !ReadPart(f, size_t(head[3]) * 4, &l.area_c) || !ReadPart(f, size_t(head[4]) * 4, &l.pm4) ||
+        !ReadPart(f, (size_t(head[5]) + head[6]) * 8, &l.record_words)) {
       std::fprintf(stderr, "native_list_check: stream cut off\n");
       return 2;
     }
-    l.table.resize(size_t(head[2]) * 4);
-    l.area_c.resize(size_t(head[3]) * 4);
-    l.pm4.resize(size_t(head[4]) * 4);
     checker.List(l);
   }
 
