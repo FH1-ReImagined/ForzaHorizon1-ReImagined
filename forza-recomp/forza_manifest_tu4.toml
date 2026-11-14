@@ -12,7 +12,7 @@ game_root = "../extracted/tu4"
 [entrypoint]
 file_path = "../extracted/tu4/default.xex"
 out_directory_path = "generated_tu4/default"
-includes = ["hints_tu4/tail_targets.toml", "hints_tu4/rexcrt.toml", "hints_tu4/default_indirect_entries.toml", "hints_tu4/default_orphan_functions.toml", "hints_tu4/physics_loader_check.toml", "hints_tu4/tu4_fixes.toml", "hints_tu4/resource_data_release.toml"]
+includes = ["hints_tu4/tail_targets.toml", "hints_tu4/rexcrt.toml", "hints_tu4/default_indirect_entries.toml", "hints_tu4/default_orphan_functions.toml", "hints_tu4/physics_loader_check.toml", "hints_tu4/tu4_fixes.toml", "hints_tu4/resource_data_release.toml", "hints_tu4/wide_world.toml"]
 
 [[modules]]
 guest_path = "XMediaFacade_default.xex"

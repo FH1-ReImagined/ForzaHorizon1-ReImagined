@@ -7,6 +7,7 @@
 #include "debug/frame_stats.h"
 #include "debug/stall_watch.h"
 #include "hooks/fm4_track_mount.h"
+#include "hooks/wide_world.h"
 #include "kernel/live.h"
 #include "platform/achievement_toast.h"
 #include "platform/discord_presence.h"
@@ -222,6 +223,8 @@ class ForzaApp : public rex::ReXApp {
     // An imported FM4 circuit (#648, experimental: the fm4_track_dir setting), mounted before the
     // mods so their loose-file checks see its files.
     forza::fm4_mount::Install(vfs);
+    // A world past 8,192 m (src/hooks/wide_world.cpp): after the mounted world's defaults.
+    forza::wide_world::Configure();
     // Before the game opens its first archive.
     forza::InstallMods(vfs, user_data_root(), cache_root());
     const std::filesystem::path host = cache_root() / "cache";

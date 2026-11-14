@@ -141,6 +141,7 @@ set(FORZA_SOURCES
     src/hooks/database_query.cpp
     src/hooks/fm4_track.cpp
     src/hooks/fm4_track_mount.cpp
+    src/hooks/wide_world.cpp
     src/hooks/fm4_lap_timer.cpp
     src/hooks/crowd_anim.cpp
     src/hooks/movie_texture.cpp

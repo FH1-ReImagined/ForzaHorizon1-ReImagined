@@ -206,6 +206,9 @@ void Install(rex::filesystem::VirtualFileSystem* vfs) {
   track_path = "game:\\media\\tracks\\" + key;
   REXLOG_INFO("FM4 track: {} mounted at {} (experimental)", mods::Utf8(dir), track_path);
 
+  // a world that reaches past 8,192 m says so (wide_world.cpp)
+  if (fs::is_regular_file(dir / "wide_world.txt", ec)) Default("FORZA_WIDE_WORLD", "1");
+
   if (!fs::is_regular_file(media / "tracks" / track / "fm4_stream_blocks.txt", ec)) {
     REXLOG_WARN("FM4 track: {} has no fm4_stream_blocks.txt: not a converted track, no switches set",
                 track);
