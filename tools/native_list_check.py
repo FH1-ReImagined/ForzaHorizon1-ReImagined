@@ -17,8 +17,8 @@ Each .rmb.bin member is read (tools/rmb_lists.py) and its lists are handed to th
     packets against scene_msaa's;
   - runs both views of each template beside a plain PM4 interpreter: the state before every
     draw, every draw's arguments and the state after the list, for each tile's bin select,
-    without tiling, with a bin mask that excludes the bin, and untiled; once with the words as
-    extracted and once with every place written;
+    without tiling, with a bin mask that excludes the bin, and untiled (in the mode Untiled()
+    names for the words); once with the words as extracted and once with every place written;
   - checks the key: the same after fixups, with the fixed-up flag and untiled, another when a
     static word changes;
   - counts the distinct per-draw parts the lists reduce to.
@@ -208,6 +208,9 @@ def failures(c, no_refusals=False, expect_reduction=None):
         out.append("%d slot(s) no record names" % conv["slots_no_record_names"])
     if conv["tile_bound_agree"] != tiled:
         out.append("tile-bound packets differ on %d list(s)" % (tiled - conv["tile_bound_agree"]))
+    if conv["untiled_told"] != tiled:
+        out.append("Untiled() does not tell tiled from untiled on %d list(s)"
+                   % (tiled - conv["untiled_told"]))
     for name, a in c["proof"].items():
         want = tiled if "/untiled/" in name else converted
         if a["runs"] != want:
@@ -286,7 +289,9 @@ def report(c, problems):
         say("  lists with the same slots when the buffer fixups (area C) are left out: %d"
             % conv["same_slots_without_area_c"])
         say("  lists scene_msaa unties: %d; tile-bound packets as scene_tiling.h's on %d "
-            "(%d packets)" % (conv["tiled"], conv["tile_bound_agree"], conv["tile_bound_packets"]))
+            "(%d packets); Untiled() tells the tiled words from the untiled on %d"
+            % (conv["tiled"], conv["tile_bound_agree"], conv["tile_bound_packets"],
+               conv["untiled_told"]))
         say("against the PM4 interpreter (runs: all agree / state before every draw, ops and draw "
             "view / draws compared):")
         for name, p in c["proof"].items():

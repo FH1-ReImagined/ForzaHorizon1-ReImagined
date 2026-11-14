@@ -24,11 +24,22 @@ def words(*values):
     return struct.pack(">%dI" % len(values), *values)
 
 
-def depth_list(stray=0x3F800000):
+def tile_block():
+    """The three tiles' windows, as a list recorded for them starts."""
+    block = [0xC0006100, 0]
+    for tile, mask in enumerate((0x3, 0xC, 0x30)):
+        block += [0xC0006000, mask, 0xC0032D01, 0x00040080, 0x7000 + tile, 0x8000 + tile,
+                  0x9000 + tile]
+    return block + [0xC0006000, 0xFFFFFFFF, 0xC0006100, 0]
+
+
+def depth_list(stray=0x3F800000, tiles=False):
     """A list in the shape of a depth pass: vertex constants, the vertex shader, state, the
     vertex buffer, one draw. Returns its PM4 (with the trailer), patch table, area C, records
-    and entries. `stray` is one of the constants' words."""
-    pm4 = [0x80000000] * 3
+    and entries. `stray` is one of the constants' words. With `tiles` it is in the shape of a
+    scene pass's instead: a tile block first, a render target write, and no window write."""
+    pm4 = (tile_block() + [2 << 16 | 0x2000, 0x21, 0x22, 0x23]) if tiles else []
+    pm4 += [0x80000000] * 3
     pm4 += [15 << 16 | 0x4000] + [stray] + [0x40000000 + i for i in range(15)]
     pm4 += [3 << 16 | 0x8000 | 0x57E, 0x00010011, 1, 0, 0]
     shader = len(pm4) + 1
@@ -41,7 +52,8 @@ def depth_list(stray=0x3F800000):
     draw = len(pm4) + 1
     pm4 += [0xC0032201, 0, 12 << 16 | 6, PLACEHOLDER, 0x40000000 | 12]
     pm4 += [0x057F, draw - 1]
-    pm4 += [2 << 16 | 0x2080, 0, 0, 0x02D00500]
+    if not tiles:
+        pm4 += [2 << 16 | 0x2080, 0, 0, 0x02D00500]
     # The shader's place and the two buffers'; the buffers are in area C too.
     table = [0x88000000 | shader << 6, 0x40, 0x88000000 | fetch << 6 | 4, 0,
              0x88000000 | draw << 6, 0]
@@ -154,6 +166,7 @@ class Check(unittest.TestCase):
             z.writestr("made_up.00002.rmb.bin", both)  # the archives repeat members
             z.writestr("made_up.00003.rmb.bin", model({18: depth_list()}))
             z.writestr("made_up.00004.rmb.bin", b"not a model")
+            z.writestr("made_up.00005.rmb.bin", model({13: depth_list(tiles=True)}))
             z.writestr("made_up.00001.pgeo", b"another kind of member")
 
     @classmethod
@@ -172,27 +185,34 @@ class Check(unittest.TestCase):
 
     def test_counts_and_proof(self):
         status, c, text = self.run_tool()
-        self.assertEqual(c["archive"], dict(archives=1, members=4, distinct_members=3, read=4,
-                                            unparsed=1, without_lists=0, lists=5,
+        self.assertEqual(c["archive"], dict(archives=1, members=5, distinct_members=4, read=5,
+                                            unparsed=1, without_lists=0, lists=6,
                                             bytes=c["archive"]["bytes"]))
-        self.assertEqual(c["census"]["lists"], 5)
-        self.assertEqual(c["census"]["group_lists"], {"0": 2, "12": 2, "18": 1})
-        self.assertEqual(c["census"]["type3_opcodes"], {"0022": 3, "0027": 3, "0036": 2})
-        self.assertEqual(c["census"]["one_register_packets"], {"057E": 3})
+        self.assertEqual(c["census"]["lists"], 6)
+        self.assertEqual(c["census"]["group_lists"], {"0": 2, "12": 2, "13": 1, "18": 1})
+        self.assertEqual(c["census"]["type3_opcodes"], {"0022": 4, "0027": 4, "002D": 3, "0036": 2,
+                                                        "0060": 4, "0061": 2})
+        self.assertEqual(c["census"]["one_register_packets"], {"057E": 4})
         self.assertEqual(c["census"]["subcode_62_63_entries"], 0)
-        self.assertEqual(c["census"]["record_types"], {"1": 3, "2": 3, "9": 3})
+        self.assertEqual(c["census"]["record_types"], {"1": 4, "2": 4, "9": 4})
         conversion = c["conversion"]
-        self.assertEqual((conversion["converted"], conversion["refused"]), (3, {"opcode": 2}))
-        self.assertEqual(conversion["distinct_keys"], 1)
-        self.assertEqual(conversion["slots_by_type"], {"1": 3, "2": 3, "9": 3})
+        self.assertEqual((conversion["converted"], conversion["refused"]), (4, {"opcode": 2}))
+        self.assertEqual(conversion["distinct_keys"], 2)
+        self.assertEqual(conversion["slots_by_type"], {"1": 4, "2": 4, "9": 4})
         self.assertEqual((conversion["record_places_checked"], conversion["record_places_agree"],
-                          conversion["slots_no_record_names"]), (15, 15, 0))
+                          conversion["slots_no_record_names"]), (20, 20, 0))
+        # The list recorded for the tiles: its three window writes and its render target write
+        # are scene_msaa's packets, and Untiled() tells its two forms apart.
+        self.assertEqual((conversion["tiled"], conversion["tile_bound_agree"],
+                          conversion["tile_bound_packets"], conversion["untiled_told"]),
+                         (1, 1, 4, 1))
         for name, runs in c["proof"].items():
-            want = 0 if "/untiled/" in name else 3
+            want = 1 if "/untiled/" in name else 4
             self.assertEqual((runs["runs"], runs["all"], runs["draws"]), (want, want, want), name)
-        self.assertEqual(c["key"]["same_after_fixups"], 3)
-        self.assertEqual(c["key"]["sees_changed_pm4_word"], 3)
-        self.assertEqual(c["reduction"]["register_deltas"], 1)
+        self.assertEqual(c["key"]["same_after_fixups"], 4)
+        self.assertEqual(c["key"]["sees_changed_pm4_word"], 4)
+        self.assertEqual((c["key"]["same_untiled"], c["key"]["untiled_refused_as_input"]), (1, 1))
+        self.assertEqual(c["reduction"]["register_deltas"], 2)
         self.assertEqual(c["draws_without_vertex_shader"]["draws"], 0)
         # The member that is no model is a failure of the run; a refusal alone is not.
         self.assertEqual(status, 1)
@@ -200,16 +220,19 @@ class Check(unittest.TestCase):
         self.assertIn("1 member(s) without a readable list table", text)
         parsed = dict(c, archive=dict(c["archive"], unparsed=0))
         self.assertEqual(native_list_check.failures(parsed), [])
+        wrong = dict(parsed, conversion=dict(conversion, untiled_told=0))
+        self.assertEqual(native_list_check.failures(wrong),
+                         ["Untiled() does not tell tiled from untiled on 1 list(s)"])
         self.assertNotIn("made_up", text)  # counts only: no member name
 
     def test_distinct_members_and_refusals(self):
         status, c, _ = self.run_tool("--distinct", "--no-refusals",
                                      "--expect-reduction", "1,1,1,1,2")
-        self.assertEqual((c["archive"]["read"], c["census"]["lists"]), (3, 3))
+        self.assertEqual((c["archive"]["read"], c["census"]["lists"]), (4, 4))
         problems = native_list_check.failures(c, True, [1, 1, 1, 1, 2])
         self.assertEqual(status, 1)
         self.assertIn("1 list(s) refused", problems)
-        self.assertTrue(any(p.startswith("reduction [1, 1, 1, 1, 1]") for p in problems), problems)
+        self.assertTrue(any(p.startswith("reduction [2, 1, 2, 1, 1]") for p in problems), problems)
 
 
 if __name__ == "__main__":

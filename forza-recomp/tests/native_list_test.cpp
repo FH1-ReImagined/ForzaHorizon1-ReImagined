@@ -380,10 +380,12 @@ List SmallTargetList() {
 
 // The scene pass (pass 4): a tile block, the marks, the block again, the draws, the block once
 // more. Its surface chain starts with the modifier entry, which names dword 0 and writes nothing.
-List SceneList() {
+// `padding` words in front make it a list that starts otherwise (no model has one).
+List SceneListAfter(uint32_t padding) {
   List l;
   l.flags = 0x886;
   std::vector<Entry> surfaces = {{0, nl::kSurfaceModifier}}, viewport;
+  l.Pad(padding);
   l.TileBlock();
   SurfaceMarks(l, &surfaces);
   l.TileBlock();
@@ -394,6 +396,7 @@ List SceneList() {
   l.Chain(viewport);
   return l;
 }
+List SceneList() { return SceneListAfter(0); }
 
 struct Mode {
   uint64_t select, mask;
@@ -522,12 +525,18 @@ uint32_t Mutations(const List& base, uint32_t rounds, uint64_t seed) {
         run.bin_mask = mode.mask;
         CHECK(harness.Check(t.data(), b.pm4.data(), uint32_t(l.pm4.size()), run).all());
       }
-      if (!(t[nl::kTFlags] & nl::kTemplateTiled)) continue;
+      // The lists scene_msaa unties are the tiled templates, no other. Of a live list a caller
+      // knows what Untiled() says: that has to be what scene_msaa did to it.
+      const bool tiled = (t[nl::kTFlags] & nl::kTemplateTiled) != 0;
+      CHECK(tiled == ref::SceneMsaaUnties(l.flags, b.pm4.data(), uint32_t(l.pm4.size())));
+      CHECK(!nl::Untiled(t.data(), b.pm4.data()));
+      if (!tiled) continue;
       Built untiled = b;
-      ref::Untile(untiled.pm4.data(), uint32_t(l.pm4.size()));
+      const bool changed = ref::Untile(untiled.pm4.data(), uint32_t(l.pm4.size())) != 0;
+      CHECK(changed && nl::Untiled(t.data(), untiled.pm4.data()));
       CHECK(nl::LiveKey(t.data(), untiled.input()) == nl::TemplateKey(t.data()));
       nl::Run flat;
-      flat.untiled = true;
+      flat.untiled = nl::Untiled(t.data(), untiled.pm4.data());
       CHECK(harness.Check(t.data(), untiled.pm4.data(), uint32_t(l.pm4.size()), flat).all());
     }
   }
@@ -724,7 +733,49 @@ int main() {
     const Built ub = unflagged.Build();
     const std::vector<uint32_t> ut = Converted(ub);
     CHECK(ut[nl::kTFlags] == 0 && ut[nl::kTTileBoundCount] == 0);
+    CHECK(!ref::SceneMsaaUnties(unflagged.flags, ub.pm4.data(), words));
+    CHECK(ref::SceneMsaaUnties(list.flags, b.pm4.data(), words));
     AllModes(ut, ub);
+  }
+
+  // A list recorded for the tiles that does not start with a tile block. Its word 4 is a value
+  // of the first packet that reads as a tile's window write: scene_msaa, which goes by that
+  // word's bits, would turn the render target write into a NOP and leave word 4, so nothing
+  // could tell the list's two forms apart. Such a list is refused.
+  {
+    const auto value_at_word_4 = [] {
+      List l;
+      l.flags = 0x886;
+      std::vector<uint32_t> constants = Values(16, 1);
+      constants[3] = nl::kTileWindowHeader;
+      l.Regs(0x4000, constants);
+      l.Regs(0x2000, Values(3, 2));
+      return l;
+    };
+    const List list = value_at_word_4();
+    Built b = list.Build();
+    const uint32_t words = uint32_t(list.pm4.size());
+    CHECK(nl::Word(b.pm4.data(), 4) == nl::kTileWindowHeader);
+    CHECK(ref::SceneMsaaUnties(list.flags, b.pm4.data(), words));
+    std::vector<uint32_t> t = {1};
+    const nl::Result result = nl::Convert(b.input(), &t);
+    CHECK(result.refuse == R::kTileBlock && result.at == 0 && t.empty());
+    // What scene_msaa would do to it: one packet's header, and not word 4.
+    CHECK(ref::Untile(b.pm4.data(), words) == 1);
+    CHECK(nl::Word(b.pm4.data(), 4) == nl::kTileWindowHeader);
+    // Whatever word 4 holds: a list with the tile flag starts with a tile block or is refused.
+    CHECK(Refused([](List& l) { l.pm4[4] = 0x3F800000; }, value_at_word_4) == R::kTileBlock);
+    CHECK(Refused([](List&) {}, [] { return SceneListAfter(1); }) == R::kTileBlock);
+    CHECK(Refused([](List&) {}, [] { return SceneListAfter(27); }) == R::kTileBlock);
+    // Without the flag scene_msaa leaves such a list alone, and it converts as any other.
+    List unflagged = list;
+    unflagged.flags = 0x86;
+    const Built ub = unflagged.Build();
+    const std::vector<uint32_t> ut = Converted(ub);
+    CHECK(ut[nl::kTFlags] == 0 && ut[nl::kTTileBoundCount] == 0);
+    CHECK(!ref::SceneMsaaUnties(unflagged.flags, ub.pm4.data(), words));
+    AllModes(ut, ub);
+    CHECK(Refused([](List& l) { l.flags = 0x86; }, [] { return SceneListAfter(1); }) == R::kNone);
   }
 
   // Refusals. Each names what is outside the format; every reason is reached.

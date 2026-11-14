@@ -144,7 +144,8 @@ enum class Refuse : uint32_t {
   kOneRegister,    // a one-register packet that is not a mark
   kFetchRange,     // fetch constants not written whole
   kPredicate,      // the predicate bit on a packet other than a draw or a tile's window
-  kTileBlock,      // a bin mask or SET_CONSTANT that is not part of a tile block
+  kTileBlock,      // a bin mask or SET_CONSTANT that is not part of a tile block, or a list
+                   // recorded for the tiles (kFlagTiles) that does not start with one
   kWindowMix,      // tile blocks and a type-0 write of the window registers in one list
   kDraw,           // a draw that is not DRAW_INDX from an index buffer, 4 words
   kDrawPlace,      // a draw whose index address is not a place
@@ -226,8 +227,9 @@ enum : uint32_t {
   kTMasks,
   kTHeaderWords,
 };
-// The list is what scene_msaa unties: recorded for the tiles and starting with a tile block.
-// Only such a template has tile-bound packets, and Run::untiled applies to it alone.
+// The list is what scene_msaa unties: recorded for the tiles and starting with a tile block (its
+// word 4 the first tile's window write). Only such a template has tile-bound packets, and
+// Run::untiled applies to it alone.
 constexpr uint32_t kTemplateTiled = 1;
 
 // An op: kind in the low byte of word 0, flags above it, then three words.
@@ -669,6 +671,7 @@ class Converter {
     const uint32_t n = in.pm4_words;
     tile_blocks_ = 0;
     window_write_ = kNone;
+    starts_with_tiles_ = false;
     for (uint32_t d = 0; d < n;) {
       const uint32_t header = Word(in.pm4, d);
       const uint32_t type = header >> 30;
@@ -790,6 +793,7 @@ class Converter {
             if (value) pool_.push_back(w);
           }
           AddOp(kOpTile, pool, d, 0, d);
+          if (d == 0) starts_with_tiles_ = true;
           for (uint32_t tile = 0; tile < kTiles; ++tile) {
             bound_.push_back(uint64_t(d + 4 + tile * 7) << 32 | kTileWindowHeader);
           }
@@ -807,11 +811,15 @@ class Converter {
       }
       d += 1 + count;
     }
-    // The list is one scene_msaa unties (src/hooks/scene_tiling.cpp, UntileList): recorded for
-    // the tiles, its word 4 the first tile's window write.
-    const uint32_t fifth = n > 4 ? Word(in.pm4, 4) : 0;
-    tiled_ = (cb_flags_ & kFlagTiles) && fifth >> 30 == 3 &&
-             ((fifth >> 8) & 0x7F) == scene_tiling::kPm4SetConstant;
+    // A list recorded for the tiles is one scene_msaa unties (src/hooks/scene_tiling.cpp,
+    // UntileList), and it starts with a tile block: its word 4 is the first tile's window write.
+    // scene_msaa goes by the bits of that word and Untiled() by its NOP, whatever the word is.
+    // So a list with the flag that starts otherwise is refused: its word 4 could be a value of
+    // another packet that reads as the header (scene_msaa would untie the list's other packets
+    // and leave that word, and Untiled() could not tell the two forms apart), or a place, whose
+    // value a template must not depend on.
+    tiled_ = (cb_flags_ & kFlagTiles) != 0;
+    if (tiled_ && !starts_with_tiles_) return No(Refuse::kTileBlock, 0);
     return {};
   }
 
@@ -1137,7 +1145,7 @@ class Converter {
   }
 
   uint32_t cb_flags_ = 0, tile_blocks_ = 0, window_write_ = kNone;
-  bool tiled_ = false;
+  bool tiled_ = false, starts_with_tiles_ = false;
   std::vector<uint32_t> ops_, op_dword_, draws_, deltas_, pool_, info_, place_of_, last_, writes_;
   std::vector<uint64_t> bound_;  // list dword << 32 | header
   std::vector<uint8_t> kind_;

@@ -143,6 +143,9 @@ struct Stats {
   uint64_t group_refused[kGroups] = {};
   KeySet keys;
   uint64_t tiled = 0, tile_bound_agree = 0, tile_bound_packets = 0;
+  // Lists scene_msaa unties for which Untiled() says "no" of the tiled words and "yes" of the
+  // untiled ones, before and after the fixups.
+  uint64_t untiled_told = 0;
   // Slots against the game's own lookup records.
   uint64_t record_places_checked = 0, record_places_agree = 0, slots_total = 0, slots_unnamed = 0;
   // Lists whose slots are the same without the buffer fixups (area C): the patch table names
@@ -498,6 +501,7 @@ class Checker {
     const bool tiled = t[nl::kTFlags] & nl::kTemplateTiled;
     ListIn live = l;
     ref::Random random(s.lists);
+    bool told = true;
     for (uint32_t variant = 0; variant < 2; ++variant) {
       if (variant) {
         // Every place written with a made-up value, as after the game's fixups.
@@ -511,14 +515,19 @@ class Checker {
       Modes(live.pm4, false, s.agree[variant]);
       if (!tiled) continue;
       std::vector<uint8_t> untiled = live.pm4;  // a copy of exactly the list's size
-      ref::Untile(untiled.data(), uint32_t(untiled.size() / 4));
-      Modes(untiled, true, s.agree_untiled[variant]);
+      const bool changed = ref::Untile(untiled.data(), uint32_t(untiled.size() / 4)) != 0;
+      // Of a live list a caller knows what Untiled() says: the untiled runs take that answer,
+      // and it has to be what scene_msaa did.
+      const bool says = nl::Untiled(t, untiled.data());
+      told = told && changed && says && !nl::Untiled(t, live.pm4.data());
+      Modes(untiled, says, s.agree_untiled[variant]);
       if (!variant) continue;
       nl::Input flat = live.input();
       flat.pm4 = untiled.data();
       s.key_untiled += nl::LiveKey(t, flat) == key;
       s.untiled_refused += converter_.Convert(flat, &other_).refuse == nl::Refuse::kUntiled;
     }
+    s.untiled_told += tiled && told;
     // The key must see a change of any static word: a PM4 word outside every slot, a table word,
     // a mask.
     const uint32_t* slot = t + t[nl::kTSlots];
@@ -689,6 +698,7 @@ int main(int argc, char** argv) {
   j.Num("tiled", s.tiled);
   j.Num("tile_bound_agree", s.tile_bound_agree);
   j.Num("tile_bound_packets", s.tile_bound_packets);
+  j.Num("untiled_told", s.untiled_told);
   j.Close();
 
   j.Open("proof");

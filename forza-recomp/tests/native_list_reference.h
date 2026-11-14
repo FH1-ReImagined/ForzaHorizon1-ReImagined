@@ -375,6 +375,15 @@ inline void FixUp(const uint32_t* t, uint8_t* pm4, Random* random) {
   }
 }
 
+// Whether scene_msaa unties a list with these header flags (src/hooks/scene_tiling.cpp,
+// UntileList): one recorded for the tiles whose word 4 reads as a SET_CONSTANT packet. It asks
+// nothing else of the word, so neither does this.
+inline bool SceneMsaaUnties(uint32_t cb_flags, const uint8_t* pm4, uint32_t words) {
+  if (!(cb_flags & kFlagTiles) || words <= 4) return false;
+  const uint32_t fifth = Word(pm4, 4);
+  return fifth >> 30 == 3 && ((fifth >> 8) & 0x7F) == scene_tiling::kPm4SetConstant;
+}
+
 // Untiles a list the way scene_msaa does (src/hooks/scene_tiling.cpp, UntileList): every
 // tile-bound packet's header becomes a NOP of the same length. Returns how many.
 inline size_t Untile(uint8_t* pm4, uint32_t words) {
