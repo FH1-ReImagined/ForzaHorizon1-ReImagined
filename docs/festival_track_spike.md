@@ -1373,21 +1373,55 @@ drive to it when each thing was ready:
 
 The fix (hooks/fm4_track.cpp, `fm4_stream_textures.h`): on a converted track a failed
 allocation of that caller comes from an arena of the hook's own: 8 MB chunks of the guest's 4
-KB-page physical heap, taken as they are needed (64 MB at most) and kept, cut into blocks
-first fit. The game's free of the pointer (sub_82423490) gives the block back, and the arena
-does not hand it out again for two seconds. When the arena is full the allocation fails as
-before and the loader tries again. `FORZA_FM4_TEX_FALLBACK=0` turns it off, with the model
-buffers' fallback above. Nothing changes for Colorado: only a converted track's failed
-allocations are taken over.
+KB-page physical heap, taken as they are needed (64 MB at most), cut into blocks first fit.
+The game's free of the pointer (sub_82423490) gives the block back, and the arena does not
+hand it out again for two seconds. The chunks are not given back: what the arena has taken,
+up to the 64 MB, it keeps for the session. For those two seconds after a reload at a busy
+place (every texture let go and asked for again at once) it can hold up to twice what is in
+use: with the Le Mans lap's trace replayed through the arena, such a reload 20 s into the lap
+takes it to 56 MB, and a second one a lap later to the 64 MB. When the arena is full the
+allocation fails as before and the loader tries again. The same when the guest's heap has no
+8 MB left in one piece for another chunk: the hook then asks the heap again a second later,
+not on every failed load (a failed request costs two error lines of the SDK's in the log, and
+there are hundreds of failed loads a second at a busy place), and says so in the log once.
+`FORZA_FM4_TEX_FALLBACK=0` turns it off, with the model buffers' fallback above. Nothing
+changes for Colorado: only a converted track's failed allocations are taken over.
 
 A first attempt allocated each block from the guest's heap and released it there, as the model
-buffers' fallback does, so the same pages were taken again at once. Every texture loaded, and
-after a minute of driving the road and the scenery showed other textures' texels, or opaque
-slabs where a billboard's cut-out should be (Le Mans from 900 m of the drive, Suzuka from
-1,100 m). The emulated GPU reads a texture's memory later than the game's thread lets it go,
-and keeps its own copy by address; with memory that stays the arena's and rests before it is
-used again, all 28 spots of the two drives (14 on each circuit) drew right. Which of the two
-it takes was not separated.
+buffers' fallback does. Every texture loaded, and after a minute of driving the road and the
+scenery showed other textures' texels, or opaque slabs where a billboard's cut-out should be
+(Le Mans from 900 m of the drive, Suzuka from 1,100 m). The cause is known, and it is the
+release, not how soon a block is used again. It is in the SDK's write watch (ReIGlue, our
+ReXGlue fork: `PhysicalHeap` in system/xmemory.cpp, `SharedMemory` in
+graphics/shared_memory.cpp):
+
+- The emulated GPU keeps its own copy of guest memory and is told of a write only on pages
+  it watches. A watch can only be set on pages that are allocated
+  (`PhysicalHeap::EnableAccessCallbacks` skips the others).
+- A release reports the block written, so the GPU's copy of it is dropped. A frame still
+  queued then draws from the released pages once more: they are uploaded again and marked
+  up to date (`SharedMemory::MakeRangeValid`), with no watch on them.
+- The pages are allocated again and another texture's file is read into them
+  (`XFile::ReadInternal` reports the write, to pages nobody watches). The GPU side takes the
+  pages it holds as up to date as they are, so it never sets the watch either, and draws the
+  old bytes from then on.
+
+Run outside the game against the SDK's own memory and shared-memory code: a block that stays
+allocated has every rewrite reported, also with no rest at all (200 loads into blocks used
+again, with a GPU read between the free and the next load: no stale page); release, a GPU
+read, allocate, load: all 64 pages of the block stale, and stale for later writes too. So the
+arena is right because it never releases its memory, and the two seconds only cover the frames
+already queued that still draw the texture that was let go (a GPU thread stopped for longer
+than that with frames queued would draw those frames from the next texture's bytes; the
+game's own heap, which uses a freed block again at once, is more exposed to that).
+
+One way in was left: a new chunk can cover pages that the model buffers' fallback released
+(it still releases each block, to the same heap) and that a queued frame read once more. In
+the same program, 3 of 41 textures loaded into such a chunk drew stale pages. The hook
+therefore makes the GPU side drop its copy of every chunk as it is taken (the chunk's pages
+are watched, then reported written once: `EnablePhysicalMemoryAccessCallbacks`,
+`TriggerPhysicalMemoryCallbacks`); with that, none of the 41. All 28 spots of the two drives
+(14 on each circuit) drew right, before that change and with it.
 
 After, the same laps:
 
@@ -1416,6 +1450,24 @@ sequence's fly-over are bit-identical with the build before (107 of 146 between 
 one build; the others are among the first 51 frames of a start), and its log has no line of
 the arena.
 
+With each chunk's copy dropped on the GPU side as it is taken and the rule for a refused
+chunk (the two changes after the laps above), a lap of each circuit again, the same way:
+
+| | Le Mans | Suzuka |
+| --- | --- | --- |
+| Streamed textures loaded, of the times asked for | 92% of 2,947 | 99% of 2,796 |
+| Not loaded: with a file / without one | 4 / 244 | 1 / 34 |
+| Textures with a file that never loaded in the lap | 0 | 0 |
+| Most waiting with a file at one moment | 27 | 87, for 0.13 s |
+| Instances with textures after they were listed, 100 km/h or more | 0% (3,534) | 0% (883) |
+| The same, any speed, from the start | 4% | 2% |
+| In the arena at most (taken from the guest's heap) | 27.8 MB, 421 textures (40 MB) | 15.3 MB, 354 textures (24 MB) |
+| Frames over 40 ms (worst) | 4 of 10,574 (65.6 ms) | 13 of 6,165 (66.6 ms) |
+
+No chunk was refused in these laps (the guest's heap always had the 8 MB), so the rule for
+that is covered by its test and not by a run. The 14 spots of each circuit's drive drew right
+again.
+
 What was tried and dropped: a second streaming centre two hexes ahead of the car at speed
 (the game's idle second centre given the zones ahead). It made the zones live 530 to 600 m
 ahead instead of 230 to 305 m, which was never what was late; a third of the texture loads
@@ -1437,7 +1489,16 @@ What is left:
   `FM4_PVS_ZONE_TEXTURE_FLAG`): the largest mip a circuit's streamed texture shows is its
   second one.
 - The model buffers' fallback above still allocates and releases each block, as the first
-  attempt here did. No wrong texels were seen from it in any run.
+  attempt here did, so a model's vertices or indices can meet the same hole in the write
+  watch. The game's destroy of a buffer (sub_82AA5A80) calls the D3D library's wait for the
+  GPU (sub_824192A0) before the free when the buffer still has a fence pending, which covers
+  the plain case; whether the track's recorded command lists set that fence is not looked
+  at. No wrong geometry or texels were seen from it in any run. The fix belongs in the SDK:
+  no page marked up to date whose watch could not be set, or the GPU's copy dropped when
+  memory is allocated.
+- Not covered by any run: a world made again while the arena holds blocks (the game's free of
+  each texture gives its block back; if a world's unload does not free them one by one, they
+  stay booked and the arena fills), Windows, the D3D12 renderer and ReGPU.
 - Not run: D3D12 and ReGPU, Windows, and other circuits than these two. The arena's 64 MB were
   not reached.
 
