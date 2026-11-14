@@ -681,9 +681,9 @@ game's fixups. Counts, from the game's files on the test PC (2026-11-14) **[M]**
 - **The FM4 circuit is not covered in its scene passes.** FM4's models have their own lists for
   the two-tile and the one-pass scene (groups 9-11 and 15-17, which no Horizon model has), and
   their tile blocks set the window with `SET_CONSTANT2` and have two tiles in pass 3: all 2,798
-  lists flagged 0x800 are refused as `tile-block`. Two lists write `RB_ALPHA_REF` (0x210E), outside
-  the register set. The other 3,287 (depth pre-pass, the 256x256 passes, the one-pass scene)
-  convert and agree. Six imported circuits together: 43,545 lists, 22,656 converted, 20,862
+  lists flagged 0x800 are refused as `tile-block`. Two lists of the one-pass scene are refused as
+  `register`: they write `RB_ALPHA_REF` (0x210E). The other 3,287 (depth pre-pass, the 256x256
+  passes, the one-pass scene) convert and agree. Six imported circuits together: 43,545 lists, 22,656 converted, 20,862
   `tile-block`, 27 `register`. FM4's lists also have no SCRATCH_REG6 marks, name their vertex and
   index buffers in the buffer fixups only, and have all mask bits set in every pass. These
   circuits were imported before the importer began to turn the window write at the end of their
