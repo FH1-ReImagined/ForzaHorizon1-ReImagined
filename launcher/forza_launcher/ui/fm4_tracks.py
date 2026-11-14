@@ -109,12 +109,17 @@ class Fm4TracksCard(QWidget):
         self.table.setMaximumHeight(220)
         self.table.setSizeAdjustPolicy(QTableWidget.AdjustToContents)
         cl.addWidget(self.table)
+        # the worlds' buttons say what they need here: their own notes are tooltips only
+        cl.addWidget(label("Forza Horizon 2's worlds (experimental): free roam in Forza Horizon 2 Presents Fast "
+                           "& Furious's world or in Forza Horizon 2's whole world, each from a folder with the "
+                           "files of your own Xbox 360 copy. They appear in the list above and on the Play page "
+                           "like a circuit. Hover a button for what works and what does not yet.", "muted"))
         row = QHBoxLayout()
         row.setSpacing(12)
         self.import_button = QPushButton("Import FM4 tracks…")
         self.import_button.clicked.connect(self._import)
         row.addWidget(self.import_button)
-        self.ff_button = QPushButton("Import Fast & Furious…")
+        self.ff_button = QPushButton("Import Fast && Furious…")   # a button's single & is a shortcut mark, not shown
         self.ff_button.setToolTip("Free roam in Forza Horizon 2 Presents Fast & Furious's world, from your own "
                                   "copy's files (experimental). " + fh2ffworld.EXPERIMENTAL)
         self.ff_button.clicked.connect(self._import_ff)
