@@ -42,6 +42,10 @@ if(APPLE)
     else()
         set(_forza_sdk_platform mac-amd64)
     endif()
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
+    # ARM64 Linux (docs/arm64_linux.md): no nightly or overlay exists for it, so the build
+    # takes a complete ReIGlue install (CMAKE_PREFIX_PATH, FORZA_REXGLUE, FORZA_XENOS_PLUGIN).
+    set(_forza_sdk_platform linux-arm64)
 else()
     set(_forza_sdk_platform linux-amd64)
 endif()
@@ -162,6 +166,7 @@ set(FORZA_SOURCES
     src/hooks/offline_cars.cpp
     src/hooks/festival_travel.cpp
     src/hooks/car_recovery.cpp
+    src/hooks/car_part_fallback.cpp
     src/hooks/native_car_tuning.cpp
     src/hooks/native_car_tuning_menu.cpp
     src/hooks/gpu_wait.cpp
@@ -173,12 +178,14 @@ set(FORZA_SOURCES
     src/hooks/car_detail.cpp
     src/hooks/livery_bake.cpp
     src/hooks/shadow_filter.cpp
+    src/hooks/native_device.cpp
     src/hooks/ai_catchup.cpp
     src/hooks/physics_loader_check.cpp
     src/hooks/resource_data_release.cpp
     src/hooks/resource_cache_eviction.cpp
     src/hooks/resource_stream_trace.cpp
     src/hooks/bigshot_readback.cpp
+    src/hooks/replay_movie.cpp
     src/hooks/online_photo.cpp
     src/hooks/photo_focus.cpp
     src/hooks/thumbnail_sync.cpp
@@ -242,6 +249,18 @@ set(FORZA_SOURCES
     src/platform/xr.cpp
 )
 
+# The D3D trace (docs/native-renderer.md "Tools"): counting wrappers around the TU4 D3D library's
+# functions that tag the command-buffer dwords each one writes, for the GPU plugin's PM4 trace
+# (ReIGlue built with REXGLUE_FH1_PM4_TRACE). A study build only: it costs every D3D call.
+option(FORZA_D3D_TRACE "Count and tag the Xbox D3D library's calls (native renderer inventory)" OFF)
+if(FORZA_D3D_TRACE)
+    if(NOT FORZA_TITLE_UPDATE STREQUAL "4" OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        message(FATAL_ERROR "FORZA_D3D_TRACE needs the TU4 build (FORZA_TITLE_UPDATE=4) on Linux")
+    endif()
+    list(APPEND FORZA_SOURCES src/debug/d3d_trace.cpp)
+    message(STATUS "D3D trace: on (src/debug/d3d_trace_hooks.inc)")
+endif()
+
 # fiber_trace.cpp interposes the SDK's rexcrt_SwitchToFiber with dlsym(RTLD_NEXT): Linux only.
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     list(REMOVE_ITEM FORZA_SOURCES src/debug/fiber_trace.cpp)
@@ -298,6 +317,9 @@ add_subdirectory(texcompress)
 add_custom_command(TARGET forza POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/forza-telemetry.json" "$<TARGET_FILE_DIR:forza>/forza-telemetry.json")
 target_compile_definitions(forza PRIVATE FORZA_TITLE_UPDATE=${FORZA_TITLE_UPDATE})
+if(FORZA_D3D_TRACE)
+    target_compile_definitions(forza PRIVATE FORZA_D3D_TRACE=1)
+endif()
 
 # The build the game names to the Forza Live server on its title service calls (X-Forza-Build,
 # src/kernel/live_auth.cpp RequestLines), which the server keeps with each leaderboard row (#517). The

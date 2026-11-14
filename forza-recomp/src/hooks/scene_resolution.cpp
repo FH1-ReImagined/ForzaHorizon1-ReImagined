@@ -34,6 +34,8 @@
 // AA or native ultrawide, which find the scene by its 720p targets: the scene stays 720p.
 // tu_address_map: TU4 addresses
 
+#include "../debug/d3d_trace.h"
+#include "native_device.h"
 #include "../platform/guest_addr.h"
 #include "../platform/guest_memory.h"
 #include "../platform/scene_resolution.h"
@@ -396,6 +398,10 @@ extern "C" REX_FUNC(CreateDevice) {
 // Its viewport and its blur's and volume quad's texel offsets are for 1280x720, written in the
 // code: they follow the scene while it runs (the hooks below).
 extern "C" REX_FUNC(ShadowMask) {
+  FORZA_D3D_TRACE_SCOPE(ShadowMask);  // the D3D trace counts the hook too
+#if FORZA_TU4
+  forza::native_device::ShadowMaskBegin(ctx, base);  // the native renderer's shadow mode
+#endif
   if (!forza::g_width.load(std::memory_order_relaxed) || forza::g_drawing_shadow_mask) {
     OriginalShadowMask(ctx, base);
     return;
@@ -408,6 +414,7 @@ extern "C" REX_FUNC(ShadowMask) {
 // D3DDevice_SetViewport (r4: x, y, width, height, min z, max z). The shadow mask's 1280x720
 // viewport is the scene's while the mask is drawn.
 extern "C" REX_FUNC(SetViewport) {
+  FORZA_D3D_TRACE_SCOPE(SetViewport);  // the D3D trace counts the hook too
   uint8_t* vp = ctx.r4.u32 ? forza::GuestPtr(base, ctx.r4.u32) : nullptr;
   if (!forza::g_drawing_shadow_mask || !vp) {
     OriginalSetViewport(ctx, base);

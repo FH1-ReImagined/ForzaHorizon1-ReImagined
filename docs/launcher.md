@@ -87,6 +87,33 @@ PyInstaller folder grows from 216 to 454 MB, 87 to 191 MB gzipped. On NVIDIA wit
 blank view is a known Qt WebEngine problem: `QTWEBENGINE_CHROMIUM_FLAGS=--disable-gpu` or **Use my
 browser instead**.
 
+**The sign-in window on Linux (#852).** Chromium's GPU code runs inside the launcher's own process,
+and where the system's EGL and Vulkan cannot start it aborts the whole launcher ("GLOzone not found
+for unknown", then `Aborted (core dumped)`). Up to v0.3.4 the .tar.gz carried Ubuntu 22.04's
+`libstdc++.so.6` (`GLIBCXX_3.4.30`) in `_internal`; newer Mesa (Arch, CachyOS, Fedora 44: Mesa 26)
+needs `GLIBCXX_3.4.32` or newer through `libSPIRV-Tools.so`, so EGL, the Vulkan drivers and VA-API
+failed to load and **Sign in or create an account** closed the launcher. Two changes:
+- `launcher/forza-launcher.spec` leaves `libstdc++.so.6`, `libgcc_s.so.1` and `libgbm.so.1` out of
+  the Linux build, so the system's own are used (22.04's `libgbm` also looks for the drivers in
+  Debian's folder only, and failed on Fedora). The bundle needs `GLIBCXX_3.4.29` and `GCC_4.0.0` at
+  most (`objdump -p` over `_internal`), which Ubuntu 22.04 has; the 0.3.4 bundle without the three
+  files was checked in an `ubuntu:22.04` container (the window, and a Qt WebEngine page drawn with
+  and without the GPU). The release job fails if one of them is bundled again. A system without
+  `libgbm.so.1` gets no Qt WebEngine, and the dialog opens the browser. The Flatpak is not
+  affected: it uses the runtime's libraries.
+- the first window of a session is tried in a launcher process of its own first (`web_view.start_mode`,
+  `forza-launcher --web-view-probe`): one off-the-record view, never on screen, must draw a red
+  page within 15 seconds (the launcher waits 20). If it fails, it is tried again with `QTWEBENGINE_CHROMIUM_FLAGS=--disable-gpu`
+  and `QT_QUICK_BACKEND=software` (with `--disable-gpu` alone the view stays black), and the launcher's
+  window then starts that way. If that fails too, the dialog opens the player's browser as with **Use
+  my browser instead**. Each failed try goes to `launcher.log` ("website account window check", with
+  the end of its output). The check takes about 1.5 seconds and runs once a session, on Linux only.
+  Tests: `launcher/test_web_account.py` (`StartCheck`, with fake probes; `RealWindow` runs the real one).
+
+Troubleshooting, Linux: on a .tar.gz from v0.3.4 or older whose sign-in window closes the launcher,
+rename `_internal/libstdc++.so.6` to `libstdc++.so.6.bak` in the extracted folder. On any version,
+`FORZA_NO_WEB_VIEW=1` skips the window and uses the browser.
+
 Discord status sharing is available under **Online > Online > Discord** (off by
 default). See [Discord Rich Presence](discord.md) for the one-time public application
 ID setup, supported activities, privacy and local IPC tests.
@@ -375,6 +402,13 @@ Dropdowns use up/down and A to select, B to close.
 File pickers use Qt dialogs so controller focus works there too. Text entry still needs a
 keyboard or the system's on-screen keyboard. Steam Input users should select a gamepad
 layout; a mouse/keyboard layout continues to work through normal Qt input.
+Settings > Advanced > Launcher > **Use the system's file dialogs**
+(`advanced.system_file_dialogs` in `launcher.json`, off by default, #884) opens the system's file
+dialog instead: Windows' own, and on Linux the desktop's where Qt has one for it (where it has
+none, Qt's own stays). A controller cannot move in those. It applies to the next dialog opened.
+The Flatpak keeps the launcher's own whatever the setting says, because the portal's dialog gives
+the sandbox only the file picked and a Games on Demand package needs its `.data` folder
+(`ui/file_dialogs.py`).
 
 Input is ignored while the launcher is inactive or the game is running, and from a device
 that the Controls page is binding or calibrating. Reconnects, returning to the launcher and
@@ -528,6 +562,12 @@ Installation behavior:
 
 * **Windows:** after downloading, choose **Open installer**, close the launcher and follow
   the installer. Packaged launchers pass their current install directory, including custom locations.
+  The installer is saved as `%APPDATA%\ForzaReImagined\updates\<tag>\ForzaHorizon1-ReImagined-Setup-<version>.exe`.
+  The updated launcher deletes it when it opens (and again when it closes, in case Setup was still
+  open), together with any older Setup it downloaded there, and removes the emptied `<tag>` folder.
+  A Setup for a newer version than the one running is kept, because that update has not been
+  installed yet (it failed, was cancelled or is still running). Nothing else in that folder, and no
+  Setup downloaded by hand, is touched.
 * **Linux archive:** **Update and restart** rechecks the downloaded archive's size and digest,
   extracts it safely into a private sibling of the install folder, and checks the new executable's
   version. A detached helper waits for the current launcher to exit, keeps the old folder as
@@ -794,6 +834,8 @@ the GPU queries, `git rev-parse` and the archive update helper all use it, and `
 not affect what is loaded). Tests: `launcher/test_cleanenv.py` (frozen environments with the original set, unset and
 empty, every launch path). `tools/prerelease.sh --only launcher` also runs `git` and a fake game under a library
 path of broken `libz`/`libpcre2`/`libstdc++` and fails if either inherits it.
+Since #852 the Linux .tar.gz no longer carries `libstdc++.so.6` or `libgcc_s.so.1` at all (see "The
+sign-in window on Linux"), but the other libraries in `_internal` still make this necessary.
 
 ### When the game ends (#98)
 
@@ -854,6 +896,11 @@ Gameplay > Map > **Fast Travel Anywhere** (`fast_travel_anywhere`, on by default
 Update 4): fast travel from the map to any road for free, as the unlock once bought with Tokens
 did. No Tokens are given and the other Token offers stay; off brings the game's offer back
 ([playing.md](playing.md#running-the-game)).
+Gameplay > Map > **Lap guide on circuits** (`fm4_track_guide`, off by default, #877): on an
+imported Forza Motorsport 4 circuit the game's GPS leads round the lap, its green route kept
+about 1.5 km ahead of the car on the minimap and the map. While it is on the map has no Set
+Route on a circuit; Colorado is not changed. Restart after changing it
+([fm4-tracks.md](fm4-tracks.md#a-route-to-follow-optional)).
 Gameplay > Loading screens > **ReImagined loading tips** (`reimagined_loading_tips`, on by default):
 the loading screens' tips are about ReImagined (photos, tuning, texture packs, the radio, co-op)
 in place of the original game's, which point to services and offers that are gone. The text is
@@ -864,6 +911,24 @@ game's own table with each tip slot (a title entry and its tip entry, as the gam
 `ui/loadingdefs.xml` pairs them: 99 slots in Title Update 4) set to one of the tips in turn (the
 ids and order stay, so the game's own picking of a tip per loading screen is unchanged). It loads first, so a
 player's mod with its own `tips.str` wins; off: no mod, the original tips. Applies on the next launch.
+**Upload texts** (#875, no setting): the main server publishes a Photo Mode Big Shot and an
+uploaded movie on forza.dyotson.dev, and the game's texts about those uploads named
+ForzaMotorsport.net. For the Big Shot: the question before the photo is made, its loading screen,
+the question about replacing the one uploaded before, and the result and error dialogs
+(`IDS_Photo_ConfirmExport_Msg`, `IDS_Photo_BigShot_Msg`, `IDS_Photo_Upload_Confirm_Overwrite`,
+`IDS_BigShot_Upload_Success` and `IDS_BigShot_Upload_Failure` of `carflow.str`). For a movie: the
+upload question, the one about replacing, and the result and error dialogs
+(`IDS_Movie_Upload_Confirm`, `IDS_Movie_Upload_Confirm_Overwrite`, `IDS_Movie_Upload_Success` and
+`IDS_Movie_Upload_Failure` of `carflow.str`), and the movie list's upload action and its "how to
+watch movies" message (`IDS_LoadSave_Upload_to_Server` and `IDS_LoadSave_WatchMovie_Msg` of
+`main.str`). A start that goes online (Online > Servers: the main server, a listed one or an
+address) builds the hidden mod `mods/.reimagined-upload-site`: each language's
+`stringtables/<lang>/carflow.str` and `main.str` are the game's own tables with only the site's
+name replaced in those entries (in capitals where the game wrote it so), so every language keeps
+its own wording. It loads first, so a player's mod with its own `carflow.str` or `main.str` wins,
+and it is rebuilt only when the game's tables change. With This PC or Offline nothing reaches the
+site and the game's text stays. The storefront's texts (a photo saved at the normal size) and the
+entries about the forums and news are not changed (`launcher/forza_launcher/upload_site.py`).
 Gameplay > Startup > **Skip startup videos** (`skip_startup_movies`, off by default): the game
 starts straight at the title screen, without the Microsoft Studios, Dolby and Playground Games
 videos (about 45 s). The game boots as after a restart of itself; the festival and 1000 Club

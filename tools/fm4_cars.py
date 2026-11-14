@@ -41,6 +41,7 @@ import os
 import re
 import sqlite3
 import struct
+import subprocess
 import sys
 import tempfile
 import time
@@ -1026,6 +1027,19 @@ def check_import(fh1, mod, package=None):
     return problems
 
 
+# A traffic car's cut-down EngineTuning: its live (uncommented) exhaust, intake or engine ambient
+# slot names a Traffic_*_HT.xml (a few low loops only) or an NA_*_HT.xml (the NA.fsb placeholder).
+# FH1 keeps such a copy for some FM4 cars it cut as traffic cars (the 2006 Focus ST, the 2011 A4,
+# Spark and Volt, the 2009 xD), their real slots commented out or gone (#840).
+_COMMENT = re.compile(rb"<!--.*?-->", re.S)
+_TRAFFIC_SLOT = re.compile(rb'(?i)"(?:Traffic|NA)_(?:[^"]*_)?(?:Exh|Int|EngAmb)_HT\.xml"')
+
+
+def traffic_tuning(data):
+    """True when an EngineTuning file (bytes) is a traffic car's placeholder (_TRAFFIC_SLOT)."""
+    return bool(_TRAFFIC_SLOT.search(_COMMENT.sub(b"", data)))
+
+
 def louder_engine(data, gain=ENGINE_GAIN):
     """An EngineTuning file (bytes) with its GlobalCarVolume curve's y values times gain (at
     most ENGINE_VOLUME_MAX); everything else is left as it is."""
@@ -1540,6 +1554,8 @@ class Converter:
     mod: the mod overlay holds at most 4 GB in all, and a full import is about 9 GB
     uncompressed (3 GB with FM4's textures kept compressed, as a pack's zips can)."""
 
+    mod_version = None  # mod.toml's version; the launcher sets its own (#853), else source_version()
+
     def __init__(self, fm4, fh1, out, package=None):
         self.fm4, self.fh1, self.out = fm4, fh1, out
         self.fm4db, self.fh1db = fm4.db(), fh1.db()
@@ -1735,8 +1751,10 @@ class Converter:
         (CarModelTuning, EngineTuning) of most FM4 cars; what it lacks is taken from FM4's copy
         (its audio/cars archives, and a DLC pack's own tuning files and sound banks for its cars).
         The EngineTuning of an engine no FH1 car uses goes into the mod at FH1's level
-        (louder_engine, #712). A tuning or sound bank that no file given has raises ConvertError:
-        the game stops with its disc read error where it misses one (#776)."""
+        (louder_engine, #712): FH1's copy, else FM4's, and FM4's where FH1's is a traffic car's
+        placeholder and FM4's is not (traffic_tuning, #840). A tuning or sound bank that no file
+        given has raises ConvertError: the game stops with its disc read error where it misses
+        one (#776)."""
         self._audio_sources()
         wanted = [("cmt", car_name + "_CMT.xml")] + [("et", e + "_ET.xml") for e in engine_names]
         plan, hts = [], []
@@ -1749,10 +1767,17 @@ class Converter:
                 # FH1's level (ENGINE_GAIN), in the mod, which outranks every archive.
                 if engine in self._louder_done:
                     continue
-                src = fh_src or self._fm_audio[kind].get(fname.lower())
+                fm_src = self._fm_audio[kind].get(fname.lower())
+                src = fh_src or fm_src
                 if not src:
                     continue
                 data = Member(ZIPS.get(src[0]), src[0], src[1]).read()
+                if fh_src and fm_src and traffic_tuning(data):
+                    # FH1's copy is a cut traffic car's (#840): FM4's own, unless it is one too
+                    # (the electric Volt's), with FM4's harmonic tuning, all of it FH1's too
+                    fm_data = Member(ZIPS.get(fm_src[0]), fm_src[0], fm_src[1]).read()
+                    if not traffic_tuning(fm_data):
+                        data, fh_src = fm_data, None
                 plan.append(("louder", rel, louder_engine(data), None if fh_src else fname))
                 if fh_src:
                     continue  # FH1's tuning names FH1's harmonic tuning and banks
@@ -1983,10 +2008,31 @@ class Converter:
         os.makedirs(dbdir, exist_ok=True)
         write_full_db(self.fh1.db_file, self.fh1db, rows, os.path.join(dbdir, "gamedb.slt"))
         with open(os.path.join(self.out, "mod.toml"), "w", encoding="utf-8") as f:
-            f.write('name = "%s"\nversion = "1"\ndescription = "%d Forza Motorsport 4 cars, '
-                    'converted on this PC from your own FM4 discs%s"\n'
-                    % (MOD_NAME, len(done), " and DLC" if report["dlc_cars"] else ""))
+            f.write(mod_manifest(len(done), bool(report["dlc_cars"]), self.mod_version or source_version()))
         return report
+
+
+def _toml_string(text):
+    return '"%s"' % str(text).replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+
+
+def mod_manifest(cars, dlc, version):
+    """The FM4 cars mod's mod.toml. version: what made the import (the launcher's version, and
+    its commit when it runs from source, #853), shown on the Mods page; nothing reads it back."""
+    return ('name = %s\nversion = %s\ndescription = "%d Forza Motorsport 4 cars, '
+            'converted on this PC from your own FM4 discs%s"\n'
+            % (_toml_string(MOD_NAME), _toml_string(version or "1"), cars, " and DLC" if dlc else ""))
+
+
+def source_version():
+    """This script's version when it runs on its own: "source <commit>" in a git checkout, else "1"."""
+    try:
+        out = subprocess.run(["git", "-C", os.path.dirname(os.path.abspath(__file__)), "rev-parse", "--short",
+                              "HEAD"], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return "1"
+    commit = out.stdout.strip() if out.returncode == 0 else ""
+    return "source " + commit if commit else "1"
 
 
 def main(argv=None):

@@ -124,6 +124,50 @@ Leaderboard screens, Windows and Steam Deck are not scripted: a hand run in the 
 
 ## Status log
 
+- 2026-11-12: **A car part the game's database doesn't have loads as the stock part (#862).**
+  After the #836 fix, a player's RUF Yellowbird (1516) hung after START: every drivetrain
+  part logged "doesn't belong to its DrivetrainID 2147483647, which has no stock ...: loaded
+  without one". The loader (TU4 `sub_82CB4500`) reads DrivetrainID and CarBodyID from the
+  Drivetrain and CarBody records without checking that they have a row, and a record whose
+  part id matches no row (a removed mod's drivetrain swap) reads 2147483647 for any column.
+  No drivetrain part matched that parent, it has no stock parts, and the car loaded without a
+  clutch, gearbox, driveline and differential. A part from another car was already handled:
+  its creator returns NULL and #836 retries with the stock part. Now
+  `src/hooks/car_part_fallback.cpp` also replaces an empty record (row count 0) of a part
+  every car has (`Required`: types 0-2, 4-20, 23, 30-41, a stock row for every car, engine,
+  drivetrain and car body in the disc and TU4 databases) with the stock part. A sub-part whose
+  parent is not in the database, or has no stock part of a required kind, takes the stock part
+  of the car's own stock parent. Measured on the TU4 build with copies of golden-save-tu4,
+  offline, on the Aventador (1398): Drivetrain 1398001 (no row) with clutch, transmission and
+  driveline 842003 and differential 842000, the player's set. Without the change the log shows
+  the player's four lines and the game stays on a grey screen with the speedometer after
+  SINGLE PLAYER. With it, one #862 line for the drivetrain (stock 1398000), four #836 lines
+  (stock 806000), free roam, and the car drives up to about 175 km/h. A build without the
+  empty-record step logs the sub-parts as "loaded with the stock part 806000 of the car's
+  DrivetrainID 806", and the car drives too. The #836 cases (clutch 3000; transmission,
+  camshaft, hood and brakes; a foreign engine with a foreign twin turbo; another car's
+  drivetrain 1434000) log as before and drive. An intact save logs no fallback line.
+
+- 2026-11-12: **A garage car with another car's part loads with the stock part (#836).**
+  When a save's current car has a part from another car, START on the title screen ended
+  the game with exit code 134. A mod's database or a save edit had put the part there; the
+  official data has no such part. The car physics loader (TU4 `sub_82CB4500`, base
+  `sub_82BF4FB0`) builds each part's record with one of five creators. Each creator checks
+  the part's parent column (Ordinal, EngineID, MotorID, DrivetrainID, CarBodyID) against
+  the car's and leaves the record NULL when they differ. A NULL clutch is dereferenced in
+  `sub_82CAAB60` (lr `82CAAB8C`). `src/hooks/car_part_fallback.cpp` runs a creator again
+  when it made no record. It uses the expected parent's `IsStock=1` part, or -1 (no part,
+  an empty record) when that parent has none, as for a turbo on an engine without one. It
+  logs one warning per car and part. A record the creator made is left as it is. Measured on
+  the TU4 build with copies of golden-save-tu4, offline: with the Aventador's clutch set to
+  3000 (drivetrain 3's), the game reaches the main menu and free roam, and the car drives
+  at about 150 km/h. The same commit without the hook faults at START (NULL r3, lr
+  `82CAAB8C`). Mismatched brakes, camshaft, transmission and hood give one line each and
+  the car drives; without the hook that save faults at lr `82CAA648`. A foreign engine and
+  a foreign twin turbo load as the stock engine without a turbo (that engine has no stock
+  turbo), and the car drives. An intact save logs no fallback line, and its warnings match
+  the build without the hook. Pure logic: `forza-recomp/tests/car_part_fallback_test.cpp`.
+
 - 2026-10-23: **Internal heap stop in the NVIDIA-labelled crash #299.** Read-only
   disassembly identifies TU4 `sub_82423000` (base `sub_823F3048`) as the memory
   manager's allocation loop. When no allocator succeeds, it compares heap `+0x154`

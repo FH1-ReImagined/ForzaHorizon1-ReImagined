@@ -91,14 +91,20 @@ jobs:
         run: python -m unittest discover -s tools -p 'test_fm4_routes.py' -v
       - name: FM4 circuits' lap timing data (#648)
         run: python -m unittest discover -s tools -p 'test_fm4_timing.py' -v
+      - name: FM4 circuits' streaming trace reader (a synthetic trace, no game files, #824)
+        run: python -m unittest discover -s tools -p 'test_fm4_stream_lead.py' -v
       - name: FM4 circuit command-buffer fixups (#648)
         run: python -m unittest discover -s tools -p 'test_fm4_pvs.py' -v
+      - name: FM4 circuits' collision (made-up cells and surface lists, no game files, #876)
+        run: python -m unittest discover -s tools -p 'test_fm4_col.py' -v
       - name: Resource hook audit tests (synthetic images)
         run: python -m unittest discover -s tools -p 'test_resource_data_hooks.py' -v
       - name: FM4 circuits' road lines and edges (decals; synthetic models, no game files, #648)
         run: python -m unittest discover -s tools -p 'test_fm4_decals.py' -v
       - name: Fast & Furious's world (synthetic files, no game files, #821)
         run: python -m unittest discover -s tools -p 'test_fh2ff_world.py' -v
+      - name: FM4 circuits' depth pre-pass scissor (synthetic models, no game files, #827)
+        run: python -m unittest discover -s tools -p 'test_fm4_prepass.py' -v
       - name: Thumbnail and photo sync renewal contracts (no game)
         shell: bash
         run: |
@@ -196,6 +202,11 @@ jobs:
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/club_garage_test.cpp -o "$RUNNER_TEMP/club-garage-test"
           "$RUNNER_TEMP/club-garage-test"
       - if: runner.os == 'Linux'
+        name: Garage cars with another car's part load with the stock part
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/car_part_fallback_test.cpp -o "$RUNNER_TEMP/car-part-fallback-test"
+          "$RUNNER_TEMP/car-part-fallback-test"
+      - if: runner.os == 'Linux'
         name: Title service request header and its nonblocking stream
         run: |
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src tools/test_lsp_request_header.cpp -o "$RUNNER_TEMP/lsp-request-header-test"
@@ -265,6 +276,17 @@ jobs:
         run: |
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/shadow_filter_test.cpp -o "$RUNNER_TEMP/shadow-filter-test"
           "$RUNNER_TEMP/shadow-filter-test"
+      - name: FM4 circuits' streamed texture data beyond the game's heap (#824)
+        shell: bash
+        run: |
+          cmake -S forza-recomp/tests/fm4-stream-textures -B "$RUNNER_TEMP/fm4-stream-textures" -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$RUNNER_TEMP/fm4-stream-textures" --config Release --parallel 2
+          ctest --test-dir "$RUNNER_TEMP/fm4-stream-textures" -C Release --output-on-failure
+      - if: runner.os == 'Linux'
+        name: Native renderer shadow mode records
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/native_shadow_record_test.cpp -o "$RUNNER_TEMP/native-shadow-record-test"
+          "$RUNNER_TEMP/native-shadow-record-test"
       - if: runner.os == 'Linux'
         name: CPU drivers without rubber banding
         run: |
@@ -642,6 +664,10 @@ jobs:
           cd launcher
           pyinstaller --noconfirm forza-launcher.spec
           dist/forza-launcher/forza-launcher --version
+          # the system's own C++ runtime and GBM, never the runner's (#852, forza-launcher.spec)
+          for lib in libstdc++.so.6 libgcc_s.so.1 libgbm.so.1; do
+            if [ -e "dist/forza-launcher/_internal/$lib" ]; then echo "::error::$lib is bundled (#852)"; exit 1; fi
+          done
       - name: Smoke test the window
         timeout-minutes: 5
         run: |
@@ -875,6 +901,15 @@ jobs:
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-26.08
       options: --privileged
+      # The image's flatpak installation in a volume: Docker fills a new volume with what the image
+      # has at that path (3.2 GB, about 20 s), so the runtimes are on the runner's disk and not in
+      # the image's layers. flatpak-builder updates the image's runtimes whenever Flathub has newer
+      # ones, and flatpak retires the old checkout of an updated runtime by renaming its directory.
+      # overlayfs renames a directory that comes from an image layer only with redirect_dir on, else
+      # "Invalid cross-device link": on with the kernel of GitHub's runners in Azure, off with the
+      # one of its runners in AWS, where every run of this job failed (#886).
+      volumes:
+        - /var/lib/flatpak
     steps:
       - uses: actions/checkout@v4
         with:

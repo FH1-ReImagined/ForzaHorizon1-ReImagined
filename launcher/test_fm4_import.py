@@ -129,6 +129,43 @@ DISC2 = {"default.xex": xex(fm4cars.FM4_TITLE), "media/x.bin": b"x",
          "content/0000000000000000/4d530910/00000002/4d53091000000001": b"pack"}
 
 
+class UpdateRootTests(unittest.TestCase):
+    def test_source_build_default_and_explicit_precedence(self):
+        from forza_launcher import game
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = Config(root / "launcher.json")
+            cfg.d["game_root"] = str(root / "game")
+            runtime = root / "runtime"
+            install = game.GameInstall(runtime, runtime / game.EXE)
+            sibling = root / "tu4"
+            sibling.mkdir()
+            (sibling / "media.zip").write_bytes(b"tu4")
+            with patch.object(game, "find_game", return_value=(install, [])):
+                self.assertEqual(fm4cars._update_root(cfg), sibling)
+                cfg.d["game_root"] = str(root / "unused" / ".." / "game")
+                self.assertEqual(fm4cars._update_root(cfg), sibling)
+                (sibling / "media.zip").unlink()
+                self.assertIsNone(fm4cars._update_root(cfg))
+                (sibling / "media.zip").write_bytes(b"tu4")
+
+                managed = runtime / "update"
+                managed.mkdir(parents=True)
+                self.assertIsNone(fm4cars._update_root(cfg))  # Play selects this empty directory
+                (managed / "media.zip").write_bytes(b"managed")
+                self.assertEqual(fm4cars._update_root(cfg), managed)
+
+                explicit = root / "explicit update"
+                explicit.mkdir()
+                (explicit / "media.zip").write_bytes(b"explicit")
+                for arg in (f'"--update_data_root={explicit}"', f'--update_data_root "{explicit}"'):
+                    cfg.advanced["extra_args"] = arg
+                    self.assertEqual(fm4cars._update_root(cfg), explicit)
+                (explicit / "media.zip").unlink()
+                self.assertIsNone(fm4cars._update_root(cfg))
+
+
 class FakeConverter:
     runs = []
 
@@ -143,7 +180,9 @@ class FakeConverter:
         FakeConverter.runs.append(list(ids))
         (self.out / "media/cars/BUG_Veyron_09").mkdir(parents=True)
         (self.out / "media/cars/BUG_Veyron_09/carattribs.xml").write_text("<CarAttributes/>")
-        (self.out / "mod.toml").write_text('name = "FM4 cars"\n')
+        tools = fm4cars._tools()  # the tool's own manifest, with the version the launcher set
+        (self.out / "mod.toml").write_text(tools.mod_manifest(1, False, getattr(self, "mod_version", None)),
+                                           encoding="utf-8")
         (self.package / "Media/DLCZips").mkdir(parents=True)
         (self.package / "Media/DLCZips/fm4cars1_pri_60.zip").write_bytes(b"PK")
         header = self.package.parent.parent / "Headers/00000002" / (self.package.name + ".header")
@@ -201,6 +240,22 @@ class Fm4ImportTests(_Setup, unittest.TestCase):
         self.assertFalse(package.exists())
         self.assertFalse(header.exists())
         self.assertIsNone(fm4cars.status(self.cfg))
+
+    def test_the_mods_version_is_the_launchers_that_made_it(self):
+        # #853: not a fixed "1": the Mods page tells which launcher made the import
+        with patch("forza_launcher.game.source_commit", lambda: ""), \
+                patch.object(fm4cars, "__version__", "0.2.7"):
+            self.build()
+        target = mods.mods_dir(self.cfg) / fm4cars.MOD
+        self.assertEqual(mods.read_mod(target).version, "0.2.7")
+        self.assertEqual(fm4cars.status(self.cfg)["launcher"], "0.2.7")
+        with patch("forza_launcher.game.source_commit", lambda: "abc1234"), \
+                patch.object(fm4cars, "__version__", "0.1.0"):
+            self.build()  # from source: the commit too
+        mod = mods.read_mod(target)
+        self.assertEqual(mod.version, "0.1.0 (abc1234)")
+        self.assertEqual(mod.name, "FM4 cars")
+        self.assertEqual(fm4cars.status(self.cfg)["launcher"], "0.1.0 (abc1234)")
 
     def test_a_second_import_replaces_the_first(self):
         self.build()
@@ -291,6 +346,29 @@ class Fm4ImportTests(_Setup, unittest.TestCase):
         shutil.rmtree(self.cfg.game_files() / "media")
         self.assertIsNone(fm4cars.repair_sound(self.cfg, log=lambda m: None))
         self.assertNotIn("banks", fm4cars.status(self.cfg))  # tried again at the next start
+
+    def test_an_old_import_with_a_traffic_cars_engine_tuning_says_so_once(self):
+        import json
+        self.build()
+        self.assertEqual(fm4cars.status(self.cfg)["engine_tuning"], 2)  # a new import has FM4's
+        folder = mods.mods_dir(self.cfg) / fm4cars.MOD
+        et = folder / "media/audio/cars/engines/enginetuning"
+        et.mkdir(parents=True)
+        (et / "FOR_FocusST_06_ET.xml").write_bytes(b"<Engine/>")
+        (et / "CHE_Volt_11_ET.xml").write_bytes(b"<Engine/>")  # NA in FM4 too
+        self.assertEqual(fm4cars.traffic_tuned(self.cfg), [])
+        self.assertIsNone(fm4cars.tuning_notice(self.cfg, log=lambda m: None))
+        marker = folder / fm4cars.MARKER
+        info = json.loads(marker.read_text())
+        del info["engine_tuning"]  # an import made before #840
+        marker.write_text(json.dumps(info))
+        self.assertEqual(fm4cars.traffic_tuned(self.cfg), ["FOR_FocusST_06_ET.xml"])
+        self.assertIn("Import FM4 cars again", fm4cars.tuning_notice(self.cfg, log=lambda m: None))
+        self.assertIsNone(fm4cars.tuning_notice(self.cfg, log=lambda m: None))  # once
+        self.assertEqual(fm4cars.traffic_tuned(self.cfg), ["FOR_FocusST_06_ET.xml"])  # the Mods page still says it
+        self.assertEqual(fm4cars.status(self.cfg)["cars"], ["BUG_Veyron_09"])
+        self.build()
+        self.assertEqual(fm4cars.traffic_tuned(self.cfg), [])
 
     def test_stale_after_dlc_changes(self):
         self.build()

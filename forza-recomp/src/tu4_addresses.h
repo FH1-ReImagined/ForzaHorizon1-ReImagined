@@ -77,6 +77,8 @@
 #define __imp__sub_825F5AA8 __imp__sub_82699E48
 #define sub_82647B78 sub_826EFFC8
 #define __imp__sub_82647B78 __imp__sub_826EFFC8
+#define sub_8265BE18 sub_827051E0  // check
+#define __imp__sub_8265BE18 __imp__sub_827051E0
 #define sub_8284EF98 sub_828FF268
 #define __imp__sub_8284EF98 __imp__sub_828FF268
 #define sub_82853DD0 sub_82904110
@@ -153,6 +155,18 @@
 #define __imp__sub_82A6D7D8 __imp__sub_82B2A848
 #define sub_82A6F2D8 sub_82B2C348
 #define __imp__sub_82A6F2D8 __imp__sub_82B2C348
+#define sub_82BED520 sub_82CACA70
+#define __imp__sub_82BED520 __imp__sub_82CACA70
+#define sub_82BED788 sub_82CACCD8
+#define __imp__sub_82BED788 __imp__sub_82CACCD8
+#define sub_82BED9F0 sub_82CACF40
+#define __imp__sub_82BED9F0 __imp__sub_82CACF40
+#define sub_82BEDC58 sub_82CAD1A8
+#define __imp__sub_82BEDC58 __imp__sub_82CAD1A8
+#define sub_82BEDEC0 sub_82CAD410
+#define __imp__sub_82BEDEC0 __imp__sub_82CAD410
+#define sub_82BF4FB0 sub_82CB4500
+#define __imp__sub_82BF4FB0 __imp__sub_82CB4500
 #define sub_82C188D0 sub_82CD8778
 #define __imp__sub_82C188D0 __imp__sub_82CD8778
 #define sub_82C18D00 sub_82CD8BA8
@@ -220,6 +234,7 @@ constexpr uint32_t Tu4Address(uint32_t a) {
     case 0x8288DCD8: return 0x8293EEB0;  // code
     case 0x82893B20: return 0x82944EF8;  // code
     case 0x829A48F4: return 0x82A58E34;  // code
+    case 0x82C19130: return 0x82CD8FD8;  // code
     case 0x82D1CE18: return 0x82DDED58;  // code  // check
     case 0x82D2A788: return 0x82DEC860;  // code
     case 0x832AAC24: return 0x8339664C;  // data

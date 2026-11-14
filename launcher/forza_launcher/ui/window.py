@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QDialog, Q
 from .. import (APP_NAME, __version__, browser, builder, cleanenv, coop_grant, crash_report, errors, game, paths, dlss,
                online_features, shader_share)
 from ..config import Config, import_toml, render_toml
-from . import theme
+from . import file_dialogs, theme
 from .pages import AboutPage, PlayPage, SetupPage
 from .settings_page import SettingsPage
 from .gallery_page import GalleryPage
@@ -263,6 +263,7 @@ class MainWindow(QMainWindow):
         if sys.platform == "win32":
             QTimer.singleShot(600, self.setup.offer_move)
         update_result = self.show_update_result()
+        self.cleanup_update_downloads()
         self._update_check_due = not paths.in_checkout() and not update_result
         if ask_online:   # the update check waits for the answer
             QTimer.singleShot(0, self.ask_online_features)
@@ -284,6 +285,16 @@ class MainWindow(QMainWindow):
         self.settings.flush()
         self.about.updates.automatic.setChecked(bool(self.cfg.d["check_updates"]))
         self._start_update_check()
+
+    def cleanup_update_downloads(self):
+        """Delete the Windows Setup of an update that is now installed, and older ones (#865). Runs at
+        start and again at exit: the installer starts the new launcher while Setup is still open, and
+        Windows does not let an open file be deleted."""
+        from .. import updater
+        try:
+            updater.cleanup_downloads()
+        except Exception as exc:   # tidying up never stops the launcher
+            paths.log_error("update download cleanup", exc)
 
     def show_update_result(self):
         from .. import linux_update
@@ -557,6 +568,7 @@ class MainWindow(QMainWindow):
             return
         if not self.about.updates.restarting:
             self.settings.flush()
+        self.cleanup_update_downloads()
         super().closeEvent(e)
 
     def _gallery_idle(self):
@@ -931,9 +943,6 @@ def run(argv):
     browser.install()   # links Qt opens itself take the same clean way (#815)
     app.setApplicationName("forza-reimagined-launcher")
     app.setDesktopFileName(paths.FLATPAK_ID or "forza-reimagined")
-    # Qt file dialogs participate in controller navigation. In Flatpak they also keep
-    # the real paths needed for a Games on Demand package and its adjacent .data folder.
-    app.setAttribute(_Qt.ApplicationAttribute.AA_DontUseNativeDialogs)
     theme.load_fonts()
     theme.apply_palette(app)
     app.setStyleSheet(theme.stylesheet())
@@ -950,7 +959,12 @@ def run(argv):
             pass
     sys.excepthook = report
     threading.excepthook = lambda a: report(a.exc_type, a.exc_value, a.exc_traceback)
-    win = MainWindow(Config())
+    cfg = Config()
+    # Qt file dialogs participate in controller navigation. In Flatpak they also keep
+    # the real paths needed for a Games on Demand package and its adjacent .data folder.
+    # The system's open only where the player asked for them (Settings > Advanced, #884).
+    file_dialogs.apply(cfg)
+    win = MainWindow(cfg)
     from .gamepad import Navigation
     navigation = Navigation(win)
     app.aboutToQuit.connect(navigation.close)

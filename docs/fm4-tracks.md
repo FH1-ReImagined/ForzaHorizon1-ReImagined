@@ -50,7 +50,16 @@ A start on a circuit:
 
 - plays **offline**: other players are in Colorado;
 - **backs up your save** first, whatever the save manager's setting is;
-- uses your current FH1 car.
+- uses the car you last drove in Colorado. Choose it there first (play with **FH1's
+  Colorado**): there is no car choice on a circuit yet.
+
+The game keeps a circuit's free-roam progress (its gas stations, flyers and discovered roads) in
+your profile, which has a fixed size: four circuits (three after the Rally expansion) filled it,
+and the game then stopped right after the title screen, in Colorado and on the circuits alike.
+So before every start the launcher takes the other circuits' progress out of your profile again,
+after a backup, and keeps only Colorado's, the Rally expansion's and the circuit you start. Your
+laps are not in the profile and stay. A profile that was already filled this way is repaired at
+the next start, with a message on the Play page (its damaged copy stays in **Library > Saves**).
 
 ## Time attack and your laps
 
@@ -70,18 +79,43 @@ Your laps are kept per circuit, also when you remove or import the circuit again
 laps** lists them: each circuit's best lap first, then the newest, with each sector's time. That
 tab appears once a circuit is imported.
 
+## A route to follow (optional)
+
+The launcher's **Gameplay > Map > Lap guide on circuits** (`fm4_track_guide`, off by default) makes
+the game's own GPS lead round the lap: its green route on the minimap and on the map, from your
+car along the circuit's road. The end of the route is kept about 1.5 km ahead of the car and
+moves on as you drive, so the distance under the minimap is the distance to that point (1.2 to
+1.5 km), not what is left of the lap. After a rewind or a reset the route leads on from where
+the car is. Restart the game after changing the setting.
+
+What it costs, and why you have to turn it on: while the guide is on, the game holds the GPS
+destination as locked on a circuit, so the map there has no **Set Route**. Fast travel and the
+rest of the map are as before, and Colorado is not changed. There is no driving line on the
+road itself.
+
 ## What works and what does not yet
 
 Works:
 
 - Free driving on the circuit: its buildings, stands, crowds, road and kerbs, and its collision
-  (walls and the ground).
+  (walls and the ground). A circuit imported with an earlier launcher loads its scenery only a
+  short way ahead of the car, so at speed it appears as you drive: import it again. Trackside
+  scenery (trees, fences, signs) is drawn from about 150 to 300 m ahead of the car; on a long
+  straight at high speed you can see it appear.
 - Timed laps with sectors, the best-lap ghost and the laps page.
-- The circuit's road on the minimap, from FM4's AI line. A circuit imported with an earlier
-  launcher has none: import it again.
+- The circuit's road on the minimap and on the map (the Back button), from FM4's AI line,
+  drawn in white all the way round from the first metre. (FH1 draws a road you have not
+  driven yet in grey, which is lost on a circuit's tarmac; a circuit imported before this
+  gets the white road at its next start, without importing again.) A circuit imported
+  before the road network (0.3.2 and earlier) has no road at all: import it again.
 - All 24 circuits of Disc 1 convert and load. Suzuka is the most tested one.
 - The road's painted lines and edges and the rubber on it (FM4 draws them over the road, as
   decals). A circuit imported with an earlier launcher has none: import it again.
+- The road as FM4 built it under the wheels: its gradients, its banking and each stretch's
+  own surface. A circuit imported with an earlier launcher rides on its bump stops wherever
+  the road climbs and lets its wheels hang wherever it falls, which shakes the car on smooth
+  tarmac, and has some stretches rougher than they are (Le Mans's Mulsanne and its
+  chicanes' run-off): import it again.
 
 Not yet:
 
@@ -89,10 +123,14 @@ Not yet:
   cars do not drive yet. An import writes the road network and the race route FH1's races need;
   no race has been run with them yet, and nothing starts one on a circuit.
 - **AI cars and traffic** on the circuit.
+- **Choosing a car** on a circuit: you drive the car you last used in Colorado.
 - **Shadows of the circuit's own buildings and trees.** Your car's shadow is drawn on the
   circuit with the Vulkan renderer (with ReGPU, the D3D12 renderer, circuits have no shadows
-  yet). A circuit imported with an earlier launcher has none: import it again.
-- **The map and GPS** (FH1's map is Colorado's).
+  yet). A circuit imported with an earlier launcher has none, or draws the shadow a second time
+  on the road ahead of the car: import it again.
+- **A driving line.** The map shows the circuit's road and your car, with Colorado's
+  pins on it, and no background. There is no driving line on the road; the game's GPS can lead
+  round the lap instead, if you turn it on ([a route to follow](#a-route-to-follow-optional)).
 - **1000 Club challenges.** They use Colorado's roads and locations. Play in Colorado to run them.
 - **Online play** on a circuit.
 
@@ -120,13 +158,14 @@ Where the files are, in the game's data folder (`%LOCALAPPDATA%\ForzaReImagined`
 | `fm4-tracks/<circuit>/` | the converted circuit |
 | `fm4-tracks/laps/<circuit>.jsonl` | your laps there, one a line |
 | `fm4-tracks/laps/<circuit>.ghost.txt` | the best lap's ghost |
-| `mods/.fm4-track-<circuit>/` | its database and race route, a mod the Mods page does not list |
+| `mods/.fm4-track-<circuit>/` | its database, race route and map colours, a mod the Mods page does not list |
 
 ## How it works
 
 The launcher runs the converter (`tools/fm4_track_mod.py`, then `tools/fm4_pvs.py`) on each
-circuit: the track's files and layout in FH1's formats, its collision, its shaders adapted to
-FH1's, and the database rows that make free roam load it. `tools/fm4_timing.py` takes the lap's
+circuit: the track's files and layout in FH1's formats, its collision (with FM4's own road
+normals and each surface under FH1's number for it), its shaders adapted to FH1's, and the
+database rows that make free roam load it. `tools/fm4_timing.py` takes the lap's
 line and sectors from FM4's AI line and database, and `tools/fm4_routes.py` builds the circuit's
 road network (what the minimap draws) and a race route from the same line. A start on a circuit
 passes the game

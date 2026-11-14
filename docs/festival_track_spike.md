@@ -21,8 +21,10 @@ are Infineon 5-6's grey road, Indianapolis 7's pale sand and Top Gear 3's orange
 2. `tools/fm4_pvs.py convert MOD FH1_DISC LOOSE` converts the mod's layouts (ribbons):
    - each PVS from FM4's version 27 to FH1's 50, split into 100 m hex zones (`.hex`,
      `__RnnZnnnnn.pvsz`, `FilenameMap_nn.dat`, `PVSZLookup_nn.dat`); big models go into every
-     zone their extent reaches, and each zone also takes the large pieces (25 m and over)
-     of the FM4 visibility cell that best matches its centre (`FM4_PVS_VISIBLE*`);
+     zone their extent reaches, each zone also takes the large pieces (25 m and over) of the
+     FM4 visibility cell that best matches its centre (`FM4_PVS_VISIBLE*`), and then what its
+     six neighbours hold, as FH1 draws the camera's zone alone (`FM4_PVS_ZONE_REACH`, "Zones
+     that hold what is seen from them" below);
    - texture records (FM4's atlas flag 8 and projected-lightmap flag 0x10 dropped), shader
      names, instance flags (high half 0x083F, FM4's low 16 bits, bit 28 dropped);
    - FM4's decal models (road lines, road edges, road detail) drawn in FH1's opaque and
@@ -51,21 +53,24 @@ are Infineon 5-6's grey road, Indianapolis 7's pale sand and Top Gear 3's orange
 | --- | --- |
 | `FORZA_INSECURE_FILES='zipmanifest.xml\|\tracks\<track>\'` | lets the changed manifest and the track's files open as plain files |
 | `FORZA_FM4_STX='<Track>\|LOOSE/<track>_stx_numbers.bin'` | FM4's static texture pack read as FH1's |
-| `FORZA_TRACK_SPAWN=x,y,z[,fx,fz]` | the player's teleports go there (facing fx,fz); FM4TRACK diagnostics on. Suzuka's grid: `605.6,598.5,-134.1,0.61,-0.79` (15 m behind FM4's first AI waypoint, `media/AI/Tracks/suzuka_00.geo`) |
+| `FORZA_TRACK_SPAWN=x,y,z[,fx,fz]` | the player's teleports go there (facing fx,fz); the game's fatal file errors (the ones its own check stops on, not the 997s of every overlapped read) and its dirty disc message logged. Suzuka's grid: `605.6,598.5,-134.1,0.61,-0.79` (15 m behind FM4's first AI waypoint, `media/AI/Tracks/suzuka_00.geo`) |
+| `FORZA_TRACK_DIAG=1` | the FM4TRACK diagnostics: zones made live, zone, texture and resource table checks, files streamed, the texture pack (off on a player's start on a circuit, #825) |
 | `FORZA_FM4_COL=1` | the collision manager reads every cell from the `.col` (no `.fiz` streaming) |
 | `FORZA_FM4_ZONE_POOL=n` | n x the live-instance and placement pools (not needed with the padding zone) |
 | `FORZA_TRACK_NO_TRAFFIC=1` | the other cars go far below the circuit |
 | `FORZA_AUTOPILOT=LINE[,scale]` | drives the line (pure pursuit, speed from the line x scale) |
 | `FORZA_AUTOPILOT_TRACE=FILE`, `_DELAY=s`, `_GAIN=k` | 10 Hz wheel/input trace, a start delay, the steering gain |
+| `FORZA_AUTOPILOT_SHIFT=0` | the autopilot leaves B and X alone (it shifts up near the redline and down under 40% of it; with manual shifting it stayed in first gear) |
 | `FORZA_ZONE_TRACE=1` | zones made live/dropped with the pools in use |
+| `FORZA_FM4_STREAM_TRACE=FILE` | what the track streaming did and when: zones, models, texture slots and texture objects, the pools, the car (`tools/fm4_stream_lead.py FILE <circuit folder>` reads it) |
 | `FORZA_FIZ_TRACE=1` | collision queries, depot reads, teleport orientation |
 | `FORZA_PVS_TRACE=FILE` | every read of the PVS reader (layout work) |
 
 Converter test switches: `FM4_PVS_FLAGS`, `FM4_PVS_FLAGMASK`, `FM4_PVS_SHADERS`,
-`FM4_PVS_PROJLM`, `FM4_PVS_SKY`, `FM4_PVS_SHADER_PATCHES`, `FM4_PVS_LIGHTMAPS`, `FM4_PVS_HEX`,
+`FM4_PVS_PROJLM`, `FM4_PVS_SKY`, `FM4_PVS_SHADER_PATCHES`, `FM4_PVS_LIGHTMAPS`, `FM4_PVS_HEX`, `FM4_PVS_ZONE_REACH`,
 `FM4_PVS_EXTENT`, `FM4_PVS_VISIBLE`, `FM4_PVS_VISIBLE_NEAR`, `FM4_PVS_VISIBLE_CELLS`, `FM4_PVS_VISIBLE_SIZE`,
 `FM4_PVS_TOD`, `FM4_PVS_TRACKSETTINGS`, `FM4_PVS_TRACKSETTINGS_FM4`, `FM4_PVS_DECALS`,
-`FM4_PVS_DECAL_BLENDED`, `FM4_PVS_DECAL_DEPTH`, `FM4_SHADERS_LIGHTMAP`,
+`FM4_PVS_DECAL_BLENDED`, `FM4_PVS_DECAL_DEPTH`, `FM4_PVS_PREPASS_SCISSOR`, `FM4_SHADERS_LIGHTMAP`,
 `FM4_SHADERS_LIGHTMAP_COLOURS`, `FM4_SHADERS_SHADOW_COLOUR`, `FM4_SHADERS_SHADOW_CLIP`, `FM4_SHADERS_TINTS`, `FM4_PVS_PASS_GROUPS`, `FM4_PVS_PASS_GROUP_DROP`, `FM4_PVS_GROUND`, `FM4_PVS_GROUND_SCALE`, `FM4_PVS_GROUND_BELOW`, `FM4_PVS_GROUND_MODEL`, `FM4_PVS_GROUND_LAYER`, `FM4_PVS_GROUND_AT`, `FM4_PVS_STREAM_MARGIN`,
 `FM4_COL_NORMALS`, `FM4_COL_WALL`, `FM4_COL_EDGES`, `FM4_COL_REMAP`, `FM4_COL_GRID`,
 `FM4_COL_SURFACE`, `FM4_COL_KEEP_DEGENERATE`; `FM4_DISC` (FM4's disc folder) for the
@@ -81,10 +86,14 @@ surface map.
 ## Findings worth keeping
 
 - FH1's collision cell: 0x90-byte header (route ids at +0x3C, count +0x7A, mask +0x7C), 16-byte
-  vertices with a packed normal (z, x signed 11 bits, y 10 bits), 32-byte triangles
-  (flags 0xTTMM8000: TT 0x0E ground, 0x08 walls; MM surface), 12x12 squares of u16 lists.
-- The wheels follow the vertex normals: true (tilted) normals lifted the front wheels at fixed
-  spots and launched the car; upright ground normals fixed it (bank no longer felt).
+  vertices with a packed normal (x and y signed 11 bits, z signed 10 bits: Direct3D's HEND3N),
+  32-byte triangles (flags 0xTTMM8000: TT 0x0E ground, 0x08 walls; MM surface), 12x12 squares
+  of u16 lists.
+- The wheels follow the vertex normals. An earlier reading of the word (z 11 bits from bit 21,
+  y 10 bits) set y's sign bit for every normal whose z came out odd, a normal lying flat for
+  the game: the car was lifted and thrown at fixed spots, so ground normals were made upright.
+  That hid the tilt but not its cost, see "The road under the wheels (#876)" below. The word is
+  now packed as the game reads it and carries FM4's own vertex normal.
 - A triangle's last word 0x00FFFFFF made walls throw the car; FM4's 0 is kept.
 - Zone pools are sized 3 x (largest zone + 128) + dynamic instances; hex zones need more.
 - Meshes placed by their model (road, terrain, kerbs, buildings: placement at 0, 0, 0) hold
@@ -1008,10 +1017,16 @@ Suzuka's road had no lines.
   groups keep their order, which the areas after them follow; the file keeps its size and
   nothing else in it moves. Groups 5, 8, 11 and 17 stay where they are (FH1 does not run them
   for these instances). A model is moved only if its buffer's own state is the pass's (no
-  draw of it blends for 12, every draw blends for 13: RB_BLENDCONTROL0) and its header's three
-  area sizes are the groups' sums, as `insert_fetch_constant` checks them; any other is left
-  undrawn and counted in the converter's line. On the 24 circuits the checks leave none of
-  the 6037 out (with and without them the same models moved, to the same bytes); and on
+  draw of it blends for 12, every draw blends for 13: RB_BLENDCONTROL0, written before the
+  buffer's first draw, which would otherwise take the state the buffer before it left), the
+  buffer writes RB_DEPTHCONTROL (for 13 too, though only 12 changes it) and writes neither
+  register in a way the scan does not read (a type-0 packet to one register, a type-3
+  packet such as SET_CONSTANT), and its header's three area sizes are the groups' sums, as
+  `insert_fetch_constant` checks them; any other decal model is left undrawn and counted in
+  the converter's line. On the 24 circuits the checks leave none of the 6037 out (with and
+  without them the same models moved, to the same bytes; the same for the stricter draw and
+  packet checks, on every model file for both slots: every draw of group 14, 7733, follows a
+  blend write, and no such packet writes either register); and on
   Suzuka's own files (`tools/test_fm4_decals.py` with `FM4_DISC` set) areas A and C stay byte
   for byte, the buffers change in their RB_DEPTHCONTROL words alone, and every area C fixup
   lands in a fetch constant write or a draw.
@@ -1156,6 +1171,16 @@ its width, the racing line's place on it):
   the vector across, FM4's racing line as the factor). A file of the game's aiopenworld
   archive, so the import keeps it with the circuit's database mod.
 
+- `media/ui/MapProfileMinimap.xml` and `MapProfileFullscreen.xml`, in the circuit's mod: FH1's
+  own two map profiles (the player's files, which say how each kind of map entity is drawn)
+  with one change. A road group (`<Filter tag="road_type" .../>`) has two colours: the first
+  until the player has driven the road, the second after. The minimap's first is the grey
+  (122, 122, 122) and it has no background, so on a circuit the road ahead was a grey line on
+  grey tarmac and read as no road at all (#877); there is nothing to discover on a circuit, so
+  the first colour becomes the second (white on the minimap, 200 grey on the map). The files
+  load with the circuit's mod only, so Colorado's maps are as they were. A circuit imported
+  before gets them at its next start (`fm4tracks._ensure_map_profiles`).
+
 What FH1 needs of a road network, found on TU4 before this converter, with Suzuka loaded as
 a track of its own in a package:
 
@@ -1246,6 +1271,335 @@ Not done:
   network.
 - The map screen and GPS routes on a circuit were not looked at; the map's picture and pins
   are Colorado's.
+
+## Zones that hold what is seen from them (#824)
+
+A reported Le Mans session at 200-330 km/h: the scenery appeared as the car drove, and
+stretches filled in as it passed. FH1 draws the camera's zone alone. Colorado's zones are
+visibility sets (1434 zones, 640 instances in the median one, each instance in 16.5 zones on
+average), where the converter's hex zone held only its own instances (those whose extent
+reaches it, plus 100 m) and the large pieces of one FM4 visibility cell: Le Mans had 3.7 zones
+an instance, and along
+the lap's line small trackside pieces showed only 120 m ahead at the median (p10 58 m), about
+1.5 s at those speeds (offline, from that conversion's zones and the circuit's lap.txt; in the
+session's log the archive thread read 15 to 200 files a second at speed and the pool never ran
+dry, so streaming was not the limit).
+
+- What a zone holds (`FM4_PVS_ZONE_REACH`): `neighbours` (the default) makes each zone its own
+  instances and then those of its six neighbouring hexes (`HexGrid.neighbours`), so a zone holds
+  everything within 200 m of its centre (the seven hexes' inradius) and its neighbours' large
+  pieces; `own` is the old zoning, and converts byte for byte as before (Suzuka's bin.zip, same
+  hash). The same offline count along Le Mans's line: 100% of the pieces within 150 m of the
+  car in the camera's zone (66% before), 86% within 300 m (38%); small pieces 200 m ahead at
+  p10, 280 m at the median.
+- The cost is in the streaming pool: FH1 streams the camera's zone and the six around it, so a
+  zone's need (`stream_blocks`) is now the files of the hexes two rings out.
+  `fm4_stream_blocks.txt` stays under the hook's cap: a layout whose zones with their whole
+  neighbours would need more than 65536 blocks with the 1.25 margin (`MAX_STREAM_BLOCKS`,
+  `kMaxBlocks` in hooks/fm4_track.cpp) takes the neighbours' instances within 200 m, then 150 m
+  of the zone's centre (`NEIGHBOUR_NEAR`), else its own alone; the converter's line for the
+  layout says which. The file itself is never more than 65536 (with a warning when the margin
+  does not fit: Crown Jewel's and Mugello's other layouts already needed more with their own
+  zones, as before).
+- The padding zone (`FM4_PVS_POOL_ZONES`) follows the largest zone: Le Mans 522 -> 1269
+  instances, so FH1's live instance and placement pools are 3 x (4 x 1269 + 128) = 15612.
+
+All 24 circuits of Disc 1 converted both ways from the disc (`tools/fm4_track_mod.py` and
+`fm4_pvs.py convert` as the launcher runs them). Ribbon_00 is the layout free roam loads; the
+blocks are the file's (the largest of all layouts, with the margin):
+
+| Circuit | Zones | Instances a zone, average | Largest zone | Blocks asked | Ribbon_00's zones |
+|---|---|---|---|---|---|
+| Alps | 238 | 40 -> 54 | 294 -> 471 | 63721 -> 65193 | neighbours within 150 m |
+| AmalfiGP | 4312 | 7 -> 14 | 446 -> 1168 | 34183 -> 42838 | neighbours |
+| Autopark | 1026 | 39 -> 129 | 556 -> 1234 | 53935 -> 65250 | neighbours |
+| Catalunya | 120 | 132 -> 503 | 776 -> 2068 | 43160 -> 59249 | neighbours |
+| CrownJewel | 378 | 40 -> 134 | 390 -> 1086 | 65536 -> 65536 | neighbours |
+| FujimiKaido | 875 | 28 -> 109 | 629 -> 1086 | 29456 -> 44818 | neighbours |
+| Hockenheim | 144 | 122 -> 232 | 666 -> 1336 | 50149 -> 63223 | neighbours within 200 m |
+| Indi | 153 | 170 -> 258 | 638 -> 944 | 57284 -> 64314 | neighbours within 200 m |
+| Infin | 130 | 90 -> 306 | 495 -> 1135 | 46395 -> 60444 | neighbours |
+| LagunaSeca | 224 | 89 -> 326 | 710 -> 1672 | 33731 -> 47393 | neighbours |
+| LeMans | 805 | 48 -> 176 | 522 -> 1269 | 38151 -> 52033 | neighbours |
+| MapleValley | 176 | 63 -> 219 | 272 -> 750 | 26550 -> 37914 | neighbours |
+| Motegi | 324 | 95 -> 134 | 734 -> 1177 | 54349 -> 65473 | neighbours within 200 m |
+| Mugello | 208 | 111 -> 111 | 591 -> 591 | 65536 -> 65536 | own (fallback) |
+| Nurburgring | 2226 | 72 -> 242 | 752 -> 1898 | 37925 -> 48999 | neighbours |
+| NurburgringF1 | 361 | 66 -> 66 | 452 -> 452 | 63121 -> 63546 | own (fallback) |
+| RoadAmerica | 169 | 124 -> 534 | 409 -> 1343 | 24326 -> 39501 | neighbours |
+| RoadAtlanta | 154 | 100 -> 385 | 464 -> 1432 | 27958 -> 46280 | neighbours |
+| Sebring | 315 | 84 -> 329 | 698 -> 1938 | 35953 -> 56659 | neighbours |
+| Silverstone | 304 | 100 -> 288 | 457 -> 1013 | 51266 -> 64071 | neighbours |
+| SunsetInfield | 120 | 198 -> 198 | 555 -> 555 | 62469 -> 64318 | own (fallback) |
+| Suzuka | 209 | 72 -> 249 | 504 -> 1158 | 43280 -> 60124 | neighbours |
+| TopGear | 242 | 110 -> 261 | 408 -> 724 | 36390 -> 47226 | neighbours |
+| Tsukuba | 176 | 40 -> 147 | 737 -> 1531 | 44238 -> 49423 | neighbours |
+
+### What was still late: the streamed textures (#824)
+
+Reported again on 0.3.6, with circuits imported after the zones above: trees, houses and
+barriers "get their textures late" and "appear out of nowhere" at speed, on Le Mans and on
+Suzuka. Measured with `FORZA_FM4_STREAM_TRACE` and `tools/fm4_stream_lead.py` over a lap of
+each (the autopilot, resolution scale 2, FSR 3 Balanced, Ultra, a 30 fps cap; Le Mans 13.3 km
+up to about 295 km/h, 58 s of the lap at 200 km/h or more; Suzuka 5.7 km up to about 215
+km/h, 3 s). For every instance within 60 m of the car's path, how far the car still had to
+drive to it when each thing was ready:
+
+| Le Mans, passed at 200 km/h or more (1,405 instances) | Least | 10th percentile | Median | Ready after it was listed |
+| --- | --- | --- | --- | --- |
+| The camera's zone lists it (FH1 draws that zone alone) | 152 m | 234 m | 298 m | |
+| A zone that lists it is live | 282 m | 366 m | 444 m | none |
+| Its model is made | 282 m | 395 m | 1,101 m | none |
+| Its textures are at full size | 0 m | 379 m | 1,015 m | 5%, by up to 11.5 s; 0.6% never |
+
+- Zones and models are not late: both are ready before the camera's zone lists the instance,
+  on both circuits and at every speed (Suzuka at 100 to 200 km/h, 839 instances: listed 149 /
+  207 / 291 m, zone 249 / 407 / 577 m, model 249 / 495 / 1,172 m).
+- Textures were: at 100 to 200 km/h 12% of Le Mans's instances got theirs after they were
+  listed (by up to 62 s, 2.7% never while the model was loaded) and 8% of Suzuka's (up to 48
+  s); from the start of the lap at any speed, 14% and 9%.
+- It was not a matter of speed or of the streaming budget. Of the times the game asked for a
+  streamed texture, a third never loaded while it was asked for (Le Mans 33% of 2,881, Suzuka
+  28% of 2,784), most of the others loaded within the same tenth of a second, and up to 404
+  (398) textures with a file were waiting at one moment. With the streaming update's budget at
+  30 ms instead of 3 (sub_82E2BE00's f1) the same: 33% and 28%, 405 and 368 waiting.
+- The cause: a streamed texture's load (sub_82CEBE10) reads its `_0x<id>.bix` file whole into
+  memory from the game's heap 0x20 (sub_82423000), sized for Colorado. Le Mans's grid asks for
+  42 MB of these files and 19 MB fitted (279 textures loaded, 343 waiting); the allocation
+  failed, the load with it (the resource's state 6), and the loader tried again on every pass,
+  450 failed loads a second there. A texture got in when others were let go. Over a lap, of
+  the streamed textures the game asked for that have a file, 390 of Le Mans's 2,031 never
+  loaded and 76 of Suzuka's 1,364.
+
+The fix (hooks/fm4_track.cpp, `fm4_stream_textures.h`): on a converted track a failed
+allocation of that caller comes from an arena of the hook's own: 8 MB chunks of the guest's 4
+KB-page physical heap, taken as they are needed (64 MB at most), cut into blocks first fit.
+The game's free of the pointer (sub_82423490) gives the block back, and the arena does not
+hand it out again for two seconds. The chunks are not given back: what the arena has taken,
+up to the 64 MB, it keeps for the session. For those two seconds after a reload at a busy
+place (every texture let go and asked for again at once) it can hold up to twice what is in
+use: with the Le Mans lap's trace replayed through the arena, such a reload 20 s into the lap
+takes it to 56 MB, and a second one a lap later to the 64 MB. When the arena is full the
+allocation fails as before and the loader tries again. The same when the guest's heap has no
+8 MB left in one piece for another chunk: the hook then asks the heap again a second later,
+not on every failed load (a failed request costs two error lines of the SDK's in the log, and
+there are hundreds of failed loads a second at a busy place), and says so in the log once.
+`FORZA_FM4_TEX_FALLBACK=0` turns it off, with the model buffers' fallback above. Nothing
+changes for Colorado: only a converted track's failed allocations are taken over.
+
+A first attempt allocated each block from the guest's heap and released it there, as the model
+buffers' fallback does. Every texture loaded, and after a minute of driving the road and the
+scenery showed other textures' texels, or opaque slabs where a billboard's cut-out should be
+(Le Mans from 900 m of the drive, Suzuka from 1,100 m). The cause is known, and it is the
+release, not how soon a block is used again. It is in the SDK's write watch (ReIGlue, our
+ReXGlue fork: `PhysicalHeap` in system/xmemory.cpp, `SharedMemory` in
+graphics/shared_memory.cpp):
+
+- The emulated GPU keeps its own copy of guest memory and is told of a write only on pages
+  it watches. A watch can only be set on pages that are allocated
+  (`PhysicalHeap::EnableAccessCallbacks` skips the others).
+- A release reports the block written, so the GPU's copy of it is dropped. A frame still
+  queued then draws from the released pages once more: they are uploaded again and marked
+  up to date (`SharedMemory::MakeRangeValid`), with no watch on them.
+- The pages are allocated again and another texture's file is read into them
+  (`XFile::ReadInternal` reports the write, to pages nobody watches). The GPU side takes the
+  pages it holds as up to date as they are, so it never sets the watch either, and draws the
+  old bytes from then on.
+
+Run outside the game against the SDK's own memory and shared-memory code: a block that stays
+allocated has every rewrite reported, also with no rest at all (200 loads into blocks used
+again, with a GPU read between the free and the next load: no stale page); release, a GPU
+read, allocate, load: all 64 pages of the block stale, and stale for later writes too. So the
+arena is right because it never releases its memory, and the two seconds only cover the frames
+already queued that still draw the texture that was let go (a GPU thread stopped for longer
+than that with frames queued would draw those frames from the next texture's bytes; the
+game's own heap, which uses a freed block again at once, is more exposed to that).
+
+One way in was left: a new chunk can cover pages that the model buffers' fallback released
+(it still releases each block, to the same heap) and that a queued frame read once more. In
+the same program, 3 of 41 textures loaded into such a chunk drew stale pages. The hook
+therefore makes the GPU side drop its copy of every chunk as it is taken (the chunk's pages
+are watched, then reported written once: `EnablePhysicalMemoryAccessCallbacks`,
+`TriggerPhysicalMemoryCallbacks`); with that, none of the 41. All 28 spots of the two drives
+(14 on each circuit) drew right, before that change and with it.
+
+After, the same laps:
+
+| | Le Mans before | after | Suzuka before | after |
+| --- | --- | --- | --- | --- |
+| Streamed textures loaded, of the times asked for | 67% | 91% | 72% | 99% |
+| Not loaded: with a file / without one | 698 / 253 | 4 / 241 | 758 / 34 | 1 / 34 |
+| Textures with a file that never loaded in the lap | 390 | 0 | 76 | 0 |
+| Most waiting with a file at one moment | 404 | 24 | 398 | 36 |
+| Instances with textures after they were listed, 200 km/h or more | 5% | 0% | 0% (25) | 0% (26) |
+| The same, 100 to 200 km/h | 12% | 0% | 8% | 0% |
+| The same, any speed, from the start | 14% | 4% | 9% | 3% |
+| In the arena at most (taken from the guest's heap) | | 27.8 MB, 420 textures (40 MB) | | 15.1 MB, 399 textures (24 MB) |
+
+(The 4% and 3% left are at the grid in the first seconds of the lap, where 3% and 1% of the
+instances' models are made after they are listed too.) At Le Mans's grid: 622 textures loaded
+and none waiting, where 279 were loaded and 343 waited; the signs, the banners and the road's
+rubber are sharp.
+
+Frame times over those laps (frames over 40 ms of about 10,300 on Le Mans and 6,100 on Suzuka,
+and the worst frame; the median is 33.4 or 33.5 ms in every run): Le Mans 18 (82.5 ms) before
+and 8 (89.2 ms) after; Suzuka 5 and 17 in two laps before (83.7 and 151.3 ms), 9 (71.6 ms)
+after. No difference beyond the spread between two laps of the same build. With the 30 ms
+budget: 13 and 5. FH1's own world with the new build: 110 of 148 consecutive frames of the title
+sequence's fly-over are bit-identical with the build before (107 of 146 between two starts of
+one build; the others are among the first 51 frames of a start), and its log has no line of
+the arena.
+
+With each chunk's copy dropped on the GPU side as it is taken and the rule for a refused
+chunk (the two changes after the laps above), a lap of each circuit again, the same way:
+
+| | Le Mans | Suzuka |
+| --- | --- | --- |
+| Streamed textures loaded, of the times asked for | 92% of 2,947 | 99% of 2,796 |
+| Not loaded: with a file / without one | 4 / 244 | 1 / 34 |
+| Textures with a file that never loaded in the lap | 0 | 0 |
+| Most waiting with a file at one moment | 27 | 87, for 0.13 s |
+| Instances with textures after they were listed, 100 km/h or more | 0% (3,534) | 0% (883) |
+| The same, any speed, from the start | 4% | 2% |
+| In the arena at most (taken from the guest's heap) | 27.8 MB, 421 textures (40 MB) | 15.3 MB, 354 textures (24 MB) |
+| Frames over 40 ms (worst) | 4 of 10,574 (65.6 ms) | 13 of 6,165 (66.6 ms) |
+
+No chunk was refused in these laps (the guest's heap always had the 8 MB), so the rule for
+that is covered by its test and not by a run. The 14 spots of each circuit's drive drew right
+again.
+
+What was tried and dropped: a second streaming centre two hexes ahead of the car at speed
+(the game's idle second centre given the zones ahead). It made the zones live 530 to 600 m
+ahead instead of 230 to 305 m, which was never what was late; a third of the texture loads
+still failed (29% on Le Mans), 37 frames of its lap were over 40 ms, in an earlier run it
+switched itself off at 85% of the streaming blocks, and on this Le Mans lap the game stopped
+at 11.8 km with a read fault in the streaming centre's update. Not kept.
+
+What is left:
+- How far ahead scenery is drawn is the zones' reach, as above: an instance is listed from
+  about 150 m ahead at the least, 235 m at the 10th percentile, 300 m at the median (Le Mans
+  at 200 km/h or more; Suzuka 149, 207 and 291 m at 100 to 200 km/h).
+  Nothing loads late inside that; drawing further needs zones that hold a second ring of
+  hexes, and the streaming blocks for it.
+- 171 of Le Mans's streamed textures and 19 of Suzuka's have no `_0x<id>.bix` file in the
+  circuit's archive: the game asks for them as long as their zones are live and they never
+  load. FM4's atlas tiles are drawn from their atlas and do not need theirs; which models the
+  others belong to is not looked at.
+- Only a texture's mip file is asked for, not its base level (`_0x<id>_B.bix`,
+  `FM4_PVS_ZONE_TEXTURE_FLAG`): the largest mip a circuit's streamed texture shows is its
+  second one.
+- The model buffers' fallback above still allocates and releases each block, as the first
+  attempt here did, so a model's vertices or indices can meet the same hole in the write
+  watch. The game's destroy of a buffer (sub_82AA5A80) calls the D3D library's wait for the
+  GPU (sub_824192A0) before the free when the buffer still has a fence pending, which covers
+  the plain case; whether the track's recorded command lists set that fence is not looked
+  at. No wrong geometry or texels were seen from it in any run. The fix belongs in the SDK:
+  no page marked up to date whose watch could not be set, or the GPU's copy dropped when
+  memory is allocated.
+- Not covered by any run: a world made again while the arena holds blocks (the game's free of
+  each texture gives its block back; if a world's unload does not free them one by one, they
+  stay booked and the arena fills), Windows, the D3D12 renderer and ReGPU.
+- Not run: D3D12 and ReGPU, Windows, and other circuits than these two. The arena's 64 MB were
+  not reached.
+
+To check in the game: frame time and draw count over a Le Mans lap at speed, and how far ahead
+the scenery appears. A circuit imported before this change keeps its old zones until it is
+imported again.
+
+## The road under the wheels (#876)
+
+A player's report: on Le Mans the car now and then shakes hard, as if the surface were rocks,
+on smooth tarmac. Measured with a dev trace of the player car's wheels on every physics step
+(not in the tree: suspension travel, contact, and the surface number the game holds for the
+triangle under each wheel; the wheel block's +336 is that triangle's flags word), the dev
+autopilot on FM4's line.
+Three things in `tools/fm4_col.py`, all in the converted collision:
+
+- **Upright ground normals.** With every ground normal (0, 1, 0), the suspension answered a
+  road rising or falling under the car in proportion to the rate, 78 mm of travel per m/s,
+  which is what a damper gives for a travel rate (damping / spring rate): as if FH1's dampers
+  took the car's speed along the road's normal for suspension travel. On Le Mans's first
+  2.1 km (the climb to the Dunlop curve, then down to the Esses) all four wheels sat on their
+  bump stops for 37 % of the steps above 50 km/h and a wheel hung at full droop for 24 %.
+  Mean travel against the road's rise rate (speed x gradient): 1 mm where it falls faster
+  than 0.5 m/s, 44 mm on the level, 102 mm (the stops) where it rises faster than 0.5 m/s;
+  0.75 m/s is 3 % at 90 km/h or 1 % at 270. With FM4's own normals: 43 to 45 mm at every
+  rise rate, no step on the stops, none hanging.
+- **The packed normal.** See above: x and y 11 bits, z 10 bits. Checked on Colorado's cells
+  (20,601 ground vertices: 0.10 degrees at the median from the mean normal of their
+  triangles; bit 21, y's sign, clear in 20,920 of 20,922). FM4's vertices carry their normal
+  in the same packing with y and z the other way round (Le Mans: 0.06 degrees at the median),
+  so the converter keeps FM4's own instead of making one.
+- **The surface numbers.** A triangle's surface is its number in the game's list
+  (`media/physics/surfaceTypes.xml`). The reader of FM4's list took entries by their
+  indentation and missed 7 of the 61 (4 indented with spaces, one a tab deeper, 2 more with
+  spaces), so every FM4 surface from 30 on got the number of another: Le Mans's
+  BumpyAsphaltSlight (2.5 km of the Mulsanne's lanes) became FH1's BumpyConcreteModerate, its
+  BumpyAsphaltModerate (the Mulsanne's shoulders, the ground round its chicanes) became
+  BumpyConcreteExtreme (3 cm ridges), FoamBarrier (Suzuka's 5,632 wall triangles) became
+  Concrete2Slow. FM4's numbers 54 and 55 (SmoothBlacktop, Infineon's drag strip, and
+  InvisibleTeleportingBorder, the 1.2 km2 of Top Gear's airfield round the track) were kept
+  as numbers: FH1's Leaf5 and GravelBits. The two lists agree up to 48. One name does not
+  mean the same in both: FM4's SlowAsphault is smooth run-off tarmac, FH1's has its grass's
+  5 cm bumps, so it goes to FH1's ConcreteSlow.
+
+FH1's own cells hold a byte per edge in a triangle's last word: 0xFF, or 255 x the cosine of
+half the angle to the triangle across the edge where that one falls away by 10 degrees or
+more (84,541 ground edges of Colorado: 82,767 exact, all but 6 of the rest 1 off).
+`FM4_COL_EDGES=fh1` writes them for the ground; on Le Mans's first 2.1 km the wheels rode the
+same with them as with FM4's 0, so the default stays 0 (the walls' reason for 0 is above).
+
+Not looked at: FH1's SlowGrass has friction 0.30 where FM4's has 0.75 (Le Mans and Suzuka
+have some beside the road), and FH1's Grass, Dirt, Gravel and Quicksand are bumpier than
+FM4's. They are off the road and keep their names.
+
+## The car's shadow drawn again up the road (#827)
+
+Reported on Le Mans and Suzuka (resolution scale 2, FSR 3 Balanced, Ultra shadows): the car's
+shadow "all over the place", and stretches of the circuit in shadow that the sun should light.
+Both are one thing: a second copy of the car's shadow on the road ahead of the car. It showed
+at both grids and while driving, with those settings and the default ones. Two causes, each
+found in a frame capture at Suzuka's grid:
+
+- **FM4's depth pass left its scissor in FH1's depth pre-pass (the converter).** FH1 draws a
+  model's pass group 0 in its depth pre-pass: the main view's depth, which the sun's shadow mask
+  and the ambient occlusion are drawn from. Of FM4's models only the roads, the shoulders and
+  some road edges have a group 0 (154 of Suzuka's 1393 models, 474 of Le Mans's 5160), FM4's
+  own depth pass, and its command buffer ends by writing PA_SC_WINDOW_OFFSET and
+  PA_SC_WINDOW_SCISSOR_TL/BR (0x2080-0x2082: 0, 0 and 256 x 256) with no scissor fixup for the
+  game to fill. FH1 sets the scissor once for its pre-pass, so after the first road piece the
+  rest of the pre-pass and its resolve into the depth texture were cut to that corner: 39 of
+  the frame's 155 pre-pass draws had the 256 x 256 scissor, and the depth texture the mask
+  passes read equalled the frame's pre-pass in 32% of its pixels (the rest was the frame
+  before's scene depth). Colorado: 446 of 446 draws with the full scissor.
+  `tools/fm4_pvs.py` (`prepass_scissor`) makes that write NOPs, in every model with a group 0;
+  the buffer keeps its size. A model is left alone when its group has a scissor fixup, when
+  the write shares its packet with other registers, or when a patch place or a buffer fixup
+  lies in the packet (`tools/test_fm4_prepass.py`). After: 155 of 155 draws with the full
+  scissor, the depth texture equal to the pre-pass. `FM4_PVS_PREPASS_SCISSOR=0` leaves the
+  write. Circuits need importing again.
+- **The marked shadow fetch read the mask at the tile's position, not the frame's (ReIGlue
+  0900).** FH1 draws its 4x MSAA scene in three tiles of rows, each at the top of the same
+  render target with the viewport moved by the rows before it; the mask covers the frame. The
+  fetch sampled at the pixel's position in the render target, so every tile showed the same
+  rows of the mask and the car's shadow came out again one and two tiles further up the screen.
+  [sdk_patches.md](sdk_patches.md) has the fix.
+
+At Suzuka's grid the copy goes with the SDK's half alone; the converter's half alone does not
+remove it. With both, on Le Mans and Suzuka, at the grids and at 14 spots of a drive each (the
+report's settings and the default ones; at the grids also render scale 2 without an upscaler):
+no picture has the copy, and the shadow is under the car. Against the same view with the
+mask's shadow off (`FH1_FM4_SHADOW_FLOOR=1`), at Le Mans's grid the mask darkened 15.6% of the
+middle third of the picture before and 0.2% after (the bottom third, the car's own shadow:
+9.9% and 9.8%).
+
+What is left: the dark stretches of road, mostly under trees (Le Mans's Mulsanne at 4.6 to
+5.8 km, Suzuka at 1.5 and 3.9 km), are there before and after, and in a drive of each circuit
+with the mask's shadow off, where only the car's shadow is missing: they are FM4's own baked
+lighting, not the shadow mask. They were not compared with FM4 itself. The
+circuit's buildings and trees still cast no shadow of FH1's (see below). ReGPU and D3D12 have
+no marked fetch and draw no shadow on a circuit, as before; the converter's half was not run
+there.
 
 ## Open
 

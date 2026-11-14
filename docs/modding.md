@@ -106,6 +106,17 @@ If the game behaves strangely with mods, untick them all and start the game agai
 problem goes away, turn them back on one at a time to find the mod that causes it. A mod made for
 the Title Update 4 build (most are) may not work with the base game.
 
+A save can keep parts a mod (or a save editor) put on a car after the mod is gone, such as another
+car's engine or clutch. The game used to close when it loaded such a car (exit code 134 after
+START on the title screen, #836). Now the car loads with its stock part in that slot, and
+`forza.log` names each one:
+`Car 1398: its Clutch part 3000 doesn't belong to its DrivetrainID 806: loaded with the stock part 806000 instead (#836)`.
+A part that is no longer in the game's database at all, such as a removed mod's drivetrain
+swap, also loads as the car's stock part (#862); the loading screen after START used to never
+end then. Its line reads
+`Car 1398: its Drivetrain part 1398001 is not in the game's database: loaded with the stock part 1398000 instead (#862)`.
+To get a different part there, upgrade the car again in the game.
+
 ## For modders
 
 ### Folder layout

@@ -78,11 +78,14 @@ NOT_CIRCUITS = re.compile(r"(?i)^(homespace\d*|ui.*)$")  # FM4's garage sets and
 EXPERIMENTAL = ("Experimental. What works: free driving on the circuit, with its buildings, stands "
                 "and collision, and timed laps (lap, sectors and best lap on the game's HUD, kept "
                 "per circuit), your car's shadow, the circuit's road on the minimap. Not yet: events "
-                "and races, the circuit's own shadows, AI cars and traffic, the map screen and GPS. "
+                "and races, a choice of car (you drive the car you last used in Colorado), the "
+                "circuit's own shadows, AI cars and traffic, the map screen and GPS. "
                 "Suzuka is the most tested circuit. "
                 "A start on a circuit plays offline, and your save is backed up first.")
 EXPERIMENTAL_SHORT = ("Experimental: free driving and timed laps on the circuit (no events "
-                      "yet). It plays offline, and your save is backed up first.")
+                      "yet). You drive the car you last used in Colorado, so choose it there "
+                      "first: there is no car choice on a circuit yet. It plays offline, and "
+                      "your save is backed up first.")
 
 # Disc 1's files the converter reads besides the circuits' folders.
 DISC1_COMMON = ("default.xex", "Media/db", "Media/physics", "Media/AI/Tracks")
@@ -601,10 +604,11 @@ def _build_one(cfg, disc_root: Path, folder, game: Path, update: Path, work: Pat
         shutil.copyfile(f, staged / "stx" / f.name)
     if not (staged / "stx" / f"{key}_stx_numbers.bin").is_file():
         raise Fm4TrackError("The converter wrote no static texture numbers.")
-    # the database, game modes and race route: a mod of their own (the cars' kind of files; the
-    # game reads a route from its aiopenworld archive, which a mod's files are laid over)
+    # the database, game modes, race route and map profiles: a mod of their own (the cars' kind
+    # of files; the game reads a route from its aiopenworld archive, which a mod's files are
+    # laid over, and the map profiles are FH1's own with the roads in their driven colour)
     db_mod = work / "dbmod"
-    for part in ("db", "gamemodes", "aiopenworld"):
+    for part in ("db", "gamemodes", "aiopenworld", "ui"):
         if (mod / "media" / part).is_dir():
             shutil.copytree(mod / "media" / part, db_mod / "media" / part)
     if not (db_mod / "media" / "db" / "gamedb.slt").is_file():
@@ -743,6 +747,33 @@ def _clear_dir(p: Path):
             shutil.rmtree(p, ignore_errors=True)
 
 
+def _ensure_map_profiles(cfg, key):
+    """A circuit imported before the import wrote them gets FH1's two map profiles with the
+    roads in their driven colour (tools/fm4_routes.py) in its mod, at its next start: the
+    minimap's grey for a road not driven yet is lost on a circuit's tarmac. Never an error:
+    without them the circuit starts as it did."""
+    ui = mods.mods_dir(cfg) / mod_folder(key) / "media" / "ui"
+    try:
+        if ui.is_dir() or not ui.parent.is_dir():
+            return
+        paths.ensure_tools_importable()
+        import fm4_routes
+        src = fm4cars._find_ci(Path(cfg.game_files()), "media", "ui")
+        files = fm4_routes.map_profiles(str(src)) if src else {}
+        if not files:
+            return
+        # all of them or none: written beside, then moved in as the folder
+        stage = Path(tempfile.mkdtemp(prefix=".ui-", dir=ui.parent))
+        try:
+            for rel, data in files.items():
+                (stage / Path(rel).name).write_bytes(data)
+            stage.rename(ui)
+        finally:
+            shutil.rmtree(stage, ignore_errors=True)
+    except Exception:  # the profiles are a help, never a reason not to start
+        pass
+
+
 def configure(cfg, env: dict, args: list, unset: list, notes: list, write=True):
     """A start on the chosen circuit: the game mounts its folder (--fm4_track_dir, which also gives
     the converted track's switches their defaults; a FORZA_* variable in the extra environment
@@ -767,6 +798,7 @@ def configure(cfg, env: dict, args: list, unset: list, notes: list, write=True):
         _ensure_festival_node(folder / "media" / "tracks" / key, spawn)
         if not saved_spawn and spawn:
             _atomic_write(spawn_file, spawn + "\n")
+        _ensure_map_profiles(cfg, key)
     extra = mods_for(cfg, key, write)
     for i, a in enumerate(args):
         if a.startswith("--forza_mods="):

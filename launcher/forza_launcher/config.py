@@ -42,6 +42,7 @@ def _default():
         "profile": {"mode": "own", "xenia_content": "", "xenia_xuid": ""},
         "advanced": {"game_dir": "", "data_root": "", "extra_args": "", "extra_env": "",
                      "extras_toml": "", "pad_per_user": False,
+                     "system_file_dialogs": False,   # the system's file dialogs, not the launcher's own (#884)
                      "accept_ms_license": False, "build_jobs": 0,
                      "blocked_root": "",       # a data folder the last build could not use (access denied, #38)
                      "data_root_asked": False},  # the player answered the offer to leave Documents\\forza

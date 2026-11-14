@@ -493,6 +493,11 @@ mirror's mask is left alone), on the GPU, outside the game's render pass:
    noisy foliage is not darkened. Both still occlude the ground (contact shadows under cars).
    The stencil comes from an 8-bit view of the same resolve, which the texture cache loads
    through fetch constant 31 (unused by the shadow passes; set for the request and put back).
+   The shadow pass's own textures are requested again after it (SDK patch 0530, #823): when a
+   memory watch had fired since the pass's request, the texture cache's request reset every
+   binding and resolved only constant 31, so that pass sampled null views for its depth and
+   shadow map, and for one frame the nearest cascade drew the near ground, up to a straight
+   line, as in shadow (5-19 frames per 7,520 in a race at 144 fps with High, none with Off).
 
 Right after the next draw into the mask by another shader (the 2x2 box blur in play; with
 Shadow softness Softer, the 6-tap horizontal pass, whose vertical pass then blurs the

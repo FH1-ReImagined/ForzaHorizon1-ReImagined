@@ -697,6 +697,30 @@ bits the source does not have); with the hook AMD's and Intel's drivers take tha
 checked, and its pictures compared, on Linux. Unset, nothing changes. What it was used for is in
 [perf.md](perf.md#the-gtx-1650-tis-gpu-frame-after-770-and-two-transfer-cuts-that-do-not-pay-640-2026-11-11).
 
+## ReIGlue 0500-0502: ARM64 Linux, 16 and 64 KB pages (#788)
+
+The first step of the Android study (#788): ARM64 Linux in CI, and the one correctness bug the study
+found for ARM64 Linux and Android.
+
+- **0500.** The 0xE0000000 view starts 4 KB into physical memory. The runtime mapped it rounded down
+  wherever `getpagesize()` was over 4 KB, but the compiled guest accesses added the 0x1000 back only
+  on macOS ARM64. On a Linux or Android kernel with 16 or 64 KB pages (Asahi, Android 15+ devices and
+  the 16 KB x86-64 emulator images, 64 KB server kernels) every access at 0xE0000000 and up would have
+  landed 4 KB off. Now every ARM64 build (any OS) and every Android build (any CPU) maps the views at
+  64 KB granularity whatever the page size, and its code adds the offset (`REX_PHYSICAL_VIEW_ROUNDED`;
+  the codegen templates repeat the condition, and a `static_assert` at the end of the PCH checks it).
+  A build whose code disagrees with the host's page size refuses to start with a message. The x86-64
+  code is unchanged: the regenerated TU4 code preprocesses identically, and sample objects (TUs 0, 10,
+  89, 150) are byte-identical. A unit test forces 4, 16 and 64 KB granularity.
+- **0501.** Linux maps the guest views with `MAP_FIXED_NOREPLACE`, so a view never replaces something
+  already mapped at its address (more likely in an Android app process).
+- **0502.** ReIGlue's `build-linux-aarch64` workflow runs the SDK's tests on every PR on GitHub's
+  `ubuntu-24.04-arm` runners: the unit tests, the 16/64 KB view tests and the PPC instruction tests with
+  the FMA cases, which run recompiled code on NEON. The PPC test binutils (VMX128) run there under
+  qemu-user.
+
+Building the game for ARM64 Linux: [arm64_linux.md](arm64_linux.md).
+
 ## ReIGlue 0510: fetch opcodes the GPU does not define, execs past the end of the microcode (#808)
 
 On the converted FM4 circuit Suzuka the game stopped 10-20 s into lap 1, on the command processor's thread:
@@ -732,3 +756,148 @@ Checked (Linux, TU4 build of main 0ec811b6 with the FM4 cars mod, RX 9060 XT, RA
 `tools/fm4_line.py` lines): with the plugin of the current pin the crash came 9 s into lap 1, as in the three runs
 before; with 0510, Suzuka two full laps (4:07.49, 4:05.82) and Laguna Seca one (3:45.29), no crash; FH1's free roam
 in Colorado drives as before.
+
+## ReIGlue 0530: the world AO's stencil request leaves the first shadow pass its textures (#823)
+
+With Ambient occlusion on (patch 0350), single frames showed the near ground, the road and everything close dark
+below a hard straight line, the far scenery lit; the next frame was normal. In a scripted race at 144 fps, render scale 2,
+FSR 3 balanced at 1080p, Ultra world detail, Softer shadows and AO High, that was
+5-19 frames in every 7,520 captured, and none with AO off.
+
+0350 loads the depth pre-pass stencil's 8-bit view through fetch constant 31 from inside the frame's first
+`ApplyShadows` draw, after that draw's own texture request. When a memory watch had fired between the two (a
+watch callback runs on the guest CPU thread that wrote the memory, so it can come at any point of a draw), the borrowed request found
+`texture_became_outdated_`, ran `ResetTextureBindings()` (every binding cleared) and resolved only constant 31. The
+draw then bound null views for its tf0 (the scene depth) and tf1 (the nearest cascade's shadow map), so that one
+pass, the nearest cascade, wrote shadow over everything it covers: the straight line is the cascade's far edge.
+The later cascades were right, since each pass requests its own textures again. A per-frame log of the AO's inputs
+(the projection constants, the depth and stencil views, extents, formats, the shadow passes and the blur) showed
+the same projection, views and sizes on the flash frames as on the others; what differed was that the first
+shadow pass's tf0 and tf1 views had changed across the AO's request: 62 such frames in one run, and each of its 13
+flash frames came about 12 ms (the capture's delay) after one of them. Most of the others inside the capture
+bursts gave a smaller one-frame change, below the scan's threshold.
+
+0530 requests the draw's own textures again after the borrowed request (`fh1_world_ao.h`,
+`RequestThroughBorrowedFetch`; nothing is loaded again when nothing was reset) and takes the AO's depth view after
+it. `tools/test_world_ao.cpp` checks the sequence against a texture cache that resets its bindings on the borrowed
+request.
+
+Measured (TU4, Linux, RX 9060 XT, RADV; a scripted run kept out of the repository: boot on a copy of a TU4 save, the GoPro
+Millennia Masters race driven by `tools/autodrive.py`, 96-frame screenshot bursts every 3 s scanned for one-frame
+changes; each pair ran side by side, so the fps are two games' share of the GPU):
+
+| Run | Pin (`46ae834`): flash frames / 7,520 | race fps | 0530: flash frames / 7,520 | race fps |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 5 | 71.4 | 0 | 71.3 |
+| 2 | 9 | 71.4 | 0 | 72.1 |
+| 3 | 3 | 69.6 | 0 | 69.7 |
+
+With a lower threshold (a one-frame change of 10 instead of 25 of 255) the pin's runs had 9, 16 and 6 and 0530's
+still none. The occlusion itself is unchanged: alone on the machine, uncapped at the free roam spawn and switched
+live, AO High against Off cost the same (pin 147.5 against 151.9 fps, 0530 148.5 against 155.3, two sessions each;
+the standing car's camera drifts, so the spread is a few fps).
+In `tools/render_test.py`'s six scenes (render scale 1) the darkening AO High adds over Off is the same with 0530
+as with the pin (race start: 1.6-1.7 against 1.5-1.6 of 255 on average, 5 % of the pixels by 8 or more, the
+contact shadow under the car among them), and the check fails the same way with both: freeroam_dawn, freeroam_midday and
+photo_mode differ from the 2026-11-02 baselines with either plugin, AO Off or High, and cockpit and race_start
+sit at their thresholds (the baselines need recording again).
+
+## ReIGlue 0700: the upload rings in host-visible video memory with Resizable BAR (#858)
+
+A player found that their own Xbox 360 recompilation ran faster when the GPU was the limit after
+they moved its per-frame upload ring into video memory the CPU writes directly (Resizable BAR /
+Smart Access Memory). The Vulkan backend of ReIGlue (our ReXGlue fork) has three such rings: the
+constant buffers, which the shaders read in place, the converted index buffers, read in place too,
+and the staging of guest memory uploads, which a copy moves into the 512 MB guest memory buffer.
+Their pages took the first host-visible, not host-cached memory type a buffer accepts. RADV lists
+its system memory type (2) before the host-visible device-local ones (3 and 4, the whole 15.9 GB of
+the RX 9060 XT's video memory with Resizable BAR on), so every ring was in system memory. The guest
+memory buffer (vertex fetch, guest index buffers) is device-local. Readbacks use host-cached system
+memory. Only the gamma ramp was in host-visible video memory.
+
+0700 adds `vulkan_rebar_uploads` (off by default, read at start). On a discrete GPU with a
+host-visible, host-coherent, not host-cached device-local type on a heap of 1 GB or more, the three
+rings take that type; the 256 MB window without Resizable BAR and integrated GPUs keep system memory
+(`tools/test_vulkan_memory_placement.cpp` checks the choice for this PC's RADV layout with and without
+Resizable BAR, NVIDIA's and three integrated GPUs'). A ring that cannot allocate a page there goes on
+in system memory; readbacks are unchanged. The guest memory buffer is still written by a copy in the
+command stream, now from video memory: a direct CPU write would land before the frame's earlier draws
+that still read the old contents. The log names where the rings went (`Vulkan uploads: ...`) and,
+once a minute, the bytes written into them a frame by kind. In the benchmark race that is about
+6.3 MB a frame: fetch constants 2.4 MB (768 bytes, about 3,100 times), system constants 1.6 MB, float
+constants 1.6 MB, guest memory 0.7 MB.
+
+Measured on Linux, RX 9060 XT (RADV 26.2.1, Resizable BAR on), 8 cores, TU4 at 1280x720 with
+`--frame_rate=240`, the same build with the setting off and on, six alternating rounds a case, each
+run alone (CPU ms: all of the game's threads, over a 60-70 s window):
+
+| Case | Metric | Off: mean (sd) | On: mean (sd) | Change | Welch t |
+| --- | --- | --- | --- | --- | --- |
+| Race, render scale 2 (GPU-bound) | fps | 75.95 (0.36) | 80.02 (0.29) | +5.4% | +21.7 |
+| | 1% low fps | 63.41 (1.94) | 65.28 (2.50) | +2.9% | +1.4 |
+| | CPU ms a frame | 20.00 (0.21) | 19.79 (0.49) | -1.1% | -1.0 |
+| | recorder thread ms a frame | 4.96 (0.06) | 5.04 (0.15) | +1.6% | +1.2 |
+| Race, render scale 1 | fps | 173.65 (4.59) | 175.47 (9.61) | +1.0% | +0.4 |
+| | 1% low fps | 114.89 (4.90) | 102.75 (21.35) | -10.6% | -1.4 |
+| | CPU ms a frame | 16.62 (0.21) | 16.27 (0.47) | -2.1% | -1.7 |
+| | recorder thread ms a frame | 4.32 (0.05) | 4.25 (0.17) | -1.6% | -1.0 |
+| Free roam, standing | fps | 225.30 (12.46) | 224.75 (5.21) | -0.2% | -0.1 |
+| | 1% low fps | 127.36 (18.01) | 129.94 (7.54) | +2.0% | +0.3 |
+| | CPU ms a frame | 14.14 (0.23) | 14.38 (0.29) | +1.6% | +1.5 |
+| | recorder thread ms a frame | 3.51 (0.07) | 3.66 (0.07) | +4.1% | +3.6 |
+
+The GPU-bound race gains 5.4 %. At render scale 1 and in free roam the frame rate does not change
+beyond the noise. At render scale 1 one run with the setting on had a slow first minute (1% low 61.6,
+the whole game slower, its guest waits too); the other runs were 100.6-119.0 on and 105.9-120.9 off.
+The recorder thread, which writes the constants, is 4.1 % slower in free roam (t 3.6), since each of
+its stores now crosses the bus. So the setting stays off by default until the recorder writes fewer
+bytes (the fetch constants first, the largest kind). `tools/render_test.py check` with it on passed
+every scene.
+
+## ReIGlue 0900: the car's shadow on a converted circuit, once (#827)
+
+On converted Forza Motorsport 4 circuits the road, shoulder and kerb shaders take the car's
+shadow from FH1's screen-space sun shadow mask, through a fetch the converter marks (ReIGlue
+0440). The fetch sampled the mask at the pixel's position in the render target. FH1 draws its 4x
+MSAA scene in three tiles of rows (256, 256 and 208 at 720p), each at the top of the same render
+target with the guest viewport moved by the rows before it, while the mask covers the whole
+frame. So every tile showed the same rows of the mask, and the car's shadow was drawn again one
+and two tiles further up the screen, over road that is sunlit.
+
+0900 adds a system constant, `fh1_fm4_frame_origin`: how far the guest viewport starts before
+the render target's first pixel, in host pixels (`fh1::TileFrameOrigin`, tested in ReIGlue's
+`tests/fh1_screen_raster_test.cpp`). The marked fetch adds it to the pixel's position. It is zero
+for a viewport that starts in the target, and only a shader with a marked fetch reads it: FH1's
+own shaders have none, and D3D12 has no marked fetch at all.
+
+The other half of #827 is the converter's (FM4's depth pass left a 256 x 256 scissor in FH1's
+depth pre-pass; [festival_track_spike.md](festival_track_spike.md), "The car's shadow drawn
+again up the road"). With both, on Le Mans and Suzuka, at the grids and at 14 spots of a drive
+each, with the report's settings (resolution scale 2, FSR 3 Balanced, Ultra shadows) and the
+default ones: the copy of the shadow on the road ahead of the car is gone, and the shadow is
+under the car.
+
+Colorado with the pinned plugin (d253875) against 0900's, on Linux, RX 9060 XT (RADV):
+
+- 150 consecutive frames of the title sequence's fly-over from the start of the game: 114 of 149
+  are bit-identical between the two plugins. Two starts of the pinned plugin give 107 of 146. In
+  both comparisons the frames that differ are among the first 50 of a start, plus one later one.
+- `tools/render_test.py`, baselines recorded with the pinned plugin (2 runs), then checked with
+  0900's (2 runs) and the pinned one again (1 run); dssim, lower is closer:
+
+| Scene | Tolerance | Between the two baseline runs | Pinned again | 0900, run 1 | 0900, run 2 |
+| --- | --- | --- | --- | --- | --- |
+| title | 0.015 | 0.0000 | 0.0000 | 0.0035 | 0.0121 |
+| freeroam_midday | 0.005 | 0.0505 | 0.0019 | 0.0024 | 0.0125 |
+| freeroam_dawn | 0.010 | 0.0507 | 0.0382 | 0.0333 | 0.0276 |
+| cockpit | 0.003 | 0.0150 | 0.0022 | 0.0014 | 0.0027 |
+| photo_mode | 0.016 | 0.0792 | 0.0087 | 0.1162 | 0.0249 |
+| race_start | 0.008 | 0.0055 | 0.0041 | 0.0029 | 0.0038 |
+
+The free roam scenes were noisy in these runs (another game was running on the PC): the two
+baseline runs differ from each other by more than the tolerance in four scenes, and
+freeroam_dawn fails with the pinned plugin too. The pictures show the same lighting and shadows
+in every run. What differs is traffic (a car crosses photo mode's picture in 0900's run 1) and,
+in the title scene, which frame of the moving fly-over a shot caught (the frames themselves are
+bit-identical, above). The mean colour of the title, noon, cockpit and race start scenes differs
+by 0.3 of 255 or less between the plugins.

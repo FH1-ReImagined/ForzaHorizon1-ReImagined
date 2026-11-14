@@ -211,7 +211,7 @@ class UpdateCard(QWidget):
             downloads = QStandardPaths.writableLocation(QStandardPaths.DownloadLocation)
             directory = Path(downloads or Path.home() / "Downloads") / "ForzaHorizon1-ReImagined" / self.release.tag
         else:
-            directory = paths.config_dir() / "updates" / self.release.tag
+            directory = updater.downloads_dir() / self.release.tag
         self._start(lambda t: updater.download(
             self.asset, directory, lambda d, total: t.progress.emit(int(d * 100 / total)),
             t.isInterruptionRequested), self._downloaded)

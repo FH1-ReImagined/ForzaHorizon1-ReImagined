@@ -13,6 +13,63 @@ BASH = (str(Path("C:/Program Files/Git/bin/bash.exe")) if os.name == "nt" and
         Path("C:/Program Files/Git/bin/bash.exe").is_file() else shutil.which("bash"))
 
 
+@unittest.skipUnless(BASH, "requires bash")
+class CodegenStampInvalidation(unittest.TestCase):
+    def check_tool_replacement(self, updated, blocked=False):
+        text = SCRIPT.read_text()
+        start = text.index('if cmp -s "$tool_new" "$OVERLAY/bin/rexglue"; then')
+        end = text.index('"$OVERLAY/bin/rexglue" --help', start)
+        with tempfile.TemporaryDirectory(prefix="codegen stamp fixture ") as d:
+            root = Path(d)
+            overlay = root / "SDK overlay"
+            installed = overlay / "bin/rexglue"
+            installed.parent.mkdir(parents=True)
+            installed.write_bytes(b"old")
+            tool_new = overlay / "bin/.rexglue.new"
+            tool_new.write_bytes(b"new" if updated else b"old")
+
+            stamps = [root / "forza-recomp" / tree / module / "codegen.stamp"
+                      for tree in ("generated", "generated_tu4")
+                      for module in ("default", "xmediafacade", "speechfacade")]
+            keep = root / "forza-recomp/generated_tu4/default/forza_recomp.cpp"
+            unrelated = root / "forza-recomp/generated_backup/default/codegen.stamp"
+            for path in [*stamps, keep, unrelated]:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"fixture")
+
+            if blocked:
+                stamps[-1].unlink()
+                stamps[-1].mkdir()
+
+            result = subprocess.run(
+                [BASH, "-eu", "-c", 'ROOT=$1; OVERLAY=$2; tool_new=$3\n' + text[start:end],
+                 "test", root.as_posix(), overlay.as_posix(), tool_new.as_posix()],
+                text=True, capture_output=True, timeout=10,
+            )
+            if blocked:
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(installed.read_bytes(), b"old")
+                self.assertEqual(tool_new.read_bytes(), b"new")
+                return
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(installed.read_bytes(), b"new" if updated else b"old")
+            self.assertFalse(tool_new.exists())
+            for stamp in stamps:
+                self.assertEqual(stamp.exists(), not updated, stamp)
+            self.assertEqual(keep.read_bytes(), b"fixture")
+            self.assertEqual(unrelated.read_bytes(), b"fixture")
+
+    def test_changed_tool_invalidates_base_and_tu4(self):
+        self.check_tool_replacement(updated=True)
+
+    def test_invalidation_failure_keeps_old_tool_for_retry(self):
+        self.check_tool_replacement(updated=True, blocked=True)
+
+    def test_identical_tool_preserves_base_and_tu4(self):
+        self.check_tool_replacement(updated=False)
+
+
 @unittest.skipUnless(BASH and shutil.which("git"), "requires bash and git")
 class ReiglueCheckout(unittest.TestCase):
     with_ffmpeg = True  # the SDK has the FFmpeg submodule and a patch for it (0413)

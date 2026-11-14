@@ -1,8 +1,10 @@
 // forza - FM4 circuits inside FH1 (#648, "The Festival"): dev switches for the conversion
 // work (tools/fm4_track_mod.py, tools/fm4_pvs.py). All off unless their variable is set:
-//   FORZA_TRACK_SPAWN=x,y,z   the player car's teleports go there; also turns on the
-//                             FM4TRACK diagnostics below (file errors, the dirty disc
-//                             message, zone, texture and resource table checks)
+//   FORZA_TRACK_SPAWN=x,y,z   the player car's teleports go there (set on every start on an
+//                             imported circuit, fm4_track_mount.cpp); the game's fatal file
+//                             errors and its dirty disc message are logged then
+//   FORZA_TRACK_DIAG=1        the FM4TRACK diagnostics below (zones made live, zone, texture
+//                             and resource table checks, files streamed, the texture pack)
 //   FORZA_PVS_TRACE=<file>    every read of the PVS reader, to <file>
 //   FORZA_INSECURE_FILES=a|b  files the secure file system lets open as plain files (a
 //                             changed zipmanifest.xml that mounts a converted track's archive)
@@ -16,6 +18,8 @@
 //   FORZA_ZONE_TRACE=1        log zones made live and dropped, with the streaming blocks,
 //                             live instance objects and placements in use
 //   FORZA_FM4_ZONE_POOL=n     n times the live instance objects (a converted track's zones)
+//   FORZA_FM4_STREAM_TRACE=f  what the track streaming did and when, to file f (zones, models,
+//                             textures, the car: tools/fm4_stream_lead.py reads it, #824)
 // tu_address_map: TU4 addresses
 //
 // tools/fm4_track_mod.py --free-roam makes FH1's free roam load an FM4 circuit in place of
@@ -24,11 +28,15 @@
 // 605.6,598.5,-134.1,0.61,-0.79) moves the player car's teleports there (the spawn into free roam, a car
 // reset), facing (fx, 0, fz) when given, and logs every vehicle teleport. Called from the teleport hook in teleport_velocity.cpp.
 
+#include "fm4_file_error.h"
+#include "fm4_stream_textures.h"
+
 #include "../platform/guest_addr.h"
 #include "../platform/guest_memory.h"
 
 #include <rex/logging.h>
 #include <rex/ppc/context.h>
+#include <rex/thread/mutex.h>
 
 #include <algorithm>
 #include <cmath>
@@ -110,6 +118,7 @@ void OnTeleport(PPCContext& ctx, uint8_t* base) {
 // tu_address_map: TU4 addresses
 #if FORZA_TU4
 #include "../platform/guest_memory.h"
+#include "../platform/telemetry.h"
 
 #include <rex/ppc/func.h>
 #include <rex/filesystem.h>
@@ -197,15 +206,209 @@ extern "C" REX_FUNC(sub_82D378E8) {
 }
 #endif
 
-// The game's fatal file error (the dirty disc message, sub_82CBF3E0): who raised it, when
-// FORZA_TRACK_SPAWN or FORZA_PVS_TRACE is set (a track being converted).
-// tu_address_map: TU4 addresses
 #if FORZA_TU4
+// FORZA_FM4_STREAM_TRACE=<file>: what the track streaming did and when (#824), as CSV rows with
+// the host's clock in seconds, for tools/fm4_stream_lead.py:
+//   zone,t,live|dropped,zone             a zone made live (sub_82E1CA20) or dropped (sub_82E1AFD8)
+//   want,t,centre,z0,...,z6              the zones a streaming centre asks for, when they change
+//   model,t,number,result,object         a streamed model made from its file (sub_82CE5140)
+//   table,t,number,table                 that model's texture table (sub_82D1B080)
+//   tex,t,number,slot,header,width,height
+//                                        the texture a slot of that table holds, when it changes
+//                                        (looked at every 0.1 s; 0 x 0: none). A streamed
+//                                        texture's resident copy is 32 x 32 or smaller
+//   gone,t,number                        the model's object no longer holds a loaded model
+//   texobj,t,texture,state               a texture object's state, when it changes: 400 a
+//                                        streamed texture, 200 loaded, 040 not asked for
+//                                        (FFE: no object)
+//   pool,t,blocks,of,objects,placements,textures,kb
+//                                        twice a second: the streaming blocks, live instance
+//                                        objects and placements in use, and the streamed
+//                                        textures' data held outside the game's heap (below)
+//   car,t,x,y,z                          the player's car, every 0.1 s
+namespace {
+void StreamTextureDataHeld(uint32_t& count, uint64_t& bytes);  // with the texture data, below
+}
+namespace fm4_stream_trace {
+std::FILE* File() {
+  static std::FILE* f = [] {
+    const char* p = std::getenv("FORZA_FM4_STREAM_TRACE");
+    return p && *p ? std::fopen(p, "w") : nullptr;
+  }();
+  return f;
+}
+double Now() {
+  return std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
+}
+std::mutex mu;
+struct Table {
+  int32_t model;
+  uint32_t object;
+  uint64_t seen[24];
+};
+std::unordered_map<uint32_t, Table> tables;  // by guest address
+thread_local int32_t loading_model = -1;
+
+template <typename... A>
+void Row(const char* format, A... a) {
+  std::lock_guard<std::mutex> lock(mu);
+  std::fprintf(File(), format, a...);
+}
+
+// The number in a model file's name (<track>.NNNNN.rmb.bin), from the std::string at `name`.
+int32_t ModelNumber(uint8_t* base, uint32_t name) {
+  if (!GuestReadable(name + 0x14)) return -1;
+  const uint32_t at = Load32(base, name + 0x14) > 15 ? Load32(base, name) : name;
+  const std::string s = CString(base, at);
+  const size_t ext = s.rfind(".rmb");
+  if (ext == std::string::npos || ext < 5) return -1;
+  int32_t n = 0;
+  for (size_t i = ext - 5; i < ext; ++i) {
+    if (!std::isdigit(static_cast<unsigned char>(s[i]))) return -1;
+    n = n * 10 + (s[i] - '0');
+  }
+  return n;
+}
+
+// A texture table seen while a model is made (the model's sections are bound then).
+void NoteTable(uint32_t table, uint32_t object) {
+  if (!File() || loading_model < 0 || !table) return;
+  std::lock_guard<std::mutex> lock(mu);
+  auto [it, fresh] = tables.try_emplace(table);
+  if (!fresh && it->second.model == loading_model && it->second.object == object) return;
+  it->second = Table{loading_model, object, {}};
+  std::fprintf(File(), "table,%.3f,%d,%08X\n", Now(), loading_model, table);
+}
+
+// The zones a streaming centre asks for (its seven wanted zones at +0x50; the track
+// presentation's two centres are 0x1B8 and 0x2D8 from the PVS), when they change.
+void Wanted(uint8_t* base, uint32_t centre, uint32_t pvs) {
+  if (centre != pvs + 0x1B8 && centre != pvs + 0x2D8) return;
+  static int32_t last[2][7];
+  const int k = centre == pvs + 0x2D8;
+  int32_t now[7];
+  for (int i = 0; i < 7; ++i) now[i] = int32_t(Load32(base, centre + 0x50 + 4 * i));
+  if (!std::memcmp(now, last[k], sizeof(now))) return;
+  std::memcpy(last[k], now, sizeof(now));
+  Row("want,%.3f,%d,%d,%d,%d,%d,%d,%d,%d\n", Now(), k, now[0], now[1], now[2], now[3], now[4], now[5], now[6]);
+}
+
+// Every 0.1 s: the texture each slot of the known tables holds (a D3D texture header: its
+// fetch constant at +0x1C, the size in its third word), and the pools.
+void Poll(uint8_t* base, uint32_t pres, uint32_t blocks, uint32_t blocks_of) {
+  static double last = 0, last_pool = 0;
+  const double t = Now();
+  if (t - last < 0.1) return;
+  last = t;
+  std::unordered_map<uint32_t, bool> pages;
+  auto readable = [&](uint32_t a) {
+    auto [it, fresh] = pages.try_emplace(a >> 12, false);
+    if (fresh) it->second = GuestReadable(a);
+    return it->second;
+  };
+  float car[3], forward[3];
+  const bool have_car = forza::telemetry::LocalCarPose(base, car, forward);
+  std::lock_guard<std::mutex> lock(mu);
+  std::FILE* f = File();
+  if (have_car) std::fprintf(f, "car,%.3f,%.2f,%.2f,%.2f\n", t, car[0], car[1], car[2]);
+  for (auto it = tables.begin(); it != tables.end();) {
+    Table& e = it->second;
+    const uint32_t table = it->first;
+    if (!readable(e.object + 0xF4) || !*forza::GuestPtr(base, e.object + 0xF4) ||
+        !readable(table + 36)) {
+      std::fprintf(f, "gone,%.3f,%d\n", t, e.model);
+      it = tables.erase(it);
+      continue;
+    }
+    const uint32_t entries = Load32(base, table + 32);
+    const uint32_t count = std::min<uint32_t>(Load32(base, table + 36), 24);
+    for (uint32_t j = 0; j < count; ++j) {
+      if (!readable(entries + 32 * j) || !readable(entries + 32 * j + 31)) break;
+      const uint32_t header = Load32(base, entries + 32 * j);
+      uint32_t size = 0;
+      if (header && readable(header + 0x24) && readable(header + 0x27))
+        size = Load32(base, header + 0x24) & 0x3FFFFFF;
+      // 1: no texture; 0 (a new table): not looked at yet
+      const uint64_t now = header ? uint64_t(header) << 32 | size : 1;
+      if (now == e.seen[j]) continue;
+      e.seen[j] = now;
+      std::fprintf(f, "tex,%.3f,%d,%u,%08X,%u,%u\n", t, e.model, j, header,
+                   header ? (size & 0x1FFF) + 1 : 0, header ? ((size >> 13) & 0x1FFF) + 1 : 0);
+    }
+    ++it;
+  }
+  // The texture objects (presentation + 0xAFC, their count at + 0xB00): of the state word at
+  // +8, the bits the row is for.
+  {
+    static std::vector<uint32_t> state;
+    const uint32_t objects = Load32(base, pres + 0xAFC), n = std::min<uint32_t>(Load32(base, pres + 0xB00), 16384);
+    if (state.size() != n) state.assign(n, 0xFFFFFFFF);
+    for (uint32_t i = 0; i < n; ++i) {
+      if (!readable(objects + 4 * i)) break;
+      const uint32_t object = Load32(base, objects + 4 * i);
+      const uint32_t now = object && readable(object + 8) ? Load32(base, object + 8) & 0x6C0 : 0xFFFFFFFE;
+      if (now == state[i]) continue;
+      state[i] = now;
+      std::fprintf(f, "texobj,%.3f,%u,%03X\n", t, i, now & 0xFFF);
+    }
+  }
+  if (t - last_pool >= 0.5) {
+    last_pool = t;
+    const uint32_t objects = Load32(base, pres + 0x50), placements = Load32(base, pres + 0xD808 + 0xE8);
+    uint32_t held = 0;
+    uint64_t held_bytes = 0;
+    StreamTextureDataHeld(held, held_bytes);
+    std::fprintf(f, "pool,%.3f,%u,%u,%u,%u,%u,%llu\n", t, blocks, blocks_of,
+                 objects && readable(objects + 12) ? Load32(base, objects + 12) : 0,
+                 placements && readable(placements + 12) ? Load32(base, placements + 12) : 0, held,
+                 static_cast<unsigned long long>(held_bytes / 1024));
+    std::fflush(f);
+  }
+}
+}  // namespace fm4_stream_trace
+
+// A streamed model made from its file (sub_82CE5140: r3 the model's object, r6 the file's
+// name; it binds each section's materials through sub_82D006E8 and sub_82D1B080): for
+// FORZA_FM4_STREAM_TRACE.
+extern "C" REX_FUNC(__imp__sub_82CE5140);
+extern "C" REX_FUNC(sub_82CE5140) {
+  if (!fm4_stream_trace::File()) return __imp__sub_82CE5140(ctx, base);
+  const uint32_t object = ctx.r3.u32;
+  const int32_t number = fm4_stream_trace::ModelNumber(base, ctx.r6.u32);
+  const int32_t outer = fm4_stream_trace::loading_model;
+  fm4_stream_trace::loading_model = number;
+  __imp__sub_82CE5140(ctx, base);
+  fm4_stream_trace::loading_model = outer;
+  fm4_stream_trace::Row("model,%.3f,%d,%u,%08X\n", fm4_stream_trace::Now(), number, ctx.r3.u32 & 0xFF,
+                        object);
+}
+#endif
+
+#if FORZA_TU4
+// FORZA_TRACK_DIAG: the FM4TRACK diagnostics (a track being converted or looked into). Not on
+// for a player's start on a circuit: some of them log on every zone or file streamed.
+static bool TrackDiag() {
+  static const bool on = [] {
+    const char* p = std::getenv("FORZA_TRACK_DIAG");
+    return p && *p && std::string_view(p) != "0";
+  }();
+  return on;
+}
+
+// The game's file error check (sub_82CBF3E0): who raised a fatal one (the game then shows its
+// dirty disc message and stops), on a circuit (FORZA_TRACK_SPAWN), with FORZA_TRACK_DIAG or
+// FORZA_PVS_TRACE.
+// tu_address_map: TU4 addresses
 extern "C" REX_FUNC(__imp__sub_82CBF3E0);
 extern "C" REX_FUNC(sub_82CBF3E0) {
-  // Called after every file operation (r3 the kind, 1 a read, 2 an open; r4 the result, 0 a
-  // failure; r5 the error code).
-  if (!ctx.r4.u32 && (std::getenv("FORZA_TRACK_SPAWN") || PvsTrace())) {
+  // Called after every file operation: r3 the file object's +8 field, r4 the operation's
+  // result (0 a failure), r5 the error code (GetLastError); which of them stop the game:
+  // fm4_file_error.h (its own timed check first, when 0x8352EF14 is set, is not about the
+  // result). Reads of overlapped files fail with 997 here (the SDK reads at once and answers
+  // PENDING), which the game lets pass: tens of thousands a session on a circuit, so only the
+  // fatal ones are logged.
+  if (forza::fm4_track::GameFatalFileError(ctx.r3.s32, ctx.r4.u32, ctx.r5.u32) &&
+      (std::getenv("FORZA_TRACK_SPAWN") || TrackDiag() || PvsTrace())) {
     std::string chain;
     uint32_t frame = ctx.r1.u32;
     for (int i = 0; i < 12 && Stack(frame) && GuestReadable(frame); ++i) {
@@ -223,7 +426,7 @@ extern "C" REX_FUNC(sub_82CBF3E0) {
 // The dirty disc message (sub_82CC94E8): who showed it.
 extern "C" REX_FUNC(__imp__sub_82CC94E8);
 extern "C" REX_FUNC(sub_82CC94E8) {
-  if (std::getenv("FORZA_TRACK_SPAWN") || PvsTrace()) {
+  if (std::getenv("FORZA_TRACK_SPAWN") || TrackDiag() || PvsTrace()) {
     std::string chain;
     uint32_t frame = ctx.r1.u32;
     for (int i = 0; i < 16 && Stack(frame) && GuestReadable(frame); ++i) {
@@ -277,11 +480,11 @@ static std::atomic<uint32_t> fm4_presentation{0};
 // The streaming resource manager (sub_82E2EAD8's r3; +16 its 12-byte entries by id).
 static std::atomic<uint32_t> fm4_resource_manager{0};
 // A zone being made live (sub_82E1CA20: r3 the track presentation, r4 the zone record):
-// the presentation's model and instance tables, for FORZA_TRACK_SPAWN runs.
+// the presentation's model and instance tables, for FORZA_TRACK_DIAG runs.
 namespace { void LogZones(uint8_t* base, uint32_t pres, const char* what, uint32_t zone); }
 extern "C" REX_FUNC(__imp__sub_82E1CA20);
 extern "C" REX_FUNC(sub_82E1CA20) {
-  if (std::getenv("FORZA_TRACK_SPAWN")) {
+  if (TrackDiag()) {
     const uint32_t t = ctx.r3.u32, z = ctx.r4.u32;
     {
       const uint32_t texs = Load32(base, t + 2812);
@@ -331,16 +534,18 @@ extern "C" REX_FUNC(sub_82E1CA20) {
     { const int d = dumps.fetch_add(1); if (std::getenv("FORZA_FM4_TEXDUMP") && (d == 0 || d == 4 || d == 15)) DumpTexObjectsLive(base, live_pres); }
   }
   if (std::getenv("FORZA_ZONE_TRACE")) LogZones(base, live_pres, "live", live_zone);
+  if (fm4_stream_trace::File())
+    fm4_stream_trace::Row("zone,%.3f,live,%u\n", fm4_stream_trace::Now(), live_zone);
 }
 
 // A zone's instance index (sub_82CEE9F8: r3 out, r4 the cell, r5 &k): log the zone's list
-// once, for FORZA_TRACK_SPAWN runs.
+// once, for FORZA_TRACK_DIAG runs.
 extern "C" REX_FUNC(__imp__sub_82CEE9F8);
 extern "C" REX_FUNC(sub_82CEE9F8) {
   const uint32_t cell = ctx.r4.u32;
   __imp__sub_82CEE9F8(ctx, base);
   static std::atomic<int> logged{0};
-  if (std::getenv("FORZA_TRACK_SPAWN") && logged.fetch_add(1) < 3) {
+  if (TrackDiag() && logged.fetch_add(1) < 3) {
     const uint32_t list = Load32(base, cell + 88), count = Load32(base, cell + 92) >> 16;
     uint32_t mx = 0, cap = Load32(base, cell + 96);
     std::string first5;
@@ -355,11 +560,11 @@ extern "C" REX_FUNC(sub_82CEE9F8) {
 }
 
 // A model's textures being bound (sub_82E18FC8: r3 the presentation, r4 &model): log a model
-// whose texture has no user list, for FORZA_TRACK_SPAWN runs.
+// whose texture has no user list, for FORZA_TRACK_DIAG runs.
 extern "C" REX_FUNC(__imp__sub_82E18FC8);
 extern "C" REX_FUNC(sub_82E18FC8) {
   static std::atomic<int> logged{0};
-  if (std::getenv("FORZA_TRACK_SPAWN") && logged.load() < 5) {
+  if (TrackDiag() && logged.load() < 5) {
     const uint32_t t = ctx.r3.u32;
     const uint32_t model = uint32_t(*forza::GuestPtr(base, ctx.r4.u32)) << 8 |
                            *forza::GuestPtr(base, ctx.r4.u32 + 1);
@@ -390,7 +595,7 @@ extern "C" REX_FUNC(__imp__sub_82E24248);
 namespace { void AliasAtlasTiles(uint8_t* base, uint32_t t); }
 extern "C" REX_FUNC(sub_82E24248) {
   AliasAtlasTiles(base, ctx.r3.u32);
-  if (std::getenv("FORZA_TRACK_SPAWN")) {
+  if (TrackDiag()) {
     const uint32_t t = ctx.r3.u32;
     REXLOG_INFO("FM4TRACK: texture users: lists {} {} textures {} models {} instances {}",
                 Load32(base, t + 59436 + 4) - Load32(base, t + 59436),
@@ -399,7 +604,7 @@ extern "C" REX_FUNC(sub_82E24248) {
   }
   const uint32_t t = ctx.r3.u32;
   __imp__sub_82E24248(ctx, base);
-  if (std::getenv("FORZA_TRACK_SPAWN")) {
+  if (TrackDiag()) {
     const uint32_t texs = Load32(base, t + 2812), n = Load32(base, t + 2816);
     uint32_t nulls = 0, first = 0xFFFFFFFF;
     for (uint32_t i = 0; i < n; ++i) {
@@ -430,18 +635,18 @@ extern "C" REX_FUNC(sub_82E24248) {
 
 extern "C" REX_FUNC(__imp__sub_82E23B50);
 extern "C" REX_FUNC(sub_82E23B50) {
-  if (std::getenv("FORZA_TRACK_SPAWN")) {
+  if (TrackDiag()) {
     REXLOG_INFO("FM4TRACK: texture user slots: {} (from {:08X})", ctx.r4.u32, uint32_t(ctx.lr));
   }
   __imp__sub_82E23B50(ctx, base);
 }
 
 // The streaming resource table (sub_82E2E890: r3 the manager, r4 the resource id; 12-byte
-// entries at +16, their count at +52): log ids past the table, for FORZA_TRACK_SPAWN runs.
+// entries at +16, their count at +52): log ids past the table, for FORZA_TRACK_DIAG runs.
 extern "C" REX_FUNC(__imp__sub_82E2E890);
 extern "C" REX_FUNC(sub_82E2E890) {
   static std::atomic<int> logged{0};
-  if (std::getenv("FORZA_TRACK_SPAWN")) {
+  if (TrackDiag()) {
     const uint32_t m = ctx.r3.u32, id = ctx.r4.u32, n = Load32(base, m + 52);
     if ((id >= n || logged.load() < 3) && logged.fetch_add(1) < 12) {
       REXLOG_INFO("FM4TRACK: resource {} of {} (table {:08X}) r5 {:08X} r6 {:08X} r7 {:08X} "
@@ -458,13 +663,13 @@ extern "C" REX_FUNC(sub_82E2E890) {
 extern "C" REX_FUNC(__imp__sub_82EB6960);
 extern "C" REX_FUNC(sub_82EB6960) {
   static std::atomic<int> logged{0};
-  if (std::getenv("FORZA_TRACK_SPAWN") && GuestReadable(ctx.r7.u32) &&
+  if (TrackDiag() && GuestReadable(ctx.r7.u32) &&
       Load32(base, ctx.r7.u32) == 0xBEBEBEBE) {
     REXLOG_ERROR("FM4TRACK: stream file {} '{}' with an unset descriptor {:08X}", ctx.r5.u32,
                  CString(base, ctx.r6.u32), ctx.r7.u32);
   }
   static std::atomic<int> totals[3];
-  if (std::getenv("FORZA_TRACK_SPAWN")) {
+  if (TrackDiag()) {
     const std::string name = CString(base, ctx.r6.u32);
     const int kind = name.find(".rmb.bin") != std::string::npos ? 0
                      : name.find(".bix") != std::string::npos ? 1 : 2;
@@ -476,7 +681,7 @@ extern "C" REX_FUNC(sub_82EB6960) {
   }
   static const bool every = std::getenv("FORZA_STREAM_LOG") != nullptr;  // every file
   if (every) REXLOG_INFO("FM4STREAM: {} {}", ctx.r5.u32, CString(base, ctx.r6.u32));
-  if (std::getenv("FORZA_TRACK_SPAWN") && logged.fetch_add(1) < 5) {
+  if (TrackDiag() && logged.fetch_add(1) < 5) {
     REXLOG_INFO("FM4TRACK: stream file {} r4 {:08X} r6 '{}' r7 {:08X} r8 {:08X} from {:08X}",
                 ctx.r5.u32, ctx.r4.u32, CString(base, ctx.r6.u32), ctx.r7.u32, ctx.r8.u32,
                 uint32_t(ctx.lr));
@@ -676,7 +881,7 @@ thread_local uint32_t fm4_stx_last = 0, fm4_stx_ids = 0;
 extern "C" REX_FUNC(sub_82E323A0) {
   const Fm4Stx& c = Fm4StxConfig();
   std::string path = CString(base, ctx.r5.u32);
-  if (std::getenv("FORZA_TRACK_SPAWN")) {
+  if (TrackDiag()) {
     REXLOG_INFO("FM4TRACK: texture pack '{}' r7 {:08X} r8 {:08X}", path, ctx.r7.u32, ctx.r8.u32);
   }
   for (auto& ch : path) ch = char(std::tolower(static_cast<unsigned char>(ch)));
@@ -707,7 +912,7 @@ void DumpCaff(uint8_t* base, uint32_t owner, const char* what) {
 
 extern "C" REX_FUNC(sub_82D099E0) {
   static std::atomic<int> dumps{0};
-  if (std::getenv("FORZA_TRACK_SPAWN") && dumps.fetch_add(1) < 2) {
+  if (TrackDiag() && dumps.fetch_add(1) < 2) {
     DumpCaff(base, ctx.r3.u32, fm4_stx_active ? "FM4 pack" : "pack");
   }
   if (!fm4_stx_active) return __imp__sub_82D099E0(ctx, base);
@@ -1179,6 +1384,8 @@ extern "C" REX_FUNC(sub_82EAF1B0) {
 extern "C" REX_FUNC(__imp__sub_82D1B080);
 extern "C" REX_FUNC(sub_82D1B080) {
   static std::atomic<int> logged{0};
+  if (fm4_stream_trace::File())
+    fm4_stream_trace::NoteTable(Load32(base, ctx.r3.u32 + 1192), ctx.r4.u32);
   if (std::getenv("FORZA_FM4_TEXDUMP") && logged.fetch_add(1) < 3) {
     const uint32_t self = ctx.r3.u32, binder = Load32(base, self + 1188);
     const uint32_t vt = binder && GuestReadable(binder) ? Load32(base, binder) : 0;
@@ -1317,7 +1524,7 @@ extern "C" REX_FUNC(sub_82D095C0) {
 extern "C" REX_FUNC(__imp__sub_82D21528);
 extern "C" REX_FUNC(sub_82D21528) {
   static std::atomic<int> logged{0};
-  if (std::getenv("FORZA_TRACK_SPAWN") && logged.fetch_add(1) < 400) {
+  if (TrackDiag() && logged.fetch_add(1) < 400) {
     REXLOG_INFO("FM4TRACK: depot file {}", ctx.r4.u32);
   }
   static std::atomic<int> traced{0};
@@ -1638,6 +1845,8 @@ extern "C" REX_FUNC(sub_82E1AFD8) {
   const uint32_t pres = ctx.r3.u32, zone = ctx.r4.u32;
   __imp__sub_82E1AFD8(ctx, base);
   if (ZoneTrace()) LogZones(base, pres, "dropped", zone);
+  if (fm4_stream_trace::File())
+    fm4_stream_trace::Row("zone,%.3f,dropped,%u\n", fm4_stream_trace::Now(), zone);
 }
 #endif
 
@@ -1657,6 +1866,28 @@ extern "C" REX_FUNC(sub_82CEDEE0) {
     }
   }
   __imp__sub_82CEDEE0(ctx, base);
+}
+#endif
+
+#if FORZA_TU4
+// For FORZA_FM4_STREAM_TRACE: the streaming update (sub_82E2BE00, once a frame: r3 the track
+// presentation) is where the trace looks at the texture tables, the texture objects and the
+// pools; a streaming centre's update (sub_82499690: r3 the centre, r4 the PVS at presentation
+// + 0xD808) is where it writes the zones the centre asks for.
+extern "C" REX_FUNC(__imp__sub_82E2BE00);
+extern "C" REX_FUNC(sub_82E2BE00) {
+  if (!fm4_stream_trace::File()) return __imp__sub_82E2BE00(ctx, base);
+  const uint32_t pres = ctx.r3.u32;
+  __imp__sub_82E2BE00(ctx, base);
+  fm4_stream_trace::Poll(base, pres, Load32(base, 0x835A0B48), stream_blocks.load());
+}
+
+extern "C" REX_FUNC(__imp__sub_82499690);
+extern "C" REX_FUNC(sub_82499690) {
+  if (!fm4_stream_trace::File()) return __imp__sub_82499690(ctx, base);
+  const uint32_t centre = ctx.r3.u32, pvs = ctx.r4.u32;
+  __imp__sub_82499690(ctx, base);
+  fm4_stream_trace::Wanted(base, centre, pvs);
 }
 #endif
 
@@ -1750,6 +1981,103 @@ extern "C" REX_FUNC(sub_825CB048) {
     }
   }
   __imp__sub_825CB048(ctx, base);
+}
+
+// A streamed track texture's data on a converted FM4 track (#824). The texture's load
+// (sub_82CEBE10: its _0x<id>.bix file read whole) takes its memory from the game's heap 0x20
+// (sub_82423000: r4 the heap, r5 the size, r6 the alignment), which FH1 sizes for Colorado. A
+// converted circuit's seven live zones ask for more (Le Mans's grid: 19 MB of these files
+// loaded and 23 MB more asked for): the allocation failed, the load with it, and the loader
+// tried it again on every pass (450 failed loads a second there) until other textures were
+// let go, tens of seconds later or not while the model was in sight. Trees, fences, signs
+// and buildings stayed on their 32 x 32 resident copies.
+//
+// On a converted track a failed allocation of that caller comes from an arena of the hook's
+// own instead (fm4_stream_textures.h): 8 MB chunks of the guest's 4 KB-page physical heap,
+// taken as they are needed, 64 MB at most, and kept for the session; the game's free of a
+// pointer (sub_82423490: r4 the pointer) gives a block back to the arena, which does not hand
+// it out again for two seconds. When the arena is full, or the guest's heap has no chunk left
+// to give (asked again a second later, not on every load), the allocation fails as it did
+// and the loader tries again. FORZA_FM4_TEX_FALLBACK=0 turns this off too.
+//
+// Why an arena that keeps its memory: a first attempt allocated each block from the guest's
+// heap and released it there, and after a minute of driving the road and the scenery showed
+// other textures' texels, or none (opaque slabs where a billboard's cut-out should be). The
+// cause is in the SDK's write watch. The emulated GPU keeps its own copy of guest memory by
+// address and is told of a write only on pages it watches. A release tells it; a frame still
+// queued then reads the released pages once more, the GPU side marks its copy up to date
+// again, and no watch can be set on pages that are not allocated. The pages are allocated
+// again, another texture's file is read into them, nobody is told, and the GPU draws the old
+// bytes from then on. Memory that stays allocated does not have this: every write to it is
+// reported, also when a block is used again at once. The two seconds are only for the frames
+// already queued, which still draw the texture that was let go.
+//
+// One way in is left and closed here: a new chunk can cover pages the model buffers' fallback
+// above released (it still releases each block, to this same heap) and that were read once
+// more since. So the GPU side is made to drop its copy of every chunk as it is taken.
+namespace {
+std::mutex stream_tex_mu;
+forza::fm4_stream_textures::Arena stream_tex;
+std::atomic<bool> stream_tex_used{false};  // a chunk was added: frees may be ours
+uint64_t StreamTexNowMs() {
+  return uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(
+                      std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+void StreamTextureDataHeld(uint32_t& count, uint64_t& bytes) {
+  std::lock_guard<std::mutex> lock(stream_tex_mu);
+  count = stream_tex.blocks();
+  bytes = stream_tex.held();
+}
+}  // namespace
+
+extern "C" REX_FUNC(__imp__sub_82423000);
+extern "C" REX_FUNC(sub_82423000) {
+  namespace st = forza::fm4_stream_textures;
+  const uint32_t size = ctx.r5.u32, lr = uint32_t(ctx.lr);
+  __imp__sub_82423000(ctx, base);
+  if (ctx.r3.u32 || !st::IsTextureLoad(lr) || !size || size > st::kChunkBytes || !TexFallbackOn()) return;
+  std::lock_guard<std::mutex> lock(stream_tex_mu);
+  const uint64_t now = StreamTexNowMs();
+  uint32_t addr = stream_tex.Take(size, now);
+  if (!addr && stream_tex.MayAddChunk(now)) {
+    auto* memory = REX_KERNEL_MEMORY();
+    auto* heap = memory->LookupHeapByType(true, 4096);
+    uint32_t chunk = 0;
+    if (heap && heap->Alloc(st::kChunkBytes, 4096, rex::memory::kMemoryAllocationReserve | rex::memory::kMemoryAllocationCommit,
+                            rex::memory::kMemoryProtectRead | rex::memory::kMemoryProtectWrite, true, &chunk) && chunk) {
+      stream_tex.AddChunk(chunk, st::kChunkBytes);
+      stream_tex_used = true;
+      // The GPU side may hold some of these pages as up to date from a read after an earlier
+      // release (see above): watch the chunk and report it written once, so its copy is
+      // dropped and what is loaded here is uploaded. Both calls take the SDK's global lock
+      // under this hook's own, as the model buffers' release above does under its lock; the
+      // game never calls this allocator or its free with the global lock held (TU4 has one
+      // interrupts-off section that takes it, with no call inside).
+      memory->EnablePhysicalMemoryAccessCallbacks(memory->GetPhysicalAddress(chunk), st::kChunkBytes, true, false);
+      memory->TriggerPhysicalMemoryCallbacks(rex::thread::global_critical_region::AcquireDirect(), chunk,
+                                             st::kChunkBytes, true, true, true);
+      REXLOG_INFO("FM4TRACK: streamed track textures' data beyond the game's heap: {} MB taken ({} MB in use)",
+                  stream_tex.capacity() >> 20, stream_tex.held() >> 20);
+      addr = stream_tex.Take(size, now);
+    } else if (stream_tex.ChunkRefused(now)) {
+      REXLOG_WARN("FM4TRACK: no {} MB left in one piece in the guest's memory for streamed track textures' data "
+                  "({} MB taken, {} MB in use): their loads fail as before until there is; asked again once a second",
+                  st::kChunkBytes >> 20, stream_tex.capacity() >> 20, stream_tex.held() >> 20);
+    }
+  }
+  if (addr) ctx.r3.u64 = addr;  // else: no room: the load fails as before and is tried again
+}
+
+extern "C" REX_FUNC(__imp__sub_82423490);
+extern "C" REX_FUNC(sub_82423490) {
+  if (stream_tex_used.load(std::memory_order_relaxed)) {
+    std::lock_guard<std::mutex> lock(stream_tex_mu);
+    if (stream_tex.Give(ctx.r4.u32, StreamTexNowMs())) {
+      ctx.r3.u64 = 1;
+      return;
+    }
+  }
+  __imp__sub_82423490(ctx, base);
 }
 
 // FORZA_FM4_ALLOCDIAG: the game's other allocator (sub_82D81300: r3 size, r4 alignment; the

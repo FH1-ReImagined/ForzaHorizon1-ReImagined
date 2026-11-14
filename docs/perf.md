@@ -3869,8 +3869,10 @@ runs (the measured minute) and a 3-minute free-roam drive at noon, ms of GPU tim
 The benchmark: 58.4 fps without the profile, 57.4 and 58.6 with it. Transfers are still the largest
 cost after the guest's draws: 3.5 ms a frame, about 25 a frame to depth. The test without any
 stencil bit draws in the section above (wrong in general) puts the bit draws that are left at about
-1.1 ms of the transfers from depth and 0.5 ms of those from color: the depth target at EDRAM tile 720
-(kD24S8) has stencil in it, and 0461 can skip only bits that are set nowhere in the source.
+1.1 ms of the transfers from depth and 0.5 ms of those from color, and 0461 can skip only bits that
+are set nowhere in the source. (This section first said the depth target at EDRAM tile 720 (kD24S8)
+has stencil in it. It does not: see the
+[section below](#the-stencil-of-one-sample-depth-transfers-from-a-buffer-copy-and-the-stencil-values-fh1-has-640-2026-11-11).)
 
 **A test hook (ReIGlue 0480).** `FORZA_TEST_NO_STENCIL_EXPORT=1` leaves
 `VK_EXT_shader_stencil_export` off, so an AMD or Intel GPU takes the NVIDIA transfer path (the
@@ -3905,3 +3907,384 @@ shadow map going back to 1x) a compute pass could write the stencil bytes to a b
 into the image's stencil aspect, which Vulkan allows for single-sample images. Then the texture
 loads (1.9 ms; the 1024x1024 k_24_8 shadow map loaded 4 times a frame is 0.52 ms of it) and the
 resolves (1.7 ms in 88 a frame, about 10 us each, mostly fixed cost).
+
+## The stencil of one-sample depth transfers from a buffer copy, and the stencil values FH1 has (#640, 2026-11-11)
+
+The next idea of the section above, measured: it does not pay either.
+
+**The cut (ReIGlue experiment 0521, `vulkan_transfer_stencil_copy`).** Without stencil export, a
+transfer to a one-sample depth target wrote its stencil to a buffer instead of the stencil clear
+and the bit draws: one draw over the transfer's rectangles with the transfer shader itself (so the
+source sample of each destination pixel is the same by construction), which ORs the pixel's
+stencil byte into a zeroed buffer of the destination's rows, then `vkCmdCopyBufferToImage` into the
+image's stencil aspect, outside the render pass (the image to `TRANSFER_DST_OPTIMAL` and back). It
+covered every transfer to a 1x depth target, from depth and from color. The render tests on an
+RX 9060 XT with `FORZA_TEST_NO_STENCIL_EXPORT=1` (0480) pass with it, within the run-to-run noise.
+
+**Measured** on the GTX 1650 Ti of the sections above (one build, the cut on or off by its cvar,
+the launcher's settings for the laptop, the built-in benchmark, warm caches):
+
+| | Off | On |
+| --- | --- | --- |
+| Benchmark, 60 fps cap, 6 alternating runs (on, off, off, on, on, off) | 59.7, 59.7, 59.7 fps | 58.1, 58.0, 58.2 fps |
+| GPU frame, `--fh1_gpu_profile=5`, 2 runs each | 13.30, 13.17 ms | 14.16, 14.26 ms |
+| Transfers to depth from depth | 1.63, 1.62 ms | 2.51, 2.53 ms |
+
+By transfer (ms a frame, one profiled run each way):
+
+| Transfer | Off | On |
+| --- | --- | --- |
+| 720t kD24S8 1x from its 4x self (3 a frame) | 0.214 | 0.594 |
+| 0t kD24FS8 1x from its 4x self (the shadow map, stencil 0) | 0.162 | 0.405 |
+| 720t kD24S8 1x from 720t kD24FS8 1x | 0.067 | 0.188 |
+| 408t kD24FS8 1x from color (k_2_10_10_10_FLOAT 2x, 8 bit draws before) | 0.128 | 0.118 |
+
+Splitting the first row (`vulkan_transfer_stencil_copy_test`, wrong pictures): without the copy
+(and its layout transitions) 0.394 ms, without the stencil draw 0.377, without zeroing the buffer
+0.598. The transitions and the copy alone cost about as much as the whole transfer did, and the
+draw with its atomics as much again; only a color source, whose eight bit draws are not masked,
+came out slightly ahead (0.01 ms a frame). The 4x transfers back from these targets, which the cut
+did not change, got slower too (720t 0.232 -> 0.266 ms, 0t 0.220 -> 0.240 ms a frame), likely from
+the depth and stencil image now also being a transfer destination (its depth may be kept
+decompressed). And the off runs sit at the 60 fps cap, so the 1.6 fps between them is the least the
+cut costs. The experiment was not kept, and its code is not in ReIGlue.
+
+**One draw per stencil value instead of one per bit.** `vulkan_transfer_stencil_value_stats`
+(testing, in the same experiment) logs the stencil values each depth source of a transfer holds. In the
+benchmark's measured minute, a transfer:
+
+| Source -> destination | Nonzero values | Bits |
+| --- | --- | --- |
+| 816t kD24FS8 2x (the scene depth) -> its 4x self | 206 | 8 |
+| 0t kD24FS8 1x (the shadow map) -> its 4x self | 1.08 (01, 03, 0F, 12, 15, 18, 81) | 1.66 |
+| 408t kD24FS8 1x -> its 4x self, and -> 720t kD24FS8 1x | 1 (85) | 3 |
+| 128t and 80t (2x and 4x) between themselves and from 0t | 1 (01) | 1 |
+| 720t kD24S8, 816t 2x from 4x, the rest | 0 | 0 |
+
+The scene depth's stencil going to 4x holds 206 different values, so one draw per bit is already
+the fewest draws there; elsewhere a value draw would save two draws of 408t's transfers and about
+half a draw of the shadow map's, about 0.1 ms a frame by the costs above, and it needs the values on
+the CPU (a readback a frame late, with the bit draws as the fallback). Not done. Every transfer from
+a depth source had its bit draws masked (0461); the ones that were not are those from color.
+
+**A correction to the section above.** It put the bit draws left in the transfers from depth on the
+depth target at tile 720 (kD24S8). It has no stencil: every transfer with a 720t kD24S8 source
+(1x from 4x, 4x from 1x, 816t 2x from 720t 1x) holds no nonzero value in the measured minute, with
+the cut off and with it on. When a test filled that buffer with garbage instead of zeroing it, the
+720t 4x-from-1x transfer went from 0.23 to 0.55 ms. The bit draws that are left come from the scene
+depth's 8 bits (816t 2x to 4x), the shadow map, and 408t, 128t and 80t going to 4x. All three 1x
+destinations of the cut (720t from its 4x self, the shadow map from its 4x self, 720t from 720t
+kD24FS8) had sources with no stencil, so 0461 had already skipped all of their bit draws. The cut
+could only save their stencil clear and the conditional draws' overhead, and that is why it could
+not pay.
+
+**What is left.** Without stencil export, the transfers' stencil costs what the bit draws of the
+scene depth's 8 bits and of the color sources cost; the other cuts in reach are the texture loads
+and the resolves of the section above.
+
+## Pipelines the driver was given twice (#607, 2026-11-11)
+
+**The question.** Reviewing ReIGlue #53 (the driver cache file stores a blob shared by several
+descriptions once) found at least 324 pipeline descriptions whose NVIDIA driver blobs were byte for
+byte the same as another's. If those were the same pipeline, the SDK compiled each of them again:
+stutter on first play and a bigger cache.
+
+**What the blobs say.** On this PC (RX 9060 XT, RADV) the same holds: a first built-in benchmark
+stores 405 descriptions with 311 distinct driver blobs. But an identical blob does not mean an
+identical pipeline. RADV (and, by the same numbers, NVIDIA) keeps the compiled shaders in its cache
+data, not the fixed-function state, so descriptions that differ only in depth test, stencil,
+winding or depth format get the same blob. A diagnostic build (not merged) logged, for every
+pipeline created, a key of everything `vkCreateGraphicsPipelines` is given (the SPIR-V by hash,
+every state structure, the layout, the attachment formats). Cold caches, with another game running
+(counts, not timings):
+
+| | First benchmark | First free-roam drive |
+| --- | --- | --- |
+| Descriptions created | 396 | 404 |
+| Distinct creation info as given | 371 | 372 |
+| ... after writing ignored state one way (0520) | 361 | 368 |
+| ... also leaving out cull mode, winding, depth and stencil state | 323 | 332 |
+| Distinct (vertex, pixel) SPIR-V pairs | 272 | 288 |
+
+What differs inside each group of descriptions with the same creation info:
+- **The guest shader hash, nothing else** (18 of the 19 benchmark groups, 23 of 24 in free roam):
+  the microcode is the same except one word of the three after the last instruction
+  (`0x4E4Axxxx`, then `d9f68398 e5d6f0df`, which the translator never reads). The SPIR-V is the
+  same, so the pipeline is.
+- **The depth format** (one group): D24S8 and D24FS8 are both `D32_SFLOAT_S8_UINT` on the host.
+- After canonicalisation, 10 (benchmark) and 4 (free roam) more groups: **the alpha blend factors of
+  attachments whose write mask has no alpha**. The stencil-of-a-culled-face and winding rules
+  merged nothing more in these runs (FH1's winding changes come with the stencil test on).
+
+The next 38 (benchmark) and 36 (free roam) merges would need the depth, stencil, cull and winding
+state to be dynamic (`VK_EXT_extended_dynamic_state`): the same shaders with other fixed-function
+state. They are cheap already: in the diagnostic's driver times, such a pipeline took 0.10 ms
+(median; 0.09 to 0.12 ms over three runs, p90 5 to 7 ms) against 14 to 21 ms for one with new shader
+code, because the driver finds its compiled shaders. 39 of them took 165 ms of a 9.8 s first
+benchmark. Not done: it changes every draw's state setting for about 2% of the driver time.
+
+**ReIGlue 0520.** Descriptions whose creation info is the same, after the ignored state is written
+one way (the blend of channels a write mask leaves out, the factors of min and max blending, the
+stencil operations of a culled face, the winding without culling, stencil test or a shader reading
+`gl_FrontFacing`), share one pipeline. That rewriting is only for the comparison: the pipeline is
+created with the first description's own creation info, so the driver cache entries stored before
+0520 stay valid. A second creation of the same key waits for the first. The
+key compares the SPIR-V (XXH3-128 of each translation's code), so a shader variant or guest shader
+that translates the same is merged without having to prove which modification bits matter.
+Duplicates built one after the other were cheap (median 0.1 ms) but two built at once both compiled:
+38 duplicates took 304 ms of that 9.8 s benchmark.
+
+**Measured** (BENCH_LOCK, 60 fps cap, 1280x720, the golden TU4 save; cold: empty game and Mesa
+caches; warm: the restart on that cache; `driver time` is the frame cost CSV's background pipeline
+time). Clean runs only: the third benchmark round and one free-roam pair ran with another game
+started during the lock and are left out (the second clean A drive started at a load of 11, just
+after another game had ended).
+
+| Run | 46ae834 (A) | 0520 (B) |
+| --- | --- | --- |
+| Benchmark cold: pipelines built | 404, 408 | 367 + 34 shared, 372 + 37 shared |
+| Benchmark cold: driver time | 3.9 s, 3.8 s | 3.7 s, 3.8 s |
+| Benchmark cold: fps, 1% low, p99 | 60.0 / 49.8 / 18.4 ms, 60.0 / 47.1 / 19.0 ms | 60.0 / 48.8 / 18.6 ms, 60.0 / 45.9 / 19.5 ms |
+| Benchmark cold: frames held for pipelines, draws skipped | 92, 2203; 90, 2029 | 89, 2230; 99, 2026 |
+| Benchmark warm: warm-up | 404 in 174 ms, 411 in 180 ms | 403 (36 shared) in 172 ms, 409 (37 shared) in 172 ms |
+| Benchmark warm: fps, 1% low | 60.0 / 51.8, 60.0 / 51.9 | 60.0 / 49.7, 60.0 / 48.9 |
+| Free roam cold, 120 s drive: pipelines built | 385, 389 | 355 + 30 shared, 353 + 33 shared, 358 + 33 shared |
+| Free roam cold: driver time; 1% low | 3.6 s, 4.1 s; 44.0, 38.8 | 3.6 s, 3.6 s, 3.4 s; 46.2, 40.3, 45.6 |
+| Driver cache file after the cold benchmark | 3.09 MB (405 entries), 3.18 MB (418) | 3.17 MB (375 entries for 411), 3.17 MB (374 for 413) |
+
+So on RADV 0520 removes about 9% of the pipelines (and their objects and driver cache entries) and
+nothing measurable in time: the duplicates were already cheap, the cache file was already
+deduplicated by #53, and the 1% low moves within its run-to-run spread (39 to 52 over all the benchmark runs, contended ones included).
+
+**Upgrading.** The first launch after the update, on a cache that 46ae834 made: a warm benchmark
+of 0520 (30 fps cap, another game running, load 9) created 366 pipelines from stored driver data,
+compiled 0 and rebuilt 0 stale entries, gave 39 descriptions another's pipeline, and warmed up in
+186 ms (46ae834 on its own cache, without the other game: 174 and 180 ms). The driver is given
+each description's own creation info, so every entry stored before 0520 still matches it. The
+measurements above ran an earlier build of 0520 that also gave the driver the rewritten state; on
+RADV that made no difference either (the same run with it: 366 from stored data, 0 compiled, 0
+stale, 184 ms), as RADV's entries hold the shaders and not that state.
+
+**The picture.** `tools/render_test.py`: baselines recorded with A (two runs), checked with B: 6 of 6
+scenes pass (title, free roam at noon and dawn, cockpit, photo mode, a race start), each closer to
+the baseline than A's own two runs were to each other (photo mode dssim 0.0100 against A's 0.0560,
+free roam at noon 0.0017 against 0.0457). B's run gave 48 descriptions another's pipeline (461
+built). The final 0520 (the driver given each description's own state) passes 6 of 6 too, photo
+mode at 0.0072 and free roam at noon at 0.0034, with 52 descriptions given another's pipeline.
+
+**On NVIDIA** (GTX 1650 Ti, Windows 11, driver 555.97, the launcher's NVIDIA preset: 60 fps cap,
+540p, no game driver pipeline file). The built-in benchmark with A and B as the only change (the
+SDK DLLs built from 46ae834 and from 0520 for the same game build), the golden TU4 save, in the order
+A, B, B, A. Cold: an empty game cache root and an empty NVIDIA shader cache
+(`__GL_SHADER_DISK_CACHE_PATH`, one folder per run); warm: the restart on both. Driver time is the
+frame cost CSV's pipeline creation time (`bg_pipeline_ms`, real pipelines on any thread); the race
+window runs from the benchmark's wait for race movement (17 to 19 s of race start on a cold run)
+through the 15 s settling and the 60 s measured, 92 to 94 s.
+
+| Run | 46ae834 (A) | 0520 (B) |
+| --- | --- | --- |
+| Cold: pipelines built | 410, 406 | 375 + 33 shared, 376 + 33 shared |
+| Cold: driver time, whole run | 58.3 s, 66.3 s | 59.1 s, 59.6 s |
+| Cold: driver time in the race window (pipelines created there) | 21.4 s (148), 30.9 s (154) | 23.8 s (130), 22.7 s (126) |
+| Cold: fps, 1% low, p99 | 58.6 / 22.8 / 23.6 ms, 58.1 / 20.9 / 24.8 ms | 58.7 / 22.1 / 23.2 ms, 57.7 / 21.9 / 24.9 ms |
+| Cold: frames over 50 ms, measured (race window) | 11 (64), 12 (69) | 12 (65), 12 (59) |
+| Cold: draws skipped for pipelines, whole run (race window) | 47908 (1633), 44793 (1776) | 29901 (1494), 25230 (1948) |
+| Cold: NVIDIA shader cache after the run | 20.7 MB, 20.6 MB | 20.5 MB, 20.8 MB |
+| Warm: warm-up | 405 in 413 ms, 397 in 406 ms | 405 (34 shared) in 419 ms, 404 (33 shared) in 411 ms |
+| Warm: driver time | 0.23 s, 0.97 s | 0.22 s, 0.67 s |
+| Warm: fps / 1% low, frames over 50 ms | 59.1 / 40.8 and 0, 59.8 / 43.1 and 0 | 59.8 / 41.6 and 1, 59.2 / 41.6 and 0 |
+
+The upgrade (B's first start on copies of A's cold caches, both rounds): 414 (38 shared) and 411 (37
+shared) created from storage in 418 and 421 ms, 0.38 and 0.25 s of driver time, 59.4 / 38.7 and
+59.6 / 41.2, no frame over 50 ms: the driver found its stored shaders for every pipeline.
+
+So NVIDIA is like RADV: 0520 builds about 8% fewer pipelines, and nothing it saves shows in time.
+A first benchmark costs about a minute of driver time here (140 to 165 ms a pipeline, the slowest
+0.8 to 1.5 s), and a duplicate costs next to nothing of it, as the driver already has the shaders;
+its shader cache does not grow with them either (20.5 to 20.8 MB both ways). B skipped fewer draws
+over the whole run (the loading screens before the race), not in the race. In this cold benchmark, the
+1% low (21 to 23) and the 11 or 12 measured stalls coincide with first-play compiles of new shader code,
+which 0520 does not touch; the prebuilt shader list (#276) is the change aimed at those. It does not
+remove every first-play stall: the fresh-profile A/B for #400 still had the same four transition hitches
+with 251 and with 575 startup hits, and those frames recorded no foreground pipeline time and no
+background pipeline completions, so pipeline work does not explain them.
+
+**Not merged.** As it saves no time on either GPU, 0520 was not taken into ReIGlue; the code stays on
+ReIGlue's branch `fh1-607-pipeline-share`. The microcode trailer could also be left out of the
+shader hash, which would translate each such shader once, but the hash is the key of every stored
+description.
+
+## The binding path's lookups cached: no gain (#607, 2026-11-12)
+
+**The question.** A CPU profile of main (TU4 game of `aaa20cdf`, ReIGlue `ff03a0f`, RX 9060 XT, 8 cores,
+uncapped) found the frame bound by the GPU Recorder (the split command processor's draw thread): the frame
+time fits `0.58 ms + 1.06 us x draws`, and the recorder is busy 82-83 % of the frame. Its largest area was the
+texture and sampler bindings, 1.29 ms of a 5.5 ms benchmark frame in wall-clock stack samples. Within it, the
+"same as the previous draw" path the profile pointed at is mostly there already: 0443 keeps a draw's samplers and
+skips its texture request while nothing they read has changed, and 0444 finds a texture set with the same
+contents (still bound in 30-40 % of draws). What was left were lookups on the draws where something did change:
+hash map finds were about 7-8 % of the recorder's samples, about 6 % of them on the binding path (texture keys 1.9 %,
+the dynamic constants set 1.8 %, texture views 1.4 %, samplers 0.8 %), and `GetSamplerParameters`, which decodes the whole fetch constant for its
+filterability check, 4.4 %.
+
+**ReIGlue 0540** (Vulkan, the recorder's thread):
+
+- the dynamic constants set: the last four keys found or added, looked at before the map;
+- `VulkanTexture::GetView`: the last arguments and the view they gave (views live as long as their texture);
+- `GetSamplerParameters`: two entries per fetch constant, keyed by its six words, the binding's filters and the
+  settings it reads;
+- `UseSampler`: a 64-entry direct-mapped table of the sampler map's entries, emptied whenever a sampler or view
+  is destroyed;
+- the float constants copied one run of used constants at a time instead of one constant at a time.
+
+`FORZA_VK_BINDING_VERIFY=1` recomputes every hit of the constants set, sampler parameter and sampler caches and logs a
+mismatch (the view cache's hits are not checked: a texture's views are only ever added); `FORZA_VK_BINDING_STATS=1`
+logs the hits. In a benchmark with both: no mismatch; 93 % of the constants set's hits came from the four recent keys, 68 % of
+the sampler parameter calls and 99.8 % of the sampler lookups hit.
+
+**Method.** One game build (TU4, x86-64-v3) with ReIGlue `ff03a0f` (A) or 0540 on it (B), both plugins and
+runtimes built with `-gline-tables-only` (the same code); the built-in benchmark uncapped (`--frame_rate=240`),
+1280x720, the PC's default preset, split command processor and present on the submission thread (the defaults
+with 8 cores), the golden TU4 save in a scratch `--user_data_root`, scratch XDG dirs, warm scratch caches, audio
+muted, a hidden display, `nice -n 10 ionice -c3`, BENCH lock held, no other game. Benchmark A, B, B, A, A, B,
+then free roam (60 s of `tools/autodrive.py` on the County Route loop after 20 s of driving) A, B, B, A. The
+recorder's CPU time from `--fh1_frame_cost_csv` over the measured window, the other threads' from
+`/proc/<pid>/task/*/schedstat`. The races drew 4,100-5,210 a frame, and both the frame time and the recorder's
+time per draw follow that, so each run is also compared with the line fitted through A's runs (time against
+draws): the residual is what the change does at the same draws.
+
+| | fps | 1% low | p99 ms | Draws a frame | Recorder us a draw | Process CPU ms a frame | Recorder vs A's fit | Frame vs A's fit |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Benchmark, A | 188.2 (204.7, 181.3, 178.5) | 121.5 | 7.34 | 4,490 | 0.980 (0.995, 0.978, 0.967) | 17.2 | 0 | 0 |
+| Benchmark, B | 174.9 (177.4, 184.6, 162.8) | 119.5 | 7.54 | 4,842 | 0.972 (0.974, 0.979, 0.963) | 18.0 | +0.021 ms | +0.002 ms |
+| Free roam, A | 222.6 (227.3, 217.8) | | | 3,565 | 1.032 (1.034, 1.030) | 14.6 | 0 | 0 |
+| Free roam, B | 222.7 (228.7, 216.7) | | | 3,555 | 1.036 (1.036, 1.036) | 14.6 | +0.012 ms | +0.014 ms |
+
+(The benchmark's frame rates and 1% lows follow each race's draws: B's third race drew 5,208 a frame. With the profile's
+two earlier timing runs of A (same build, profiler off) added to A's fit, B's residuals are +0.004 ms for the recorder
+and -0.016 ms for the frame.)
+
+**Why nothing.** A CPU profile of B (1 ms samples, the benchmark, 4,760 draws a frame) against A's (4,556): the cached lookups do drop (the
+constants set's map lookup 0.094 -> 0.025 ms a frame, `GetView` out of the top 60, `UseSampler` 0.046 -> 0.031,
+`BindingInfoFromFetchConstant` 0.049 -> 0.034; `GetSamplerParameters` itself 0.067 -> 0.076 with its memo's compares), but in the same run `UpdateBindings` grows 0.42 -> 0.53 ms and
+`memmove` 0.22 -> 0.35 ms. The likely reading (no cache counters were taken): the lookups' time was cache misses on memory the draw then touches anyway (the
+texture, its descriptors, the upload buffer), so the misses move to the next touch; and the float constants'
+copy is bound by the writes into the upload buffer, not by the loop (one `memmove` call per run seems to cost more
+than the inlined 16-byte copies did). The recorder's per-draw time is spread thin: no single lookup on this path is a
+cut on its own.
+
+**The picture.** `tools/render_test.py check` against the stored baselines, A, B, A, B: A 2 and 3 of 6 scenes,
+B 5 and 6 of 6. A's failures are the run's scene, not the picture: in A's first run the car rests at another pose at
+the spawn point with a car in view, which fails cockpit, both free roam scenes and photo mode together (as in the
+0450-0452 render check above); in its second a drivatar and its name tag are in view at noon, and dawn and
+cockpit are just over their thresholds (0.0110 against 0.01, 0.0045 against 0.003). Compared with each other (free roam at noon): A's second run against either B
+run 0.0093 and 0.0129 dssim, A's first 0.056 and 0.063, B against B 0.0048, A against A 0.0534. The differences
+follow what is in view, not the build, and the verify run above found no cache hit that differs.
+
+**Not merged.** 0540 is kept on a ReIGlue branch (`perf/0540-binding-lookups`) as a reference. The recorder's
+next candidates from the same profile are structural, not lookups: skipping the draw-state work for register
+groups the decoder saw unchanged (#607 item 2) and the recorder's idle time at each frame start (item 5).
+
+## Native renderer baselines (M0, 2026-11-12)
+
+The numbers the native renderer's milestones are measured against ([native-renderer.md](native-renderer.md)), on the
+test PC (Ryzen 7 7800X3D, 8 cores, RX 9060 XT, RADV, Mesa 26.2.1): main `8d4831bf` with ReIGlue `ff03a0f`, the build
+folder without its `forza.toml` (the game's defaults), 1280x720 window, render scale 1, no upscaler, world AO off,
+a copy of the TU4 test save, a scratch user data folder, audio muted, no other game running and the benchmark lock
+held for each timed run. CPU is each thread's run time (schedstat) over the measured window, in ms a frame.
+
+**Benchmark** (the built-in race, `--frame_rate=240`, the race's own 60 s window):
+
+| Run | fps | 1% low | p99 ms | All threads | Command processor (decoder) | GPU recorder | Vulkan submission |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 170.7 | 99.3 | 8.38 | 18.2 | 2.61 | 4.59 | 1.76 |
+| 2 | 178.1 | 108.8 | 7.81 | 18.0 | 2.63 | 4.50 | 1.80 |
+| 3 | 182.0 | 127.9 | 7.14 | 17.7 | 2.60 | 4.36 | 1.75 |
+| 4 | 167.8 | 116.6 | 7.59 | 18.8 | 2.75 | 4.80 | 1.88 |
+| Mean | **174.6** (sd 6.5) | 113.2 | 7.73 | 18.2 | 2.65 | 4.56 | 1.80 |
+
+**GPU** (`--fh1_gpu_profile=10`, two more benchmark runs at 170.3 and 161.7 fps, the 10 s windows 2-6, ms a frame):
+busy 4.80 and 4.83; the guest draws (render passes) 2.60 and 2.63; render target transfers 0.80 and 0.80; loads of
+textures (mostly resolved targets) 0.65 and 0.65; resolves 0.64 and 0.64; uploads 0.09. The draws are 54% of the GPU's
+busy time; transfers, resolves and their reloads 44%, the share a renderer without EDRAM aims at.
+
+**Free roam** (the save's spawn point, the car standing, 60 s from 90 s after the start):
+
+| Run | Frame rate | fps | p99 ms | Draws | All threads | Command processor (decoder) | GPU recorder | Vulkan submission |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 30-1 | 30 | 30.0 | 33.9 | 3,289 | 20.3 | 1.90 | 3.53 | 1.57 |
+| 30-2 | 30 | 30.0 | 33.8 | 3,436 | 21.0 | 1.97 | 3.60 | 1.60 |
+| 240-1 | 240 | 233.8 (at the cap) | 6.32 | 3,373 | 14.0 | 1.81 | 3.39 | 1.53 |
+| 240-2 | 240 | 234.2 (at the cap) | 6.30 | 3,396 | 14.2 | 1.79 | 3.44 | 1.52 |
+
+At 30 fps the game's own threads take more per frame (the audio mixer and the workers run per second, not per frame).
+
+**What the command processor reads** (the D3D and PM4 traces, `FORZA_D3D_TRACE` with ReIGlue 0570, 30 fps, 1,800
+frames each; counted, not timed):
+
+| | Dwords a frame | Packets a frame | Draw packets | Written by D3D | Foreign lists with SET_CONSTANT | Other foreign lists |
+| --- | --- | --- | --- | --- | --- | --- |
+| Benchmark race | 1,308,537 | 122,886 | 4,889 | 51.7% dw, 28.3% pk, 37.6% draws | 24.1%, 41.4%, 26.8% | 24.2%, 30.2%, 35.6% |
+| Free roam | 855,324 | 82,984 | 3,514 | 47.4%, 28.0%, 36.5% | 23.5%, 37.2%, 24.3% | 29.0%, 34.7%, 39.2% |
+
+RunCommandBuffer (`sub_824469B0`) launches the foreign lists: 1,258 of 1,273 runs a frame in the race (735 with
+SET_CONSTANT, 523 without), 720 of 735 in free roam; the other 15 a frame are `sub_8249F310`'s game-recorded buffers
+(675 dwords). So every class of foreign list enters through the two functions the native layer replaces.
+
+**Shaders:** the game's own SPIR-V (`--dump_shaders`, the race above: 501 translations) is byte-identical to
+`rexglue-shaders translate` with the configuration line from the same log. The shipped prebuild list's 2,156 pairs
+translate in 0.78 s on one thread, identical twice; the game's 6,359 shader blobs, one modification each, in 1.9 s.
+
+**Render test:** baselines recorded on this build (`tools/render_test.py record`, three sessions, kept on the test PC)
+and a check against them: 6/6 scenes pass (title 0.0091, free roam midday 0.0001, dawn 0.0016, cockpit 0.0001,
+photo mode 0.0059, race start 0.0029 dssim). Sessions 2 and 3 of the recording are the same picture (0.0000 at noon);
+session 1 caught another moment of the free roam scenes (0.0172 at noon), so the recorded noise is over the tolerance
+in four scenes although each check takes the closest frames.
+
+## Native renderer M1: shaders translated at build time (2026-11-12)
+
+ReIGlue 0590 (the start's translations on several threads) and 0600 (the shader pack the Prebuild shaders run
+writes; [native-renderer.md](native-renderer.md#m1-shaders-translated-at-build-time)), against main's plugin, on the
+same PC and setup as the M0 baselines above (main's game build, no `forza.toml`, benchmark lock held, no other game
+running). Every run starts from its own copy of one cache root: the shipped prebuild list's files (launcher step 1-2),
+then one prebuild-only run of the M1 plugin (which wrote the pack) and one start to the title (warm driver and Mesa
+caches). The warm-up then translates 1,496 pairs (the list's 1,489 for this cache and 7 stored ones) and creates
+2,254 pipelines. Times are from the log: "SHADER_WARMUP: Vulkan begin" to the first pipeline (the stores, the list
+import and the translations), and the whole warm-up.
+
+| Warm start, 3 runs each (interleaved) | Translation | Begin to first pipeline | Shader warm-up |
+| --- | --- | --- | --- |
+| A: main (one thread) | | 631, 632, 660 ms | 664, 667, 699 ms (and 660, 671, 680 in the benchmark runs) |
+| D: M1, pack off, one thread (`--vulkan_shader_translation_threads=1`) | 554, 567, 574 ms | 588, 596, 603 ms | 618, 627, 636 ms |
+| B: M1, pack off (`--vulkan_shader_pack=false`), 6 threads | 109, 111, 111 ms | 139, 140, 147 ms | 169, 175, 177 ms |
+| C: M1 with the pack (an earlier 0600: 1,489 from it, 7 translated) | 44, 46, 46 ms | 73, 75, 75 ms | 104, 107, 110 ms (and 105, 106, 107) |
+| Second session, A: main | | 627, 635, 657 ms | 659, 667, 689 ms |
+| Second session, C: M1 as committed (all 1,496 from the pack) | 48, 50, 55 ms | 77, 79, 88 ms | 109, 113, 121 ms |
+
+- The pack: 22.1 MB for 1,496 translations (1,036 distinct modules, 63.9 MB of SPIR-V). The prebuild-only run
+  translated them in 115-126 ms on 6 threads and wrote the pack in 57-59 ms.
+- C's translation step reads the GPU plugin's file for the pack's identity (once a process), reads the 22 MB,
+  checks four random pairs by translating them again (together 10-18 ms), then decodes the modules and makes the
+  shader modules on 6 threads; the 30 ms before it are the stores and the list import, unchanged.
+- `rexglue-shaders check-pack --plugin` over the pack the game wrote, with the configuration line of the same log:
+  all 1,496 translations byte-identical to a fresh translation, bindings included.
+- Fallback, each from a copy of the same cache, to the title: no pack ("none for this configuration", 140 ms of
+  translation); another configuration's pack (render scale 2) under this configuration's name ("written by another
+  build or for another configuration"); a truncated pack ("damaged"); one damaged module ("translating it", the
+  other 1,495 from the pack); a forged pack (this plugin's identity, render scale 2 SPIR-V, 979 of 1,496 modules
+  different): refused at three of three starts ("differs from this build's translation"). With the checked pairs
+  at fixed positions instead of random ones, that forged pack had been used twice.
+
+**Play** (the benchmark race, `--frame_rate=240`, from the same cache copy; C is the earlier 0600 of the first session):
+
+| Run | fps (A main / C M1) | 1% low | p99 ms | Shaders translated in play | Pipelines created in play |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 187.7 / 184.2 | 125.2 / 129.6 | 7.19 / 7.19 | 0 / 0 | 12 / 12 |
+| 2 | 191.2 / 179.8 | 130.1 / 126.1 | 7.02 / 7.34 | 0 / 0 | 12 / 12 |
+| 3 | 166.6 / 198.2 | 106.7 / 127.5 | 8.10 / 7.07 | 0 / 0 | 12 / 12 |
+| Mean | 181.8 / 187.4 | 120.7 / 127.7 | 7.44 / 7.20 | | |
+
+The list covers every shader of the race, so play translated nothing with either plugin, and the gain is at start
+only, as expected: a pair the warm-up does not need is not in the pack either (the pack is the warm-up of the
+prebuild run). Frames over 33 ms (loading): 11, 12, 11 and 13, 12, 16.
+

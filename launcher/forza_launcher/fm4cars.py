@@ -18,7 +18,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from . import datafolder, mods, paths
+from . import __version__, datafolder, mods, paths
 from .fetch import Cancelled
 
 MOD = "reimagined-fm4-cars"
@@ -37,6 +37,14 @@ def _tools():
     paths.ensure_tools_importable()
     import fm4_cars
     return fm4_cars
+
+
+def import_version():
+    """What the mod's version says (#853): the launcher's version, and its commit when it runs
+    from source, so the Mods page tells which launcher made the import."""
+    from . import game
+    commit = game.source_commit()
+    return f"{__version__} ({commit})" if commit else __version__
 
 
 def _package(cfg):
@@ -109,6 +117,45 @@ def repair_sound(cfg, log=print):
     for name, (fh1, _) in sorted(fixes.items()):
         log(f"FM4 cars: {name} names an engine sound bank no file has; FH1's {fh1} in its place (#776)")
     return SOUND_NOTICE
+
+
+# The engine tunings an import before #840 took from FH1, a cut traffic car's (the Traffic_/NA_
+# placeholder slots tools/fm4_cars.py traffic_tuning finds): FM4's own are full ones. The Volt's
+# is NA in FM4 too (electric) and stays.
+TRAFFIC_TUNINGS = ("AUD_2_A4_11_ET.xml", "CHE_Spark_11_ET.xml", "FOR_FocusST_06_ET.xml", "SCI_xD_09_ET.xml")
+TUNING_NOTICE = ("Some imported FM4 cars (such as the 2006 Ford Focus ST) have a cut-down traffic car's "
+                 "engine sound, the same with every exhaust. Import FM4 cars again (Mods > Forza Motorsport "
+                 "4 cars) to give them FM4's own.")
+
+
+def traffic_tuned(cfg):
+    """The engine tunings (TRAFFIC_TUNINGS) an import made before #840 holds: its marker has no
+    "engine_tuning". Only a new import replaces them (they come from FM4's discs)."""
+    info = status(cfg)
+    if not info or info.get("engine_tuning", 1) >= 2:
+        return []
+    folder = mods.mods_dir(cfg) / MOD / "media" / "audio" / "cars" / "engines" / "enginetuning"
+    try:
+        have = {p.name.lower() for p in folder.iterdir()}
+    except OSError:
+        return []
+    return [n for n in TRAFFIC_TUNINGS if n.lower() in have]
+
+
+def tuning_notice(cfg, log=print):
+    """Once for an import made before #840 that has a traffic car's engine tuning (traffic_tuned):
+    a notice for the player, else None. The Mods page says it until the next import."""
+    info = status(cfg)
+    if not info or info.get("tuning_notice") or not traffic_tuned(cfg):
+        return None
+    try:
+        info["tuning_notice"] = True
+        (mods.mods_dir(cfg) / MOD / MARKER).write_text(json.dumps(info, ensure_ascii=False, indent=1),
+                                                     encoding="utf-8")
+    except OSError as e:
+        log(f"FM4 cars: could not note the engine tuning notice ({e})")
+        return None
+    return TUNING_NOTICE
 
 
 # ---- What the player chose (#681) --------------------------------------------------------------
@@ -1014,6 +1061,10 @@ def _update_root(cfg):
     from .config import render_toml
     install, _ = game_module.find_game(cfg)
     update = game_module.update_data_root(cfg, install, render_toml(cfg)) if install else None
+    if not update or not update.is_dir():
+        # With no managed update directory, Play leaves the root unset and the TU4
+        # game defaults to a sibling of its game-data directory.
+        update = Path(os.path.abspath(cfg.game_files())).parent / "tu4"
     extra = game_module.split_args(cfg.advanced.get("extra_args", ""))
     for i, arg in enumerate(extra):
         if arg.startswith("--update_data_root="):
@@ -1127,6 +1178,8 @@ def _build(cfg, tools, target, backup, work, disc1, disc2, progress, cancelled, 
         update = _update_root(cfg)
         fh1 = tools.FH1(str(cfg.game_files()), str(update) if update else None, str(dlc_root))
         conv = (converter or tools.Converter)(fm4, fh1, str(staged), str(staged_pack))
+        version = import_version()
+        conv.mod_version = version
         candidates = conv.candidates()
         ids = [cid for cid, _, reason in candidates if not reason]
         dlc_ids = getattr(fm4, "dlc_car_ids", set())
@@ -1153,9 +1206,10 @@ def _build(cfg, tools, target, backup, work, disc1, disc2, progress, cancelled, 
         if fm4 is not None:
             fm4.close()
     # banks: made with the engine sound banks FH1 lacks (#776), nothing for repair_sound to do
-    info = {"format": 1, "banks": True, "cars": [c[1] for c in report["cars"]],
+    # engine_tuning 2: FM4's own engine tuning where FH1's is a cut traffic car's (#840)
+    info = {"format": 1, "banks": True, "engine_tuning": 2, "cars": [c[1] for c in report["cars"]],
             "skipped": [s[1] for s in report["skipped"]],
-            "dlc": _dlc(cfg)}
+            "dlc": _dlc(cfg), "launcher": version}
     if dlc_packs or dlc:
         info["fm4_dlc"] = {"packs": [name for _, name in dlc_packs],
                            "cars": [c[1] for c in report.get("dlc_cars", [])], "notes": notes}

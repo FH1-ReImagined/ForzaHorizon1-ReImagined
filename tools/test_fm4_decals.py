@@ -149,6 +149,54 @@ class DecalGroup(unittest.TestCase):
             for slot in (12, 13):
                 self.assertIsNone(fm4_pvs.decal_group_to(model(buffers), slot))
 
+    def test_a_draw_before_the_buffers_blend_write_is_left(self):
+        # such a draw takes the state the buffer drawn before it left, whatever the buffer's
+        # own writes after it say (the review of #799: DRAW, then RB_BLENDCONTROL0)
+        late = [TEXTURES] + [0] * 6 + [0x2200, FM4_DECAL_DEPTH, DRAW, 0, 0, 0, 0, 0x2201, NO_BLEND, NOP]
+        second = buffer([DRAW, 0, 0, 0, 0], draw())           # the second draw is after one
+        late_detail = buffer([DRAW, 0, 0, 0, 0], draw(blend=BLEND))
+        for buffers in ({**LINES, 14: late}, {**LINES, 14: second}, {**DETAIL, 14: late_detail}):
+            for slot in (12, 13):
+                self.assertIsNone(fm4_pvs.decal_group_to(model(buffers), slot))
+        # a draw after another one, with no state write between, keeps the buffer's state
+        again = buffer(draw(), [TEXTURES] + [0] * 6 + [DRAW, 0, 0, 0, 0])
+        data = model({**LINES, 14: again})
+        _, new = self.moved(data, fm4_pvs.decal_group_to(data), 12)
+        self.assertEqual(depths(new), [WRITTEN])
+        data = model({**DETAIL, 14: buffer(draw(blend=BLEND), [TEXTURES] + [0] * 6 + [DRAW, 0, 0, 0, 0])})
+        self.moved(data, fm4_pvs.decal_group_to(data, 13), 13)
+
+    def test_a_state_write_the_scan_does_not_read_is_left(self):
+        # RB_DEPTHCONTROL (0x2200) or RB_BLENDCONTROL0 (0x2201) written by a type-0 packet with
+        # bit 15 (every value to the one register) or by a type-3 packet, between the buffer's
+        # state write and its draw: the scan would miss what the draw is drawn with
+        def between(blend, packet):
+            d = draw(blend=blend)
+            return buffer(d[:-5] + packet + d[-5:])
+        for name, base, blend, slot, other in (("lines", LINES, NO_BLEND, 12, BLEND),
+                                               ("detail", DETAIL, BLEND, 13, NO_BLEND)):
+            for what, packet in (
+                    ("one register, blend", [0x0001A201, other, other]),
+                    ("one register, depth", [0x0000A200, WRITTEN]),
+                    ("SET_CONSTANT", [0xC0012D00, 0x00040201, other]),
+                    ("SET_CONSTANT over both", [0xC0042D00, 0x000401FF, 0, FM4_DECAL_DEPTH, other, 0]),
+                    ("SET_CONSTANT2", [0xC0015500, 0x00002201, other]),
+                    ("SET_SHADER_CONSTANTS", [0xC0015600, 0x00002200, WRITTEN]),
+                    ("LOAD_ALU_CONSTANT", [0xC0022F00, 0x01000000, 0x00040200, 2]),
+                    ("COND_WRITE", [0xC0054500, 0x00000003, 0x00001000, 0, 0xFFFFFFFF, 0x00002201, other]),
+                    ("INDIRECT_BUFFER", [0xC0013F00, 0x01000000, 16])):
+                data = model({**base, 14: between(blend, packet)})
+                self.assertIsNone(fm4_pvs.decal_group_to(data, slot), (name, what))
+            # the same packets writing other registers, or memory, change nothing
+            for what, packet in (
+                    ("one register, RB_COLORCONTROL", [0x0001A202, other, other]),
+                    ("SET_CONSTANT of ALU constants", [0xC0012D00, 0x00000201, other]),
+                    ("SET_CONSTANT, RB_COLORCONTROL", [0xC0012D00, 0x00040202, other]),
+                    ("COND_WRITE to memory", [0xC0054500, 0x00000103, 0x00001000, 0, 0xFFFFFFFF, 0x00002201, other]),
+                    ("type-3 NOP", [0xC0011000, 0x00002201, other])):
+                data = model({**base, 14: between(blend, packet)})
+                self.assertIsNotNone(fm4_pvs.decal_group_to(data, slot), (name, what))
+
     def test_every_draw_of_the_buffer_gets_the_depth_state(self):
         buffers = dict(LINES)
         buffers[14] = buffer(draw(), draw(), draw(ROAD_DEPTH))
@@ -191,6 +239,9 @@ class DecalGroup(unittest.TestCase):
         no_depth[14] = [0x2201, NO_BLEND, DRAW, 0, 0, 0, 0]
         cut = dict(LINES)
         cut[14] = [(5 << 16) | 0x2200, FM4_DECAL_DEPTH, NO_BLEND]             # says six values, holds two
+        # the transparent slot keeps FM4's depth state but also asks for its write
+        blended_no_depth = {**DETAIL, 14: [0x2201, BLEND, DRAW, 0, 0, 0, 0, NOP]}
+        self.assertIsNone(fm4_pvs.decal_group_to(model(blended_no_depth), 13))
         for buffers in (no_depth, cut):
             for slot in (12, 13):
                 self.assertIsNone(fm4_pvs.decal_group_to(model(buffers), slot))
@@ -269,6 +320,10 @@ class Layout(unittest.TestCase):
         with open(os.path.join(self.bin, f"{prefix}.{m:05d}.rmb.bin"), "wb") as f:
             f.write(model(buffers))
 
+    def read(self, m, prefix="trk"):
+        with open(os.path.join(self.bin, f"{prefix}.{m:05d}.rmb.bin"), "rb") as f:
+            return f.read()
+
     def groups(self, prefix="trk"):
         return {int(n.split(".")[1]): groups_of(os.path.join(self.bin, n))
                 for n in sorted(os.listdir(self.bin)) if n.startswith(prefix + ".")}
@@ -282,6 +337,25 @@ class Layout(unittest.TestCase):
         self.assertEqual(self.groups(), {0: [11, 12, 17], 1: [3, 12, 15], 2: [11, 13, 17], 4: [11, 14, 17],
                                          5: [11, 14, 17], 6: [11, 14, 17], 7: [11, 14, 17]})
         self.assertEqual(self.flags(), flags)                 # the layouts keep FM4's flags
+
+    def test_every_decal_model_left_is_counted(self):
+        # decal models neither slot takes are counted as left too: a buffer of both kinds,
+        # one with no blend write, one that draws before its blend write, a header that
+        # disagrees with the groups, and lines flagged neither way
+        self.write("trk", 8, {**LINES, 14: buffer(draw(), draw(blend=BLEND))})
+        self.write("trk", 9, {**LINES, 14: [TEXTURES] + [0] * 6 + [0x2200, FM4_DECAL_DEPTH, DRAW, 0, 0, 0, 0]})
+        self.write("trk", 10, {**LINES, 14: buffer([DRAW, 0, 0, 0, 0], draw())})
+        bad = bytearray(model(LINES))
+        p = bad.rfind(b".fx") + 3
+        struct.pack_into(">I", bad, p + 12, struct.unpack_from(">I", bad, p + 12)[0] + 8)  # area A's size
+        with open(os.path.join(self.bin, "trk.00011.rmb.bin"), "wb") as f:
+            f.write(bad)
+        self.write("trk", 12, LINES)
+        self.P["instances"] += [{"model": m, "flags": OPAQUE} for m in (8, 9, 10, 11)]
+        self.P["instances"].append({"model": 12, "flags": OPAQUE & ~0x6})
+        before = {m: self.read(m) for m in range(8, 13)}
+        self.assertEqual(fm4_pvs.draw_decals(self.converted, self.bin), (2, 8))
+        self.assertEqual({m: self.read(m) for m in before}, before)
 
     def test_a_second_run_changes_nothing_more(self):
         fm4_pvs.draw_decals(self.converted, self.bin)
@@ -361,7 +435,8 @@ class RealModels(unittest.TestCase):
                                        if not w >> 30 and not w & 0x8000
                                        and (w & 0x7FFF) <= 0x2200 <= (w & 0x7FFF) + ((w >> 16) & 0x3FFF)}
                         self.assertTrue(depth_words, info.filename)
-                        self.assertEqual(new, [w | 0x4 if k in depth_words else w for k, w in enumerate(old)],
+                        clear, put = fm4_pvs.DECAL_DEPTH       # FM4_PVS_DECAL_DEPTH's mode
+                        self.assertEqual(new, [w & ~clear | put if k in depth_words else w for k, w in enumerate(old)],
                                          info.filename)
                         changed += old != new
                     # every area C fixup lands in a packet that takes an address: a fetch
@@ -371,8 +446,9 @@ class RealModels(unittest.TestCase):
                         w = max((p for p in packets if p[0] // 4 < k), default=(0, 0))[1]
                         self.assertTrue(w >> 30 == 3 or (w >> 30 == 0 and 0x4800 <= w & 0x7FFF < 0x4900),
                                         (info.filename, i, k, hex(w)))
-        # of Suzuka's 1282 models; six hold the road's depth state already
-        self.assertEqual((moved, changed), (147, 141))
+        # of Suzuka's 1282 models; six hold the road's depth state already (and with
+        # FM4_PVS_DECAL_DEPTH=0 no buffer changes)
+        self.assertEqual((moved, changed), (147, 141 if fm4_pvs.DECAL_DEPTH != (0, 0) else 0))
 
 
 if __name__ == "__main__":

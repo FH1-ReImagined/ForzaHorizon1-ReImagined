@@ -1,6 +1,7 @@
 // World ambient occlusion (SDK patch 0350, src/graphics/vulkan/fh1_world_ao.h, #380): the
 // setting's levels, where the occlusion is computed, the projection taken from the shadow
-// passes' constants, and which pixels keep their own shading.
+// passes' constants, which pixels keep their own shading, and the stencil's borrowed fetch
+// constant leaving the draw's own textures bound (#823, patch 0530).
 //   clang++ -std=c++17 -I<sdk>/src/graphics/vulkan tools/test_world_ao.cpp
 #include "fh1_world_ao.h"
 
@@ -88,6 +89,48 @@ int main() {
   CHECK(ao::IsShadowPass(0x22DA22B5639EBAE4ull));
   CHECK(!ao::IsShadowPass(0x58CE51CE56247C16ull));  // BlurShadowMask, the 2x2 box
   CHECK(!ao::IsShadowPass(0));
+
+  // #823 (patch 0530): the stencil's view through the borrowed fetch constant 31 must leave the
+  // draw's own bindings (tf0 the depth, tf1 the cascade's shadow map) as the draw requested them,
+  // also when that request finds a texture outdated: the texture cache then resets every binding
+  // and resolves only the constants it is given, as TextureCache::RequestTextures does.
+  for (bool outdated_during_borrow : {false, true}) {
+    struct FakeCache {
+      uint32_t fetch[32] = {};
+      uint32_t bound[32] = {};  // 0: a null view
+      uint32_t in_sync = 0;
+      bool outdated = false;
+      int requests = 0;
+      void Request(uint32_t mask) {
+        ++requests;
+        if (outdated) {
+          outdated = false;
+          for (uint32_t& b : bound) b = 0;
+          in_sync = 0;
+        }
+        for (uint32_t i = 0; i < 32; ++i)
+          if ((mask >> i & 1) && !(in_sync >> i & 1)) {
+            bound[i] = fetch[i];
+            in_sync |= 1u << i;
+          }
+      }
+      void Written(uint32_t i) { in_sync &= ~(1u << i); }
+    } cache;
+    cache.fetch[0] = 100;  // the scene depth
+    cache.fetch[1] = 200;  // the nearest cascade's shadow map
+    const uint32_t draw_mask = 0b11;
+    cache.Request(draw_mask);  // the draw's own request, before the AO
+    cache.outdated = outdated_during_borrow;  // a memory watch fires before the borrowed one
+    const uint32_t saved = cache.fetch[31];
+    const uint32_t view = ao::RequestThroughBorrowedFetch(
+        draw_mask, 1u << 31, [&] { cache.fetch[31] = 300; cache.Written(31); },
+        [&](uint32_t mask) { cache.Request(mask); }, [&] { return cache.bound[31]; },
+        [&] { cache.fetch[31] = saved; cache.Written(31); });
+    CHECK(view == 300);
+    CHECK(cache.bound[0] == 100 && cache.bound[1] == 200);
+    CHECK(cache.fetch[31] == saved && !(cache.in_sync >> 31 & 1));
+    CHECK(cache.requests == 3);
+  }
 
   std::printf("world AO: ok\n");
   return 0;

@@ -111,16 +111,23 @@ def game_version(game: GameInstall | None) -> str:
         m = re.search(r"Built from commit (\w+)", text)
         if m:
             return "build " + m.group(1)
-    if paths.in_checkout():
-        try:
-            out = subprocess.run(["git", "-C", str(paths.REPO_ROOT), "rev-parse", "--short", "HEAD"],
-                                 capture_output=True, text=True, timeout=5,
-                                 env=cleanenv.clean_environment())
-            if out.returncode == 0 and out.stdout.strip():
-                return "source build " + out.stdout.strip()
-        except (OSError, subprocess.SubprocessError):
-            pass
+    commit = source_commit()
+    if commit:
+        return "source build " + commit
     return "unknown build"
+
+
+def source_commit() -> str:
+    """The checkout's short commit when the launcher runs from source, else ""."""
+    if not paths.in_checkout():
+        return ""
+    try:
+        out = subprocess.run(["git", "-C", str(paths.REPO_ROOT), "rev-parse", "--short", "HEAD"],
+                             capture_output=True, text=True, timeout=5,
+                             env=cleanenv.clean_environment())
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return out.stdout.strip() if out.returncode == 0 else ""
 
 
 def installed_dlc(cfg: Config) -> int:
@@ -671,9 +678,15 @@ def _build_plan(cfg: Config, game: GameInstall, write, refresh_xenia, log, saver
         note = fm4cars.repair_sound(cfg, log)
         if note:
             notes.append(note)
+        # one made before #840: some cars with a traffic car's engine tuning, once
+        note = fm4cars.tuning_notice(cfg, log)
+        if note:
+            notes.append(note)
     args += mods.launch_args(cfg, named)
     from . import loading_tips  # ReImagined loading-screen tips (Settings > Gameplay), first in the order
     loading_tips.launch_args(cfg, args, write, log)
+    from . import upload_site  # the photo and movie upload texts name forza.dyotson.dev when Play goes online (#875)
+    upload_site.launch_args(cfg, args, write, log)
     args += texture_packs.launch_args(cfg, named)  # the packs turned on, in order (#384)
     # An imported FM4 circuit chosen on the Play page (#648, experimental): its game folder, mods
     # and switches, offline. Colorado (the default) changes nothing here.

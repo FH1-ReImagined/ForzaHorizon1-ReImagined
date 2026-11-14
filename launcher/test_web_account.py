@@ -548,6 +548,48 @@ class Interface(ServiceTest):
         d.accept()
         self.assertEqual(view.closed, 1)
 
+    def gap(self, d, above, below):
+        """Pixels between the bottom of `above` and the top of `below` in the shown dialog."""
+        d.layout().activate()
+        self.app.processEvents()
+        return below.mapTo(d, below.rect().topLeft()).y() - above.mapTo(d, above.rect().bottomLeft()).y()
+
+    def test_after_use_my_browser_instead_the_buttons_are_under_the_question(self):
+        # #856: the dialog was sized for the page; the buttons stayed at its bottom, far below
+        view = self.fake_view()
+        d, _ = self.dialog(view)
+        d.show()
+        self.spin(lambda: view.loaded)
+        d.browser_button.click()
+        self.app.processEvents()
+        self.assertLess(d.height(), 520)                  # no longer the page's size
+        self.assertLess(self.gap(d, d.text, d.close_button), 120)   # only the code in between
+        self.svc.claim(d.request["id"])
+        self.spin(lambda: d.claimed is not None)
+        self.assertLess(self.gap(d, d.text, d.link_button), 40)
+        d.resize(980, 820)                                # made big again: the room goes below
+        self.assertLess(self.gap(d, d.text, d.link_button), 40)
+        self.assertGreater(d.height() - d.link_button.mapTo(d, d.link_button.rect().bottomLeft()).y(), 300)
+
+    def test_with_the_page_the_question_moves_down_to_the_buttons(self):
+        view = self.fake_view()
+        d, _ = self.dialog(view)
+        d.show()
+        self.spin(lambda: view.loaded)
+        self.assertGreater(self.gap(d, d.text, view), -1)  # "Sign in below" stays above the page
+        self.svc.claim(d.request["id"])
+        self.spin(lambda: d.claimed is not None)
+        self.assertTrue(view.isVisibleTo(d))
+        self.assertGreater(self.gap(d, view, d.text), -1)  # the question now under the page
+        self.assertLess(self.gap(d, d.text, d.link_button), 40)
+
+    def test_without_the_page_the_buttons_are_under_the_text(self):
+        d, opened = self.dialog(None)
+        d.show()
+        self.spin(lambda: d.request is not None and d.code.text())
+        d.resize(980, 820)
+        self.assertLess(self.gap(d, d.text, d.close_button), 120)
+
     def test_a_window_that_stops_falls_back_to_the_browser(self):
         view = self.fake_view()
         d, opened = self.dialog(view)
@@ -787,6 +829,122 @@ class Page(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+
+class StartCheck(unittest.TestCase):
+    """web_view.start_mode (#852): the first window of a session is tried in a process of its own,
+    then without the GPU, then the browser opens. Fake probes: nothing is started."""
+
+    def setUp(self):
+        wv = web_view_module()
+        for name, value in (("_mode", []), ("_built", None)):
+            p = mock.patch.object(wv, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+        self.logged = []
+        p = mock.patch.object(wv.paths, "log_error", side_effect=lambda what, exc=None: self.logged.append(what))
+        p.start()
+        self.addCleanup(p.stop)
+
+    def mode(self, answers, platform="linux"):
+        asked = []
+
+        def check(software):
+            asked.append(software)
+            return answers[len(asked) - 1]
+        return web_view_module().start_mode(check, platform), asked
+
+    def test_the_gpu_first_then_without_it_then_the_browser(self):
+        wv = web_view_module()
+        for answers, expected, asked in (([True], wv.GPU, [False]),
+                                         ([False, True], wv.SOFTWARE, [False, True]),
+                                         ([False, False], None, [False, True])):
+            wv._mode.clear()
+            self.assertEqual(self.mode(answers), (expected, asked), answers)
+
+    def test_once_per_session(self):
+        wv = web_view_module()
+        self.assertEqual(self.mode([False, True])[0], wv.SOFTWARE)
+        self.assertEqual(self.mode([True]), (wv.SOFTWARE, []))   # not asked again
+
+    def test_windows_starts_the_view_itself(self):
+        wv = web_view_module()
+        self.assertEqual(self.mode([], platform="win32"), (wv.GPU, []))
+
+    def test_without_the_gpu(self):
+        wv = web_view_module()
+        env = wv.software_environment({"PATH": "/usr/bin", "QTWEBENGINE_CHROMIUM_FLAGS": "--lang=en"})
+        self.assertEqual(env, {"PATH": "/usr/bin", "QTWEBENGINE_CHROMIUM_FLAGS": "--lang=en --disable-gpu",
+                               "QT_QUICK_BACKEND": "software"})
+        self.assertEqual(wv.software_environment(env), env)       # the flag only once
+        self.assertEqual(wv.software_environment({})["QTWEBENGINE_CHROMIUM_FLAGS"], "--disable-gpu")
+
+    def test_the_probe_is_the_launcher_itself(self):
+        wv = web_view_module()
+        with mock.patch.object(wv.paths, "FROZEN", True), mock.patch.object(sys, "executable", "/opt/fh1/forza-launcher"):
+            self.assertEqual(wv.probe_command(), ["/opt/fh1/forza-launcher", "--web-view-probe"])
+        cmd = wv.probe_command()
+        self.assertEqual(cmd[0], sys.executable)
+        self.assertEqual(Path(cmd[1]), Path(__file__).resolve().parent / "main.py")
+        self.assertEqual(cmd[2:], ["--web-view-probe"])
+
+    def test_the_probe_s_answer(self):
+        import subprocess
+        wv = web_view_module()
+        runs = []
+
+        def run(code):
+            def fake(cmd, **kw):
+                runs.append((cmd, kw))
+                if code == "timeout":
+                    raise subprocess.TimeoutExpired(cmd, kw["timeout"])
+                if code == "missing":
+                    raise FileNotFoundError(cmd[0])
+                return subprocess.CompletedProcess(cmd, code, "line\n" * 40 + "GLOzone not found for unknown\n")
+            return fake
+        self.assertTrue(wv.probe(run=run(0)))
+        self.assertEqual(self.logged, [])
+        self.assertEqual(runs[0][0], wv.probe_command())
+        self.assertNotIn("QT_QUICK_BACKEND", runs[0][1]["env"])
+        self.assertFalse(wv.probe(software=True, run=run(-6)))     # Chromium's abort
+        self.assertEqual(runs[1][1]["env"]["QT_QUICK_BACKEND"], "software")
+        self.assertIn("--disable-gpu", runs[1][1]["env"]["QTWEBENGINE_CHROMIUM_FLAGS"])
+        self.assertIn("without the GPU: exit -6", self.logged[0])
+        self.assertTrue(self.logged[0].endswith("GLOzone not found for unknown"))   # the output's end
+        self.assertLess(self.logged[0].count("line"), 30)
+        self.assertFalse(wv.probe(run=run(1)))
+        self.assertFalse(wv.probe(run=run("timeout"), timeout=3))
+        self.assertIn("no answer in 3 s", self.logged[-1])
+        self.assertFalse(wv.probe(run=run("missing")))
+
+    def test_create_uses_the_answer(self):
+        from PySide6.QtWidgets import QApplication
+        QApplication.instance() or QApplication([])
+        wv = web_view_module()
+        made = []
+
+        class View:
+            def __init__(self, site, parent, storage):
+                made.append((site, dict(os.environ)))
+        with mock.patch.object(wv, "available", return_value=True), \
+                mock.patch.object(wv, "_classes", return_value=View), \
+                mock.patch.object(wv, "_quit_hooked", True), \
+                mock.patch.object(wv.sys, "platform", "linux"), \
+                mock.patch.dict(os.environ, {"QTWEBENGINE_CHROMIUM_FLAGS": "", "QT_QUICK_BACKEND": ""}):
+            with mock.patch.object(wv, "probe", return_value=False) as probe:
+                self.assertIsNone(wv.create("https://forza.dyotson.dev"))      # the browser then
+                self.assertIsNone(wv.create("https://forza.dyotson.dev"))
+            self.assertEqual(probe.call_count, 2)                             # GPU, CPU; once a session
+            self.assertEqual(made, [])
+            wv._mode.clear()
+            with mock.patch.object(wv, "probe", side_effect=lambda software: software):
+                self.assertIsNotNone(wv.create("https://forza.dyotson.dev"))
+            self.assertEqual(made[0][1]["QT_QUICK_BACKEND"], "software")
+            self.assertEqual(made[0][1]["QTWEBENGINE_CHROMIUM_FLAGS"], "--disable-gpu")
+            wv._mode[:] = [wv.GPU]
+            os.environ.update(QTWEBENGINE_CHROMIUM_FLAGS="", QT_QUICK_BACKEND="")
+            self.assertIsNotNone(wv.create("https://forza.dyotson.dev"))
+            self.assertEqual(made[1][1]["QT_QUICK_BACKEND"], "")                # left alone
 
 
 @unittest.skipUnless(web_view_module().available(), "Qt WebEngine is not installed")

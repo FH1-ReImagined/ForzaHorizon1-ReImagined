@@ -164,7 +164,7 @@ from unpacked files; 5.6 GB of package, 10 MB of mod).
 | `Thumbnail_<id>.xds` | FM4 | none (the same 884,788-byte format); the game draws a new one after a paint job |
 | database rows | FM4 | [below](#the-database) |
 | names (`data_car.str`, `list_carmake.str`) | FM4 | added to FH1's tables ([strings](#strings)) |
-| engine sound | FH1, else FM4 | FH1 has the sound banks, harmonic tuning, `CarModelTuning` and `EngineTuning` of all 381 disc cars ([checked](#checked-in-the-game)); what it lacks is taken from FM4's archives and DLC packs, its sound banks too ([below](#engine-sound-banks-776)). The `EngineTuning` of an engine no FH1 car uses goes into the mod with its `GlobalCarVolume` curve times 1.6, at most 1.0 ([level](#engine-level-712)) |
+| engine sound | FH1, else FM4 | FH1 has the sound banks, harmonic tuning, `CarModelTuning` and `EngineTuning` of all 381 disc cars ([checked](#checked-in-the-game)); what it lacks is taken from FM4's archives and DLC packs, its sound banks too ([below](#engine-sound-banks-776)). The `EngineTuning` of an engine no FH1 car uses goes into the mod with its `GlobalCarVolume` curve times 1.6, at most 1.0 ([level](#engine-level-712)): FH1's copy, else FM4's, and FM4's where FH1's is a cut traffic car's ([below](#traffic-car-tunings-840)) |
 
 `interior_emissive_LOD0.xds` and `zlights*.xds` are not made: 19 of FH1's own 175 cars have no
 `interior_emissive_LOD0.xds` either, and FM4's cockpit materials do not sample it.
@@ -421,6 +421,38 @@ the disc read error, at the start); the same with the bank in the mod crashed on
 `update:\` path; with the bank next to the package's zip, and after `repair_sound` on the old
 import, the save started in free roam in the S1 and it drove. `check` named the seven banks of the
 old import and nothing for the new one or the repaired one.
+
+### Traffic car tunings (#840)
+
+FH1 keeps an `EngineTuning` for five FM4 cars it cut as traffic cars and does not have (no model,
+no database row): the 2006 Ford Focus ST (also the 2011 Ka's swap), the 2011 Audi A4 race car
+(`AUD_2_A4_11`), the 2011 Chevrolet Spark and Volt and the 2009 Scion xD. They are cut down
+("removing proper assignments to make this car lightweight for civilian traffic in Horizon",
+FH1's own comment around the Focus ST's real slots): `EngineAmbient` and `Intake` name
+`NA_EngAmb_HT.xml` and `NA_Int_HT.xml` (the `NA.fsb` placeholder, no sound), and every exhaust
+level the same `Traffic_*_Exh_HT.xml`, a few low loops only (the Focus ST's 5 up to 3,908 rpm,
+against `5T1_S40_Exh_HT.xml`'s 9 up to 20,000; its redline is 6,800). An import before this fix
+took those copies, as for any engine no FH1 car uses, so the cars had no intake or engine
+ambient sound, an exhaust that ends at about 3,900 rpm and exhaust upgrades that changed nothing.
+
+The import now takes FM4's own copy where FH1's live (uncommented) exhaust, intake or engine
+ambient slot names a `Traffic_*_HT.xml` or an `NA_*_HT.xml` and FM4's does not
+(`tools/fm4_cars.py` `traffic_tuning`), at FH1's level as before. The Volt is electric and NA in
+FM4 too, so it keeps FH1's copy. Every harmonic tuning file FM4's four copies name is in FH1's
+`HarmonicTuning.zip`, and every bank those name is one of FH1's disc banks: nothing else comes in.
+Of FH1's 807 tunings, 24 are traffic ones (`traffic_tuning`); FM4 has 2 (the Volt's and the Leaf's).
+
+Checked with `tools/fm4_cars.py convert` on the six cars that use these engines (the Focus ST,
+the Ka, the xD, the Spark, the Volt, the A4): the four tunings are FM4's (the Focus ST's
+`10N2_SRT10_j_EngAmb_HT.xml`, `5T1_A200_Int_HT.xml`, `5T1_S40_Exh_HT.xml`), the Volt's and the
+other engines' the same as before, no harmonic tuning file or bank added, and `check` finds
+nothing missing. Over all 381 cars of the discs, `audio_plan` before and after this fix differs
+only in those four tunings. Not yet heard in the game.
+
+An import made before this fix keeps the traffic tunings until FM4 cars are imported again (the
+right files come only from FM4's discs). Its `.reimagined-fm4-cars.json` has no
+`"engine_tuning": 2`; when its mod folder holds one of the four, the launcher says so once when
+it starts the game (`fm4cars.tuning_notice`), and the Mods page until the next import.
 
 ### Engine level (#712)
 

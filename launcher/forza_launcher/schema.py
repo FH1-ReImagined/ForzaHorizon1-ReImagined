@@ -587,6 +587,13 @@ add("fast_travel_anywhere", "Fast Travel Anywhere", "Gameplay", "bool", True,
     "Works offline and online. Nothing is saved, so turning it off locks it again unless your "
     "profile bought it. Title Update 4 only.", "Map")
 
+add("fm4_track_guide", "Lap guide on circuits", "Gameplay", "bool", False,
+    "On an imported Forza Motorsport 4 circuit, the game's GPS leads round the lap: its green "
+    "route on the minimap and the map, kept about 1.5 km ahead of your car. The distance it "
+    "shows is to the end of that route, not of the lap. While it is on, the map has no Set "
+    "Route on a circuit. Colorado is not changed. Applies on the next game launch.",
+    "Map", restart=True)
+
 add("reimagined_loading_tips", "ReImagined loading tips", "Gameplay", "bool", True,
     "The loading screens show tips about ReImagined's features (photos, tuning, texture packs, "
     "the radio, co-op and more) in place of the original game's, which point to services and "
@@ -721,6 +728,10 @@ add("vulkan_store_pipeline_cache", "Keep compiled Vulkan pipelines", "Advanced",
     "the file may still compile again.", "GPU", restart=True)
 add("async_shader_compilation", "Compile shaders in the background", "Advanced", "bool", True,
     "", "GPU")
+add("vulkan_shader_pack", "Keep translated shaders", "Advanced", "bool", True,
+    "Prebuild shaders (Setup) also saves the shaders it translates for your GPU and settings, so "
+    "the game takes them at start instead of translating them again. Off: they are translated at "
+    "every start, as before. Vulkan.", "GPU", restart=True)
 add("gpu_wait_blocking", "Sleep while waiting for the GPU", "Advanced", "bool", True,
     "The render thread sleeps until the GPU is done instead of keeping a CPU core busy, which "
     "leaves more CPU and power to the game, above all on 4-core PCs and laptops. Turn it off "
