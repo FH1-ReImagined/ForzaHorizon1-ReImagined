@@ -271,8 +271,10 @@ tools/run_forza.sh 120        # a two-minute test run; logs in ${XDG_RUNTIME_DIR
   name the file. The game shows PLEASE WAIT while it renders and encodes every frame (a 15 s WEB
   movie takes about half a minute), then offers to upload it. Movies made before this fix had
   sound but a black picture ([why](rendering.md#a-replay-movie-was-four-black-frames-880)).
-  Still open: with FSR 3 at a 1080p output the picture fills only the top-left three quarters
-  of the movie; a 1440p output, FSR 1 and render scale 1 or 2 without FSR 3 are right.
+  With FSR 3 or SMAA at a 1080p output the picture filled only the top-left three quarters of
+  the movie, of a photo saved in Photo Mode and of its thumbnail, the rest black; that is fixed
+  too (#879, [why](rendering.md#pictures-at-three-quarters-of-their-size-at-a-1080p-output-879)).
+  Movies and photos made before stay as they are.
 - **Hitches:** a frame that takes over 200 ms logs `FORZA_STALL` lines in `forza.log` with
   what the game was doing, and a game database query of 50 ms or more a `FORZA_SQL` line; attach
   them to an issue ([details](perf.md#long-frames-forza_stall)). Title Update 4 builds up to

@@ -889,7 +889,7 @@ Each movie was made from the replay of a one-lap race. The frames are counted in
 | 1080p, FSR 1 | WEB, 15 s | 450 | 450 different | the same | 15.2 s |
 | FSR 3 Quality at a 1440p output | WEB, 15 s | 450 | 450 different | the same | 15.4 s |
 | render scale 1, `frame_rate` 144 | LARGE, 10 s | 300 (1280x720) | 300 different | the same | 10.2 s |
-| FSR 3 Quality at a 1080p output | WEB, 15 s | 450 | 450 different | **in the top-left 480x270 from the second frame on** (open, below) | 15.4 s |
+| FSR 3 Quality at a 1080p output | WEB, 15 s | 450 | 450 different | **in the top-left 480x270 from the second frame on** (#879, fixed since: the next section) | 15.4 s |
 
 Every file has its frames 33 or 34 ms apart (30.00 a second) and no black frame (the darkest
 frame's mean luma is 78 or more in the first six rows and 50 in the last, where black is 16); the
@@ -919,15 +919,111 @@ built). Photo mode holds its pipelines as before (`Pipeline sync: photo mode`), 
 with SAVE has the right thumbnail, and a Big Shot is 3840x2160 with nine different tiles that
 join, captured in 14.7 s. Not run: NVIDIA, D3D12, ReGPU, and the benchmark without a frame cap.
 
-Open: with the scene and the HUD split at a 1080p output (FSR 3 in every mode; SMAA 1x, DLSS and
-DLAA take the same path and were not tried) the movie's first frame is whole, and from the second
-on the picture is in the top-left 480x270 of the 640x360 frame, the rest black. The HUD target's
-raster there is 1920x1080 of the 2560x1440 surface (#539). The likely cause, read from the code
-and not traced: once a frame has drawn the HUD layer (the Forza Horizon logo), the capture's quad
-is drawn in that layer too, into three quarters of its target, and the readback takes the whole
-target. At a 1440p output the raster is the whole surface and the movie is right. The fix belongs
-in ReIGlue (our ReXGlue fork), where a resolve made in the HUD layer would be read back from the
-raster's part; it is not in this change.
+The movie at three quarters of its size with FSR 3 at a 1080p output (the last row) was left
+open by this change. It was not the movie's own: a saved photo and its thumbnail came out the
+same way, and it was fixed in ReIGlue (our ReXGlue fork) as #879, the next section.
+
+## Pictures at three quarters of their size at a 1080p output (#879)
+
+Report: 0.3.6, Vulkan, a Radeon, 1080p output with FSR 3 Balanced (render scale 2, 144 fps,
+ambient occlusion on). A Big Shot taken at a rally stage came out as a 3x3 grid with black
+bands: each of its nine tiles at three quarters of its size in the top left of its place (480x270
+in every 640x360 place of the 1920x1080 copy). The replay movies of #880 showed the same from
+their second frame on.
+
+What reproduces on ReIGlue main (TU4, RADV on an RX 9060 XT, a private server on the same PC; a
+picture's box is the smallest rectangle that holds every pixel that is not black):
+
+| Picture | Settings | Result |
+|---|---|---|
+| Replay movie, WEB 15 s | FSR 3 Quality, 1080p output | frame 1 fills 640x360, frames 2 to 450 sit in (0,0)-(480,270) |
+| Photo saved with SAVE, and its upload | FSR 3 Balanced, 1080p output | 1280x720 with the picture in (0,0)-(960,540) |
+| The saved photo's thumbnail | the same | 416x240 with the picture in (0,0)-(312,180) |
+| The same photo and thumbnail | SMAA at a 1080p output | the same: (0,0)-(960,540) and (0,0)-(312,180) |
+| Big Shot | FSR 3 Balanced, 1080p output, at 60 and 144 fps, with the report's other settings; in free roam, in a paused race, from a paused and from a playing replay | whole: nine 1280x720 tiles that join |
+| Big Shot with every frame's scene drawn in the HUD layer (a test hook, below) | FSR 3 Balanced, 1080p output | every tile in (0,0)-(960,540) of its 1280x720: the report's picture |
+
+So the photo and its thumbnail are part of it too, which the report did not have.
+
+The cause, from a trace of every resolve, its layer and the viewport of the draw before it. With
+the split, the HUD's render targets at a 1080p output are 2560x1440 and their raster is the
+output's 1920x1080 (#539, #330): a display-scale draw there has its viewport and scissor
+multiplied by 0.75 (`UpdateDynamicState` in ReIGlue's Vulkan `command_processor.cpp`, for what
+`UsesFractionalRaster` in `render_target_cache.h` takes for a display view on a target of screen
+pitch), and the HUD's shaders read every screen texture at 0.75 of its coordinates, so inside that
+layer everything agrees. A frame starts in the scene layer and changes to the HUD layer at its
+first draw to the front buffer in the HUD's format (`IssueDraw`). Whatever is drawn after that
+goes through the fractional raster, also a picture the game then reads on the CPU. And the copy
+of a resolve to guest memory (`IssueCopy_ReadbackResolvePath`, the `resolve_downscale` compute
+shader) takes one host pixel of every 2x2 block of the whole scaled surface. The traced cases:
+
+- **The movie.** Frame 0: the capture's quad is drawn before the frame's first HUD draw, on a
+  640-pixel-pitch target in the scene layer (render scale 1, viewport 640x360), and its resolve is
+  copied back from guest-sized memory: whole. From frame 1 on the HUD draw comes first and the
+  quad follows in the HUD layer: `resolve to 1CA95000 +983040 (640x360) ... layer HUD, cache scale
+  2x2, raster 0.750x0.750 ... guest viewport (0, 0, 1280, 720), host viewport (0, 0, 960, 540)`,
+  then `copied back ... downscaled from the scaled resolve buffer`: 960x540 of 1280x720 host
+  pixels, which is 480x270 of the 640x360 frame.
+- **The photo and its thumbnail.** At SAVE the game draws the photo (1280x720) and the thumbnail
+  (416x240) in the HUD layer: host viewports 1920x1080 and 624x360 of 2560x1440 and 832x480.
+- **The Big Shot.** Every frame of it resolves the front buffer twice: the scene (in the scene
+  layer, guest-sized, whole), then, after the camera's HUD is drawn over it, the HUD layer's
+  (2560x1440 with the picture in 1920x1080; its copy to guest memory was the three quarters). The
+  tile was whole in every Big Shot made here, so the game reads it between the two. The
+  report's log has `FH1 world AO: 2560x1440 scene` during its Big Shot: there the scene itself was
+  drawn in the HUD layer, which happens when a frame's first draw to the front buffer has the
+  HUD's format (seen here while a replay plays, in a paused race's menus and for the 27 frames
+  after a load; never in photo mode's camera, entered from free roam, a paused race or a
+  replay). Then the scene's own resolve of the front buffer is on the fractional raster and the
+  tile is the three quarters. A temporary test hook that changes to the HUD layer at the first
+  draw of every Big Shot frame gives exactly the report's picture and the same log line; what put
+  the report's session in that state was not found.
+
+Fix: ReIGlue 1000 ([sdk_patches.md](sdk_patches.md#reiglue-1000-a-picture-drawn-on-the-hud-target-is-copied-back-at-its-full-size-879)).
+The copy to guest memory of a whole picture drawn on the fractional raster takes the raster's
+part, every guest pixel the average of the host pixels it covers there. A whole picture is the
+color target the last draw rendered to on the fractional raster, copied from its origin to the
+texture's first tile, where the copy holds all of that draw's viewport; a predicated tiling tile,
+a corner of a larger view, depth and every resolve on an integer raster keep the copy they had.
+Only the bytes that reach guest memory change, not what the HUD samples.
+`--vulkan_fractional_raster_readback=false` gives the old copy.
+
+Checked with the fix (the game of main with ReIGlue 1000; TU4, RADV on an RX 9060 XT):
+
+| Picture | Settings | ReIGlue main | With 1000 |
+|---|---|---|---|
+| Replay movie, WEB 15 s | FSR 3 Quality, 1080p output | frame 1 whole, frames 2 to 450 in (0,0)-(480,270) | 450 of 450 frames fill 640x360 |
+| Replay movie, WEB 15 s | FSR 3 Balanced, 1080p output, the report's other settings | not made | 449 frames fill 640x360, and so does the other but for its dark ground (below) |
+| Photo (SAVE and upload) and its thumbnail | FSR 3 Balanced, 1080p output, the report's other settings, 144 fps | (0,0)-(960,540) of 1280x720 and (0,0)-(312,180) of 416x240 | fill 1280x720 and 416x240 |
+| Photo and thumbnail | SMAA at a 1080p output | the same three quarters | fill 1280x720 and 416x240 |
+| Big Shot | FSR 3 Balanced, 1080p output, the report's other settings, 144 fps | nine 1280x720 tiles that join, captured in 14.7 to 18.5 s (three runs) | the same, 12.0 to 20.5 s (four runs) |
+| Big Shot with its frames in the HUD layer (the test hook) | FSR 3 Balanced, 1080p output | every tile in (0,0)-(960,540) of its 1280x720 (the old copy, `vulkan_fractional_raster_readback=false`), 18.7 s | nine 1280x720 tiles that join, 18.1 s |
+| Replay movie, WEB 15 s | default settings; render scale 2 at 1080p; FSR 1 at 1080p; FSR 3 Quality at a 1440p output | right (the table of #880) | every frame fills 640x360 in all four |
+| Photo, thumbnail and Big Shot | default settings; FSR 3 Quality at a 1440p output; SMAA at 1080p (the Big Shot) | right | fill 1280x720 and 416x240; nine tiles that join |
+
+A movie takes as long as before (27 to 33 s from CREATE MOVIE to the upload question, 29 s on
+main), and a Big Shot's time varies from run to run by more than the two differ. The log names what was copied the new way (`FH1 fractional raster:
+640x360 resolve to 1CA95000 copied back from its 960x540 picture (#879)`, the first four): the
+movie's texture, the photo, its thumbnail and the HUD layer's front buffer during a Big Shot, and
+nothing at default settings, at render scale 2, with FSR 1 or at a 1440p output. In the render
+scale 2 movie the encoder wrote 449 frames (one came out as a skipped frame; the capture read 450
+different pictures). One frame of the FSR 3 Balanced movie has the near ground dark at its bottom
+edge, behind an intact logo: that is the scene, not the copy (it looks like #823's dark ground,
+with ambient occlusion High).
+
+Outside a capture: `tools/render_test.py check` passes 6 of 6 with the fix and on main (warm
+caches), and its session (default settings, 60 fps cap) has guest frames of 16.70 and 16.71 ms on
+average with the fix (95th percentile 18.6 and 18.0 ms, 99th 21.0 and 19.5 ms) against 16.70 and
+16.71 ms on main (18.4 and 18.5 ms, 20.1 and 21.3 ms), two runs each. Standing in free roam for
+50 s with FSR 3 Balanced at a 1080p output (60 fps cap), where the HUD layer's draws pass the new
+note: 16.69 and 16.68 ms with the fix (95th percentile 18.7 and 18.5 ms) against 16.68 and
+16.90 ms on main (18.4 and 19.1 ms).
+
+Not run: NVIDIA, DLSS and DLAA (the same split; not available on this GPU), Windows, a LARGE
+movie with the split, and the benchmark without a frame cap. ReIGlue's Direct3D 12 backend has
+no scene/HUD split (no fractional raster in its code), so it has no such copy; it was not run,
+and neither was ReGPU (its own renderer, which offers FSR 1 only). What put the report's Big Shot
+in the HUD layer is not known, so that case is checked with the test hook only.
 
 ## Festival video flashes purple (#91, open)
 
