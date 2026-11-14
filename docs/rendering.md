@@ -996,13 +996,13 @@ Checked with the fix (the game of main with ReIGlue 1000; TU4, RADV on an RX 906
 | Replay movie, WEB 15 s | FSR 3 Balanced, 1080p output, the report's other settings | not made | 449 frames fill 640x360, and so does the other but for its dark ground (below) |
 | Photo (SAVE and upload) and its thumbnail | FSR 3 Balanced, 1080p output, the report's other settings, 144 fps | (0,0)-(960,540) of 1280x720 and (0,0)-(312,180) of 416x240 | fill 1280x720 and 416x240 |
 | Photo and thumbnail | SMAA at a 1080p output | the same three quarters | fill 1280x720 and 416x240 |
-| Big Shot | FSR 3 Balanced, 1080p output, the report's other settings, 144 fps | nine 1280x720 tiles that join, captured in 15.0 s | the same, 14.9 and 12.4 s |
-| Big Shot with its frames in the HUD layer (the test hook) | FSR 3 Balanced, 1080p output | every tile in (0,0)-(960,540) of its 1280x720 (the old copy, `vulkan_fractional_raster_readback=false`), 19.0 s | nine 1280x720 tiles that join, 18.4 s |
+| Big Shot | FSR 3 Balanced, 1080p output, the report's other settings, 144 fps | nine 1280x720 tiles that join, captured in 14.7 to 18.5 s (three runs) | the same, 12.0 to 20.5 s (four runs) |
+| Big Shot with its frames in the HUD layer (the test hook) | FSR 3 Balanced, 1080p output | every tile in (0,0)-(960,540) of its 1280x720 (the old copy, `vulkan_fractional_raster_readback=false`), 18.7 s | nine 1280x720 tiles that join, 18.1 s |
 | Replay movie, WEB 15 s | default settings; render scale 2 at 1080p; FSR 1 at 1080p; FSR 3 Quality at a 1440p output | right (the table of #880) | every frame fills 640x360 in all four |
 | Photo, thumbnail and Big Shot | default settings; FSR 3 Quality at a 1440p output; SMAA at 1080p (the Big Shot) | right | fill 1280x720 and 416x240; nine tiles that join |
 
 A movie takes as long as before (27 to 33 s from CREATE MOVIE to the upload question, 29 s on
-main), and so does a Big Shot. The log names what was copied the new way (`FH1 fractional raster:
+main), and a Big Shot's time varies from run to run by more than the two differ. The log names what was copied the new way (`FH1 fractional raster:
 640x360 resolve to 1CA95000 copied back from its 960x540 picture (#879)`, the first four): the
 movie's texture, the photo, its thumbnail and the HUD layer's front buffer during a Big Shot, and
 nothing at default settings, at render scale 2, with FSR 1 or at a 1440p output. In the render
