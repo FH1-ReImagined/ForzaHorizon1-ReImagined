@@ -91,6 +91,8 @@ jobs:
         run: python -m unittest discover -s tools -p 'test_fm4_routes.py' -v
       - name: FM4 circuits' lap timing data (#648)
         run: python -m unittest discover -s tools -p 'test_fm4_timing.py' -v
+      - name: FM4 circuits' streaming trace reader (a synthetic trace, no game files, #824)
+        run: python -m unittest discover -s tools -p 'test_fm4_stream_lead.py' -v
       - name: FM4 circuit command-buffer fixups (#648)
         run: python -m unittest discover -s tools -p 'test_fm4_pvs.py' -v
       - name: FM4 circuits' collision (made-up cells and surface lists, no game files, #876)
@@ -272,6 +274,12 @@ jobs:
         run: |
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/shadow_filter_test.cpp -o "$RUNNER_TEMP/shadow-filter-test"
           "$RUNNER_TEMP/shadow-filter-test"
+      - name: FM4 circuits' streamed texture data beyond the game's heap (#824)
+        shell: bash
+        run: |
+          cmake -S forza-recomp/tests/fm4-stream-textures -B "$RUNNER_TEMP/fm4-stream-textures" -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$RUNNER_TEMP/fm4-stream-textures" --config Release --parallel 2
+          ctest --test-dir "$RUNNER_TEMP/fm4-stream-textures" -C Release --output-on-failure
       - if: runner.os == 'Linux'
         name: Native renderer shadow mode records
         run: |

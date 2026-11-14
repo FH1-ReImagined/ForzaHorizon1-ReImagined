@@ -62,6 +62,7 @@ are Infineon 5-6's grey road, Indianapolis 7's pale sand and Top Gear 3's orange
 | `FORZA_AUTOPILOT_TRACE=FILE`, `_DELAY=s`, `_GAIN=k` | 10 Hz wheel/input trace, a start delay, the steering gain |
 | `FORZA_AUTOPILOT_SHIFT=0` | the autopilot leaves B and X alone (it shifts up near the redline and down under 40% of it; with manual shifting it stayed in first gear) |
 | `FORZA_ZONE_TRACE=1` | zones made live/dropped with the pools in use |
+| `FORZA_FM4_STREAM_TRACE=FILE` | what the track streaming did and when: zones, models, texture slots and texture objects, the pools, the car (`tools/fm4_stream_lead.py FILE <circuit folder>` reads it) |
 | `FORZA_FIZ_TRACE=1` | collision queries, depot reads, teleport orientation |
 | `FORZA_PVS_TRACE=FILE` | every read of the PVS reader (layout work) |
 
@@ -1333,6 +1334,173 @@ blocks are the file's (the largest of all layouts, with the margin):
 | Suzuka | 209 | 72 -> 249 | 504 -> 1158 | 43280 -> 60124 | neighbours |
 | TopGear | 242 | 110 -> 261 | 408 -> 724 | 36390 -> 47226 | neighbours |
 | Tsukuba | 176 | 40 -> 147 | 737 -> 1531 | 44238 -> 49423 | neighbours |
+
+### What was still late: the streamed textures (#824)
+
+Reported again on 0.3.6, with circuits imported after the zones above: trees, houses and
+barriers "get their textures late" and "appear out of nowhere" at speed, on Le Mans and on
+Suzuka. Measured with `FORZA_FM4_STREAM_TRACE` and `tools/fm4_stream_lead.py` over a lap of
+each (the autopilot, resolution scale 2, FSR 3 Balanced, Ultra, a 30 fps cap; Le Mans 13.3 km
+up to about 295 km/h, 58 s of the lap at 200 km/h or more; Suzuka 5.7 km up to about 215
+km/h, 3 s). For every instance within 60 m of the car's path, how far the car still had to
+drive to it when each thing was ready:
+
+| Le Mans, passed at 200 km/h or more (1,405 instances) | Least | 10th percentile | Median | Ready after it was listed |
+| --- | --- | --- | --- | --- |
+| The camera's zone lists it (FH1 draws that zone alone) | 152 m | 234 m | 298 m | |
+| A zone that lists it is live | 282 m | 366 m | 444 m | none |
+| Its model is made | 282 m | 395 m | 1,101 m | none |
+| Its textures are at full size | 0 m | 379 m | 1,015 m | 5%, by up to 11.5 s; 0.6% never |
+
+- Zones and models are not late: both are ready before the camera's zone lists the instance,
+  on both circuits and at every speed (Suzuka at 100 to 200 km/h, 839 instances: listed 149 /
+  207 / 291 m, zone 249 / 407 / 577 m, model 249 / 495 / 1,172 m).
+- Textures were: at 100 to 200 km/h 12% of Le Mans's instances got theirs after they were
+  listed (by up to 62 s, 2.7% never while the model was loaded) and 8% of Suzuka's (up to 48
+  s); from the start of the lap at any speed, 14% and 9%.
+- It was not a matter of speed or of the streaming budget. Of the times the game asked for a
+  streamed texture, a third never loaded while it was asked for (Le Mans 33% of 2,881, Suzuka
+  28% of 2,784), most of the others loaded within the same tenth of a second, and up to 404
+  (398) textures with a file were waiting at one moment. With the streaming update's budget at
+  30 ms instead of 3 (sub_82E2BE00's f1) the same: 33% and 28%, 405 and 368 waiting.
+- The cause: a streamed texture's load (sub_82CEBE10) reads its `_0x<id>.bix` file whole into
+  memory from the game's heap 0x20 (sub_82423000), sized for Colorado. Le Mans's grid asks for
+  42 MB of these files and 19 MB fitted (279 textures loaded, 343 waiting); the allocation
+  failed, the load with it (the resource's state 6), and the loader tried again on every pass,
+  450 failed loads a second there. A texture got in when others were let go. Over a lap, of
+  the streamed textures the game asked for that have a file, 390 of Le Mans's 2,031 never
+  loaded and 76 of Suzuka's 1,364.
+
+The fix (hooks/fm4_track.cpp, `fm4_stream_textures.h`): on a converted track a failed
+allocation of that caller comes from an arena of the hook's own: 8 MB chunks of the guest's 4
+KB-page physical heap, taken as they are needed (64 MB at most), cut into blocks first fit.
+The game's free of the pointer (sub_82423490) gives the block back, and the arena does not
+hand it out again for two seconds. The chunks are not given back: what the arena has taken,
+up to the 64 MB, it keeps for the session. For those two seconds after a reload at a busy
+place (every texture let go and asked for again at once) it can hold up to twice what is in
+use: with the Le Mans lap's trace replayed through the arena, such a reload 20 s into the lap
+takes it to 56 MB, and a second one a lap later to the 64 MB. When the arena is full the
+allocation fails as before and the loader tries again. The same when the guest's heap has no
+8 MB left in one piece for another chunk: the hook then asks the heap again a second later,
+not on every failed load (a failed request costs two error lines of the SDK's in the log, and
+there are hundreds of failed loads a second at a busy place), and says so in the log once.
+`FORZA_FM4_TEX_FALLBACK=0` turns it off, with the model buffers' fallback above. Nothing
+changes for Colorado: only a converted track's failed allocations are taken over.
+
+A first attempt allocated each block from the guest's heap and released it there, as the model
+buffers' fallback does. Every texture loaded, and after a minute of driving the road and the
+scenery showed other textures' texels, or opaque slabs where a billboard's cut-out should be
+(Le Mans from 900 m of the drive, Suzuka from 1,100 m). The cause is known, and it is the
+release, not how soon a block is used again. It is in the SDK's write watch (ReIGlue, our
+ReXGlue fork: `PhysicalHeap` in system/xmemory.cpp, `SharedMemory` in
+graphics/shared_memory.cpp):
+
+- The emulated GPU keeps its own copy of guest memory and is told of a write only on pages
+  it watches. A watch can only be set on pages that are allocated
+  (`PhysicalHeap::EnableAccessCallbacks` skips the others).
+- A release reports the block written, so the GPU's copy of it is dropped. A frame still
+  queued then draws from the released pages once more: they are uploaded again and marked
+  up to date (`SharedMemory::MakeRangeValid`), with no watch on them.
+- The pages are allocated again and another texture's file is read into them
+  (`XFile::ReadInternal` reports the write, to pages nobody watches). The GPU side takes the
+  pages it holds as up to date as they are, so it never sets the watch either, and draws the
+  old bytes from then on.
+
+Run outside the game against the SDK's own memory and shared-memory code: a block that stays
+allocated has every rewrite reported, also with no rest at all (200 loads into blocks used
+again, with a GPU read between the free and the next load: no stale page); release, a GPU
+read, allocate, load: all 64 pages of the block stale, and stale for later writes too. So the
+arena is right because it never releases its memory, and the two seconds only cover the frames
+already queued that still draw the texture that was let go (a GPU thread stopped for longer
+than that with frames queued would draw those frames from the next texture's bytes; the
+game's own heap, which uses a freed block again at once, is more exposed to that).
+
+One way in was left: a new chunk can cover pages that the model buffers' fallback released
+(it still releases each block, to the same heap) and that a queued frame read once more. In
+the same program, 3 of 41 textures loaded into such a chunk drew stale pages. The hook
+therefore makes the GPU side drop its copy of every chunk as it is taken (the chunk's pages
+are watched, then reported written once: `EnablePhysicalMemoryAccessCallbacks`,
+`TriggerPhysicalMemoryCallbacks`); with that, none of the 41. All 28 spots of the two drives
+(14 on each circuit) drew right, before that change and with it.
+
+After, the same laps:
+
+| | Le Mans before | after | Suzuka before | after |
+| --- | --- | --- | --- | --- |
+| Streamed textures loaded, of the times asked for | 67% | 91% | 72% | 99% |
+| Not loaded: with a file / without one | 698 / 253 | 4 / 241 | 758 / 34 | 1 / 34 |
+| Textures with a file that never loaded in the lap | 390 | 0 | 76 | 0 |
+| Most waiting with a file at one moment | 404 | 24 | 398 | 36 |
+| Instances with textures after they were listed, 200 km/h or more | 5% | 0% | 0% (25) | 0% (26) |
+| The same, 100 to 200 km/h | 12% | 0% | 8% | 0% |
+| The same, any speed, from the start | 14% | 4% | 9% | 3% |
+| In the arena at most (taken from the guest's heap) | | 27.8 MB, 420 textures (40 MB) | | 15.1 MB, 399 textures (24 MB) |
+
+(The 4% and 3% left are at the grid in the first seconds of the lap, where 3% and 1% of the
+instances' models are made after they are listed too.) At Le Mans's grid: 622 textures loaded
+and none waiting, where 279 were loaded and 343 waited; the signs, the banners and the road's
+rubber are sharp.
+
+Frame times over those laps (frames over 40 ms of about 10,300 on Le Mans and 6,100 on Suzuka,
+and the worst frame; the median is 33.4 or 33.5 ms in every run): Le Mans 18 (82.5 ms) before
+and 8 (89.2 ms) after; Suzuka 5 and 17 in two laps before (83.7 and 151.3 ms), 9 (71.6 ms)
+after. No difference beyond the spread between two laps of the same build. With the 30 ms
+budget: 13 and 5. FH1's own world with the new build: 110 of 148 consecutive frames of the title
+sequence's fly-over are bit-identical with the build before (107 of 146 between two starts of
+one build; the others are among the first 51 frames of a start), and its log has no line of
+the arena.
+
+With each chunk's copy dropped on the GPU side as it is taken and the rule for a refused
+chunk (the two changes after the laps above), a lap of each circuit again, the same way:
+
+| | Le Mans | Suzuka |
+| --- | --- | --- |
+| Streamed textures loaded, of the times asked for | 92% of 2,947 | 99% of 2,796 |
+| Not loaded: with a file / without one | 4 / 244 | 1 / 34 |
+| Textures with a file that never loaded in the lap | 0 | 0 |
+| Most waiting with a file at one moment | 27 | 87, for 0.13 s |
+| Instances with textures after they were listed, 100 km/h or more | 0% (3,534) | 0% (883) |
+| The same, any speed, from the start | 4% | 2% |
+| In the arena at most (taken from the guest's heap) | 27.8 MB, 421 textures (40 MB) | 15.3 MB, 354 textures (24 MB) |
+| Frames over 40 ms (worst) | 4 of 10,574 (65.6 ms) | 13 of 6,165 (66.6 ms) |
+
+No chunk was refused in these laps (the guest's heap always had the 8 MB), so the rule for
+that is covered by its test and not by a run. The 14 spots of each circuit's drive drew right
+again.
+
+What was tried and dropped: a second streaming centre two hexes ahead of the car at speed
+(the game's idle second centre given the zones ahead). It made the zones live 530 to 600 m
+ahead instead of 230 to 305 m, which was never what was late; a third of the texture loads
+still failed (29% on Le Mans), 37 frames of its lap were over 40 ms, in an earlier run it
+switched itself off at 85% of the streaming blocks, and on this Le Mans lap the game stopped
+at 11.8 km with a read fault in the streaming centre's update. Not kept.
+
+What is left:
+- How far ahead scenery is drawn is the zones' reach, as above: an instance is listed from
+  about 150 m ahead at the least, 235 m at the 10th percentile, 300 m at the median (Le Mans
+  at 200 km/h or more; Suzuka 149, 207 and 291 m at 100 to 200 km/h).
+  Nothing loads late inside that; drawing further needs zones that hold a second ring of
+  hexes, and the streaming blocks for it.
+- 171 of Le Mans's streamed textures and 19 of Suzuka's have no `_0x<id>.bix` file in the
+  circuit's archive: the game asks for them as long as their zones are live and they never
+  load. FM4's atlas tiles are drawn from their atlas and do not need theirs; which models the
+  others belong to is not looked at.
+- Only a texture's mip file is asked for, not its base level (`_0x<id>_B.bix`,
+  `FM4_PVS_ZONE_TEXTURE_FLAG`): the largest mip a circuit's streamed texture shows is its
+  second one.
+- The model buffers' fallback above still allocates and releases each block, as the first
+  attempt here did, so a model's vertices or indices can meet the same hole in the write
+  watch. The game's destroy of a buffer (sub_82AA5A80) calls the D3D library's wait for the
+  GPU (sub_824192A0) before the free when the buffer still has a fence pending, which covers
+  the plain case; whether the track's recorded command lists set that fence is not looked
+  at. No wrong geometry or texels were seen from it in any run. The fix belongs in the SDK:
+  no page marked up to date whose watch could not be set, or the GPU's copy dropped when
+  memory is allocated.
+- Not covered by any run: a world made again while the arena holds blocks (the game's free of
+  each texture gives its block back; if a world's unload does not free them one by one, they
+  stay booked and the arena fills), Windows, the D3D12 renderer and ReGPU.
+- Not run: D3D12 and ReGPU, Windows, and other circuits than these two. The arena's 64 MB were
+  not reached.
 
 To check in the game: frame time and draw count over a Le Mans lap at speed, and how far ahead
 the scenery appears. A circuit imported before this change keeps its old zones until it is
