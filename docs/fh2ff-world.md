@@ -254,7 +254,11 @@ with F&F's own world (the same picture).
 
 **Textures.** 5,072 of F&F's 10,233 texture records are byte for byte one of FH2's under another
 id (files or bundled data, and the same record): those use FH2's record; the rest get records of
-their own.
+their own. Several of F&F's records can be the same picture (its many copies of one small
+default texture), and all of them then share one FH2 record: a bundle names that record once.
+Written once for each of them (about 160 times a bundle, 14,083 times in all for one record),
+surfaces drew black as bundles came and went: a road after a motorway overpass, walls in the
+coast towns, guard rails.
 
 **The whole area (`--all`).** Outside the docks F&F changed the shared world a little everywhere:
 in the 1,071 cells both have, F&F's zones name 26% more vegetation files, 304 cells have a tenth

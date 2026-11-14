@@ -248,8 +248,17 @@ def rewrite_bundle(d, record_map):
     when none is left. Moved by the ids' step instead, F&F's later textures (their records
     past 9,977) were registered past the end of FH1's streaming resource table, which has a
     12-byte entry a texture record: it wrote over what follows, and the game faulted in its
-    stream list (sub_82DD9388) as soon as the docks' bundles loaded."""
-    kept = [(record_map[t], p, n) for t, p, n in bundle_entries(d) if t in record_map]
+    stream list (sub_82DD9388) as soon as the docks' bundles loaded.
+
+    A record is written once: textures of the added world that are the same picture (its many
+    copies of one small default texture) share the base's one record, and a bundle that listed
+    it for each of them (about 160 times a bundle, 14,083 in all) is not what either game has
+    (a bundle of theirs names a record once)."""
+    kept, seen = [], set()
+    for t, p, n in bundle_entries(d):
+        if t in record_map and record_map[t] not in seen:
+            seen.add(record_map[t])
+            kept.append((record_map[t], p, n))
     if not kept:
         return None
     out = bytearray(struct.pack(">I", len(kept)))

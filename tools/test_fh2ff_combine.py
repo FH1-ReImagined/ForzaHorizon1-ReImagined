@@ -127,6 +127,12 @@ class Bundles(unittest.TestCase):
         self.assertNotIn(b"abcd", out)
         self.assertIsNone(fc.rewrite_bundle(d, {}))
 
+    def test_a_record_is_written_once(self):
+        d = bundle([(4, b"same"), (9, b"same"), (12, b"zz"), (13, b"same")])
+        out = fc.rewrite_bundle(d, {4: 259, 9: 259, 12: 77, 13: 259})     # three copies of one picture
+        self.assertEqual([t for t, _, _ in fc.bundle_entries(out)], [259, 77])
+        self.assertEqual(out.count(b"same"), 1)
+
 
 class Collision(unittest.TestCase):
     @staticmethod
