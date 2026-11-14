@@ -305,8 +305,8 @@ class GarageTests(unittest.TestCase):
         with garage._open(database(owned=(320,326,330,1082,1197,1233,1488,309))) as db:
             db.execute("UPDATE Career_Garage SET DefaultManufacturerColorIndex=0, LiveryFileName='', "
                        "OriginalOwner='ReImagined', NumOwners=1, Flags=73, PartsValue=987, Tuning_firstGear=3")
-            # These are deliberately not repairable: valid paint, custom livery, another owner,
-            # native flags, second-hand car and a non-unicorn. Only CR-X (1) and MINI (7) match.
+            # The repair skips valid paint (2), a custom livery (3), another owner (4),
+            # a second-hand car (6) and a non-unicorn (8). Native flags (5) still qualify.
             db.execute('UPDATE Career_Garage SET DefaultManufacturerColorIndex=2 WHERE Id=2')
             db.execute("UPDATE Career_Garage SET LiveryFileName='Liveries/custom.liv' WHERE Id=3")
             db.execute("UPDATE Career_Garage SET OriginalOwner='Someone else' WHERE Id=4")
@@ -317,7 +317,7 @@ class GarageTests(unittest.TestCase):
         source = self.cfg.game_files()/'media/db/gamedb.slt'
         with closing(sqlite3.connect(source)) as db:
             db.execute('CREATE TABLE Combo_Colors (Ordinal INT, Sequence INT)')
-            db.executemany('INSERT INTO Combo_Colors VALUES (?,1)', [(320,), (1488,)])
+            db.executemany('INSERT INTO Combo_Colors VALUES (?,1)', [(320,), (330,), (1197,), (1488,)])
             db.commit()
         return self.path.read_bytes()
 
@@ -326,14 +326,14 @@ class GarageTests(unittest.TestCase):
         with garage._open(garage.decode(self.profile, original, (KEYS,)).database) as db:
             before = [dict(row) for row in db.execute('SELECT * FROM Career_Garage ORDER BY Id')]
         result = garage.repair_factory_paint(self.cfg, self.profile)
-        self.assertEqual(result.repaired, (1, 7))
+        self.assertEqual(result.repaired, (1, 5, 7))
         self.assertEqual((result.backup.path/'save/ForzaProfile/PlayerDatabase').read_bytes(), original)
         with garage._open(garage.decode(self.profile, self.path.read_bytes(), (KEYS,)).database) as db:
             after = [dict(row) for row in db.execute('SELECT * FROM Career_Garage ORDER BY Id')]
             self.assertEqual(db.execute('SELECT LastUsedGarageId FROM LastUsedGarageId').fetchone()[0], 50)
             self.assertEqual(db.execute('SELECT value FROM OtherProgress').fetchone()[0], 'preserved')
         for row in before:
-            if row['Id'] in (1, 7):
+            if row['Id'] in (1, 5, 7):
                 row['DefaultManufacturerColorIndex'] = 1
         self.assertEqual(after, before)
         self.assertEqual(self.companion.read_bytes(), b'unchanged profile and active-car choice')
