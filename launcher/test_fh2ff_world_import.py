@@ -220,11 +220,11 @@ class Ui(WorldBase):
 
     def test_the_card_imports_the_world(self):
         import shiboken6
-        from forza_launcher.ui.fm4_tracks import Fm4TracksCard
+        from forza_launcher.ui.fm4_tracks import Fh2WorldsCard
         page = mock.Mock()
         page._game_running.return_value = False
         page._confirm.return_value = False  # no FH2 files
-        card = Fm4TracksCard(self.cfg, page)
+        card = Fh2WorldsCard(self.cfg, page)
         self.addCleanup(lambda: shiboken6.isValid(card) and shiboken6.delete(card))
         self.assertTrue(card.ff_button.isEnabled())
         # a button shows "&&" as "&" (a single one is a shortcut mark and is not drawn)
@@ -243,6 +243,37 @@ class Ui(WorldBase):
             card._import_ff()  # not F&F's files: said, nothing started
         self.assertEqual(len(started), 1)
         self.assertIn("Fast & Furious", card.message.text())
+
+    def test_worlds_have_a_card_of_their_own(self):
+        import shiboken6
+        from forza_launcher.ui.fm4_tracks import Fh2WorldsCard, Fm4TracksCard, TrackPicker
+        self.import_world()
+        page = mock.Mock()
+        page._game_running.return_value = False
+        page._confirm.return_value = True
+        worlds, circuits = Fh2WorldsCard(self.cfg, page), Fm4TracksCard(self.cfg, page)
+        picker = TrackPicker(self.cfg)
+        for w in (worlds, circuits, picker):
+            self.addCleanup(lambda w=w: shiboken6.isValid(w) and shiboken6.delete(w))
+        self.assertEqual([worlds.table.item(r, 0).text() for r in range(worlds.table.rowCount())], ["Fast & Furious"])
+        self.assertEqual(worlds.table.columnCount(), 3)                 # no lap times in a world
+        self.assertIn("1 world(s) imported", worlds.message.text())
+        self.assertEqual(worlds.remove_button.text(), "Remove world")
+        self.assertEqual(circuits.table.rowCount(), 0)                  # and it is no circuit
+        self.assertEqual(circuits.message.text(), "")
+        self.assertFalse(hasattr(circuits, "ff_button"))
+        # the Play page's note is the world's when a world is chosen
+        fm4tracks.select(self.cfg, "anthem")
+        picker.refresh()
+        self.assertEqual(picker.note.text(), fh2ffworld.EXPERIMENTAL_SHORT)
+        fm4tracks.select(self.cfg, "")
+        picker.refresh()
+        self.assertTrue(picker.note.isHidden())
+        # removing it from its card
+        worlds.table.selectRow(0)
+        worlds._remove()
+        self.assertEqual(worlds.table.rowCount(), 0)
+        self.assertIsNone(fm4tracks.find(self.cfg, "anthem"))
 
 
 if __name__ == "__main__":

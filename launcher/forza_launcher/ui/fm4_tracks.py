@@ -1,6 +1,7 @@
-"""Forza Motorsport 4 circuits (#648, experimental): the import on Mods > Mods, next to the FM4
-cars, and the choice of where Play starts (TrackPicker, on the Play page once a circuit is
-imported). fm4tracks.py does the work."""
+"""Forza Motorsport 4 circuits (#648, experimental) and Forza Horizon 2's worlds (#821,
+experimental): their import cards on Mods > Mods, next to the FM4 cars, and the choice of where
+Play starts (TrackPicker, on the Play page once one is imported). fm4tracks.py and fh2ffworld.py
+do the work."""
 import shutil
 import tempfile
 from pathlib import Path
@@ -80,8 +81,26 @@ class ChooseCircuits(QDialog):
 
 
 class Fm4TracksCard(QWidget):
-    """Mods > Mods: Import FM4 tracks, the imported circuits with their sizes, Remove."""
+    """Mods > Mods: Import FM4 tracks, the imported circuits with their sizes, Remove.
+    (Fh2WorldsCard below is the same card for Forza Horizon 2's worlds.)"""
     changed = Signal()
+    TITLE = f"Forza Motorsport 4 tracks ({EXPERIMENTAL_TAG.lower()})"
+    INTRO = ("Drive the circuits of your own Forza Motorsport 4 Disc 1 (a disc image, a Games "
+             "on Demand package, an archive or a folder with its files) in FH1. Choose all of "
+             "them or a few; they are converted on this PC. Then pick one on the Play page "
+             "before you press Play: FH1's Colorado stays the default.")
+    WARNING = fm4tracks.EXPERIMENTAL
+    COLUMNS = ["Circuit", "Size", "Imported", "Best lap"]
+    THING = "circuit"
+
+    def _mine(self, info) -> bool:
+        """Whether an import belongs in this card's list."""
+        return info.get("kind") not in fh2ffworld.KINDS
+
+    def _import_buttons(self) -> list:
+        self.import_button = QPushButton("Import FM4 tracks…")
+        self.import_button.clicked.connect(self._import)
+        return [self.import_button]
 
     def __init__(self, cfg, page):
         super().__init__()
@@ -92,14 +111,11 @@ class Fm4TracksCard(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         c, cl = card(spacing=10)
-        cl.addWidget(label(f"Forza Motorsport 4 tracks ({EXPERIMENTAL_TAG.lower()})", "cardTitle"))
-        cl.addWidget(label("Drive the circuits of your own Forza Motorsport 4 Disc 1 (a disc image, a Games "
-                           "on Demand package, an archive or a folder with its files) in FH1. Choose all of "
-                           "them or a few; they are converted on this PC. Then pick one on the Play page "
-                           "before you press Play: FH1's Colorado stays the default.", "muted"))
-        cl.addWidget(label(fm4tracks.EXPERIMENTAL, "warn"))
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["Circuit", "Size", "Imported", "Best lap"])
+        cl.addWidget(label(self.TITLE, "cardTitle"))
+        cl.addWidget(label(self.INTRO, "muted"))
+        cl.addWidget(label(self.WARNING, "warn"))
+        self.table = QTableWidget(0, len(self.COLUMNS))
+        self.table.setHorizontalHeaderLabels(self.COLUMNS)
         self.table.verticalHeader().hide()
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -109,27 +125,12 @@ class Fm4TracksCard(QWidget):
         self.table.setMaximumHeight(220)
         self.table.setSizeAdjustPolicy(QTableWidget.AdjustToContents)
         cl.addWidget(self.table)
-        # the worlds' buttons say what they need here: their own notes are tooltips only
-        cl.addWidget(label("Forza Horizon 2's worlds (experimental): free roam in Forza Horizon 2 Presents Fast "
-                           "& Furious's world or in Forza Horizon 2's whole world, each from a folder with the "
-                           "files of your own Xbox 360 copy. They appear in the list above and on the Play page "
-                           "like a circuit. Hover a button for what works and what does not yet.", "muted"))
         row = QHBoxLayout()
         row.setSpacing(12)
-        self.import_button = QPushButton("Import FM4 tracks…")
-        self.import_button.clicked.connect(self._import)
-        row.addWidget(self.import_button)
-        self.ff_button = QPushButton("Import Fast && Furious…")   # a button's single & is a shortcut mark, not shown
-        self.ff_button.setToolTip("Free roam in Forza Horizon 2 Presents Fast & Furious's world, from your own "
-                                  "copy's files (experimental). " + fh2ffworld.EXPERIMENTAL)
-        self.ff_button.clicked.connect(self._import_ff)
-        row.addWidget(self.ff_button)
-        self.fh2_button = QPushButton("Import Forza Horizon 2…")
-        self.fh2_button.setToolTip("Free roam in Forza Horizon 2's whole world, from your own copy's files "
-                                   "(experimental). " + fh2ffworld.EXPERIMENTAL)
-        self.fh2_button.clicked.connect(self._import_fh2)
-        row.addWidget(self.fh2_button)
-        self.remove_button = QPushButton("Remove circuit")
+        self.import_buttons = self._import_buttons()
+        for button in self.import_buttons:
+            row.addWidget(button)
+        self.remove_button = QPushButton(f"Remove {self.THING}")
         self.remove_button.clicked.connect(self._remove)
         row.addWidget(self.remove_button)
         self.cancel_button = QPushButton("Cancel")
@@ -147,7 +148,7 @@ class Fm4TracksCard(QWidget):
         self.refresh()
 
     def refresh(self):
-        tracks = fm4tracks.installed(self.cfg)
+        tracks = [info for info in fm4tracks.installed(self.cfg) if self._mine(info)]
         self.table.setRowCount(len(tracks))
         for r, info in enumerate(tracks):
             name = QTableWidgetItem(info.get("name", info["key"]))
@@ -155,18 +156,18 @@ class Fm4TracksCard(QWidget):
             self.table.setItem(r, 0, name)
             self.table.setItem(r, 1, QTableWidgetItem(fm4tracks.size_text(int(info.get("size", 0)))))
             self.table.setItem(r, 2, QTableWidgetItem(info.get("imported", "")))
-            self.table.setItem(r, 3, QTableWidgetItem(fm4tracks.lap_text(fm4tracks.best_lap(self.cfg, info["key"]))))
+            if len(self.COLUMNS) > 3:
+                self.table.setItem(r, 3, QTableWidgetItem(fm4tracks.lap_text(fm4tracks.best_lap(self.cfg, info["key"]))))
         self.table.setVisible(bool(tracks))
         if self.task is None:
-            self.message.setText(f"{len(tracks)} circuit(s) imported, {fm4tracks.size_text(fm4tracks.total_size(self.cfg))} "
-                                 "in all." if tracks else "")
+            size = fm4tracks.size_text(sum(int(info.get("size", 0)) for info in tracks))
+            self.message.setText(f"{len(tracks)} {self.THING}(s) imported, {size} in all." if tracks else "")
         self._buttons()
 
     def _buttons(self):
         idle = self.task is None
-        self.import_button.setEnabled(idle)
-        self.ff_button.setEnabled(idle)
-        self.fh2_button.setEnabled(idle)
+        for button in self.import_buttons:
+            button.setEnabled(idle)
         self.remove_button.setEnabled(idle and bool(self.table.selectedItems()))
         self.remove_button.setVisible(self.table.rowCount() > 0)
 
@@ -179,12 +180,12 @@ class Fm4TracksCard(QWidget):
         if not key:
             return
         if self.page._game_running():
-            self.message.setText("Close the game before removing a circuit.")
+            self.message.setText(f"Close the game before removing a {self.THING}.")
             return
         info = fm4tracks.find(self.cfg, key) or {"name": key, "size": 0}
-        if not self.page._confirm("Remove circuit", f"Remove {info['name']} "
+        if not self.page._confirm(f"Remove {self.THING}", f"Remove {info['name']} "
                                   f"({fm4tracks.size_text(int(info.get('size', 0)))})? You can import it "
-                                  "again from your disc."):
+                                  "again from your own files."):
             return
         try:
             fm4tracks.remove(self.cfg, key)
@@ -279,6 +280,40 @@ class Fm4TracksCard(QWidget):
         self._start(job, "import FM4 tracks", f"Converting {len(names)} circuit(s)… Circuits imported "
                     "before stay until each new one is complete.", self._build_done)
 
+    def _build_done(self, ok, message):
+        self._end()
+        self._drop_work()
+        self.refresh()
+        self.changed.emit()
+        self.message.setText(message)
+
+
+class Fh2WorldsCard(Fm4TracksCard):
+    """Mods > Mods: Forza Horizon 2's worlds (#821, fh2ffworld.py): the imports, the imported
+    worlds with their sizes, Remove. They share the circuits' store and the Play page's picker."""
+    TITLE = f"Forza Horizon 2 worlds ({EXPERIMENTAL_TAG.lower()})"
+    INTRO = ("Free roam in the worlds of Forza Horizon 2 (Xbox 360) and Forza Horizon 2 Presents Fast & "
+             "Furious (Xbox 360), each from a folder with the files of your own copy. A world is converted "
+             "on this PC. Then pick it on the Play page before you press Play: FH1's Colorado stays the "
+             "default.")
+    WARNING = fh2ffworld.EXPERIMENTAL
+    COLUMNS = ["World", "Size", "Imported"]
+    THING = "world"
+
+    def _mine(self, info) -> bool:
+        return info.get("kind") in fh2ffworld.KINDS
+
+    def _import_buttons(self) -> list:
+        self.ff_button = QPushButton("Import Fast && Furious…")   # a button's single & is a shortcut mark, not shown
+        self.ff_button.setToolTip("Free roam in Forza Horizon 2 Presents Fast & Furious's world, from your own "
+                                  "copy's files (experimental). " + fh2ffworld.EXPERIMENTAL)
+        self.ff_button.clicked.connect(self._import_ff)
+        self.fh2_button = QPushButton("Import Forza Horizon 2…")
+        self.fh2_button.setToolTip("Free roam in Forza Horizon 2's whole world, from your own copy's files "
+                                   "(experimental). " + fh2ffworld.EXPERIMENTAL)
+        self.fh2_button.clicked.connect(self._import_fh2)
+        return [self.ff_button, self.fh2_button]
+
     def _import_ff(self):
         """Fast & Furious's world (fh2ffworld.py): its files' folder, then FH2's (optional)."""
         from PySide6.QtWidgets import QFileDialog
@@ -338,14 +373,6 @@ class Fm4TracksCard(QWidget):
         self._start(job, "import Forza Horizon 2", "Converting Forza Horizon 2's world (about 5 minutes)… An "
                     "earlier import stays until the new one is complete.", self._build_done)
 
-    def _build_done(self, ok, message):
-        self._end()
-        self._drop_work()
-        self.refresh()
-        self.changed.emit()
-        self.message.setText(message)
-
-
 class TrackPicker(QWidget):
     """Play page: where Play starts. Shown only once an FM4 circuit is imported."""
 
@@ -360,8 +387,8 @@ class TrackPicker(QWidget):
         row.addWidget(QLabel("Drive in"))
         self.combo = QComboBox()
         self.combo.setAccessibleName("Where Play starts")
-        self.combo.setToolTip("FH1's own Colorado, or a Forza Motorsport 4 circuit you imported "
-                              "(Mods > Mods > Forza Motorsport 4 tracks).")
+        self.combo.setToolTip("FH1's own Colorado, or a Forza Motorsport 4 circuit or a Forza Horizon 2 world "
+                              "you imported (Mods > Mods).")
         self.combo.currentIndexChanged.connect(self._chosen)
         row.addWidget(self.combo, 1)
         lay.addLayout(row)
@@ -384,7 +411,14 @@ class TrackPicker(QWidget):
             self.combo.setCurrentIndex(max(0, self.combo.findData(current)))
         self._filling = False
         self.setVisible(len(items) > 1)
-        self.note.setVisible(bool(current))
+        self._note(current)
+
+    def _note(self, key):
+        """The chosen place's own note: a circuit's or a world's."""
+        info = fm4tracks.find(self.cfg, key) if key else None
+        world = bool(info) and info.get("kind") in fh2ffworld.KINDS
+        self.note.setText(fh2ffworld.EXPERIMENTAL_SHORT if world else fm4tracks.EXPERIMENTAL_SHORT)
+        self.note.setVisible(bool(key))
 
     def _chosen(self, _index):
         if self._filling:
@@ -394,7 +428,7 @@ class TrackPicker(QWidget):
             fm4tracks.select(self.cfg, key)
         except fm4tracks.Fm4Error:
             key = ""
-        self.note.setVisible(bool(key))
+        self._note(key)
 
 
 class Fm4LapsPage(QWidget):
