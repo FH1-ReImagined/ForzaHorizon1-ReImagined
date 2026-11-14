@@ -43,7 +43,8 @@ no switch.
 
 - Positions sent to other players were not looked at. A wide world is for players who all
   run it.
-- ±16,384 m is the new limit. FH2's roads reach 14.8 km east.
+- ±16,384 m is the new limit. FH2's roads reach 14.8 km east, inside it; its zones end at
+  10.85 km, and nothing past them was driven.
 
 ## Checking the list
 
