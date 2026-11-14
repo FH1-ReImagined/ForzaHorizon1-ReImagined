@@ -13,6 +13,7 @@ for f in bin/rexglue lib/librexgpu-xenos.so lib/librexruntime.so; do
     [ -f "$OVERLAY/$f" ] || { echo "missing $OVERLAY/$f (run tools/build_rexglue_sdk.sh)" >&2; exit 1; }
 done
 files=(bin/rexglue lib/librexgpu-xenos.so lib/librexruntime.so)
+[ -f "$OVERLAY/lib/fh1-native-scene.json" ] && files+=(lib/fh1-native-scene.json)
 [ -f "$OVERLAY/lib/libopenxr_loader.so.1" ] && files+=(lib/libopenxr_loader.so.1)  # VR (docs/vr.md)
 # ReIGlue's CMake helpers (the code model of the game's code), over the nightly's
 [ -f "$OVERLAY/lib/cmake/rexglue/rexglue_helpers.cmake" ] && files+=(lib/cmake/rexglue/rexglue_helpers.cmake)

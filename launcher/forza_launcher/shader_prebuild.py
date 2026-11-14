@@ -32,7 +32,8 @@ PACK_SETTING = "vulkan_shader_pack"
 PACK_LINE = "Vulkan shader pack: wrote "
 # Arguments that choose which pipeline stores the game uses (and so what a prebuild built).
 STORE_ARGS = ("--gpu_backend", "--render_target_path_vulkan", "--fh1_upscaler",
-              "--fh1_scene_720p_native_hud", "--fh1_native_scene_scale", "--fh1_output_width",
+              "--fh1_scene_720p_native_hud", "--fh1_native_scene_scale",
+              "--fh1_native_scene_width", "--fh1_native_scene_height", "--fh1_output_width",
               "--fh1_output_height", "--resolution_scale", "--draw_resolution_scale_x",
               "--draw_resolution_scale_y")
 

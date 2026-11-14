@@ -242,6 +242,25 @@ class OfferAgainTests(unittest.TestCase):
         plan = plan_in(self.tmp, f"--cache_root={other}")
         self.assertEqual(shader_prebuild.cache_root(plan), other)
 
+    def test_native_scene_size_changes_prebuild_store(self):
+        output = ("--fh1_output_width=1920", "--fh1_output_height=1080")
+        default = plan_in(self.tmp, *output)
+        base_key = shader_prebuild.store_key(default)
+        self.assertEqual(base_key, {"fh1_output_width": "1920", "fh1_output_height": "1080"})
+        first = plan_in(self.tmp, *output, "--fh1_native_scene_width=1920",
+                        "--fh1_native_scene_height=1080")
+        wider = plan_in(self.tmp, *output, "--fh1_native_scene_width=2560",
+                        "--fh1_native_scene_height=1080")
+        taller = plan_in(self.tmp, *output, "--fh1_native_scene_width=1920",
+                         "--fh1_native_scene_height=1440")
+        self.assertNotEqual(shader_prebuild.store_key(first), base_key)
+        self.assertNotEqual(shader_prebuild.store_key(first), shader_prebuild.store_key(wider))
+        self.assertNotEqual(shader_prebuild.store_key(first), shader_prebuild.store_key(taller))
+        self.stamp(first)
+        self.assertEqual(shader_prebuild.status(first)[0], "done")
+        self.assertEqual(shader_prebuild.status(wider)[0], "stale")
+        self.assertEqual(shader_prebuild.status(taller)[0], "stale")
+
     def test_states(self):
         plan = plan_in(self.tmp)
         self.assertEqual(shader_prebuild.status(plan)[0], "none")

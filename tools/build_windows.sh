@@ -122,6 +122,13 @@ for dll in "$PREFIX"/bin/*.dll; do
     esac
 done
 # Native NGX capability metadata and SDK notices must travel with the GPU DLL.
+if [ -f "$PREFIX/bin/fh1-native-scene.json" ] && [ -f "$PREFIX/bin/rexgpu-xenos.dll" ]; then
+    python3 "$ROOT/launcher/forza_launcher/native_scene_marker.py" \
+        "$PREFIX/bin/fh1-native-scene.json" "$PREFIX/bin/rexgpu-xenos.dll" \
+        "$DIST/rexgpu-xenos.dll" "$DIST/fh1-native-scene.json"
+else
+    rm -f "$DIST/fh1-native-scene.json"
+fi
 if [ -f "$PREFIX/bin/fh1-native-dlss.json" ]; then
     cp "$PREFIX/bin/fh1-native-dlss.json" "$DIST/"
     cp "$PREFIX/share/licenses/nvidia-dlss/LICENSE.txt" "$DIST/licenses/NVIDIA-DLSS.txt"

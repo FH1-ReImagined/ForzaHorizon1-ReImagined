@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog,
                                QMessageBox, QPushButton, QRadioButton, QScrollArea, QSlider, QStackedWidget,
                                QToolButton, QToolTip, QVBoxLayout, QWidget)
 
-from .. import (PUBLIC_SERVER, browser, display, dlss, fsr3, game, gamertag, gpu, power, regpu, schema, server_list,
+from .. import (PUBLIC_SERVER, browser, display, dlss, fsr3, game, gamertag, gpu, native_scene, power, regpu, schema, server_list,
                specs, vr)
 from ..config import Config, render_toml, validate_extras
 from . import file_dialogs, theme
@@ -617,6 +617,13 @@ class SettingsPage(QWidget):
         for key, dep in DEPENDS.items():
             states[key] = (bool(self.cfg.settings.get(dep)), "")
         scaling = self.cfg.settings.get("fh1_upscaler", "off") != "off" or self.cfg.settings.get("present_effect") == "fsr3"
+        install, _ = game.find_game(self.cfg)
+        saver_active = power.decide(self.cfg.effective_settings()).active
+        native_ok = (native_scene.available(self.cfg, install) and not scaling and not ultrawide and not saver_active and
+                     str(self.cfg.settings.get("scene_resolution", "720")) == "720" and
+                     self.cfg.settings.get("forza_antialiasing", "game") == "game")
+        for key in (native_scene.WIDTH, native_scene.HEIGHT):
+            states[key] = (native_ok, "Requires a compatible Vulkan renderer and the 720p guest scene with Game MSAA, without reconstruction, ultrawide or active battery saver. Play in VR uses the default scene size.")
         supported = self.cfg.settings.get("gpu_backend", "vulkan") == "vulkan" and not ultrawide
         aa_reason = ("Upscaling includes anti-aliasing; turn it off to choose a separate method." if scaling else
                      "Separate scene AA currently requires Vulkan and standard 16:9 output." if not supported else "")

@@ -11,7 +11,8 @@ from . import OLD_PUBLIC_SERVERS, PUBLIC_SERVER, display, gpu, languages, paths,
 from .haptics.settings import DEFAULTS as HAPTICS_DEFAULTS, normalize as normalize_haptics
 
 # Settings of the launcher itself: not game cvars, never written to forza.toml.
-LAUNCHER_ONLY = ("share_shader_list", "coop_results", "challenges", "battery_saver", "game_language",
+LAUNCHER_ONLY = ("fh1_native_scene_width", "fh1_native_scene_height",
+                 "share_shader_list", "coop_results", "challenges", "battery_saver", "game_language",
                  "vr_mode", "vr_picture", "vr_seat_height_cm", "vr_swap_eyes",
                  "reimagined_loading_tips")
 ONLINE_MODES = ["public", "local", "custom", "offline"]
@@ -154,8 +155,20 @@ class Config:
             keep = 10
         self.d['save_manager'] = dict(automatic=prefs.get('automatic', True) is True, keep_automatic=keep)
         saved_tag = self.d["settings"].get("gamertag")
+        # Unlike the ordinary bounded controls, an invalid custom dimension must
+        # not silently become a different, valid rendering size.
+        native_keys = ("fh1_native_scene_width", "fh1_native_scene_height")
+        native_values = [self.d["settings"].get(k, 0) for k in native_keys]
+        native_invalid = any(isinstance(v, bool) or not isinstance(v, int) or not 0 <= v <= limit
+                             for v, limit in zip(native_values, (schema.NATIVE_SCENE_MAX_WIDTH,
+                                                                schema.NATIVE_SCENE_MAX_HEIGHT)))
         for key, setting in schema.BY_KEY.items():
             self.d["settings"][key] = schema.coerce(setting, self.d["settings"].get(key))
+        if native_invalid:
+            for key in native_keys:
+                self.d["settings"][key] = 0
+            self.notices.append("Invalid custom scene dimensions were reset to default; set both again "
+                                "within the width and height limits shown in Settings.")
         self.gamertag_cleaned = None  # (saved, cleaned) when the saved Gamertag was not plain ASCII
         if isinstance(saved_tag, str) and saved_tag.strip() != self.d["settings"]["gamertag"]:
             self.gamertag_cleaned = (saved_tag, self.d["settings"]["gamertag"])
