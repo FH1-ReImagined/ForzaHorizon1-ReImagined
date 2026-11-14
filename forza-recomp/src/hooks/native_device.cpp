@@ -708,4 +708,19 @@ extern "C" REX_FUNC(sub_824933E0) {
   }
 }
 
+#else  // the disc build
+
+// The native renderer's hooks and records are Title Update 4's (docs/native-renderer.md). The
+// shadow filter's hooks (shadow_filter.cpp) are in both builds and open these scopes around the
+// mask's blurs and resolves: without a native device they do nothing, and no blur is native.
+namespace forza::native_device {
+
+bool ShadowMaskBlurNative(uint8_t*, bool) { return false; }
+BlurScope::BlurScope(uint32_t) : active_(false) {}
+BlurScope::~BlurScope() { (void)active_; }
+MaskResolveScope::MaskResolveScope() : active_(false) {}
+MaskResolveScope::~MaskResolveScope() { (void)active_; }
+
+}  // namespace forza::native_device
+
 #endif  // FORZA_TU4
