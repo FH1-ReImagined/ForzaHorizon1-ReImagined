@@ -74,6 +74,21 @@ class Version51(unittest.TestCase):
         r = fm4_pvs.Reader(placement_bytes([5, 6], ver=50))
         self.assertEqual(fm4_pvs.read_placement(r)["extra"][1], b"\5\6")
 
+    def test_a_placement_held_as_bytes_reads_as_the_dict(self):
+        for routes in (None, [5, 600]):
+            with self.subTest(routes=routes):
+                data = placement_bytes(routes) + b"next"
+                r = fm4_pvs.Reader(data)
+                held = ff.Placement(r, 51)
+                self.assertEqual(r.p, len(data) - 4)
+                self.assertEqual(held.raw, data[:-4])
+                want = fm4_pvs.read_placement(fm4_pvs.Reader(data), 51)
+                self.assertEqual(dict(held), want)
+                self.assertEqual(held["pos"], [10.0, 20.0, 30.0])
+                self.assertEqual(dict(held, pos=[1.0, 2.0, 3.0])["rot"], want["rot"])
+                with self.assertRaises(KeyError):
+                    held["none"]
+
 
 def pgeo(kind=3, routes=(2381,), name=b"crowd_test_2381\0", rest=b"REST" * 8, dyn=True):
     """A procedural geometry file with FH2's 76-byte dynamic data block, its name and a part after

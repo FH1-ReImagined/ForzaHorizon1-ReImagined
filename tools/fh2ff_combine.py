@@ -137,6 +137,9 @@ def write_cell_51(c, g2):
     real = fm4_pvs.write_placement
 
     def placement(_w, e):
+        if type(e) is ff.Placement and e.ver >= fm4_pvs.FH2_VERSION:
+            w.raw(e.raw)           # as it was read: the same bytes
+            return
         for v in e["lod"]:
             w.u16(v)
         w.floats(e["pos"])
@@ -1113,7 +1116,12 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
     A, B = C.A, C.B
     PA, PB = A.P, B.P
     rbA, rbB = os.path.join(C.roots[0], "Ribbon_00"), os.path.join(C.roots[1], "Ribbon_00")
-    bz = {zone_uid(info): c for info, c in B.zones()}            # FH2's zones, read once
+    # both worlds' zones, read once; the files' bytes they were read from are let go (ff.World
+    # keeps them to read the zones again: about a third of this step's memory)
+    az = {zone_uid(info): c for info, c in A.zones()}
+    bz = {zone_uid(info): c for info, c in B.zones()}
+    A._zone_data = B._zone_data = None
+    progress(f"zones read: {len(az)} and {len(bz)}")
     # the breakable objects: the added world's keys after the base's, in one file
     physics, key_shift = None, 0
     phys = [find_ci(r, "PhysicsDefinitions.bin") for r in C.roots]
@@ -1305,8 +1313,8 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
     # F&F's procedural geometry standing in the region (its own older docks' vegetation and
     # placed models: the file's bounds' centre) leaves F&F's zones round it
     region_pgeo = set()
-    for info, c in A.zones():
-        if az_cell.get(zone_uid(info)) in C.region:
+    for uid, c in az.items():
+        if az_cell.get(uid) in C.region:
             region_pgeo.update(f[3] for f in c["files"] + c.get("files2", []) if f[2] == PGEO)
     a_pgeo_drop = set()
     for e in region_pgeo:
@@ -1319,8 +1327,7 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
     # F&F's zones in the region are retired (no cell is theirs: written empty). The model and
     # procedural geometry files only they used are left out (with every cell of FH2's taken,
     # the two worlds' files are past the archive's 65,535), and F&F's entries numbered again.
-    az = {zone_uid(info): c for info, c in A.zones()}
-    retired = {uid for cell, uid in C.hexA.items() if cell in C.region}
+    retired ={uid for cell, uid in C.hexA.items() if cell in C.region}
     a_ref, a_pg_inst = set(), set()
     for uid, c in az.items():
         if uid in retired:
@@ -1636,12 +1643,10 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
              resources=B_RES + PB["resources"], rmodels=PA["rmodels"] + PB["rmodels"])
 
     # the archive
-    a_zone_files = {}
-    for info, c in A.zones():
-        base = info.filename.replace("\\", "/").split("/")[-1].lower()
-        a_zone_files[a_index[base]] = write_cell_51(a_zone(c, zone_uid(info)), PA["g2"])
-    b_zone_files = {a_index[f"__r00z{C.zone_new[uid]:05d}.pvsz"]: write_cell_51(b_zone(bz[uid]), PB["g2"])
-                    for uid in C.b_zones}
+    # (each zone is written as the archive comes to its file, not all held written)
+    a_zone_files = {a_index[info.filename.replace("\\", "/").split("/")[-1].lower()]: zone_uid(info)
+                    for info in A.zone_infos}
+    b_zone_files = {a_index[f"__r00z{C.zone_new[uid]:05d}.pvsz"]: uid for uid in C.b_zones}
     if len(names) > 0xFFFF:
         raise ValueError(f"{len(names)} files: the archive takes 65,535")
     rb = os.path.join(out_root, "Ribbon_00")
@@ -1655,7 +1660,8 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
                     wr.add_raw(info.filename, bi, B.zip.raw(bi))
                     continue
                 if k in a_zone_files:
-                    wr.add(info.filename, a_zone_files[k])
+                    uid = a_zone_files[k]
+                    wr.add(info.filename, write_cell_51(a_zone(az[uid], uid), PA["g2"]))
                 elif not a_whole and n.lower().endswith(".pgeo"):
                     d = A.zip.read(info)          # F&F's Models files: its instances renumbered
                     d2 = rewrite_pgeo(d, inst_map=a_inst)
@@ -1680,7 +1686,7 @@ def _combine(C, ff_disc, fh2_disc, out_disc, out_root):
             info = B.info_of[e]
             folder = info.filename.replace("\\", "/").rsplit("/", 1)[0] + "/" if "/" in info.filename.replace("\\", "/") else ""
             if k in b_zone_files:
-                wr.add(folder + n, b_zone_files[k])
+                wr.add(folder + n, write_cell_51(b_zone(bz[b_zone_files[k]]), PB["g2"]))
             elif n.lower().endswith(".bundle"):
                 wr.add(folder + n, rewrite_bundle(B.zip.read(info), own_map))
             elif B.names[e].lower().endswith(".fiz") and int(B.names[e].split(".")[0]) in retiled:

@@ -40,6 +40,7 @@ docs/fh2ff-world.md has what is converted and why, and what is not done yet.
 """
 import bisect
 import collections
+import collections.abc
 from contextlib import ExitStack
 import math
 import os
@@ -300,6 +301,32 @@ def closures(ff_xml, fh2_xml):
     return "".join(out), [(x, y, z) for _, _, _, x, y, z in gone]
 
 
+class Placement(collections.abc.Mapping):
+    """A zone's placement as fm4_pvs.read_placement's dict reads ("lod", "pos", "rot", "v",
+    "extra"), held as its bytes and read when asked. (As dicts, FH2's and F&F's zones together
+    took 3.8 GB: about 1 KB a placement, 53 bytes of file.)"""
+    __slots__ = ("raw", "ver")
+    KEYS = ("lod", "pos", "rot", "v", "extra")
+
+    def __init__(self, r, ver):
+        start = r.p
+        fm4_pvs.read_placement(r, ver)
+        self.raw, self.ver = bytes(r.d[start:r.p]), ver
+
+    def __getitem__(self, key):
+        if key == "pos":                           # after the three 16-bit lod numbers
+            return list(struct.unpack_from(">3f", self.raw, 6))
+        if key == "extra" and not self.raw[52]:    # the flag after lod, pos, rot (9 x 16 bits), v
+            return None
+        return fm4_pvs.read_placement(fm4_pvs.Reader(self.raw), self.ver)[key]
+
+    def __iter__(self):
+        return iter(self.KEYS)
+
+    def __len__(self):
+        return len(self.KEYS)
+
+
 class World:
     """F&F's world folder (media/tracks/Anthem), read with tools/fm4_pvs.py's FH1 reader (its
     layout is version 51)."""
@@ -373,7 +400,7 @@ class World:
             self._zone_data = [(i, self.zip.read(i)) for i in self.zone_infos]
         for info, data in self._zone_data:
             r = fm4_pvs.Reader(data)
-            c = fm4_pvs.read_cell(r, self.P["g2"], self.P["version"])
+            c = fm4_pvs.read_cell(r, self.P["g2"], self.P["version"], Placement)
             if r.p != len(data):
                 raise ValueError(f"{info.filename}: read {r.p} of {len(data)} bytes")
             if not len(c["instances"]) == len(c["drawn"]) == len(c["placements"]):

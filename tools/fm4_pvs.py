@@ -192,7 +192,9 @@ def read_rec16(r):  # sub_82CF0F48 with g1: stored as +12, +0, +4, +8
     return r.u32(), r.u32(), r.u32(), r.u32()
 
 
-def read_cell(r, g2, ver=FH1_VERSION):  # sub_82CF2168: a zone (.pvsz) or a cell of the PVS
+def read_cell(r, g2, ver=FH1_VERSION, placement=read_placement):
+    # sub_82CF2168: a zone (.pvsz) or a cell of the PVS. placement: what reads one placement
+    # (a world's every zone held as dicts is gigabytes: fh2ff_world keeps their bytes)
     c = {"instances": r.vec(r.u32)}
     if g2:
         c["models2"] = r.vec(r.u16)
@@ -204,7 +206,7 @@ def read_cell(r, g2, ver=FH1_VERSION):  # sub_82CF2168: a zone (.pvsz) or a cell
     c["texture_flags"] = r.vec(r.u8)
     c["files"] = r.vec(lambda: read_rec16(r))
     c["drawn"] = r.vec(r.u8)
-    c["placements"] = [read_placement(r, ver) for _ in range(r.u32())]
+    c["placements"] = [placement(r, ver) for _ in range(r.u32())]
     return c
 
 

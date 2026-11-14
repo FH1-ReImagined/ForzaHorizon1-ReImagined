@@ -172,8 +172,9 @@ it; `fh2ff_world.py build` then converts that folder as it converts either game'
 
 OUT_DISC must be new, empty or an earlier output (the tool writes `.fh2ff-combined` into it and
 replaces only a folder that has it), and not one of the game folders or in one. The combine step
-takes about 4.7 GB of memory at its peak, with either choice (both worlds' zones are held read);
-the build step after it about 1.2 GB.
+takes about 2.5 GB of memory at its peak, with either choice (both worlds' zones are held read,
+their placements as the files' bytes; held as dicts it was 4.7 GB); the build step after it
+about 0.7 GB.
 
 With `--all`, F&F's zone is used in every cell F&F has one (1,132): F&F's version of its whole
 area, with its extra trees and detail, in FH2's world (see "The whole area" below).
@@ -214,7 +215,8 @@ The lists differ from cell to cell (1,136 of F&F's 3,964 cells have a neighbour 
 list), so a cut cell's list is the ids its triangles select and their bits are set again for it;
 the largest such list is 10 ids of the 15 the bits allow. Free roam selects none of them.
 
-**What is merged.** In the 61 cells: F&F's collision cells and shadow squares; F&F's collision
+**What is merged.** In the 61 cells: F&F's collision cells and `.sh` squares (the world's light on a car by place: spherical
+harmonics, `CWorldSH`, which only the car's drawing reads; "shadow squares" in the tool); F&F's collision
 objects (`CollObjs.xml`; its road-closure fences there are left out, with their instances) in
 place of FH2's; F&F's roads that FH2 has not, joined to FH2's network where they meet it (each
 within a metre of an FH2 node). A road both worlds have stays FH2's, with its types and traffic:
@@ -309,9 +311,15 @@ archive member the same.
 - FH2's far east. FH1 streams the zones round a point it clamps near x = 8.2 km: a start at
   x 9.1 to 9.4 km (zones 2422 to 2535) had zone 2250 (x 8.25 km) made live and nothing else, the
   car held still with no collision under it. FH2's grid reaches x 10.85 km (about the last
-  sixth of it) and its roads 14.8 km. Either the clamp found in the game (17 floats of 8192 in
-  the TU4 image to look through) or the world moved 3 km west (every placement, the hex grid,
-  the collision cells and index, the road network, the ribbon's XML) is the next step.
+  sixth of it) and its roads 14.8 km. The limit is the game's camera position type: a 32-bit
+  fixed-point number with 18 fraction bits (`Vec4Fixed<18>`; the FH2 prototype's PDB has 17),
+  which holds ±8,192 m and saturates. It is converted at 83 places in about 60 functions (the
+  cameras, `CMultiCam::UpdateViewAudioData`, `CGame::Update`, the cars, the render thread). A
+  local build with all 83 at 17 bits (±16,384 m, 8 µm steps) streamed and drove the far east
+  and F&F's southern edge (z past -8,192 m, where the chase camera stops following); that is a
+  change to the game's code and is not in this tool.
+- Tunnels' roads draw dark between lit walls. Colorado lights its tunnels with 444 light-map
+  files (procedural geometry type 8); F&F and FH2 have none, and what lights theirs is not found.
 - F&F's places in FH2's world (its airfield, docks): one world or the other for now.
 - Races and arenas in a lobby, and AI racers on the converted lines (the data is in: see above);
   the routes' own names (FH1 shows the developer's); a route's branches (its main line only).
