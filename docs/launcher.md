@@ -896,6 +896,11 @@ Gameplay > Map > **Fast Travel Anywhere** (`fast_travel_anywhere`, on by default
 Update 4): fast travel from the map to any road for free, as the unlock once bought with Tokens
 did. No Tokens are given and the other Token offers stay; off brings the game's offer back
 ([playing.md](playing.md#running-the-game)).
+Gameplay > Map > **Lap guide on circuits** (`fm4_track_guide`, off by default, #877): on an
+imported Forza Motorsport 4 circuit the game's GPS leads round the lap, its green route kept
+about 1.5 km ahead of the car on the minimap and the map. While it is on the map has no Set
+Route on a circuit; Colorado is not changed. Restart after changing it
+([fm4-tracks.md](fm4-tracks.md#a-route-to-follow-optional)).
 Gameplay > Loading screens > **ReImagined loading tips** (`reimagined_loading_tips`, on by default):
 the loading screens' tips are about ReImagined (photos, tuning, texture packs, the radio, co-op)
 in place of the original game's, which point to services and offers that are gone. The text is

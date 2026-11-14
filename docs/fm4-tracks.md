@@ -79,6 +79,20 @@ Your laps are kept per circuit, also when you remove or import the circuit again
 laps** lists them: each circuit's best lap first, then the newest, with each sector's time. That
 tab appears once a circuit is imported.
 
+## A route to follow (optional)
+
+The launcher's **Gameplay > Map > Lap guide on circuits** (`fm4_track_guide`, off by default) makes
+the game's own GPS lead round the lap: its green route on the minimap and on the map, from your
+car along the circuit's road. The end of the route is kept about 1.5 km ahead of the car and
+moves on as you drive, so the distance under the minimap is the distance to that point (1.2 to
+1.5 km), not what is left of the lap. After a rewind or a reset the route leads on from where
+the car is. Restart the game after changing the setting.
+
+What it costs, and why you have to turn it on: while the guide is on, the game holds the GPS
+destination as locked on a circuit, so the map there has no **Set Route**. Fast travel and the
+rest of the map are as before, and Colorado is not changed. There is no driving line on the
+road itself.
+
 ## What works and what does not yet
 
 Works:
@@ -111,8 +125,9 @@ Not yet:
 - **Shadows of the circuit's own buildings and trees.** Your car's shadow is drawn on the
   circuit with the Vulkan renderer (with ReGPU, the D3D12 renderer, circuits have no shadows
   yet). A circuit imported with an earlier launcher has none: import it again.
-- **A route to follow.** The map shows the circuit's road and your car, with Colorado's
-  pins on it, and no background. There is no driving line and no GPS route round the lap yet.
+- **A driving line.** The map shows the circuit's road and your car, with Colorado's
+  pins on it, and no background. There is no driving line on the road; the game's GPS can lead
+  round the lap instead, if you turn it on ([a route to follow](#a-route-to-follow-optional)).
 - **1000 Club challenges.** They use Colorado's roads and locations. Play in Colorado to run them.
 - **Online play** on a circuit.
 

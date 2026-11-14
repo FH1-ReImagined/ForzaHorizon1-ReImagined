@@ -10,8 +10,12 @@
 //
 // Time attack's ghost: each lap keeps its trace (time and place every few metres along the
 // line); the best lap's is the ghost, and Delta() is the time to it at the car's place now.
+//
+// The lap guide (#877): Guide says where the game's sat-nav destination goes so that the game's
+// own route, the green line on the minimap, leads round the lap.
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -265,6 +269,7 @@ class Timer {
   const std::vector<double>& best_splits() const { return best_splits_; }
   const std::vector<double>& last_splits() const { return last_splits_; }
   float along() const { return s_; }
+  bool on_line() const { return found_; }  // the car was on the line at the last update
 
  private:
   Event End(const char* why) {
@@ -288,6 +293,85 @@ class Timer {
   size_t next_split_ = 0;
   std::vector<double> splits_, best_splits_, last_splits_;
   Trace trace_, ghost_;
+};
+
+// The lap guide: the game's sat-nav destination, kept ahead of the car along the line. The
+// game plans the shorter way to it over the circuit's road, a ring, so the destination stays
+// kAhead metres ahead (0.4 of a lap shorter than that would be more than half way round) and
+// is set again when the car has come kEvery metres nearer. It is also set again when the car
+// is no longer that far behind it (driven backwards, a rewind, a reset): the route leads on
+// from where the car is.
+//
+// The game makes the destination the road node nearest the place it is given. Where the lap
+// passes over or under itself (Suzuka's bridge: the two roads 6 m apart in height, a road's
+// nodes 20 m apart) that can be the other road's node, and the route would lead the shorter
+// way to it: back the way the car came. So a point with another stretch of the lap within
+// kClear metres on the plan is never the destination: the next point clear of it is.
+class Guide {
+ public:
+  static constexpr float kAhead = 1500.0f;
+  static constexpr float kEvery = 300.0f;
+  static constexpr float kClear = 20.0f;   // metres on the plan to another stretch of the lap
+  static constexpr float kApart = 150.0f;  // metres along the lap from which it is another stretch
+
+  explicit Guide(const Line& line) : line_(line), crossing_(line.points.size(), false) {
+    const size_t n = line.points.size();
+    if (n < 2 || !(line.total > 0) || line.along.size() != n) return;
+    // compared with every few metres of the line, not every point: once, when the circuit loads
+    const size_t step = std::max<size_t>(1, size_t(0.25f * kClear * float(n) / line.total));
+    for (size_t i = 0; i < n; ++i) {
+      for (size_t j = 0; j < n && !crossing_[i]; j += step) {
+        float apart = std::fabs(line.along[i] - line.along[j]);
+        apart = std::min(apart, line.total - apart);
+        if (apart < kApart) continue;
+        const float dx = line.points[i][0] - line.points[j][0], dz = line.points[i][2] - line.points[j][2];
+        crossing_[i] = dx * dx + dz * dz < kClear * kClear;
+      }
+    }
+  }
+
+  float ahead() const { return std::min(kAhead, 0.4f * line_.total); }
+  float every() const { return std::min(kEvery, 0.5f * ahead()); }
+  // The line's point `index` has another stretch of the lap over, under or right beside it.
+  bool crossing(size_t index) const { return index < crossing_.size() && crossing_[index]; }
+
+  // The car is `along` metres round the line: the line's point to make the destination now,
+  // or -1 while the one set still leads.
+  int Next(float along) const {
+    const size_t n = line_.points.size();
+    if (n < 2 || !(line_.total > 0) || !(along >= 0)) return -1;
+    if (set_) {
+      float left = target_ - along;  // metres on to the destination, the way the lap runs
+      if (left < 0) left += line_.total;
+      if (left > ahead() - every() && left < ahead() + every()) return -1;
+    }
+    const float want = std::fmod(along + ahead(), line_.total);
+    const auto it = std::lower_bound(line_.along.begin(), line_.along.end(), want);
+    const size_t first = it == line_.along.end() ? 0 : size_t(it - line_.along.begin());
+    // on to the next point clear of a crossing, within half a step (else the point as it is)
+    size_t at = first;
+    for (float gone = 0; crossing_[at] && gone < 0.5f * every();) {
+      const size_t next = (at + 1) % n;
+      gone += next ? line_.along[next] - line_.along[at] : line_.total - line_.along[at];
+      at = next;
+    }
+    return int(crossing_[at] ? first : at);
+  }
+  // The game took the line's point `index` as its destination.
+  void Set(int index) {
+    if (index < 0 || size_t(index) >= line_.along.size()) return;
+    set_ = true;
+    target_ = line_.along[size_t(index)];
+  }
+  // The destination is gone (the guide was turned off, the game dropped it).
+  void Clear() { set_ = false; }
+  bool set() const { return set_; }
+
+ private:
+  const Line& line_;
+  std::vector<bool> crossing_;
+  bool set_ = false;
+  float target_ = 0;
 };
 
 }  // namespace forza::fm4_lap

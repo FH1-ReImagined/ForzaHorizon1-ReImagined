@@ -42,6 +42,6 @@ extern "C" REX_FUNC(sub_823E40D8) {
   f.rewinding = std::bit_cast<float>(std::byteswap(scale)) < 0.0f;
   f.stepped = g_substeps.load(std::memory_order_relaxed) != substeps;
   forza::telemetry::Player().Frame(forza::telemetry::DrivingNowMs(), f);
-  forza::fm4_lap::WorldFrame(base, f.loaded && !f.paused, f.rewinding);  // an FM4 circuit's lap timer
+  forza::fm4_lap::WorldFrame(ctx, base, f.loaded && !f.paused, f.rewinding);  // an FM4 circuit's lap timer and guide
   forza::discord::WorldFrame(ctx, base);
 }
