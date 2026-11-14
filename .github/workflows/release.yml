@@ -274,11 +274,12 @@ jobs:
         run: |
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/shadow_filter_test.cpp -o "$RUNNER_TEMP/shadow-filter-test"
           "$RUNNER_TEMP/shadow-filter-test"
-      - if: runner.os == 'Linux'
-        name: FM4 circuits' streamed texture data beyond the game's heap (#824)
+      - name: FM4 circuits' streamed texture data beyond the game's heap (#824)
+        shell: bash
         run: |
-          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/fm4_stream_textures_test.cpp -o "$RUNNER_TEMP/fm4-stream-textures-test"
-          "$RUNNER_TEMP/fm4-stream-textures-test"
+          cmake -S forza-recomp/tests/fm4-stream-textures -B "$RUNNER_TEMP/fm4-stream-textures" -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$RUNNER_TEMP/fm4-stream-textures" --config Release --parallel 2
+          ctest --test-dir "$RUNNER_TEMP/fm4-stream-textures" -C Release --output-on-failure
       - if: runner.os == 'Linux'
         name: Native renderer shadow mode records
         run: |

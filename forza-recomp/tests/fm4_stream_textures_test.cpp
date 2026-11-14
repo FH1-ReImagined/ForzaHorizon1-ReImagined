@@ -3,6 +3,7 @@
 // Build from the repository root:
 //   g++ -std=c++20 -Wall -Wextra -Werror -Iforza-recomp/src forza-recomp/tests/fm4_stream_textures_test.cpp
 //       -o fm4-stream-textures-test && ./fm4-stream-textures-test
+// or with CMake, as CI does on Linux and Windows: forza-recomp/tests/fm4-stream-textures.
 #include "hooks/fm4_stream_textures.h"
 
 #include <cstdio>
@@ -59,6 +60,36 @@ int main() {
   Check(arena.Give(b, 5000) && arena.Give(c, 5000), "two neighbours given back");
   Check(arena.Take(12288, 5000 + st::kReuseDelayMs) == b, "one block where the two were");
 
+  // A free run that is too short is passed over, not cut into the block after it.
+  st::Arena gaps;
+  gaps.AddChunk(kBase, 65536);
+  const uint32_t g0 = gaps.Take(8192, 0), g1 = gaps.Take(4096, 0), g2 = gaps.Take(16384, 0);
+  Check(g0 == kBase && g1 == kBase + 8192 && g2 == kBase + 12288, "three blocks in a row");
+  Check(gaps.Give(g0, 0), "the first one given back: a free run of two pages before a held block");
+  Check(gaps.Take(12288, st::kReuseDelayMs) == kBase + 28672, "three pages do not fit there: after the last block");
+  Check(gaps.Take(8192, st::kReuseDelayMs) == kBase, "two pages do");
+
+  // A size so near 4 GB that rounding it up to pages would wrap is refused, not booked as a
+  // block of nothing at an address the next request gets too.
+  st::Arena wide;
+  wide.AddChunk(kBase, kMB);
+  Check(wide.Take(0xFFFFF001u, 0) == 0 && wide.Take(0xFFFFFFFFu, 0) == 0, "no block of nearly 4 GB");
+  Check(wide.Take(0xFFFFF000u, 0) == 0 && wide.blocks() == 0, "nor of the last size that rounds");
+  Check(wide.Take(4096, 0) == kBase && wide.blocks() == 1 && wide.held() == 4096, "the chunk is untouched");
+
+  // The guest's heap with no room for a chunk: not asked again for a second, said once.
+  st::Arena asking;
+  Check(asking.MayAddChunk(0), "no chunk yet: ask");
+  Check(asking.ChunkRefused(10000), "the first refusal is the one to log");
+  Check(!asking.MayAddChunk(10000) && !asking.MayAddChunk(10000 + st::kChunkRetryMs - 1), "not again within the second");
+  Check(asking.MayAddChunk(10000 + st::kChunkRetryMs), "then again");
+  Check(!asking.ChunkRefused(11000) && !asking.MayAddChunk(11500) && asking.MayAddChunk(12000),
+        "refused again: another second, nothing more to log");
+  asking.AddChunk(kBase, 8192);
+  Check(asking.ChunkRefused(20000), "after a chunk did come, a refusal is news again");
+  for (uint32_t i = 1; i < st::kMaxChunks; ++i) asking.AddChunk(kBase + i * 0x100000, 8192);
+  Check(asking.chunks() == st::kMaxChunks && !asking.MayAddChunk(1000000), "never more than kMaxChunks");
+
   // A full arena gives nothing, and the allocation fails as it did; another chunk helps.
   st::Arena small;
   small.AddChunk(kBase, 16384);
@@ -74,23 +105,31 @@ int main() {
   joined.AddChunk(kBase + 8192, 8192);
   Check(joined.Take(16384, 0) == kBase, "a block across two chunks that touch");
 
-  // Many textures coming and going: nothing lost, nothing handed out twice.
+  // Many textures coming and going in no order (a fixed pseudo-random one): nothing lost, and
+  // no block ever shares a byte with another one in use or lies outside the chunk.
   st::Arena busy;
-  busy.AddChunk(kBase, 4 * kMB);
-  uint32_t held[64] = {};
+  busy.AddChunk(kBase, 8 * kMB);
+  uint32_t held[64] = {}, size[64] = {};
   uint64_t now = 0;
-  for (int round = 0; round < 2000; ++round) {
-    const int k = round * 37 % 64;
-    now += 50;
+  uint32_t seed = 824;
+  const auto next = [&seed] { return (seed = seed * 1664525u + 1013904223u) >> 8; };
+  for (int round = 0; round < 20000; ++round) {
+    const int k = int(next() % 64);
+    now += next() % 120;
     if (held[k]) {
       Check(busy.Give(held[k], now), "a held block is given back");
       held[k] = 0;
     } else {
-      const uint32_t bytes = 4096u * (1 + round % 23);
+      // sizes that are not whole pages too: a block is its size rounded up
+      const uint32_t bytes = 4096u * (1 + next() % 23) - (next() % 3 ? 0 : 1234);
       held[k] = busy.Take(bytes, now);
-      Check(held[k] != 0, "room in a 4 MB chunk for 64 blocks of up to 92 KB");
+      size[k] = st::Rounded(bytes);
+      Check(held[k] != 0, "room in an 8 MB chunk for 64 blocks of up to 92 KB");
+      Check(held[k] % st::kPage == 0 && held[k] >= kBase && held[k] - kBase <= 8 * kMB - size[k],
+            "a block is whole pages inside the chunk");
       for (int j = 0; j < 64; ++j)
-        Check(j == k || !held[j] || held[j] != held[k], "no address handed out twice");
+        Check(j == k || !held[j] || held[j] + size[j] <= held[k] || held[k] + size[k] <= held[j],
+              "no two blocks in use overlap");
     }
   }
   uint64_t in_use = 0;
@@ -100,7 +139,7 @@ int main() {
   for (uint32_t& address : held)
     if (address) Check(busy.Give(address, now), "all given back");
   Check(busy.blocks() == 0 && busy.held() == 0, "nothing held");
-  Check(busy.Take(4 * kMB, now + st::kReuseDelayMs) == kBase, "and the whole chunk is one free run again");
+  Check(busy.Take(8 * kMB, now + st::kReuseDelayMs) == kBase, "and the whole chunk is one free run again");
 
   std::puts("fm4_stream_textures_test: ok");
   return 0;

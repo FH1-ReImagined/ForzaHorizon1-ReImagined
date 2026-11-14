@@ -36,6 +36,7 @@
 
 #include <rex/logging.h>
 #include <rex/ppc/context.h>
+#include <rex/thread/mutex.h>
 
 #include <algorithm>
 #include <cmath>
@@ -1993,17 +1994,27 @@ extern "C" REX_FUNC(sub_825CB048) {
 //
 // On a converted track a failed allocation of that caller comes from an arena of the hook's
 // own instead (fm4_stream_textures.h): 8 MB chunks of the guest's 4 KB-page physical heap,
-// taken as they are needed, 64 MB at most, and kept; the game's free of a pointer
-// (sub_82423490: r4 the pointer) gives a block back to the arena, which does not hand it out
-// again for two seconds. A first attempt allocated each block from the guest's heap and
-// released it there, so the same pages were taken again at once: after a minute of driving
-// the road and the scenery showed other textures' texels, or none (opaque slabs where a
-// billboard's cut-out should be). The emulated GPU reads a texture's memory later than the
-// game's thread lets it go, and keeps its own copy by address; with memory that stays the
-// arena's and rests before it is used again, the 28 spots of a drive on Le Mans and on Suzuka
-// drew right. Which of the two it takes was not separated. When the arena is full the
-// allocation fails as it did and the loader tries again. FORZA_FM4_TEX_FALLBACK=0 turns this
-// off too.
+// taken as they are needed, 64 MB at most, and kept for the session; the game's free of a
+// pointer (sub_82423490: r4 the pointer) gives a block back to the arena, which does not hand
+// it out again for two seconds. When the arena is full, or the guest's heap has no chunk left
+// to give (asked again a second later, not on every load), the allocation fails as it did
+// and the loader tries again. FORZA_FM4_TEX_FALLBACK=0 turns this off too.
+//
+// Why an arena that keeps its memory: a first attempt allocated each block from the guest's
+// heap and released it there, and after a minute of driving the road and the scenery showed
+// other textures' texels, or none (opaque slabs where a billboard's cut-out should be). The
+// cause is in the SDK's write watch. The emulated GPU keeps its own copy of guest memory by
+// address and is told of a write only on pages it watches. A release tells it; a frame still
+// queued then reads the released pages once more, the GPU side marks its copy up to date
+// again, and no watch can be set on pages that are not allocated. The pages are allocated
+// again, another texture's file is read into them, nobody is told, and the GPU draws the old
+// bytes from then on. Memory that stays allocated does not have this: every write to it is
+// reported, also when a block is used again at once. The two seconds are only for the frames
+// already queued, which still draw the texture that was let go.
+//
+// One way in is left and closed here: a new chunk can cover pages the model buffers' fallback
+// above released (it still releases each block, to this same heap) and that were read once
+// more since. So the GPU side is made to drop its copy of every chunk as it is taken.
 namespace {
 std::mutex stream_tex_mu;
 forza::fm4_stream_textures::Arena stream_tex;
@@ -2026,17 +2037,32 @@ extern "C" REX_FUNC(sub_82423000) {
   __imp__sub_82423000(ctx, base);
   if (ctx.r3.u32 || !st::IsTextureLoad(lr) || !size || size > st::kChunkBytes || !TexFallbackOn()) return;
   std::lock_guard<std::mutex> lock(stream_tex_mu);
-  uint32_t addr = stream_tex.Take(size, StreamTexNowMs());
-  if (!addr && stream_tex.chunks() < st::kMaxChunks) {
-    auto* heap = REX_KERNEL_MEMORY()->LookupHeapByType(true, 4096);
+  const uint64_t now = StreamTexNowMs();
+  uint32_t addr = stream_tex.Take(size, now);
+  if (!addr && stream_tex.MayAddChunk(now)) {
+    auto* memory = REX_KERNEL_MEMORY();
+    auto* heap = memory->LookupHeapByType(true, 4096);
     uint32_t chunk = 0;
     if (heap && heap->Alloc(st::kChunkBytes, 4096, rex::memory::kMemoryAllocationReserve | rex::memory::kMemoryAllocationCommit,
                             rex::memory::kMemoryProtectRead | rex::memory::kMemoryProtectWrite, true, &chunk) && chunk) {
       stream_tex.AddChunk(chunk, st::kChunkBytes);
       stream_tex_used = true;
+      // The GPU side may hold some of these pages as up to date from a read after an earlier
+      // release (see above): watch the chunk and report it written once, so its copy is
+      // dropped and what is loaded here is uploaded. Both calls take the SDK's global lock
+      // under this hook's own, as the model buffers' release above does under its lock; the
+      // game never calls this allocator or its free with the global lock held (TU4 has one
+      // interrupts-off section that takes it, with no call inside).
+      memory->EnablePhysicalMemoryAccessCallbacks(memory->GetPhysicalAddress(chunk), st::kChunkBytes, true, false);
+      memory->TriggerPhysicalMemoryCallbacks(rex::thread::global_critical_region::AcquireDirect(), chunk,
+                                             st::kChunkBytes, true, true, true);
       REXLOG_INFO("FM4TRACK: streamed track textures' data beyond the game's heap: {} MB taken ({} MB in use)",
                   stream_tex.capacity() >> 20, stream_tex.held() >> 20);
-      addr = stream_tex.Take(size, StreamTexNowMs());
+      addr = stream_tex.Take(size, now);
+    } else if (stream_tex.ChunkRefused(now)) {
+      REXLOG_WARN("FM4TRACK: no {} MB left in one piece in the guest's memory for streamed track textures' data "
+                  "({} MB taken, {} MB in use): their loads fail as before until there is; asked again once a second",
+                  st::kChunkBytes >> 20, stream_tex.capacity() >> 20, stream_tex.held() >> 20);
     }
   }
   if (addr) ctx.r3.u64 = addr;  // else: no room: the load fails as before and is tried again
