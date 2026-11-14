@@ -70,7 +70,7 @@ Converter test switches: `FM4_PVS_FLAGS`, `FM4_PVS_FLAGMASK`, `FM4_PVS_SHADERS`,
 `FM4_PVS_PROJLM`, `FM4_PVS_SKY`, `FM4_PVS_SHADER_PATCHES`, `FM4_PVS_LIGHTMAPS`, `FM4_PVS_HEX`, `FM4_PVS_ZONE_REACH`,
 `FM4_PVS_EXTENT`, `FM4_PVS_VISIBLE`, `FM4_PVS_VISIBLE_NEAR`, `FM4_PVS_VISIBLE_CELLS`, `FM4_PVS_VISIBLE_SIZE`,
 `FM4_PVS_TOD`, `FM4_PVS_TRACKSETTINGS`, `FM4_PVS_TRACKSETTINGS_FM4`, `FM4_PVS_DECALS`,
-`FM4_PVS_DECAL_BLENDED`, `FM4_PVS_DECAL_DEPTH`, `FM4_SHADERS_LIGHTMAP`,
+`FM4_PVS_DECAL_BLENDED`, `FM4_PVS_DECAL_DEPTH`, `FM4_PVS_PREPASS_SCISSOR`, `FM4_SHADERS_LIGHTMAP`,
 `FM4_SHADERS_LIGHTMAP_COLOURS`, `FM4_SHADERS_SHADOW_COLOUR`, `FM4_SHADERS_SHADOW_CLIP`, `FM4_SHADERS_TINTS`, `FM4_PVS_PASS_GROUPS`, `FM4_PVS_PASS_GROUP_DROP`, `FM4_PVS_GROUND`, `FM4_PVS_GROUND_SCALE`, `FM4_PVS_GROUND_BELOW`, `FM4_PVS_GROUND_MODEL`, `FM4_PVS_GROUND_LAYER`, `FM4_PVS_GROUND_AT`, `FM4_PVS_STREAM_MARGIN`,
 `FM4_COL_NORMALS`, `FM4_COL_WALL`, `FM4_COL_EDGES`, `FM4_COL_REMAP`, `FM4_COL_GRID`,
 `FM4_COL_SURFACE`, `FM4_COL_KEEP_DEGENERATE`; `FM4_DISC` (FM4's disc folder) for the
@@ -1491,6 +1491,54 @@ same with them as with FM4's 0, so the default stays 0 (the walls' reason for 0 
 Not looked at: FH1's SlowGrass has friction 0.30 where FM4's has 0.75 (Le Mans and Suzuka
 have some beside the road), and FH1's Grass, Dirt, Gravel and Quicksand are bumpier than
 FM4's. They are off the road and keep their names.
+
+## The car's shadow drawn again up the road (#827)
+
+Reported on Le Mans and Suzuka (resolution scale 2, FSR 3 Balanced, Ultra shadows): the car's
+shadow "all over the place", and stretches of the circuit in shadow that the sun should light.
+Both are one thing: a second copy of the car's shadow on the road ahead of the car. It showed
+at both grids and while driving, with those settings and the default ones. Two causes, each
+found in a frame capture at Suzuka's grid:
+
+- **FM4's depth pass left its scissor in FH1's depth pre-pass (the converter).** FH1 draws a
+  model's pass group 0 in its depth pre-pass: the main view's depth, which the sun's shadow mask
+  and the ambient occlusion are drawn from. Of FM4's models only the roads, the shoulders and
+  some road edges have a group 0 (154 of Suzuka's 1393 models, 474 of Le Mans's 5160), FM4's
+  own depth pass, and its command buffer ends by writing PA_SC_WINDOW_OFFSET and
+  PA_SC_WINDOW_SCISSOR_TL/BR (0x2080-0x2082: 0, 0 and 256 x 256) with no scissor fixup for the
+  game to fill. FH1 sets the scissor once for its pre-pass, so after the first road piece the
+  rest of the pre-pass and its resolve into the depth texture were cut to that corner: 39 of
+  the frame's 155 pre-pass draws had the 256 x 256 scissor, and the depth texture the mask
+  passes read equalled the frame's pre-pass in 32% of its pixels (the rest was the frame
+  before's scene depth). Colorado: 446 of 446 draws with the full scissor.
+  `tools/fm4_pvs.py` (`prepass_scissor`) makes that write NOPs, in every model with a group 0;
+  the buffer keeps its size. A model is left alone when its group has a scissor fixup, when
+  the write shares its packet with other registers, or when a patch place or a buffer fixup
+  lies in the packet (`tools/test_fm4_prepass.py`). After: 155 of 155 draws with the full
+  scissor, the depth texture equal to the pre-pass. `FM4_PVS_PREPASS_SCISSOR=0` leaves the
+  write. Circuits need importing again.
+- **The marked shadow fetch read the mask at the tile's position, not the frame's (ReIGlue
+  0900).** FH1 draws its 4x MSAA scene in three tiles of rows, each at the top of the same
+  render target with the viewport moved by the rows before it; the mask covers the frame. The
+  fetch sampled at the pixel's position in the render target, so every tile showed the same
+  rows of the mask and the car's shadow came out again one and two tiles further up the screen.
+  [sdk_patches.md](sdk_patches.md) has the fix.
+
+At Suzuka's grid the copy goes with the SDK's half alone; the converter's half alone does not
+remove it. With both, on Le Mans and Suzuka, at the grids and at 14 spots of a drive each (the
+report's settings and the default ones; at the grids also render scale 2 without an upscaler):
+no picture has the copy, and the shadow is under the car. Against the same view with the
+mask's shadow off (`FH1_FM4_SHADOW_FLOOR=1`), at Le Mans's grid the mask darkened 15.6% of the
+middle third of the picture before and 0.2% after (the bottom third, the car's own shadow:
+9.9% and 9.8%).
+
+What is left: the dark stretches of road, mostly under trees (Le Mans's Mulsanne at 4.6 to
+5.8 km, Suzuka at 1.5 and 3.9 km), are there before and after, and in a drive of each circuit
+with the mask's shadow off, where only the car's shadow is missing: they are FM4's own baked
+lighting, not the shadow mask. They were not compared with FM4 itself. The
+circuit's buildings and trees still cast no shadow of FH1's (see below). ReGPU and D3D12 have
+no marked fetch and draw no shadow on a circuit, as before; the converter's half was not run
+there.
 
 ## Open
 

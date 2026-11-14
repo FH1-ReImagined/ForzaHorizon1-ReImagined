@@ -853,3 +853,51 @@ The recorder thread, which writes the constants, is 4.1 % slower in free roam (t
 its stores now crosses the bus. So the setting stays off by default until the recorder writes fewer
 bytes (the fetch constants first, the largest kind). `tools/render_test.py check` with it on passed
 every scene.
+
+## ReIGlue 0900: the car's shadow on a converted circuit, once (#827)
+
+On converted Forza Motorsport 4 circuits the road, shoulder and kerb shaders take the car's
+shadow from FH1's screen-space sun shadow mask, through a fetch the converter marks (ReIGlue
+0440). The fetch sampled the mask at the pixel's position in the render target. FH1 draws its 4x
+MSAA scene in three tiles of rows (256, 256 and 208 at 720p), each at the top of the same render
+target with the guest viewport moved by the rows before it, while the mask covers the whole
+frame. So every tile showed the same rows of the mask, and the car's shadow was drawn again one
+and two tiles further up the screen, over road that is sunlit.
+
+0900 adds a system constant, `fh1_fm4_frame_origin`: how far the guest viewport starts before
+the render target's first pixel, in host pixels (`fh1::TileFrameOrigin`, tested in ReIGlue's
+`tests/fh1_screen_raster_test.cpp`). The marked fetch adds it to the pixel's position. It is zero
+for a viewport that starts in the target, and only a shader with a marked fetch reads it: FH1's
+own shaders have none, and D3D12 has no marked fetch at all.
+
+The other half of #827 is the converter's (FM4's depth pass left a 256 x 256 scissor in FH1's
+depth pre-pass; [festival_track_spike.md](festival_track_spike.md), "The car's shadow drawn
+again up the road"). With both, on Le Mans and Suzuka, at the grids and at 14 spots of a drive
+each, with the report's settings (resolution scale 2, FSR 3 Balanced, Ultra shadows) and the
+default ones: the copy of the shadow on the road ahead of the car is gone, and the shadow is
+under the car.
+
+Colorado with the pinned plugin (d253875) against 0900's, on Linux, RX 9060 XT (RADV):
+
+- 150 consecutive frames of the title sequence's fly-over from the start of the game: 114 of 149
+  are bit-identical between the two plugins. Two starts of the pinned plugin give 107 of 146. In
+  both comparisons the frames that differ are among the first 50 of a start, plus one later one.
+- `tools/render_test.py`, baselines recorded with the pinned plugin (2 runs), then checked with
+  0900's (2 runs) and the pinned one again (1 run); dssim, lower is closer:
+
+| Scene | Tolerance | Between the two baseline runs | Pinned again | 0900, run 1 | 0900, run 2 |
+| --- | --- | --- | --- | --- | --- |
+| title | 0.015 | 0.0000 | 0.0000 | 0.0035 | 0.0121 |
+| freeroam_midday | 0.005 | 0.0505 | 0.0019 | 0.0024 | 0.0125 |
+| freeroam_dawn | 0.010 | 0.0507 | 0.0382 | 0.0333 | 0.0276 |
+| cockpit | 0.003 | 0.0150 | 0.0022 | 0.0014 | 0.0027 |
+| photo_mode | 0.016 | 0.0792 | 0.0087 | 0.1162 | 0.0249 |
+| race_start | 0.008 | 0.0055 | 0.0041 | 0.0029 | 0.0038 |
+
+The free roam scenes were noisy in these runs (another game was running on the PC): the two
+baseline runs differ from each other by more than the tolerance in four scenes, and
+freeroam_dawn fails with the pinned plugin too. The pictures show the same lighting and shadows
+in every run. What differs is traffic (a car crosses photo mode's picture in 0900's run 1) and,
+in the title scene, which frame of the moving fly-over a shot caught (the frames themselves are
+bit-identical, above). The mean colour of the title, noon, cockpit and race start scenes differs
+by 0.3 of 255 or less between the plugins.

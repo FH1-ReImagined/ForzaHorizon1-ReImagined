@@ -126,7 +126,8 @@ Not yet:
 - **Choosing a car** on a circuit: you drive the car you last used in Colorado.
 - **Shadows of the circuit's own buildings and trees.** Your car's shadow is drawn on the
   circuit with the Vulkan renderer (with ReGPU, the D3D12 renderer, circuits have no shadows
-  yet). A circuit imported with an earlier launcher has none: import it again.
+  yet). A circuit imported with an earlier launcher has none, or draws the shadow a second time
+  on the road ahead of the car: import it again.
 - **A driving line.** The map shows the circuit's road and your car, with Colorado's
   pins on it, and no background. There is no driving line on the road; the game's GPS can lead
   round the lap instead, if you turn it on ([a route to follow](#a-route-to-follow-optional)).
