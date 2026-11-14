@@ -681,7 +681,10 @@ game's fixups. Counts, from the game's files on the test PC (2026-11-14) **[M]**
   the register set. The other 3,287 (depth pre-pass, the 256x256 passes, the one-pass scene)
   convert and agree. Six imported circuits together: 43,545 lists, 22,656 converted, 20,862
   `tile-block`, 27 `register`. FM4's lists also have no SCRATCH_REG6 marks, name their vertex and
-  index buffers in the buffer fixups only, and have all mask bits set in every pass.
+  index buffers in the buffer fixups only, and have all mask bits set in every pass. These
+  circuits were imported before the importer began to turn the window write at the end of their
+  depth pre-pass lists into padding (#827): that changes the 154 group 0 lists of this circuit, to
+  packets the converter takes.
 
 What the files settled for the next steps:
 
