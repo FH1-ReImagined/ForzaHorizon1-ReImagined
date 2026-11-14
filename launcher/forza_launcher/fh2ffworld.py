@@ -57,6 +57,10 @@ EXPERIMENTAL = ("Experimental. What works: free roam in Fast & Furious's world (
                 "offline, and your save is backed up first.")
 
 
+EXPERIMENTAL_SHORT = ("Experimental: free roam in the world, with traffic (no events of its own yet; FH1's "
+                      "sounds stand in). It plays offline, and your save is backed up first.")
+
+
 class Fh2ffError(fm4tracks.Fm4TrackError):
     pass
 
