@@ -265,6 +265,9 @@ class Ui(WorldBase):
         card = Fm4TracksCard(self.cfg, page)
         self.addCleanup(lambda: shiboken6.isValid(card) and shiboken6.delete(card))
         self.assertTrue(card.ff_button.isEnabled())
+        # a button shows "&&" as "&" (a single one is a shortcut mark and is not drawn)
+        self.assertEqual(card.ff_button.text().replace("&&", "&"), "Import Fast & Furious…")
+        self.assertNotRegex(card.ff_button.text(), r"(?<!&)&(?!&)")
         started = []
         card._start = lambda job, name, text, done: started.append(job)
         with mock.patch("PySide6.QtWidgets.QFileDialog.getExistingDirectory", return_value=str(self.t / "FF")),                 mock.patch.object(fh2ffworld, "build", return_value="done") as build:
