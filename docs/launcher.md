@@ -899,6 +899,19 @@ game's own table with each tip slot (a title entry and its tip entry, as the gam
 `ui/loadingdefs.xml` pairs them: 99 slots in Title Update 4) set to one of the tips in turn (the
 ids and order stay, so the game's own picking of a tip per loading screen is unchanged). It loads first, so a
 player's mod with its own `tips.str` wins; off: no mod, the original tips. Applies on the next launch.
+**Photo upload texts** (#875, no setting): the main server publishes a Photo Mode Big Shot on
+forza.dyotson.dev, and the game's five texts about that upload named ForzaMotorsport.net: the
+question before the photo is made, its loading screen, the question about replacing the one
+uploaded before, and the result and error dialogs (`IDS_Photo_ConfirmExport_Msg`,
+`IDS_Photo_BigShot_Msg`, `IDS_Photo_Upload_Confirm_Overwrite`, `IDS_BigShot_Upload_Success` and
+`IDS_BigShot_Upload_Failure` of `carflow.str`). A start that goes online (Online > Servers: the
+main server, a listed one or an address) builds the hidden mod `mods/.reimagined-upload-site`:
+each language's `stringtables/<lang>/carflow.str` is the game's own table with only the site's
+name replaced in those entries, so every language keeps its own wording. It loads first, so a
+player's mod with its own `carflow.str` wins, and it is rebuilt only when the game's tables
+change. With This PC or Offline nothing reaches the site and the game's text stays. The movie
+upload's texts and the storefront's (a photo saved at the normal size) are not changed
+(`launcher/forza_launcher/upload_site.py`).
 Gameplay > Startup > **Skip startup videos** (`skip_startup_movies`, off by default): the game
 starts straight at the title screen, without the Microsoft Studios, Dolby and Playground Games
 videos (about 45 s). The game boots as after a restart of itself; the festival and 1000 Club
