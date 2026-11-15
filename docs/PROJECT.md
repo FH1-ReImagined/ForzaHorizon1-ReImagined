@@ -162,8 +162,9 @@ Leaderboard screens, Windows and Steam Deck are not scripted: a hand run in the 
   where the first needed the overflow (the same 1,146,880 bytes with 61,139 of 62,464 KB in use, 170 ms after
   Get In Car; the menu drew as usual), and 15 changes (13 different cars) then the garage's Change
   Car in another session, where the first change needed it too (1,146,880 and 884,736 bytes with
-  61,448 KB in use). With the Native pause menu off (stock pause twice, driving) no request ever
-  reached the overflow. The garage's Car Select shows the same two cars' pictures garbled on
+  61,448 KB in use). With `FORZA_FIXED_GPU_OVERFLOW=0` the same build stopped at the first change
+  exactly as in the players' logs (guest 5, `lr=8242306C`, the same chain). With the Native pause
+  menu off (stock pause, driving) no request ever reached the overflow. The garage's Car Select shows the same two cars' pictures garbled on
   main (a build without the overflow), so that is not from this. With `=always` the arena
   reached its 64 MB in the first seconds (about 4,096 blocks), then gave out blocks again as they
   came back, the rest from the game's heap, and the world, the menus and My Cars' pictures drew
