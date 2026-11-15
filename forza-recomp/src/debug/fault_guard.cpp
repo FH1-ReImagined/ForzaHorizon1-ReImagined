@@ -18,9 +18,10 @@
 // parks the thread instead, so gdb can attach (gdb -p PID, then `thread apply all bt`).
 //
 // LogGuestThreads (called when the window closes) logs every guest thread's last call site
-// and call chain, so the log of a game that hangs without a fault shows where it waits; the
-// stall watchdog (src/debug/stall_watch.cpp) logs the same for the main loop and render
-// threads during a long frame.
+// and call chain, then the fibers no thread runs (a load waiting in its fiber, #771), so the
+// log of a game that hangs without a fault shows where it waits; the stall watchdog
+// (src/debug/stall_watch.cpp) logs the same for the main loop and render threads during a
+// long frame.
 
 #include "../platform/guest_memory.h"
 
@@ -282,20 +283,80 @@ std::string DescribeGuestThread(rex::system::XThread& thread) {
                      GuestChain(kernel->memory()->virtual_membase(), ctx->r1.u32, 16));
 }
 
+namespace {
+
+// The fibers no thread is running, with where each one stopped (#771). The game loads in a
+// fiber: a load that waits switches back to the main loop's fiber, and the thread list then
+// shows the main loop running (its last call is whatever the loading screen did last), not
+// what the load waits for. The SDK keeps each guest fiber's context (X_FIBER_CONTEXT,
+// rex/system/xthread.h) on a page of its own in the system heap (0x30000000-0x3FFFFFFF):
+// +0x04 stack_alloc_base, +0x08 stack_base, +0x0C stack_limit, +0x30 the r1 it was switched
+// out with (u64). A page whose words have that shape (a guest stack, r1 inside it) is listed
+// with the call chain of its saved stack; the fibers the threads are running now
+// (KTHREAD +0x164) are left out, the thread lines show them. A fiber that never ran still
+// has its first frame (stack top - 0x50) and is counted, not listed; so is a page whose saved
+// stack has no guest call chain (a fiber context left by a thread that has exited). A page
+// freed by DeleteFiber, or left by an exited thread, whose stack is still committed and still
+// holds a chain passes the shape check too: such a line is stale, so read the list as fibers
+// that may be waiting. It only reads guest memory.
+void LogWaitingFibers(const std::set<uint32_t>& running) {
+  auto* kernel = rex::system::kernel_state();
+  if (!kernel || !kernel->memory()) return;
+  uint8_t* base = kernel->memory()->virtual_membase();
+  int listed = 0, fresh = 0, stale = 0;
+  for (uint32_t page = 0x30000000; page < 0x40000000 && listed < 64; page += 0x1000) {
+    if (!GuestReadable(page) || !GuestReadable(page + 0x34)) continue;
+    const uint32_t alloc_base = Load32(forza::GuestPtr(base, page + 0x04));
+    const uint32_t stack_base = Load32(forza::GuestPtr(base, page + 0x08));
+    const uint32_t stack_limit = Load32(forza::GuestPtr(base, page + 0x0C));
+    const uint32_t sp_high = Load32(forza::GuestPtr(base, page + 0x30));
+    const uint32_t sp = Load32(forza::GuestPtr(base, page + 0x34));
+    if (stack_base < 0x70000000 || stack_base > 0x7F000000 || alloc_base < stack_base ||
+        alloc_base - stack_base > 0x100000 || stack_limit >= stack_base ||
+        stack_base - stack_limit > 0x1000000 || sp_high || sp < stack_limit || sp >= stack_base ||
+        (sp & 7) || running.count(page)) {
+      continue;
+    }
+    if (sp == stack_base - 0x50) {
+      ++fresh;
+      continue;
+    }
+    const std::string chain = GuestChain(base, sp, 16);
+    if (chain.empty()) {
+      ++stale;
+      continue;
+    }
+    ++listed;
+    REXLOG_INFO("  fiber {:08X} (not running) stack {:08X}-{:08X} sp {:08X} chain{}", page,
+                stack_limit, stack_base, sp, chain);
+  }
+  if (fresh) REXLOG_INFO("  {} more fiber(s) not started yet", fresh);
+  if (stale) REXLOG_INFO("  {} fiber page(s) with no call chain", stale);
+}
+
+}  // namespace
+
 // Where every guest thread is when the player closes the window (#76): a game that loads
 // forever logs nothing else, so this is what a hang report shows. One line per thread
-// (DescribeGuestThread).
+// (DescribeGuestThread), then the fibers no thread is running (LogWaitingFibers).
 void LogGuestThreads(const char* why) {
   auto* kernel = rex::system::kernel_state();
   if (!kernel || !kernel->object_table()) return;
   auto threads = kernel->object_table()->GetObjectsByType<rex::system::XThread>();
   REXLOG_INFO("FORZA: guest threads {}:", why);
   std::set<rex::system::XThread*> seen;  // a thread is listed once per handle
+  std::set<uint32_t> running;           // the fibers the threads run now
+  uint8_t* base = kernel->memory() ? kernel->memory()->virtual_membase() : nullptr;
   for (auto& thread : threads) {
     if (!thread || !thread->is_guest_thread() || !seen.insert(thread.get()).second) continue;
     const std::string line = DescribeGuestThread(*thread);
     if (!line.empty()) REXLOG_INFO("  {}", line);
+    const uint32_t kthread = thread->guest_object();
+    if (base && kthread && GuestReadable(kthread + 0x164)) {
+      if (const uint32_t fiber = Load32(forza::GuestPtr(base, kthread + 0x164))) running.insert(fiber);
+    }
   }
+  LogWaitingFibers(running);
 }
 
 void InstallFaultGuard() {
