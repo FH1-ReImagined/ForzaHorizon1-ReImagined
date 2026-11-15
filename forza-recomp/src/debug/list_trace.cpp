@@ -26,6 +26,12 @@
 // FH1_LIST_STATS=<file> (the plugin's report) turns it on; FH1_LIST_CHECK_EVERY=N checks the key of
 // a converted list on every Nth call only (default 1: every call).
 
+// Built only with FORZA_LIST_TRACE (CMakeLists.txt); the host checks (tools/cmake/*-host-check)
+// compile every source of src/, so the trace is compiled in full there too.
+#ifndef FORZA_LIST_TRACE
+#define FORZA_LIST_TRACE 1
+#endif
+
 #include "list_trace.h"
 
 #include "d3d_trace.h"
