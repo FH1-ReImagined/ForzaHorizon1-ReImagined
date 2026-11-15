@@ -156,7 +156,7 @@ struct NavigationLease {
   uint32_t manager = 0, destination = 0;
   uint8_t locked = 0;
 } navigation;
-bool SatNav(PPCContext& ctx, uint8_t* base, bool set, float x, float y, float z) {
+bool SatNav(PPCContext& ctx, uint8_t* base, bool set, float x, float y, float z, bool quiet = false) {
   const uint32_t root = Load32(forza::GuestPtr(base, kCarRoot));
   if (!Plausible(root)) return false;
   const uint32_t holder = Load32(forza::GuestPtr(base, root + 4));
@@ -202,8 +202,9 @@ bool SatNav(PPCContext& ctx, uint8_t* base, bool set, float x, float y, float z)
   *locked = accepted && set ? 1 : previous.locked;
   if (accepted) {
     navigation = set ? previous : NavigationLease{};
-    REXLOG_INFO("CHALLENGE: GPS {} (road node {:08X})",
-                set ? "route to the finish" : "previous route restored", node);
+    if (!quiet)
+      REXLOG_INFO("CHALLENGE: GPS {} (road node {:08X})",
+                  set ? "route to the finish" : "previous route restored", node);
   }
   return accepted;
 }
@@ -534,6 +535,17 @@ void LiveChallenge(const uint8_t* p, size_t n) {
     default:
       return;
   }
+}
+
+// The lap guide of an imported FM4 circuit (fm4_lap_timer.cpp): the sat-nav's destination
+// becomes the road node nearest (x, y, z), as a challenge's finish does (`lead`), or what it
+// was before the guide took it, unlocked again if it was (not `lead`: the guide was turned
+// off). Called from the world update, every few hundred metres of the lap; false while the
+// game has no road network or sat-nav yet. A circuit plays offline, so no challenge borrows
+// the sat-nav there.
+bool SatNavGuide(PPCContext& ctx, uint8_t* base, bool lead, float x, float y, float z) {
+  std::lock_guard<std::mutex> lock(mutex);
+  return SatNav(ctx, base, lead, x, y, z, true);
 }
 
 }  // namespace forza

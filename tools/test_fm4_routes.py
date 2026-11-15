@@ -370,6 +370,100 @@ class CircuitFiles(Base):
         self.assertEqual(fm4_routes.main(["fm4_routes.py"]), 2)
 
 
+# A map profile in the layout of FH1's media/ui/MapProfileMinimap.xml (written out here, none
+# of the game's): a road group with an outline and its two colours, one with a single colour, a
+# route and an icon group that are no roads, and a comment.
+PROFILE = b"""<MapRenderProfiles>\r
+    <!-- MINI MAP -->\r
+    <Profile name="minimap" >\r
+      <Group name="a roads" >\r
+        <Symbolizer type="line_fade_lr" sort_order="90" >\r
+          <Size value="14" />\r
+          <ColourPrimary r="0" g="0" b="0" a="128" />\r
+          <ColourSecondary r="0" g="0" b="0" a="128" />\r
+        </Symbolizer>\r
+        <Symbolizer type="line_coloured_noalpha" sort_order="110" >\r
+          <Size value="14" />\r
+          <ColourPrimary r="122" g="122" b="122" a="255" />\r
+          <ColourSecondary r="255" g="255" b="255" a="255" />\r
+        </Symbolizer>\r
+        <Filter tag="road_type" value="a" />\r
+      </Group>\r
+      <Group name="freeways" >\r
+        <Symbolizer type="line_coloured" sort_order="110" >\r
+            <ColourSecondary r="199" g="182" b="99" a="255" />     \r
+            <ColourPrimary r="120" g="120" b="120" a="255" />\r
+        </Symbolizer>\r
+        <Symbolizer type="line_fade_lr" sort_order="90" >\r
+          <ColourPrimary r="0" g="0" b="0" a="255" />\r
+        </Symbolizer>\r
+        <Filter tag="road_type" value="freeway" />\r
+      </Group>\r
+      <Group name="route" >\r
+        <Symbolizer type="line_coloured" sort_order="165" >\r
+          <ColourPrimary r="74" g="238" b="97" a="255" />\r
+          <ColourSecondary r="74" g="238" b="97" a="0" />\r
+        </Symbolizer>\r
+        <Filter tag="type" value="route" />\r
+      </Group>\r
+      <Group name="gas_station" >\r
+        <Symbolizer type="icon_facing" sort_order="420" >\r
+          <ColourPrimary r="255" g="255" b="255" a="255" />\r
+        </Symbolizer>\r
+        <Filter tag="activity_type" value="gas_station" />\r
+      </Group>\r
+    </Profile>\r
+</MapRenderProfiles>\r
+"""
+
+
+class MapProfiles(Base):
+    """The circuit's map profiles: FH1's own with every road in its driven colour."""
+
+    def test_a_road_not_driven_yet_gets_its_driven_colour(self):
+        out = fm4_routes.discovered_roads(PROFILE)
+        was, now = PROFILE.split(b"\r\n"), out.split(b"\r\n")
+        self.assertEqual(len(was), len(now))
+        changed = [(a.strip(), b.strip()) for a, b in zip(was, now) if a != b]
+        self.assertEqual(changed, [
+            (b'<ColourPrimary r="122" g="122" b="122" a="255" />', b'<ColourPrimary r="255" g="255" b="255" a="255" />'),
+            (b'<ColourPrimary r="120" g="120" b="120" a="255" />', b'<ColourPrimary r="199" g="182" b="99" a="255" />')])
+        # the route's fading green, the icons and the roads' outlines are as they were
+        self.assertIn(b'<ColourSecondary r="74" g="238" b="97" a="0" />', out)
+        self.assertEqual(out.count(b'r="0" g="0" b="0"'), PROFILE.count(b'r="0" g="0" b="0"'))
+        self.assertEqual(fm4_routes.discovered_roads(out), out)   # done once is done
+
+    def test_a_file_that_is_no_profile_is_left_alone(self):
+        for data in (b"", b"<a/>", b"\xff\xfe\x00 not xml <Group", PROFILE.replace(b"road_type", b"road_kind")):
+            self.assertEqual(fm4_routes.discovered_roads(data), data)
+
+    def test_the_games_two_profiles(self):
+        ui = os.path.join(self.fh1, "Media", "UI")
+        os.makedirs(ui)
+        self.assertEqual(fm4_routes.map_profiles(ui), {})                  # none there
+        self.assertEqual(fm4_routes.map_profiles(os.path.join(ui, "no")), {})
+        with open(os.path.join(ui, "mapprofileminimap.XML"), "wb") as f:   # any case
+            f.write(PROFILE)
+        with open(os.path.join(ui, "MapProfileFullscreen.xml"), "wb") as f:
+            f.write(b"<MapRenderProfiles/>")                               # no road group: left out
+        with open(os.path.join(ui, "LoadingDefs.xml"), "wb") as f:
+            f.write(PROFILE)                                               # not a map profile
+        files = fm4_routes.map_profiles(ui)
+        self.assertEqual(list(files), ["ui/MapProfileMinimap.xml"])
+        self.assertEqual(files["ui/MapProfileMinimap.xml"], fm4_routes.discovered_roads(PROFILE))
+
+    def test_the_command_line(self):
+        ui = os.path.join(self.fh1, "media", "ui")
+        os.makedirs(ui)
+        out = os.path.join(self.tmp.name, "out")
+        self.assertEqual(fm4_routes.main(["fm4_routes.py", "profiles", ui, out]), 1)   # nothing to write
+        with open(os.path.join(ui, "MapProfileMinimap.xml"), "wb") as f:
+            f.write(PROFILE)
+        self.assertEqual(fm4_routes.main(["fm4_routes.py", "profiles", ui, out]), 0)
+        with open(os.path.join(out, "media", "ui", "MapProfileMinimap.xml"), "rb") as f:
+            self.assertEqual(f.read(), fm4_routes.discovered_roads(PROFILE))
+
+
 class TrackMod(Base):
     """tools/fm4_track_mod.py's part: which AI line, and the files in the mod."""
 
@@ -414,6 +508,19 @@ class TrackMod(Base):
         self.assertEqual([n for n in os.listdir(self.tmp.name) if n.startswith("fm4routes-")], [])   # the staging folder
         with open(os.path.join(media, "tracks", "ring", "ring.oww"), "rb") as f:
             self.assertEqual(f.read()[:4], b"OWWF")     # Colorado's, as the circuit's
+        self.assertFalse(os.path.exists(os.path.join(media, "ui")))    # this game folder has no map profiles
+
+    def test_the_map_profiles_go_into_the_mod(self):
+        ui = os.path.join(self.fh1, "media", "UI")      # the game's folder, any case
+        os.makedirs(ui)
+        with open(os.path.join(ui, "MapProfileMinimap.xml"), "wb") as f:
+            f.write(PROFILE)
+        self.assertIsNotNone(fm4_track_mod.add_routes(self.out, "Ring", 0, self.ai, self.fh1))
+        with open(os.path.join(self.out, "media", "ui", "MapProfileMinimap.xml"), "rb") as f:
+            self.assertEqual(f.read(), fm4_routes.discovered_roads(PROFILE))
+        with open(os.path.join(ui, "MapProfileMinimap.xml"), "rb") as f:
+            self.assertEqual(f.read(), PROFILE)         # the game's own is never changed
+        self.assertTrue(os.path.isfile(os.path.join(self.out, "media", "tracks", "ring", "ring.nav")))
 
     def test_the_other_layouts_roads_are_left_out(self):
         # Ring's other layouts leave the lap along roads of their own: the circuit's world is

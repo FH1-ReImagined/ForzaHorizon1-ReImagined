@@ -587,6 +587,13 @@ add("fast_travel_anywhere", "Fast Travel Anywhere", "Gameplay", "bool", True,
     "Works offline and online. Nothing is saved, so turning it off locks it again unless your "
     "profile bought it. Title Update 4 only.", "Map")
 
+add("fm4_track_guide", "Lap guide on circuits", "Gameplay", "bool", False,
+    "On an imported Forza Motorsport 4 circuit, the game's GPS leads round the lap: its green "
+    "route on the minimap and the map, kept about 1.5 km ahead of your car. The distance it "
+    "shows is to the end of that route, not of the lap. While it is on, the map has no Set "
+    "Route on a circuit. Colorado is not changed. Applies on the next game launch.",
+    "Map", restart=True)
+
 add("reimagined_loading_tips", "ReImagined loading tips", "Gameplay", "bool", True,
     "The loading screens show tips about ReImagined's features (photos, tuning, texture packs, "
     "the radio, co-op and more) in place of the original game's, which point to services and "

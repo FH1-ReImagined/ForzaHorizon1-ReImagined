@@ -168,6 +168,118 @@ int main() {
     CHECK(timer.Invalidate("rewind used").kind == Kind::kNone);
     CHECK(timer.best() == 99.5);
   }
+  {  // the lap guide: the sat-nav destination stays ahead of the car, the shorter way round
+    Line big;  // a ring of 5 km, a point every 5 m: 1500 m ahead, set again every 300 m
+    {
+      std::string t = "name Big Ring\nlength 5000\nsplits 0.5\npoints 1000\n";
+      for (int i = 0; i < 1000; ++i) {
+        const double a = 2 * M_PI * i / 1000;
+        char row[64];
+        std::snprintf(row, sizeof row, "%.3f 0 %.3f\n", 795.775 * std::cos(a), 795.775 * std::sin(a));
+        t += row;
+      }
+      CHECK(Parse(t, big));
+    }
+    Guide guide(big);
+    CHECK(std::fabs(guide.ahead() - 1500) < 0.01f && std::fabs(guide.every() - 300) < 0.01f);
+    CHECK(!guide.set());
+    int at = guide.Next(100);  // nothing set yet: the point 1500 m on
+    CHECK(at >= 0 && std::fabs(big.along[size_t(at)] - 1600) < 6);
+    CHECK(guide.Next(100) == at);  // asked again until the game has taken it
+    guide.Set(at);
+    CHECK(guide.set());
+    CHECK(guide.Next(100) == -1 && guide.Next(250) == -1 && guide.Next(395) == -1);  // it still leads
+    int next = guide.Next(410);  // 300 m nearer: moved on
+    CHECK(next >= 0 && std::fabs(big.along[size_t(next)] - 1910) < 6);
+    guide.Set(next);
+    // a whole lap: set about every 300 m, always 1200 to 1800 m ahead, never behind the car
+    int sets = 0;
+    for (float s = 410; s < 410 + big.total; s += 2) {
+      const float place = std::fmod(s, big.total);
+      const int i = guide.Next(place);
+      if (i >= 0) { guide.Set(i); ++sets; }
+      CHECK(guide.Next(place) == -1);
+    }
+    CHECK(sets >= 15 && sets <= 18);
+    // over the start line: the destination is on the next lap's first metres
+    guide.Clear();
+    at = guide.Next(4000);
+    CHECK(at >= 0 && std::fabs(big.along[size_t(at)] - 500) < 6);
+    guide.Set(at);
+    CHECK(guide.Next(4200) == -1);
+    // the car is suddenly elsewhere (a rewind, a reset, driven back): the route leads on from there
+    next = guide.Next(2000);
+    CHECK(next >= 0 && std::fabs(big.along[size_t(next)] - 3500) < 6);
+    guide.Set(next);
+    next = guide.Next(1600);  // 400 m back
+    CHECK(next >= 0 && std::fabs(big.along[size_t(next)] - 3100) < 6);
+    // a short lap: 0.4 of it ahead, so the way on stays the shorter one
+    Guide small(line);  // the 1257 m ring
+    CHECK(std::fabs(small.ahead() - 0.4f * line.total) < 0.01f && small.ahead() < line.total / 2);
+    CHECK(std::fabs(small.every() - 0.2f * line.total) < 0.01f);
+    at = small.Next(1200);
+    CHECK(at >= 0 && std::fabs(line.along[size_t(at)] - std::fmod(1200 + small.ahead(), line.total)) < 4);
+    small.Set(at);
+    CHECK(small.Next(1250) == -1 && small.Next(40) == -1);
+    CHECK(small.Next(260) >= 0);
+    // no line, no guide; a point that is not one changes nothing
+    Line none;
+    Guide off(none);
+    CHECK(off.Next(10) == -1);
+    off.Set(3);
+    CHECK(!off.set());
+    CHECK(guide.Next(-1) == -1 && guide.Next(NAN) == -1);
+    CHECK(!guide.crossing(0) && !guide.crossing(500) && !guide.crossing(5000));  // a plain ring has none
+  }
+  {  // the lap guide where the lap passes over itself: the destination is never at the crossing
+    Line eight;  // a figure of eight of about 5.5 km, the second pass 6 m over the first
+    {
+      std::string t = "name Eight\nlength 5490\nsplits 0.5\npoints 2800\n";
+      for (int i = 0; i < 2800; ++i) {
+        const double a = 2 * M_PI * (i + 0.5) / 2800;
+        char row[80];
+        std::snprintf(row, sizeof row, "%.3f %.3f %.3f\n", 900 * std::sin(a), 3 * (1 - std::cos(a)),
+                      900 * std::sin(a) * std::cos(a));
+        t += row;
+      }
+      CHECK(Parse(t, eight));
+    }
+    const Guide guide(eight);
+    const auto from_crossing = [&](int i) {
+      return std::hypot(eight.points[size_t(i)][0], eight.points[size_t(i)][2]);
+    };
+    int marked = 0;
+    for (int i = 0; i < 2800; ++i) {
+      if (from_crossing(i) < 10) CHECK(guide.crossing(size_t(i)));   // both passes, the low and the high
+      if (from_crossing(i) > 60) CHECK(!guide.crossing(size_t(i)));
+      marked += guide.crossing(size_t(i));
+    }
+    CHECK(marked > 20 && marked < 120);
+    // the high pass is half a lap round: a car 1500 m before it would get it as its destination
+    const int high = 1400;
+    CHECK(from_crossing(high) < 3 && eight.points[size_t(high)][1] > 5.9f);
+    int moved = 0;
+    for (float back = -40; back <= 40; back += 1) {
+      const int at = guide.Next(eight.along[size_t(high)] - guide.ahead() + back);
+      CHECK(at >= 0 && !guide.crossing(size_t(at)));
+      const float on = eight.along[size_t(at)] - (eight.along[size_t(high)] + back);
+      CHECK(on >= -0.01f && on < 70);  // the point asked for, or the first clear one after it
+      moved += on > 4;
+    }
+    CHECK(moved > 20);
+    // round the whole lap: set as often as on a ring, never at the crossing
+    Guide lap(eight);
+    int sets = 0;
+    for (float place = 0; place < eight.total; place += 2) {
+      const int i = lap.Next(place);
+      if (i < 0) continue;
+      CHECK(!lap.crossing(size_t(i)));
+      lap.Set(i);
+      ++sets;
+      CHECK(lap.Next(place) == -1);
+    }
+    CHECK(sets >= 17 && sets <= 20);
+  }
   if (failures) {
     std::fprintf(stderr, "%d check(s) failed\n", failures);
     return 1;

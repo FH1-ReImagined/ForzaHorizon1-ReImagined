@@ -416,7 +416,7 @@ bool RoutedUser(uint32_t user_index, uint32_t flags, uint32_t& user) {
 
 // DWORD XamInputGetState(DWORD user_index, DWORD flags, X_INPUT_STATE* state)
 namespace forza::autopilot {
-bool Drive(uint8_t* base, int16_t& steer, uint8_t& brake, uint8_t& throttle);
+bool Drive(uint8_t* base, int16_t& steer, uint8_t& brake, uint8_t& throttle, uint16_t& buttons);
 }
 
 extern "C" REX_FUNC(__imp__XamInputGetState) {
@@ -460,10 +460,12 @@ extern "C" REX_FUNC(__imp__XamInputGetState) {
   if (user == 0 && connected) {  // the dev autopilot (src/debug/autopilot.cpp)
     int16_t steer;
     uint8_t lt, rt;
-    if (forza::autopilot::Drive(base, steer, lt, rt)) {
+    uint16_t shift = 0;
+    if (forza::autopilot::Drive(base, steer, lt, rt, shift)) {
       state.sticks[0] = steer;
       state.triggers[0] = lt;
       state.triggers[1] = rt;
+      state.buttons |= shift;
     }
   }
   if (user == 0 && forza::benchmark::WantsPad()) connected = true;

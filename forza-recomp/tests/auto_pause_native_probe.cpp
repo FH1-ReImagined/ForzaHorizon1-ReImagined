@@ -22,7 +22,7 @@ namespace forza::discord {
 void WorldFrame(const PPCContext&, uint8_t*) {}
 }
 namespace forza::fm4_lap {
-void WorldFrame(uint8_t*, bool, bool) {}  // an FM4 circuit's lap timer (fm4_lap_timer.cpp)
+void WorldFrame(PPCContext&, uint8_t*, bool, bool) {}  // an FM4 circuit's lap timer and guide (fm4_lap_timer.cpp)
 }
 namespace forza::telemetry {
 void Physics(uint8_t*) { ++physics_calls; }

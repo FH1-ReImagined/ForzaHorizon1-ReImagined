@@ -78,13 +78,19 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # and 0570-0600: the PM4 trace and rexglue-shaders (build options, off), the start's shader
 # translations on several threads, and the shader pack Prebuild shaders writes (native renderer M0, M1).
 # and 0700: the upload rings in host-visible video memory with Resizable BAR (vulkan_rebar_uploads,
-# off by default) and their bytes by kind in the log (#858),
+# off by default) and their bytes by kind in the log (#858).
 # and 0800: without stencil export (NVIDIA), the stencil bit draws of transfers to 2x and 4x targets once
 # per pixel through the sample mask (vulkan_transfer_stencil_bit_per_pixel, #640).
+# and 0900: a marked FM4 shadow fetch reads the shadow mask at the pixel's place in the frame, so
+# the car's shadow on a converted circuit is no longer drawn again up the road (#827).
+# and 1000: a picture drawn on the HUD target's fractional 1080p raster (a replay movie's frame, a
+# saved photo and its thumbnail) is copied back to guest memory at its full size (#879).
+# and 1010: fh1_hold_scene_layer, which the Big Shot's hook sets: its frames stay in the scene layer,
+# also in a rally stage, whose frames start with a draw to the front buffer (#879).
 # A reviewed full commit can be pinned before a maintainer publishes a tag.
 # When a tag is supplied, its target must still match this immutable commit.
 REIGLUE_TAG=
-REIGLUE_COMMIT=7e785f7319b71af28f8606d183768cd63f78b6f7  # ReIGlue perf/640-stencil-per-pixel: main d253875 + 0800 (#59)
+REIGLUE_COMMIT=be65a3966bed1f4c096351f50714a38573e2d4c6  # ReIGlue perf/640-stencil-per-pixel: main 3584130 + 0800 (#59)
 REIGLUE_URL="${REIGLUE_URL:-https://github.com/FH1-ReImagined/ReIGlue}"
 NIGHTLY="${REXSDK_NIGHTLY:-$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64}"
 SRC="${REXSDK_SRC:-$HOME/rexglue-sdk-src-forza/sdk}"

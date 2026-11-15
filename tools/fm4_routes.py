@@ -13,6 +13,11 @@ FH1's sat-nav and its races read files a track of FM4's does not have:
   media/aiopenworld/<track>/ribbon_00/route_NNN.owt  a route's line: the road's centre, its half
                                                      width and the racing line, every 2 m
 
+and FH1's maps draw a road grey until the player has driven it. On a circuit that grey is lost
+on the tarmac under the minimap, so a circuit also gets FH1's own two map profiles with every
+road in its driven colour (media/ui/MapProfileMinimap.xml, MapProfileFullscreen.xml:
+discovered_roads). They load with the circuit's mod, so Colorado's maps stay as they are.
+
 This writes them from FM4's AI line of the layout, media/AI/Tracks/<track>_NN.geo (an "MLPData"
 file, tools/fm4_spawn.py): its waypoints run round the lap from the start/finish line, each with
 a vector across the road as long as half its width (fNormal) and the racing line's place on it
@@ -45,6 +50,9 @@ Usage:
       writes the files above under OUT_DIR/media/ for the circuit TRACK (its folder's name);
       OTHER_GEO: the AI lines of the circuit's other layouts, whose own stretches of road
       join the network (no route is written for them; the import passes none, see above)
+  tools/fm4_routes.py profiles UI_DIR OUT_DIR
+      writes FH1's two map profiles of UI_DIR (the game's media/ui) with every road in its
+      driven colour under OUT_DIR/media/ui/
   tools/fm4_routes.py nav FILE.nav      prints a road network's counts and tag names
   tools/fm4_routes.py owt FILE.owt      prints a route's length and width
 """
@@ -431,6 +439,58 @@ def check_network(data, waypoints=(), reach=NAV_SPACING):
     return problems
 
 
+# ---- The map's style ------------------------------------------------------------------------------
+
+MAP_PROFILES = ("MapProfileMinimap.xml", "MapProfileFullscreen.xml")  # in FH1's media/ui
+
+
+def discovered_roads(profile):
+    """An FH1 map profile (bytes: media/ui/MapProfileMinimap.xml or MapProfileFullscreen.xml)
+    with its roads drawn as driven ones from the start. A profile's road groups (those with a
+    <Filter tag="road_type" .../>) give a road two colours: ColourPrimary until the player
+    has driven it (the minimap's is the grey 122, 122, 122), ColourSecondary after (white).
+    On a circuit the grey road ahead cannot be told from the tarmac under the minimap, which
+    has no background of its own, and there is nothing to discover: the first colour becomes
+    the second. Everything else is left byte for byte."""
+    def symbolizer(m):
+        block = m.group(0)
+        first = re.search(rb"<ColourPrimary\b([^>]*?)/>", block)
+        second = re.search(rb"<ColourSecondary\b([^>]*?)/>", block)
+        if not first or not second:
+            return block
+        return block[:first.start(1)] + second.group(1) + block[first.end(1):]
+
+    def group(m):
+        block = m.group(0)
+        if not re.search(rb"<Filter\s+tag\s*=\s*[\"']road_type[\"']", block):
+            return block
+        return re.sub(rb"<Symbolizer\b.*?</Symbolizer>", symbolizer, block, flags=re.S)
+    return re.sub(rb"<Group\b.*?</Group>", group, profile, flags=re.S)
+
+
+def map_profiles(ui_dir):
+    """{path under media/: bytes}: FH1's two map profiles of ui_dir (the player's own
+    media/ui, any case) with discovered_roads applied; a profile that is not there, or has no
+    road group to change, is left out."""
+    out = {}
+    try:
+        names = {n.lower(): n for n in os.listdir(ui_dir)}
+    except OSError:
+        return out
+    for name in MAP_PROFILES:
+        if name.lower() not in names:
+            continue
+        try:
+            with open(os.path.join(ui_dir, names[name.lower()]), "rb") as f:
+                data = f.read()
+        except OSError:
+            continue
+        changed = discovered_roads(data)
+        if changed != data:
+            out[f"ui/{name}"] = changed
+    return out
+
+
 # ---- A circuit's files ----------------------------------------------------------------------------
 
 def build(track, geo, colorado_nav, other_geos=(), route=RACE_ROUTE):
@@ -480,6 +540,17 @@ def main(argv):
                 f.write(data)
             print(f"media/{rel}: {len(data)} bytes")
         return 0
+    if len(argv) == 4 and argv[1] == "profiles":
+        files = map_profiles(argv[2])
+        for rel, data in files.items():
+            dst = os.path.join(argv[3], "media", *rel.split("/"))
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            with open(dst, "wb") as f:
+                f.write(data)
+            print(f"media/{rel}: {len(data)} bytes")
+        if not files:
+            print(f"fm4_routes: no map profile with a road group in {argv[2]}")
+        return 0 if files else 1
     if len(argv) == 3 and argv[1] in ("nav", "owt"):
         with open(argv[2], "rb") as f:
             data = f.read()

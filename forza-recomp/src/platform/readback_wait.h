@@ -3,11 +3,12 @@
 // With readback_resolve = some (the default) a resolve is copied back to guest memory only
 // when its key is new, so the CPU sees the first picture of a target the game resolves every
 // frame. A range in readback_resolve_wait_range is copied back on every resolve, as with
-// readback_resolve = full. The setting holds one range, and four hooks need one: the Big Shot
+// readback_resolve = full. The setting holds one range, and five hooks need one: the Big Shot
 // (the front buffers, #552), the online photo (all of physical memory at the shutter, #576),
-// photo mode's focus (the world depth target, #665) and a paint job drawn at 2x (all of physical
-// memory while it is drawn and compressed, #680). Each asks for its own range here; the
-// setting is the smallest range that covers all of them, so no hook drops another's.
+// photo mode's focus (the world depth target, #665), a paint job drawn at 2x (all of physical
+// memory while it is drawn and compressed, #680) and a replay movie (the texture its frames are
+// read from, #880). Each asks for its own range here; the setting is the smallest range that
+// covers all of them, so no hook drops another's.
 #pragma once
 
 #include <algorithm>
@@ -17,7 +18,7 @@
 
 namespace forza::readback_wait {
 
-enum class Owner : size_t { kBigShot, kOnlinePhoto, kPhotoFocus, kLiveryBake, kCount };
+enum class Owner : size_t { kBigShot, kOnlinePhoto, kPhotoFocus, kLiveryBake, kReplayMovie, kCount };
 
 // The setting's format: (address << 32) | length in bytes, 0 for none.
 constexpr uint64_t Pack(uint32_t address, uint32_t length) {

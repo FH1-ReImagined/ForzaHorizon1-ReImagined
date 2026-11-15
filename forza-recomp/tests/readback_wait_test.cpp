@@ -1,7 +1,9 @@
-// The owners of readback_resolve_wait_range (src/platform/readback_wait.h, #552, #576, #665):
-// one owner's release never drops another's range, and the setting covers all of them.
+// The owners of readback_resolve_wait_range (src/platform/readback_wait.h, #552, #576, #665,
+// #880): one owner's release never drops another's range, and the setting covers all of them.
+// And the range of a replay movie's capture texture (src/platform/replay_movie.h).
 //   g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/readback_wait_test.cpp
 #include "platform/readback_wait.h"
+#include "platform/replay_movie.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -51,6 +53,26 @@ int main() {
   Check(r.Set(Owner::kLiveryBake, all) == all, "a paint job drawn at 2x: all of physical memory");
   Check(r.Set(Owner::kLiveryBake, 0) == depth, "paint job done: focus's range stays");
   Check(r.Set(Owner::kPhotoFocus, 0) == 0, "released: none");
+
+  // A replay movie (#880): the capture texture starts at the renderer's scratch block, tiled, so
+  // its height is padded to 32 rows. WEB is 640x360 and LARGE 1280x720.
+  using forza::replay_movie::TextureRange;
+  const uint32_t scratch = 0xBE759000;  // a view of physical 0x1E759000
+  const uint64_t web = TextureRange(scratch, 640, 360);
+  const uint64_t large = TextureRange(scratch, 1280, 720);
+  Check(web == Pack(0x1E759000, 640 * 384 * 4), "a WEB movie: 640x384 tiles of 32 bits");
+  Check(large == Pack(0x1E759000, 1280 * 736 * 4), "a LARGE movie: 1280x736");
+  Check(TextureRange(0x1E759000, 640, 360) == web, "a physical address is taken as it is");
+  Check(TextureRange(0, 640, 360) == 0, "no scratch block: none");
+  Check(TextureRange(scratch, 0, 360) == 0 && TextureRange(scratch, 640, 0) == 0, "no size: none");
+  Check(TextureRange(scratch, 1312, 720) == 0 && TextureRange(scratch, 1280, 721) == 0,
+        "larger than a LARGE movie: none");
+  Check(TextureRange(0xBFFFF000, 640, 360) == 0, "past the end of physical memory: none");
+  Check(r.Set(Owner::kPhotoFocus, depth) == depth, "focus");
+  Check(r.Set(Owner::kReplayMovie, web) == Pack(0x1DAC5000, 0x1E759000 + 640 * 384 * 4 - 0x1DAC5000),
+        "a movie with the focus held: the cover");
+  Check(r.Set(Owner::kPhotoFocus, 0) == web, "focus released: the movie's texture stays");
+  Check(r.Set(Owner::kReplayMovie, 0) == 0, "the movie done: none");
 
   if (failures) return EXIT_FAILURE;
   std::printf("readback_wait: all checks passed\n");

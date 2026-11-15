@@ -228,6 +228,7 @@ bool LocalCarPhysics(uint8_t* base, CarPhysicsView& out) {
       car, FORZA_TU4 != 0, [base](uint32_t a, void* d, size_t n) { return Read(base, a, d, n); });
   if (!p.valid) return false;
   out.rpm = p.rpm;
+  out.redline = p.redline;
   out.speed = p.speed;
   out.gear = p.gear;
   for (int i = 0; i < 5; ++i) out.controls[i] = p.controls[i];

@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog,
 from .. import (PUBLIC_SERVER, browser, display, dlss, fsr3, game, gamertag, gpu, power, regpu, schema, server_list,
                specs, vr)
 from ..config import Config, render_toml, validate_extras
-from . import theme
+from . import file_dialogs, theme
 from .settings_search import SettingsSearch
 from .widgets import Disclosure, DoubleSpinBox, SpinBox, Switch, card, label
 
@@ -1250,6 +1250,7 @@ class SettingsPage(QWidget):
         ]
         for w in items:
             launcher.addWidget(w)
+        launcher.addWidget(self._file_dialogs_row())
         page = lay
         lay = section_card(page, "Other settings")
         lay.addWidget(label("Any other forza.toml key, one per line (key = value). They are written "
@@ -1284,6 +1285,37 @@ class SettingsPage(QWidget):
                         keywords="command line preview executable")
         self.search.add("Reset all settings to defaults", "Advanced", "Launcher", reset)
         self.refresh_preview()
+
+    def _file_dialogs_row(self):
+        """Advanced > Launcher: the system's file dialogs in place of the launcher's own (#884,
+        file_dialogs.py). Off and locked in the Flatpak, which keeps the launcher's own."""
+        w = QWidget()
+        row = QHBoxLayout(w)
+        row.setContentsMargins(0, 8, 0, 8)
+        row.setSpacing(32)
+        col = QVBoxLayout()
+        col.setSpacing(8)
+        t = QLabel(file_dialogs.LABEL)
+        t.setStyleSheet("font-weight: 600;")
+        col.addWidget(t)
+        col.addWidget(label(file_dialogs.HELP, "help"))
+        if not file_dialogs.available():
+            col.addWidget(label(file_dialogs.FLATPAK_REASON, "reason"))
+        row.addLayout(col, 1)
+        sw = Switch()
+        sw.setChecked(file_dialogs.system(self.cfg))
+        sw.setEnabled(file_dialogs.available())
+        sw.setToolTip(f"advanced.{file_dialogs.KEY} in launcher.json (default False)")
+
+        def toggled(on):
+            self._adv(file_dialogs.KEY, on)
+            file_dialogs.apply(self.cfg)   # the next dialog opened is already the chosen kind
+        sw.toggled.connect(toggled)
+        row.addWidget(sw, 0, Qt.AlignRight | Qt.AlignVCenter)
+        self.file_dialogs_switch = sw
+        self.search.add(file_dialogs.LABEL, "Advanced", "Launcher", w, sw,
+                        file_dialogs.KEY + " native file picker chooser explorer browse " + file_dialogs.HELP)
+        return w
 
     def _browse_into(self, edit, title, key):
         d = QFileDialog.getExistingDirectory(self, title, edit.text() or str(Path.home()))

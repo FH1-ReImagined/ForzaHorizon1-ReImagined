@@ -1,5 +1,5 @@
-// forza - a car's picture, its livery and photo mode are rendered with real pipelines (#74, #77,
-// #167, #632, docs/rendering.md).
+// forza - a car's picture, its livery, photo mode and a replay movie are rendered with real
+// pipelines (#74, #77, #167, #632, #880, docs/rendering.md).
 //
 // The game renders a car's picture once (the purchase, Car Select, the garage), reads the
 // resolve back on the CPU and saves it in the profile (ForzaProfile/Thumbnails). With
@@ -38,6 +38,13 @@
 // src/hooks/shadow_filter.cpp), which play never uses; while it does, the same window holds
 // (the frame end then waits for every pipeline in flight, as before 0364).
 // FORZA_PHOTO_SYNC=0 switches that off.
+//
+// A replay movie (#880, src/hooks/replay_movie.cpp): every frame of the replay goes into the
+// file, once. The capture draws each frame's picture into its texture with a pipeline nothing
+// else uses, so with async_shader_compilation that draw was skipped in the movie's first frame
+// (a black frame), and so were the draws of whatever the replay showed for the first time while
+// the movie was made. The same window holds from the capture's start to its last frame.
+// FORZA_MOVIE_SYNC=0 switches that off.
 
 #include "thumbnail_sync.h"
 
@@ -96,21 +103,36 @@ void HoldSync() {
 }  // namespace
 
 namespace forza::thumbnail_sync {
+namespace {
 
-void HoldForPhotoMode() {
-  static const bool on = EnvOn("FORZA_PHOTO_SYNC");
-  if (!on) return;
-  // Called for every photo mode frame: renew the window at most once a second.
-  static std::atomic<int64_t> last_ms{INT64_MIN / 2};
+// For a caller that asks every frame: renews the window at most once a second, and logs `what`
+// when a hold starts.
+void HoldEveryFrame(std::atomic<int64_t>& last_ms, const char* what) {
   const int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                              std::chrono::steady_clock::now().time_since_epoch())
                              .count();
   int64_t last = last_ms.load(std::memory_order_relaxed);
   if (now_ms - last < 1000 || !last_ms.compare_exchange_strong(last, now_ms)) return;
   if (now_ms - last > std::chrono::milliseconds(kWindow).count()) {
-    REXLOG_INFO("Pipeline sync: photo mode, the pipelines are built before its frames end");
+    REXLOG_INFO("Pipeline sync: {}, the pipelines are built before its frames end", what);
   }
   HoldSync();
+}
+
+}  // namespace
+
+void HoldForPhotoMode() {
+  static const bool on = EnvOn("FORZA_PHOTO_SYNC");
+  if (!on) return;
+  static std::atomic<int64_t> last_ms{INT64_MIN / 2};
+  HoldEveryFrame(last_ms, "photo mode");
+}
+
+void HoldForReplayMovie() {
+  static const bool on = EnvOn("FORZA_MOVIE_SYNC");
+  if (!on) return;
+  static std::atomic<int64_t> last_ms{INT64_MIN / 2};
+  HoldEveryFrame(last_ms, "a replay movie");
 }
 
 }  // namespace forza::thumbnail_sync

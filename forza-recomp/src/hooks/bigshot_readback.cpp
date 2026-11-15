@@ -16,11 +16,20 @@
 // Shot runs, the SDK's readback_resolve_wait_range (ReIGlue 0411) holds the two front buffers:
 // their resolves wait for the GPU and are copied back, as with readback_resolve = full. Other
 // resolves and other frames are not affected. FORZA_BIGSHOT_READBACK=0 switches it off.
+//
+// The frames of a Big Shot also keep to the scene layer of the SDK's scene/HUD split (FSR 3,
+// SMAA, DLSS; fh1_hold_scene_layer, ReIGlue 1010; #879). A tile is accumulated over its 96
+// frames in a render target, and the split's two layers have their own. In a rally stage of the
+// Rally expansion every frame starts with a draw to the front buffer, which from the Big Shot's
+// 69th frame on took the whole frame to the HUD layer: the first tile came out as a double image
+// (and, at a 1080p output, every tile at three quarters of its size, the HUD layer's raster).
+// FORZA_BIGSHOT_LAYER=0 leaves the layers as they come.
 
 #include "../platform/guest_addr.h"
 #include "../platform/guest_memory.h"
 #include "../platform/readback_wait.h"
 
+#include <rex/cvar.h>
 #include <rex/logging.h>
 #include <rex/ppc/context.h>
 #include <rex/ppc/func.h>
@@ -76,6 +85,15 @@ bool SetRange(uint64_t range) {
   return forza::readback_wait::Request(forza::readback_wait::Owner::kBigShot, range);
 }
 
+// False when it is switched off or the SDK has no such setting (a renderer without the split).
+bool HoldSceneLayer(bool hold) {
+  static const bool on = [] {
+    const char* v = std::getenv("FORZA_BIGSHOT_LAYER");
+    return !(v && std::strcmp(v, "0") == 0);
+  }();
+  return on && rex::cvar::SetFlagByName("fh1_hold_scene_layer", hold ? "true" : "false");
+}
+
 // The physical range of both front buffers (each from its fetch constant: base address in
 // word 1, 32 bits a pixel, width and height in word 2), as one range.
 uint64_t FrontBufferRange(uint8_t* base) {
@@ -104,6 +122,7 @@ extern "C" REX_FUNC(BigShotStart) {
   const uint64_t range = FrontBufferRange(base);
   if (!range) return;
   uint64_t generation;
+  bool held;
   {
     std::lock_guard lock(g_mutex);
     if (!SetRange(range)) {
@@ -113,14 +132,17 @@ extern "C" REX_FUNC(BigShotStart) {
     }
     g_set = true;
     generation = ++g_generation;
+    held = HoldSceneLayer(true);
   }
-  REXLOG_INFO("Big Shot: the front buffers ({:08X}, {} bytes) are copied back for its tiles",
-              uint32_t(range >> 32), uint32_t(range));
+  REXLOG_INFO("Big Shot: the front buffers ({:08X}, {} bytes) are copied back for its tiles{}",
+              uint32_t(range >> 32), uint32_t(range),
+              held ? "; its frames keep to the scene layer" : "");
   std::thread([generation] {
     std::this_thread::sleep_for(kLimit);
     std::lock_guard lock(g_mutex);
     if (g_set && g_generation == generation) {
       SetRange(0);
+      HoldSceneLayer(false);
       g_set = false;
       REXLOG_WARN("Big Shot: no end after {} minutes; front buffer readback back to normal",
                   std::chrono::duration_cast<std::chrono::minutes>(kLimit).count());
@@ -134,6 +156,7 @@ extern "C" REX_FUNC(BigShotEnd) {
   std::lock_guard lock(g_mutex);
   if (!g_set) return;
   SetRange(0);
+  HoldSceneLayer(false);
   g_set = false;
   REXLOG_INFO("Big Shot: done, front buffer readback back to normal");
 }

@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QDialog, Q
 from .. import (APP_NAME, __version__, browser, builder, cleanenv, coop_grant, crash_report, errors, game, paths, dlss,
                online_features, shader_share)
 from ..config import Config, import_toml, render_toml
-from . import theme
+from . import file_dialogs, theme
 from .pages import AboutPage, PlayPage, SetupPage
 from .settings_page import SettingsPage
 from .gallery_page import GalleryPage
@@ -943,9 +943,6 @@ def run(argv):
     browser.install()   # links Qt opens itself take the same clean way (#815)
     app.setApplicationName("forza-reimagined-launcher")
     app.setDesktopFileName(paths.FLATPAK_ID or "forza-reimagined")
-    # Qt file dialogs participate in controller navigation. In Flatpak they also keep
-    # the real paths needed for a Games on Demand package and its adjacent .data folder.
-    app.setAttribute(_Qt.ApplicationAttribute.AA_DontUseNativeDialogs)
     theme.load_fonts()
     theme.apply_palette(app)
     app.setStyleSheet(theme.stylesheet())
@@ -962,7 +959,12 @@ def run(argv):
             pass
     sys.excepthook = report
     threading.excepthook = lambda a: report(a.exc_type, a.exc_value, a.exc_traceback)
-    win = MainWindow(Config())
+    cfg = Config()
+    # Qt file dialogs participate in controller navigation. In Flatpak they also keep
+    # the real paths needed for a Games on Demand package and its adjacent .data folder.
+    # The system's open only where the player asked for them (Settings > Advanced, #884).
+    file_dialogs.apply(cfg)
+    win = MainWindow(cfg)
     from .gamepad import Navigation
     navigation = Navigation(win)
     app.aboutToQuit.connect(navigation.close)

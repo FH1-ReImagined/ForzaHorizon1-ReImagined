@@ -141,6 +141,7 @@ set(FORZA_SOURCES
     src/hooks/database_query.cpp
     src/hooks/fm4_track.cpp
     src/hooks/fm4_track_mount.cpp
+    src/hooks/wide_world.cpp
     src/hooks/fm4_lap_timer.cpp
     src/hooks/crowd_anim.cpp
     src/hooks/movie_texture.cpp
@@ -181,10 +182,12 @@ set(FORZA_SOURCES
     src/hooks/native_device.cpp
     src/hooks/ai_catchup.cpp
     src/hooks/physics_loader_check.cpp
+    src/hooks/emergency_zones.cpp
     src/hooks/resource_data_release.cpp
     src/hooks/resource_cache_eviction.cpp
     src/hooks/resource_stream_trace.cpp
     src/hooks/bigshot_readback.cpp
+    src/hooks/replay_movie.cpp
     src/hooks/online_photo.cpp
     src/hooks/photo_focus.cpp
     src/hooks/thumbnail_sync.cpp
