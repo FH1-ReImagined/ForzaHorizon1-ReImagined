@@ -9,6 +9,7 @@ import zipfile
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import car_ids  # noqa: E402
 import carbin_dump  # noqa: E402
 import fm4_carbin  # noqa: E402
 import fm4_cars  # noqa: E402
@@ -487,20 +488,12 @@ class MovedMakeStringTests(unittest.TestCase):
 
 
 class TrafficTwinTests(unittest.TestCase):
-    """#841: an FM4 car FH1 has only as a traffic car (the same id and MediaName, not
-    selectable, its model cut down) comes in as a car of its own beside it: 50000 + its id, a 5
-    after its make in its MediaName, its own rows, wheel and files, and its own copy of the parts
-    FH1 has only on traffic cars. FH1's traffic car is left as it is."""
+    """#841, #924: the importer applies the id table (car_ids.json). An FM4 car FH1 has only as a
+    traffic car comes in as a car of its own beside it (55000 + its id, a 5 after its make in its
+    MediaName, its own rows, wheel and files, its own copy of the parts FH1 has only on traffic
+    cars), a car whose FM4 id FH1 gives another car under 55000 + id. FH1's cars stay as they are."""
 
     def test_ids_names_and_files(self):
-        self.assertEqual(fm4_cars.twin_id(935), 55935)
-        self.assertEqual(fm4_cars.twin_id(282), 55282)
-        self.assertEqual(fm4_cars.twin_id(1241), 56241)  # not 551241: a car id stays under 65536
-        self.assertEqual(fm4_cars.twin_id(800), 55800)  # an engine
-        self.assertEqual(fm4_cars.twin_id(30), 55030)  # a wheel
-        self.assertIsNone(fm4_cars.twin_id(282, {55282}))  # taken
-        self.assertEqual(fm4_cars.twin_id(10535, (), fm4_cars.CAR_ID_LIMIT), 65535)
-        self.assertIsNone(fm4_cars.twin_id(10536, (), fm4_cars.CAR_ID_LIMIT))
         self.assertEqual(fm4_cars.twin_name("VW_Beetle_04"), "VW_5_Beetle_04")
         f = fm4_cars.twin_file
         self.assertEqual(f("VW_Beetle_04.carbin", "VW_Beetle_04", "VW_5_Beetle_04"), "VW_5_Beetle_04.carbin")
@@ -560,6 +553,9 @@ class TrafficTwinTests(unittest.TestCase):
             db.execute("create table Data_Drivetrain (DrivetrainID INTEGER, DrivetypeID INT)")
             db.execute("insert into Data_Drivetrain values (35, 1)")
             db.execute("create table List_UpgradeDrivetrainTransmission (Id INTEGER, DrivetrainID INT, NumGears INT)")
+            # both games spell the drivetrain's column DrivetrainId in this table
+            db.execute("create table List_UpgradeDrivetrainDriveline (Id INTEGER, DrivetrainId INT, Level INT, MassDiff REAL)")
+            db.execute("insert into List_UpgradeDrivetrainDriveline values (35000, 35, 0, 0.0)")
         fh1.execute("insert into List_UpgradeEngine values (283000, 283, 0, 37, 1)")
         fm4.execute("insert into List_UpgradeEngine values (282001, 282, 1, 690, 0)")  # a swap FH1 lacks
         fm4.execute("insert into Data_Engine values (690, 'VW_Golf_R32_03')")
@@ -570,20 +566,25 @@ class TrafficTwinTests(unittest.TestCase):
         fh1.execute("insert into List_UpgradeDrivetrainTransmission values (35000, 35, 6)")
         return fm4, fh1
 
-    def test_which_cars_are_twins(self):
+    def table(self, fm4, fh1):
+        return car_ids.Table(car_ids.build({}, fh1, [("FM4", fm4)]))
+
+    def test_which_cars_the_table_renumbers(self):
         fm4, fh1 = self.dbs()
-        # the Beetle: FH1's 282 is the traffic car of that name. Not NUL_Car_00 (a placeholder),
-        # 1530 (FH1's is another car), 414 (selectable in FH1: FH1's own car), 100 (FH1 lacks it)
-        self.assertEqual(fm4_cars.traffic_twins(fm4, fh1), {282: (55282, "VW_5_Beetle_04", (55030, "VW_5_Beetle_04"))})
-        self.assertEqual(fm4_cars.traffic_twins(fm4, fh1, skip={"vw_beetle_04"}), {})  # an FH1 DLC car
-        # an installed DLC's car has 55282: no copy rather than two cars of one id
-        self.assertEqual(fm4_cars.traffic_twins(fm4, fh1, taken={55282}), {})
+        t = self.table(fm4, fh1)
+        # the Beetle: FH1's 282 is the traffic car of that name; 1530: FH1's RAV4 has the id. Not
+        # NUL_Car_00 (a placeholder), 414 (FH1's own car), 100 (keeps its id)
+        self.assertEqual(fm4_cars.table_cars(t, fm4), {282: (55282, "VW_5_Beetle_04"), 1530: (56530, "FOR_Coupe_40")})
+        self.assertEqual(sorted(t.source_cars("FM4")), [100, 282, 1530])
+        self.assertEqual(fm4_cars.table_parts(t), {"engine": {36: (55036, "VW_Beetle_04_FM4")},
+                                                   "drivetrain": {35: (55035, None)},
+                                                   "wheel": {30: (55030, "VW_5_Beetle_04")}})
 
     def test_a_twin_is_a_car_of_its_own(self):
         fm4, fh1 = self.dbs()
-        twins = fm4_cars.traffic_twins(fm4, fh1)
+        t = self.table(fm4, fh1)
         with mock.patch.object(fm4_cars, "Retune", _NoRetune):
-            db = fm4_cars.Database(fm4, fh1, twins=twins)
+            db = fm4_cars.Database(fm4, fh1, renumber=fm4_cars.table_cars(t, fm4), parts=fm4_cars.table_parts(t))
         db.collect([282])
         report = {}
         rows = db.finish(report)
@@ -610,8 +611,41 @@ class TrafficTwinTests(unittest.TestCase):
         self.assertEqual(table("List_UpgradeDrivetrain"), [(55282000, 55282, 0, 55035)])
         self.assertEqual(table("Data_Drivetrain"), [(55035, 1)])
         self.assertEqual(table("List_UpgradeDrivetrainTransmission"), [(55035000, 55035, 2)])  # FM4's gearbox
-        self.assertEqual(db.part_names, {(55282, "VW_Beetle_04"): "VW_Beetle_04_FM4"})
+        self.assertEqual(table("List_UpgradeDrivetrainDriveline"), [(55035000, 55035, 0, 0.0)])  # DrivetrainId
+        self.assertEqual(db.part_names, {"VW_Beetle_04": "VW_Beetle_04_FM4"})
         self.assertNotIn("conflicts", report)  # nothing of FH1's traffic car is left out or changed
+
+    def test_an_engine_id_in_a_renumbered_cars_range_stays(self):
+        """Engine 282's rows are 282000 + n, the Beetle's range: renumbering the Beetle leaves them."""
+        fm4, fh1 = self.dbs()
+        fm4.execute("insert into Data_Engine values (282, 'OTHER_Engine')")
+        fm4.execute("insert into List_UpgradeEngine values (282003, 282, 2, 282, 0)")
+        fm4.execute("insert into List_UpgradeEngineCamshaft values (282000, 282, 1, null)")
+        t = self.table(fm4, fh1)
+        with mock.patch.object(fm4_cars, "Retune", _NoRetune):
+            db = fm4_cars.Database(fm4, fh1, renumber=fm4_cars.table_cars(t, fm4), parts=fm4_cars.table_parts(t))
+        db.collect([282])
+        rows = db.finish({})
+        self.assertIn((282000, 282, 1, None), [tuple(r.values()) for r in rows["List_UpgradeEngineCamshaft"]])
+        self.assertIn((55282003, 55282, 2, 282, 0), [tuple(r.values()) for r in rows["List_UpgradeEngine"]])
+
+    def test_a_renumbered_car_leaves_nothing_in_its_fm4_range(self):
+        """FM4's 1530 becomes 56530 (FH1 has a car of that id): its rear wing's aero row comes under
+        the new id, and nothing stays at 1530900, where FH1's car keeps its own (the Cayman R's
+        aero rows stayed at 1541900, FH1's DLC car 1541's range)."""
+        fm4, fh1 = self.dbs()
+        for db in (fm4, fh1):
+            db.execute("create table List_UpgradeRearWing (Id INTEGER, Ordinal INT, Level INT, AeroPhysicsID INT)")
+            db.execute("create table List_AeroPhysics (AeroPhysicsID INTEGER, Drag0 REAL)")
+        fm4.execute("insert into List_UpgradeRearWing values (1530000, 1530, 1, 1530900)")
+        fm4.execute("insert into List_AeroPhysics values (1530900, 0.3)")
+        t = self.table(fm4, fh1)
+        with mock.patch.object(fm4_cars, "Retune", _NoRetune):
+            db = fm4_cars.Database(fm4, fh1, renumber=fm4_cars.table_cars(t, fm4), parts=fm4_cars.table_parts(t))
+        db.collect([1530])
+        rows = db.finish({})
+        self.assertEqual([tuple(r.values()) for r in rows["List_UpgradeRearWing"]], [(56530000, 56530, 1, 56530900)])
+        self.assertEqual([tuple(r.values()) for r in rows["List_AeroPhysics"]], [(56530900, 0.3)])
 
     def test_an_electric_car_without_an_engine_row(self):
         """FM4's Leaf has an electric motor and no engine row; FH1 needs one (the Leaf twin is
@@ -823,7 +857,7 @@ class EngineLevelTests(unittest.TestCase):
 
     def test_a_twins_own_engine_takes_fm4s_tuning_under_its_new_name(self):
         """#841: FH1's VW_Beetle_04_ET.xml is a traffic one, and FH1's traffic Beetle keeps it; the
-        twin's own copy of the engine (Database._own_parts), VW_Beetle_04_FM4, gets FM4's at FH1's
+        twin's own copy of the engine (Database._move_parts), VW_Beetle_04_FM4, gets FM4's at FH1's
         level (FH1's own file of the old name would win over the import's)."""
         conv = self.converter({"VW_Beetle_04_ET.xml": TRAFFIC_ET}, {"VW_Beetle_04_ET.xml": ET})
         conv.fh1db.execute("insert into Data_Engine values (36, 'VW_Beetle_04')")
@@ -1151,6 +1185,9 @@ class DlcPackTests(unittest.TestCase):
         for name, cols in DB_TABLES.items():
             conv.fh1db.execute("create table [%s] (%s)" % (name, cols))
         conv.fh1 = mock.Mock(dlc_car_names=lambda: (set(), set()), has_wheel=lambda name: False)
+        # the id table of these files (#924), made when first asked for, after a test's own rows
+        built = {}
+        conv.table = lambda: built.setdefault("t", car_ids.Table(car_ids.build({}, conv.fh1db, [("FM4", conv.fm4db)])))
         self.addCleanup(conv.fm4db.close)
         self.addCleanup(conv.fh1db.close)
         return conv
@@ -1172,11 +1209,12 @@ class DlcPackTests(unittest.TestCase):
         self.assertIn("needs the files of its wheel OTHER_Pack_Wheel", reasons["NOW_Rim_11"])
         self.assertEqual(reasons["NOW_Model_11"], "no model in the FM4 files given")
 
-    def test_a_dlc_cars_wheel_row_comes_along_and_a_clashing_engine_does_not(self):
+    def test_a_dlc_cars_wheel_row_comes_along_and_a_clashing_engine_gets_its_own_id(self):
         """FH1's database lacks the wheel rows of the Porsche Expansion's cars (they did not load
         without one), and gives two of the DLC's engine ids to other engines (the GT2 RS engine,
-        a swap of four Porsches, is FH1's Camry engine): such a swap is left out, a car whose own
-        engine clashes is not converted."""
+        a swap of four Porsches, is FH1's Camry engine). The id table gives such an engine an id of
+        its own (#924): the swap comes along under 55000 + id, and so does the Sprite, whose own
+        engine it is (before the table the swap was left out and the Sprite not converted)."""
         self.pack("A", {"34_pri_65.zip": {**car_members("POR_959_87"), **car_members("AH_Sprite_58"),
                                           **self.patch({
             "Data_Car": [(269, "POR_959_87", 3, 1987, 595), (1574, "AH_Sprite_58", 3, 1958, 2)],
@@ -1189,14 +1227,22 @@ class DlcPackTests(unittest.TestCase):
         conv.fh1db.execute("insert into List_Wheels values (2, 'AH_Sprite_58')")
         reasons = {name: reason for _, name, reason in conv.candidates()}
         self.assertIsNone(reasons["POR_959_87"])
-        self.assertEqual(reasons["AH_Sprite_58"], "its engine's id (EngineID 1034) is another engine's in FH1")
+        self.assertIsNone(reasons["AH_Sprite_58"])
+        parts = fm4_cars.table_parts(conv.table())
+        self.assertEqual(parts["engine"], {999: (55999, None), 1034: (56034, None)})
         with mock.patch.object(fm4_cars, "Retune", _NoRetune):
-            db = fm4_cars.Database(conv.fm4db, conv.fh1db)
+            db = fm4_cars.Database(conv.fm4db, conv.fh1db, parts=parts)
         db.collect([269])
         rows = db.finish({})
         self.assertEqual([(r["ID"], r["MediaName"]) for r in rows["List_Wheels"]], [(595, "POR_959_87")])
-        self.assertEqual([r["EngineID"] for r in rows["List_UpgradeEngine"]], [23])  # the swap left out
-        self.assertEqual([r["EngineID"] for r in rows["Data_Engine"]], [23])
+        self.assertEqual(sorted(r["EngineID"] for r in rows["List_UpgradeEngine"]), [23, 55999])  # the swap
+        self.assertEqual(sorted((r["EngineID"], r["MediaName"]) for r in rows["Data_Engine"]),
+                         [(23, "POR_959_87"), (55999, "POR_911GT2_12")])
+        # without the table's ids the swap is left out, as before
+        with mock.patch.object(fm4_cars, "Retune", _NoRetune):
+            db = fm4_cars.Database(conv.fm4db, conv.fh1db)
+        db.collect([269])
+        self.assertEqual([r["EngineID"] for r in db.finish({})["List_UpgradeEngine"]], [23])
 
 
 if __name__ == "__main__":

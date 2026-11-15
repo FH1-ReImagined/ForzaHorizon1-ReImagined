@@ -9,6 +9,7 @@ player's PC from their discs and stay there.
   - [What the import accepts](#what-the-import-accepts)
   - [FM4 DLC](#fm4-dlc)
 - [What a converted car is made of](#what-a-converted-car-is-made-of)
+  - [The id table](#the-id-table-924)
 - [physicsdefinition.bin](#physicsdefinitionbin)
 - [FH1's handling retune](#fh1s-handling-retune)
 - [Checked in the game](#checked-in-the-game)
@@ -30,7 +31,9 @@ player's PC from their discs and stay there.
 6. Start the game: the cars are in the **Autoshow** with the other cars of their makes (and
    in **Change Car** once bought). Four FM4 cars FH1 has only as traffic cars (the 2004 Beetle
    and PT Cruiser GT, the 2010 Taurus SHO, the 2011 Prius) come in as cars of their own; FH1's
-   traffic cars stay as they are ([how](#fh1s-traffic-cars-841)).
+   traffic cars stay as they are ([how](#fh1s-traffic-cars-841)). Every car takes its id from one
+   table, the same for every player, so a car has the same id on every game it is imported into
+   ([the id table](#the-id-table-924)).
 
 ### What the import accepts
 
@@ -85,10 +88,13 @@ the same **FM4 cars** mod and package. The Mods page says how many came from the
 Two things the disc cars never met: FH1's database has the stock wheel rows (`List_Wheels`) of
 every disc car but not of 33 DLC cars (the Porsche Expansion's and some later packs'), and a car
 without its wheel row did not load (the 959 in a grey void, the 997 GT3 RS standing still with its
-textures wrong), so the import adds those rows. And FH1 gives two of the DLC's engine ids to other
-engines (`999`, the Porsche GT2 RS engine, is FH1's Camry engine; `1034`, the Austin-Healey
-Sprite's, a Fiat 500's): the engine swap of four Porsches that names `999` is left out, and the
-Sprite, whose own engine is `1034`, is not converted ("its engine's id is another engine's in FH1").
+textures wrong), so the import adds those rows. And FH1 gives some of the DLC's ids to other
+cars and parts: car `1541`, the Porsche Cayman R's, is FH1's Explorer (a traffic car), and engine
+`999`, the Porsche 911 GT2 RS engine, is FH1's Camry engine. Such a car or part comes in under an id
+of its own, 55000 + its id ([the id table](#the-id-table-924)): the Cayman R is 56541, and the
+engine swap to `999` that four Porsches have names 55999. Before #924 those cars were left out
+and the swap too, and so was the Austin-Healey Sprite, whose engine `1034` is a Fiat 500's in FH1
+(it is now 56034).
 
 Left out, each named in the import's message: a pack with no cars (the Launch Track Pack: tracks,
 a soccer field and events), Disc 2's three car packs and its Autovista pack when they are among the
@@ -98,9 +104,10 @@ cars FH1 or its own DLC has already, and a car whose rows name something no file
 engine, body, drivetrain, make or wheel, as for a car that relies on another pack): such a car is
 skipped with that reason rather than added broken.
 
-Sixteen of FM4's packs, checked with the converter's list: 116 cars FH1 lacks are converted, on
-top of the discs' 381; 5 more are FH1 DLC cars, the Sprite is left out (above) and the rest are in
-FH1 already.
+Sixteen of FM4's packs, checked with the converter's list: 139 cars FH1 lacks are converted, on
+top of the discs' 385 (381, and the four [traffic cars'](#fh1s-traffic-cars-841) copies); 25 of
+the 139 take an id other than FM4's ([the id table](#the-id-table-924)). The rest are FH1's cars or
+its DLC's.
 
 The result is in two parts: the **FM4 cars** mod in the mods folder (the database and the car
 names, a few MB) and a DLC-style package with the cars' files, `464D34434152530...4D` in the
@@ -137,16 +144,19 @@ installed import lacks ([the same section](#engine-sound-banks-776)).
 
 `FM4_DISC1` is the unpacked disc 1, `FM4_PACKS` a folder with the unpacked Disc 2 packages
 (`tools/xcontent_extract.py`), `FM4_DLC` a folder with unpacked FM4 DLC packs, `GAME` FH1's game
-folder and `TU4` its title update folder.
+folder and `TU4` its title update folder. `list` names FM4's id and name of each car, and after it
+the id and name the import gives it when they are not FM4's (`1541 POR_CaymanR_12 ok (as 56541
+POR_CaymanR_12)`); `--cars` takes FM4's.
 
 ## What a converted car is made of
 
-Which cars: every `Data_Car` row of FM4's database whose id and `MediaName` FH1's database (and
-the installed DLC's patches) does not have, that has a model in the given files, and that is not
-one of FH1's DLC cars (`FH1_DLC_CARS`: a DLC installed later must not meet a second copy), and
-the FM4 cars FH1 has only as traffic cars, as cars of their own ([below](#fh1s-traffic-cars-841)). The
-two games share one car id registry: no id means two different cars. FM4 Disc 1 and the three
-Disc 2 car packs give 381 such cars (60 of them of the 25 makes FH1 lacks, such as Acura, Saab
+Which cars: every FM4 car of the [id table](#the-id-table-924), under the table's id, that has a
+model in the given files and that no installed DLC pack has. The table has every `Data_Car` row of
+FM4's database whose `MediaName` neither FH1 nor any of its official DLC packs has (a DLC installed
+later must not meet a second copy; `FH1_DLC_CARS` names them too), and the FM4 cars FH1 has only
+as traffic cars, as cars of their own ([below](#fh1s-traffic-cars-841)). The two games mostly share
+one car id registry, and the table keeps FM4's id where FH1 and its DLC leave it free. FM4 Disc 1
+and the three Disc 2 car packs give 381 such cars under FM4's ids (60 of them of the 25 makes FH1 lacks, such as Acura, Saab
 and Vauxhall: their `List_CarMake` row and names come along). FH1 has the logos of all of them
 but Renault's, which come from FM4's `UI/Textures.zip` (`UI4/Logos/<size>/L_MAN_Renault_Logo.xds`,
 the same format; without them its Autoshow tile was black, #710). An FM4 make FH1 has under
@@ -297,6 +307,54 @@ installed DLC's in priority order, as the game merges them), byte for byte the s
 nothing is added. The section after the IDS names (one `u16` per string) is kept as each game
 wrote it; it is not decoded.
 
+### The id table (#924)
+
+Online, and in saves, an id has to mean one car on every player's game: two players whose imports
+gave one id to two different cars break each other's sessions. So the import does not work a car's
+id out from the player's files. It takes it from `tools/car_ids.json`, one table of every car an
+import can bring, the same for everyone. `tools/car_ids.py build` makes it from the games
+themselves: FH1 with its title update and all of its official DLC packs, Forza Horizon 2, Fast &
+Furious, and FM4 with its DLC. The table is committed, and a new build only adds to it: an id in
+it never changes.
+
+| Rule | Example |
+|---|---|
+| A car is its `MediaName`: a car several games have has one id | FM4's and FH2's SLK55 AMG are one car |
+| FH1's cars and those of its official DLC (every pack, installed or not) keep their ids, and no other game's version of them is imported | FH1's DLC has the Hennessey Venom GT (1564), so FM4's (1532) is not imported |
+| ...but for FH1's 18 traffic cars: another game's full car is a car of its own, under 55000 + the traffic car's id and a 5 after the make in its `MediaName` ([below](#fh1s-traffic-cars-841)) | `VW_5_Beetle_04`, 55282 |
+| Otherwise the first game in the order FH2, Fast & Furious, FM4 that has the car gives its id | FM4's SLK55 AMG (1525) has FH2's id, 51525, as in UDLC |
+| A car keeps its game's id unless a car before it in that order has it; it then takes 55000 + it | FM4's Cayman R (1541) is 56541: FH1's 1541 is the Explorer, a traffic car |
+| A car id stays under 65536: with car ids above that, no imported car loaded. The build stops when one would not | |
+
+FM4's parts go by the same rule (`car_ids.fm4_parts`). An engine, drivetrain or stock wheel takes
+55000 + its id when FH1 or its DLC has that id for another part (an engine or wheel of another
+`MediaName`, a drivetrain that only other cars use), or has it only on its traffic cars, which FH1
+cut down. FM4's engine 999, the Porsche 911 GT2 RS's, is 55999, as FH1's 999 is the Camry's. An
+engine whose `MediaName` FH1 has gets `_FM4` after it (`VW_Beetle_04_FM4`), as the game finds an
+engine's `EngineTuning` by that name and the disc's file would win. A part FH1 keeps with no car of
+its own using it stays shared, as before, so an imported car's parts keep their ids. The table
+moves 26 engines, 30 drivetrains and 35 wheels of FM4's. The import moves the part's rows with it
+(`Database._move_parts`: those keyed by the part's id, or by id × 1000 + n, and the torque curves
+in that range), and a car the table renumbers takes its rows along (`Database._renumber_cars`:
+the rows keyed by its id, or by id × 1000 + n, and the references between them).
+
+The table also lists, under `renumbered`, every id an older import gave a car or part that the
+table gives another, for the launcher to move a save's cars to their new ids (not done yet: it is
+to ask first and keep a backup). They are those of ReImagined's import before the table (the two
+2013 SRT Viper race cars, 1606 and 1637 when FH1's DLC was not installed, where FH1's DLC has the
+Shelby GT500 and the Escalade, now 56606 and 56637, and three parts of cars that kept their ids:
+drivetrains 946 and 947, and engine 36) and the 158 cars of Forza Imported DLC Maker that move.
+
+    tools/car_ids.py build --fh1 GAME --update TU4 --dlc FH1_DLC --fh2 FH2 --ff FH2FF \
+                           --fm4 FM4_DISC1 [--fm4-content FM4_PACKS] [--fm4-dlc FM4_DLC] \
+                           [--old-ids "Forza Imported DLC Maker=fm4_car_ids.json"]
+    tools/car_ids.py check
+
+`build` needs all of those games, and only who maintains the table runs it; `FH1_DLC` is a folder
+holding all of FH1's official DLC packs (named by their 42-digit hash; other packs there are left
+out). `check` finds a table's own errors: an id or `MediaName` used twice, a car id out of range,
+a part id used twice.
+
 ### FH1's traffic cars (#841)
 
 Five FM4 cars are in FH1 only as traffic cars: the 2004 Beetle and PT Cruiser GT, the 2010
@@ -304,11 +362,11 @@ Taurus SHO, the 2011 Prius and Leaf. FH1 has their id and `MediaName` with `IsSe
 cut-down models (`media/cars/VW_Beetle_04.zip` holds only the `_lod0` and `_cockpit` models). An
 import before this fix took them for FH1's own cars and left them out without saying so. Now
 FH1's traffic cars stay as they are, so traffic loads nothing bigger, and FM4's car comes in
-beside each one as a car of its own (`traffic_twins`):
+beside each one as a car of its own, as the [id table](#the-id-table-924) numbers and names it:
 
 | | FH1's traffic car | FM4's car in the import |
 |---|---|---|
-| id | 282 | 55282: 55000 + the id (`twin_id`), a 55 in front of a three-digit id (the 1241 Taurus SHO is 56241) |
+| id | 282 | 55282: 55000 + the id (`car_ids.new_id`), a 55 in front of a three-digit id (the 1241 Taurus SHO is 56241) |
 | `MediaName`, files | `VW_Beetle_04` | `VW_5_Beetle_04`: its models, gauge and wheel files under that name (`twin_name`, `twin_file`). Files under the traffic car's name would lose to the disc's |
 | rows keyed by the car | 282000 + n | 55282000 + n, with the references between them kept. The engine combos get new keys |
 | stock wheel | 30 `VW_Beetle_04`, cut down too | its own: 55030 `VW_5_Beetle_04` |
@@ -326,10 +384,10 @@ car, the Corrado. With 55282 and 56340, they load. Engine and drivetrain ids abo
 FH1 cut down these cars' parts too. FH1's `EngineTuning` of each of their four engines is a
 traffic one ([`traffic_tuning`](#traffic-car-tunings-840)); FM4's is not. FH1's Prius gearbox is
 not a CVT (`CVTShiftTime` −1, FM4's 1.0), and its torque curves are not FM4's. FH1's Leaf has six
-gears (five forward); FM4's has one. So a part that FH1 has only on traffic cars (every FH1 car
-naming it has `IsSelectable` 0) becomes the twin's own (`Database._own_parts`). The engine,
-drivetrain, body or motor gets FM4's rows under 55000 + its id: engine 800 becomes 55800, its
-rows 800000 + n become 55800000 + n, and so do the torque curves in that range. The game finds an engine's `EngineTuning` by the engine's
+gears (five forward); FM4's has one. So a part that FH1 has only on its traffic cars becomes the
+twin's own ([the id table's parts](#the-id-table-924)). The engine or drivetrain gets FM4's rows
+under 55000 + its id: engine 800 becomes 55800, its rows 800000 + n become 55800000 + n, and so do
+the torque curves in that range (the body's rows are the car's, under its id). The game finds an engine's `EngineTuning` by the engine's
 `MediaName`, and the disc's file of the old name, the traffic one, would win over the import's.
 So the copy is named `<name>_FM4`, as Forza Imported DLC Maker names such an engine (its 2006
 Focus ST, Spark and xD were silent with FH1's traffic tuning). Its tuning is FM4's, at FH1's
@@ -566,6 +624,17 @@ the five cars, with their files in the package:
 | Drive | the Prius and then the Beetle, each the save's current car (in every garage slot of a copy of the save), spawned at the festival and drove off (16 mph and a turn). The game read `toy_prius_11_fm4_et.xml` and `vw_beetle_04_fm4_et.xml`, their own engines' tunings. The PT Cruiser and the Taurus SHO were not driven |
 | Car ids | with the Taurus SHO and the Prius at 551241 and 551340, not even the Beetle loaded, and the game spawned its default car instead. With every car id under 65536, it loaded. Moving only the Beetle's car (55282), wheel (5530), engine (5536) or drivetrain (5535) to a new id did not stop it loading |
 
+### Ids from the table (#924)
+
+Windows, the 0.3.7 release runtime, a copy of a save, offline.
+
+| What | Result |
+|---|---|
+| Table | `tools/car_ids.py build` with FH1 (title update 4, all of its official DLC), FH2, Fast & Furious, FM4 Disc 1 and 16 FM4 DLC packs: 555 cars (88 of FH2's, 9 of Fast & Furious', 458 of FM4's, 5 of them copies of FH1's traffic cars), 26 engines, 30 drivetrains and 35 wheels of FM4's under ids of their own, 163 ids under `renumbered`. `check`: no problem. Against a database of FH1 with all of its DLC and UDLC: every FH1 and official DLC car is FH1's in the table, and the 97 FH2 and Fast & Furious cars all have UDLC's ids |
+| List | `tools/fm4_cars.py list` with FM4's discs and DLC: 524 cars to convert (385 from the discs, 139 from the DLC), 29 of them under an id other than FM4's: the four traffic cars' copies, 4 under FH2's ids (51525, 51535, 51549, 51558) and 21 under 55000 + their id (56519 to 56637). Left out: the Leaf ([above](#fh1s-traffic-cars-841)) and two cars without a model in the files |
+| Import | six cars, their files in the package: the Beetle's and the Prius' copies (55282, 56340, as before), the Cayman R (56541), the Sprite (56574), the SLK55 AMG (51525) and the 997 GT3 (263, its own id; its swap to the GT2 RS engine names 55999). Every row of FH1's database is in the import unchanged. Every id the new cars' rows name is a row of the import, none is an FM4 part id the table moves, and nothing is left under a renumbered car's FM4 id or in its range. Each moved engine and drivetrain has all of FM4's rows under its new id. `check` finds nothing missing |
+| Drive | the Cayman R, the SLK55 AMG and the Sprite, each the save's current car (in every garage slot of a copy of the save), spawned at the festival and drove off (9 to 19 mph). The game read their engines' own tunings (`por_caymanr_12_et.xml`, `mer_slk55amg_12_et.xml`, `ah_sprite_58_et.xml`) |
+
 ## Not done yet
 
 - Indicators: FH1 gives indicator sprites only to its traffic cars, so the converted cars get
@@ -576,10 +645,9 @@ the five cars, with their files in the package:
 - FM4's title updates are not read. Of the DLC packs' extra content only the cars are used:
   liveries, events, tracks and achievements are not.
 - The 2011 Leaf, an electric car without an engine row ([above](#fh1s-traffic-cars-841)).
-- 25 FM4 DLC cars whose car id FH1 gives another car (the Porsche Cayman R and Cayenne, the 2013
-  Mustang Boss 302, the Lotus Eleven and others) are still left out without a word. They are
-  other cars, not FH1's, and could take 55000 + their id the same way. Two more, the Hennessey
-  Venom GT and the 2013 SRT Viper, are FH1's own cars under other ids and stay out.
+- The rest of #924: the launcher moving a save's cars and parts to the ids the table gives them
+  (`renumbered`), FH2 and Fast & Furious as sources to import from, and the rally parts Forza
+  Imported DLC Maker gives FM4 cars.
 
 ## Credits
 
