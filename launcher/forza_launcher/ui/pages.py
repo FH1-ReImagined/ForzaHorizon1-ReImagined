@@ -11,10 +11,11 @@ from PySide6.QtWidgets import (QCheckBox, QFileDialog, QFrame, QGridLayout, QHBo
                                QTabBar, QStackedWidget, QVBoxLayout, QWidget)
 
 from .. import (GITHUB_URL, PRIVACY_URL, PUBLIC_SERVER, __version__, browser, build_env, builder, datafolder, errors,
-               game, installer, paths, pins, shader_prebuild, vr)
+               fan_dlc, game, installer, paths, pins, shader_prebuild, vr)
 from ..config import Config
 from . import theme, workers
 from .challenges_card import ChallengesCard
+from .fan_dlc_notice import FanDlcNotice
 from .widgets import Disclosure, Hero, SpinBox, StatusRow, card, label
 
 
@@ -120,6 +121,10 @@ class PlayPage(QWidget):
         from .offline_notice import OfflineNotice
         self.offline_notice = OfflineNotice(cfg)   # Offline because Online features is off
         lay.addWidget(self.offline_notice)
+        # The fan-made unicorn cars pack (offer 1975) is installed: Single Player never loads (#771).
+        self.fan_dlc = FanDlcNotice(cfg, window)
+        self.fan_dlc.moved.connect(self.show_message)
+        lay.addWidget(self.fan_dlc)
         self.warn = label("", "warn")
         self.warn.hide()
         lay.addWidget(self.warn)
@@ -286,8 +291,11 @@ class PlayPage(QWidget):
         else:
             self.r_build.set(False if state != "partial" else None, detail + " Open Setup and press Build.")
         n = game.installed_dlc(cfg)
-        self.r_dlc.set(True if n else None, f"{n} DLC package(s) installed" if n else
-                       "None installed (optional): add them in Setup.")
+        self.fan_dlc.refresh()
+        self.r_dlc.set(None if self.fan_dlc.packages or not n else True,
+                       f"{n} DLC package(s) installed" +
+                       (" · a fan-made pack that stops Single Player loading" if self.fan_dlc.packages else "")
+                       if n else "None installed (optional): add them in Setup.")
         mode = cfg.online["mode"]
         self.r_online.set(True, {
             "public": "Public server",
@@ -575,6 +583,15 @@ class SetupPage(QWidget):
         self.dlcwarning.setStyleSheet(f"color: {theme.ORANGE};")
         self.dlcwarning.hide()
         self.c2.lay.addWidget(self.dlcwarning)
+        # What is already installed (not only the folder above): the fan-made unicorn cars pack with
+        # its button, and other packages that are not the game's (#771).
+        self.fan_dlc = FanDlcNotice(cfg, window)
+        self.c2.lay.addWidget(self.fan_dlc)
+        self.dlcinstalled = label("")
+        self.dlcinstalled.setTextFormat(Qt.PlainText)
+        self.dlcinstalled.setStyleSheet(f"color: {theme.ORANGE};")
+        self.dlcinstalled.hide()
+        self.c2.lay.addWidget(self.dlcinstalled)
         self.go2 = QPushButton("Install DLC")
         self.go2.clicked.connect(self._install_dlc)
         brow = QHBoxLayout()
@@ -585,6 +602,7 @@ class SetupPage(QWidget):
         self.bar2.hide()
         self.c2.lay.addWidget(self.bar2)
         self.msg2 = label("", "muted")
+        self.fan_dlc.moved.connect(self.msg2.setText)
         self.c2.lay.addWidget(self.msg2)
         lay.addWidget(self.c2.frame)
         lay.addStretch(1)
@@ -766,14 +784,19 @@ class SetupPage(QWidget):
                 self.dlclist.setText("Reading the DLC folder...")
                 self._probe("dlc:" + d, lambda: self._read_dlc(d))
             else:
-                self.dlclist.setText(self._dlc_text(*got))
-                warning = installer.dlc_warning(got[0])
+                self.dlclist.setText(self._dlc_text(got[0], got[1]))
+                warning = installer.dlc_warning(got[0], got[2])
         else:
             self.dlclist.setText("")
         self.dlcwarning.setText(warning)
         self.dlcwarning.setVisible(bool(warning))
         n = game.installed_dlc(cfg)
-        self.c2.set_badge(f"{n} installed" if n else "Optional", True if n else None)
+        odd = fan_dlc.unrecognized(cfg.data_home())
+        self.fan_dlc.refresh([p for p in odd if p.fan])
+        other = fan_dlc.unknown_text([p for p in odd if not p.fan])
+        self.dlcinstalled.setText(other)
+        self.dlcinstalled.setVisible(bool(other))
+        self.c2.set_badge(f"{n} installed" if n else "Optional", True if n and not odd else None)
         state, detail = builder.build_status(cfg.data_home(), cfg["tu_package"])
         label_for = {"built": ("Built", True), "stale": ("Rebuild needed", None), "partial": ("Unfinished", None),
                      "none": ("Not built", None), "nosource": ("Missing sources", False)}[state]
