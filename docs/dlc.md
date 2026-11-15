@@ -201,7 +201,8 @@ within 0.1 s), and the loading screen runs for ever. The #115 log has that stop 
 server, on a server on the player's own PC and on five offline starts. #771 has the same offers
 (plus the FM4 cars import) and the same mount lines, and there opening Multiplayer first and
 then Single Player loads every time (in that log the first speech facade load comes on the
-Multiplayer path and the load goes on to the effects). Why the Multiplayer path gets through is not reverse engineered. A package with only
+Multiplayer path and the load goes on to the effects). Why the Multiplayer path gets through is
+not reverse engineered. A package with only
 that shape (an empty `1975.puboffer` and an official `stringtables.xml`, no zips) loads, so it is
 the pack's content, not its offer number or layout. Removing the pack fixed the load in #115; the
 launcher's save editor adds the unicorn cars to a save without it ([unicorn_cars.md](unicorn_cars.md)).
