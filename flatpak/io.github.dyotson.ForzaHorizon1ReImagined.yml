@@ -83,7 +83,7 @@ modules:
       - /var
     sources:
       - type: archive
-        url: https://kerberos.org/dist/krb5/1.22/krb5-1.22.3.tar.gz
+        url: https://kerberos.invalid/dist/krb5/1.22/krb5-1.22.3.tar.gz
         mirror-urls:
           - https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/releases/download/ci-flatpak-sources/krb5-1.22.3.tar.gz
         sha256: fe90af8441ad9fa9b064b8e53077cefb782a96f8a68276b031dc54af1789ff0b
@@ -106,7 +106,7 @@ modules:
         sha256: 16f4b5e41daf49235ae048458243da9efe5f3d8040f9cc5aa454ce69893d3bd9
         only-arches: [x86_64]
       - type: file
-        url: https://files.pythonhosted.org/packages/49/c2/a04fa003b4360e99d8e3fc2829abacf37396ace63ea1cd616402209ec7c6/shiboken6-6.12.0-cp310-abi3-manylinux_2_34_x86_64.whl
+        url: https://pythonhosted.invalid/packages/49/c2/a04fa003b4360e99d8e3fc2829abacf37396ace63ea1cd616402209ec7c6/shiboken6-6.12.0-cp310-abi3-manylinux_2_34_x86_64.whl
         mirror-urls:
           - https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/releases/download/ci-flatpak-sources/shiboken6-6.12.0-cp310-abi3-manylinux_2_34_x86_64.whl
         sha256: 3bde565bb0890044b5c7f63808adddede5abc241e9395a2bfed61919884d6240
