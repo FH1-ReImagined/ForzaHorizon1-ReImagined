@@ -39,6 +39,7 @@ constexpr uint32_t kListRetiled = 1;
 constexpr uint32_t kRefuseRetile = uint32_t(Refuse::kCount);      // untiled, saved headers wrong
 constexpr uint32_t kRefuseNoSlot = uint32_t(Refuse::kCount) + 1;  // no state word left
 constexpr uint32_t kRefuseCollision = uint32_t(Refuse::kCount) + 2;  // a key with other words
+constexpr uint32_t kRefuseTooLarge = uint32_t(Refuse::kCount) + 3;   // larger than the whole ring
 
 // The hash a define carries: the first word of the 128-bit hash of the template's words.
 inline uint32_t TemplateHash(const uint32_t* words, size_t count) {
@@ -145,6 +146,10 @@ class DefineRing {
  public:
   static constexpr uint32_t kAlign = 64;
   explicit DefineRing(uint32_t capacity) : capacity_(capacity) {}
+  // Whether a template of `bytes` can ever go in (one that cannot is refused, not retried).
+  bool Fits(uint32_t bytes) const {
+    return bytes && ((uint64_t(bytes) + kAlign - 1) & ~uint64_t(kAlign - 1)) <= capacity_;
+  }
   bool Reserve(uint32_t bytes, uint32_t acked, uint32_t* offset, uint32_t* sequence) {
     bytes = (bytes + kAlign - 1) & ~(kAlign - 1);
     if (!bytes || bytes > capacity_) return false;

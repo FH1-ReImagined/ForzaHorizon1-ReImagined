@@ -2,8 +2,9 @@
 // list registry and its shadow compare, behind native_lists (off by default).
 //
 // With native_lists=shadow, at each RunCommandBuffer call (TU4 sub_824469B0, the hook in
-// cockpit_gauges.cpp) on the main D3D device, of a model's list (a command buffer of type 9 with
-// the files' marker after its patch table) that is not registered yet:
+// cockpit_gauges.cpp) on the game's D3D device (the device of the first model list call: a call
+// on any other is counted and not registered), of a model's list (a command buffer of type 9
+// with the files' marker after its patch table) that is not registered yet:
 // - the list is converted (src/platform/native_list.h) from a copy of its header (with its flags
 //   in the files' form, FilesFormFlags), its patch table and its PM4; area C is not kept in
 //   memory, so the key and the slots come from those alone. A list scene_msaa has untiled (the
@@ -137,7 +138,7 @@ struct Counts {
            refused = 0, defined = 0, define_words = 0, bound = 0, dropped = 0, unloads = 0,
            unload_by_header = 0, unload_by_address = 0, not_device = 0, recording = 0,
            ring_full = 0, no_room = 0, fixups = 0, convert_ns = 0, run_ns = 0;
-  uint64_t refusals[nl::kRefuseCollision + 1] = {};
+  uint64_t refusals[nl::kRefuseTooLarge + 1] = {};
 };
 
 struct State {
@@ -149,6 +150,7 @@ struct State {
   nl::Converter converter;
   std::vector<nl::Bound> drops;  // unloaded, to go out at the next call
   uint32_t ring_base = 0, ack = 0, states = 0;
+  uint32_t device = 0;  // the device of the first model list call
   bool memory_failed = false;
   std::vector<uint32_t> tmpl;
   std::vector<uint8_t> header, patch, pm4;
@@ -171,7 +173,8 @@ const char* RefusalName(uint32_t r) {
   return r < uint32_t(nl::Refuse::kCount) ? nl::RefuseName(nl::Refuse(r))
          : r == nl::kRefuseRetile          ? "retile"
          : r == nl::kRefuseNoSlot          ? "no-state-word"
-                                           : "key-collision";
+         : r == nl::kRefuseCollision       ? "key-collision"
+                                           : "too-large";
 }
 
 bool AllocateMemory(State& s) {
@@ -197,7 +200,7 @@ bool Emit(PPCContext& ctx, uint8_t* base, uint32_t dev, const uint32_t* words, u
 void Log(State& s, uint64_t now) {
   const Counts& n = s.n;
   std::string refusals;
-  for (uint32_t r = 0; r <= nl::kRefuseCollision; ++r) {
+  for (uint32_t r = 0; r <= nl::kRefuseTooLarge; ++r) {
     if (!n.refusals[r]) continue;
     refusals += fmt::format(" {} {};", RefusalName(r), n.refusals[r]);
   }
@@ -292,6 +295,12 @@ void Register(PPCContext& ctx, uint8_t* base, uint32_t dev, uint32_t cb, uint32_
     }
   }
   s.n.convert_ns += NowNs() - t0;
+  if (!refused && !s.templates.Sent(key) && !s.ring.Fits(uint32_t(s.tmpl.size() * 4))) {
+    // Never fits: bound as refused, not converted again at every call.
+    refused = true;
+    refusal = nl::kRefuseTooLarge;
+    id = nl::kListRefused;
+  }
   if (!refused && !s.templates.Sent(key)) {
     const uint32_t bytes = uint32_t(s.tmpl.size() * 4);
     uint32_t offset = 0, sequence = 0;
@@ -337,7 +346,7 @@ void Register(PPCContext& ctx, uint8_t* base, uint32_t dev, uint32_t cb, uint32_
   ++s.n.bound;
   if (refused) {
     ++s.n.refused;
-    ++s.n.refusals[std::min<uint32_t>(refusal, nl::kRefuseCollision)];
+    ++s.n.refusals[std::min<uint32_t>(refusal, nl::kRefuseTooLarge)];
     static std::atomic<uint32_t> told{0};
     if (told.fetch_add(1) < 10)
       REXLOG_INFO("native_lists: list {:08X} (group {}) not converted: {}", cb, Group(),
@@ -366,7 +375,7 @@ void OnRun(PPCContext& ctx, uint8_t* base) {
     }
   } timed{s, t0};
   if (!Plausible(cb) || (Load32(base, cb) & 15) != 9) return;
-  if (!LooksLikeDevice(base, dev)) {
+  if (!LooksLikeDevice(base, dev) || (s.device && dev != s.device)) {
     ++s.n.not_device;
     return;
   }
@@ -380,6 +389,7 @@ void OnRun(PPCContext& ctx, uint8_t* base) {
             Load32(base, after + i * 4 + 4) == 0x55667789u;
   }
   if (!model) return;
+  if (!s.device) s.device = dev;  // the game's device: every later call is checked against it
   ++s.n.lists;
   if (forza::GuestPtr(base, dev)[kDeviceMode] & 0x80) {
     ++s.n.recording;  // into another command buffer: never seen (docs, "M4, second step")
@@ -453,8 +463,13 @@ extern "C" REX_FUNC(sub_82D19210) {
       ++s.n.fixups;
     }
   }
+  // A seqlock's writer: the odd generation stored before the fixup's writes, the even one after
+  // them (the plugin reads the generation, the slots, then the generation again). On x86 the
+  // fences only hold the compiler back; a weakly ordered CPU needs them as barriers.
+  if (word) std::atomic_thread_fence(std::memory_order_release);
   __imp__sub_82D19210(ctx, base);
   if (word) {
+    std::atomic_thread_fence(std::memory_order_release);
     nls::State& s = nls::S();
     std::lock_guard<std::mutex> lock(s.mutex);
     nls::Store32(base, word, nls::Load32(base, word) + 1);

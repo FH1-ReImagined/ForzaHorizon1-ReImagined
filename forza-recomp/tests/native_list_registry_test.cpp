@@ -291,6 +291,8 @@ void TestRing() {
   CHECK(ring.Reserve(300, 0, &at, &seq) && at == 640 && seq == 3);  // 320: up to 960
   CHECK(!ring.Reserve(100, 0, &at, &seq));                          // 64 left, nothing acked
   CHECK(!ring.Reserve(2000, 3, &at, &seq));                         // never fits
+  CHECK(!ring.Fits(2000) && !ring.Fits(1025) && !ring.Fits(0) && ring.Fits(1024) &&
+        ring.Fits(1));
   // The plugin read the first: its 128 bytes at the start are free again.
   CHECK(ring.Reserve(100, 1, &at, &seq) && at == 0 && seq == 4);
   CHECK(!ring.Reserve(64, 1, &at, &seq));  // wrapped: 0-128 used, 128 is the oldest
