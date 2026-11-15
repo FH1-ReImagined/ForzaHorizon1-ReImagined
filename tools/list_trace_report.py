@@ -156,7 +156,7 @@ def main():
         mean = c["ticks"] / free if free else 0
         return c["ticks"] + mean * c["sync_runs"]
 
-    print("\nindirect buffers a frame by class, depth (self = without the buffers they run)")
+    print("\nindirect buffers a frame by class, depth (self = without the buffers they run; ns/dw of self)")
     print("%-18s %5s %9s %10s %8s %8s %7s %9s %9s %8s" % (
         "class", "depth", "runs", "dwords", "ms", "self ms", "ns/dw", "regs in", "regs out", "skipped"))
     by_cd = collections.defaultdict(collections.Counter)
@@ -170,7 +170,7 @@ def main():
     for (cls, depth), c in sorted(by_cd.items()):
         r = dict(cls=CLASSES.get(cls, cls), depth=depth, runs=pf(c["runs"]), dwords=pf(c["dw"]),
                  ms=ms(c["est"]), self_ms=ms(c["self_est"]),
-                 ns_dw=(c["est"] * ns_tick / c["dw"]) if c["dw"] else 0,
+                 ns_dw=(c["self_est"] * ns_tick / c["dw"]) if c["dw"] else 0,
                  regs_in=pf(c["rin"]), regs_out=pf(c["rout"]), skipped=pf(c["skipped"]),
                  sync_runs=pf(c["sync_runs"]))
         rows.append(r)
