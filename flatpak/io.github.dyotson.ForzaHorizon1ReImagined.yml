@@ -9,6 +9,12 @@
 # Build (from the repository root):
 #   flatpak/stage.py --overlay rexglue-overlay-linux-amd64.tar.gz --sdk-license LICENSE-of-the-SDK
 #   flatpak-builder --user --install --force-clean build-dir flatpak/io.github.dyotson.ForzaHorizon1ReImagined.yml
+#
+# Every downloaded source pins its sha256 and has one mirror-urls entry: its copy in this
+# repository's pre-release ci-flatpak-sources, which flatpak-builder uses only when the url fails
+# (same sha256 check). A new or updated source needs that line too (launcher/test_flatpak_sources_mirror.py
+# names it: python3 launcher/packaging/flatpak_sources_mirror.py check); flatpak-sources-mirror.yml
+# adds the file to the release once the change is on main.
 app-id: io.github.dyotson.ForzaHorizon1ReImagined
 runtime: org.freedesktop.Sdk
 runtime-version: '26.08'
@@ -78,6 +84,8 @@ modules:
     sources:
       - type: archive
         url: https://kerberos.org/dist/krb5/1.22/krb5-1.22.3.tar.gz
+        mirror-urls:
+          - https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/releases/download/ci-flatpak-sources/krb5-1.22.3.tar.gz
         sha256: fe90af8441ad9fa9b064b8e53077cefb782a96f8a68276b031dc54af1789ff0b
 
   # The launcher's main third-party dependency. PySide6 6.12 wheels (Qt 6.12 inside), pinned.
@@ -93,18 +101,26 @@ modules:
         path: trim_pyside6.py
       - type: file
         url: https://files.pythonhosted.org/packages/7b/3c/7597d8dcb36aa8315427635ec6ec9d850ffbad4ce78b9118ac854889f2d3/pyside6_essentials-6.12.0-cp310-abi3-manylinux_2_34_x86_64.whl
+        mirror-urls:
+          - https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/releases/download/ci-flatpak-sources/pyside6_essentials-6.12.0-cp310-abi3-manylinux_2_34_x86_64.whl
         sha256: 16f4b5e41daf49235ae048458243da9efe5f3d8040f9cc5aa454ce69893d3bd9
         only-arches: [x86_64]
       - type: file
         url: https://files.pythonhosted.org/packages/49/c2/a04fa003b4360e99d8e3fc2829abacf37396ace63ea1cd616402209ec7c6/shiboken6-6.12.0-cp310-abi3-manylinux_2_34_x86_64.whl
+        mirror-urls:
+          - https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/releases/download/ci-flatpak-sources/shiboken6-6.12.0-cp310-abi3-manylinux_2_34_x86_64.whl
         sha256: 3bde565bb0890044b5c7f63808adddede5abc241e9395a2bfed61919884d6240
         only-arches: [x86_64]
       - type: file
         url: https://files.pythonhosted.org/packages/ff/3e/0d6c5934de575286ac0699a701d4155048185035b8da0ee78d57a38bc7ef/pyside6_addons-6.12.0-cp310-abi3-manylinux_2_34_x86_64.whl
+        mirror-urls:
+          - https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/releases/download/ci-flatpak-sources/pyside6_addons-6.12.0-cp310-abi3-manylinux_2_34_x86_64.whl
         sha256: 4ab38c0017f0453671a9313d3a53ca1c0e378924f54b07e596bcea94a9642391
         only-arches: [x86_64]
       - type: file
         url: https://files.pythonhosted.org/packages/ce/e0/cb8b68b962afc253709ed61555d0a4f297fd6786c0e77921d2e951504210/pyside6_webengine-6.12.0.140-cp310-abi3-manylinux_2_34_x86_64.whl
+        mirror-urls:
+          - https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/releases/download/ci-flatpak-sources/pyside6_webengine-6.12.0.140-cp310-abi3-manylinux_2_34_x86_64.whl
         sha256: c041c9921d7c91c9e51a2c027f434d05c3c59baa2c8f17b71dc8194e77791f06
         only-arches: [x86_64]
 
@@ -116,9 +132,13 @@ modules:
     sources:
       - type: file
         url: https://files.pythonhosted.org/packages/5d/e2/399ea7900e7510096aeb41439e6f1540bef0bdf7e15cc2d8464e4adb71e8/PySDL2-0.9.17-py3-none-any.whl
+        mirror-urls:
+          - https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/releases/download/ci-flatpak-sources/PySDL2-0.9.17-py3-none-any.whl
         sha256: fe923dbf5c7b27bbc1eb2bf58abfa793f8f13fd7ae8b27b1bc2de49920bcbd41
       - type: file
         url: https://files.pythonhosted.org/packages/2b/1c/91fb667c3968b420de5dd76e840259b44b876b6fc84c5889151633fcc06e/pysdl2_dll-2.32.10-py2.py3-none-manylinux_2_28_x86_64.whl
+        mirror-urls:
+          - https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/releases/download/ci-flatpak-sources/pysdl2_dll-2.32.10-py2.py3-none-manylinux_2_28_x86_64.whl
         sha256: 1e6139e3ce832d95d8376b77f4c9288bef34d6b131f844f2a5fcc8873ce8e6da
         only-arches: [x86_64]
 
@@ -130,6 +150,8 @@ modules:
     sources:
       - type: file
         url: https://files.pythonhosted.org/packages/0b/a7/71ac2cff56fec219ed242bb11b8efb69fcc4bec75db06fb7bfe35de520e6/certifi-2026.7.22-py3-none-any.whl
+        mirror-urls:
+          - https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/releases/download/ci-flatpak-sources/certifi-2026.7.22-py3-none-any.whl
         sha256: 62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775
 
   - name: forza-reimagined
