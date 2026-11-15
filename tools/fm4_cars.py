@@ -263,12 +263,16 @@ def zip_member(path, name):
     return None
 
 
-def logo_members(path):
-    """Lowercase name -> Member of the make logos (UI4/Logos/<size>/L_MAN_*.xds) in a UI
-    textures zip."""
+def logo_members(path, prefix=""):
+    """Lowercase name ("ui4/logos/<size>/l_man_<make>_logo.xds") -> Member of the make logos in a
+    UI textures zip, or in a pack's zip under prefix ("media/ui/textures/")."""
     z = ZIPS.get(path)
-    return {i.filename.lower(): Member(z, path, i) for i in z.infolist()
-            if re.match(r"(?i)ui4/logos/[^/]+/l_man_[^/]+\.xds$", i.filename)}
+    out = {}
+    for i in z.infolist():
+        m = re.match(r"(?i)%s(ui4/logos/[^/]+/l_man_[^/]+\.xds)$" % re.escape(prefix), i.filename)
+        if m:
+            out[m.group(1).lower()] = Member(z, path, i)
+    return out
 
 
 # A pack's car zip: Disc 2's are 0001_pri_65.zip..., a DLC pack's its offer (27_pri_65.zip) or a
@@ -612,9 +616,14 @@ class FM4:
         return self._banks
 
     def logos(self):
-        """Lowercase member name -> Member: the make logos in UI/Textures.zip (UI4/Logos/...)."""
+        """Lowercase name (ui4/logos/...) -> Member: the make logos in disc 1's UI/Textures.zip,
+        and the packs' own (media/UI/Textures/UI4/Logos/...), later packs over earlier ones: the
+        DLC makes' logos (MG, Porsche, smart, Triumph, Lincoln) ship only in their packs (#772)."""
         z = find_ci(self.media, "UI", "Textures.zip")
-        return logo_members(z) if z else {}
+        out = logo_members(z) if z else {}
+        for path, _ in self.packs:
+            out.update(logo_members(path, "media/ui/textures/"))
+        return out
 
     def languages(self):
         st = find_ci(self.media, "StringTables")
@@ -1176,25 +1185,53 @@ def _make_key(text):
     return re.sub(r"[^0-9a-z]", "", (text or "").casefold())
 
 
+def _unrelated(a, b):
+    """Two make names' keys (_make_key) for two makes: both known, and neither equal to the other
+    nor its start (FM4's "GMC Truck" is FH1's "GMC")."""
+    return bool(a and b) and not (a == b or a.startswith(b) or b.startswith(a))
+
+
+def _make_keys(db, names):
+    """{make id: _make_key of its English name} of a game's List_CarMake."""
+    return {mid: _make_key(names.text(name))
+            for mid, name in db.execute("select ID, DisplayName from List_CarMake order by ID")}
+
+
 def make_merges(fm4db, fh1db, fm4_names, fh1_names):
     """{FM4 make id: FH1 make id} for the FM4 makes FH1 has under another id: the same English
     name. FM4's Eagle (87, the Talon's) is FH1's Eagle (102, the Speedster's); as a make of its
-    own it was a second "Eagle" in the Autoshow (#710). fm4_names and fh1_names are the two
-    games' List_CarMake string tables."""
+    own it was a second "Eagle" in the Autoshow (#710). That goes too for an FM4 make whose id
+    FH1 uses for another make: FM4's Hennessey (102) is FH1's Hennessey (103), not FH1's 102,
+    Eagle (#772). fm4_names and fh1_names are the two games' List_CarMake string tables."""
+    fh_keys = _make_keys(fh1db, fh1_names)
     fh = {}
-    fh_ids = set()
-    for mid, name in fh1db.execute("select ID, DisplayName from List_CarMake order by ID"):
-        fh_ids.add(mid)
-        key = _make_key(fh1_names.text(name))
+    for mid, key in fh_keys.items():
         if key:
             fh.setdefault(key, mid)
     out = {}
-    for mid, name in fm4db.execute("select ID, DisplayName from List_CarMake order by ID"):
-        if mid in fh_ids:
-            continue
-        hit = fh.get(_make_key(fm4_names.text(name)))
-        if hit is not None:
+    for mid, key in _make_keys(fm4db, fm4_names).items():
+        if mid in fh_keys and not _unrelated(key, fh_keys[mid]):
+            continue  # FH1's own make under the same id
+        hit = fh.get(key)
+        if hit is not None and hit != mid:
             out[mid] = hit
+    return out
+
+
+def make_moves(fm4db, fh1db, fm4_names, fh1_names, merges):
+    """{FM4 make id: new id} for the FM4 makes whose id FH1 uses for another make, when FH1 has no
+    make of their name (make_merges takes those): FM4's Lincoln (105, the 1962 Continental's) is
+    FH1's Viper, and the Continental showed as a "Viper Continental" (#772). The new ids follow the
+    highest either game uses (FH1's DLC packs add none above its own)."""
+    fh_keys = _make_keys(fh1db, fh1_names)
+    fm4_keys = _make_keys(fm4db, fm4_names)
+    new = max(list(fh_keys) + list(fm4_keys) + [0]) + 1
+    out = {}
+    for mid, key in fm4_keys.items():
+        if mid in merges or mid not in fh_keys or not _unrelated(key, fh_keys[mid]):
+            continue
+        out[mid] = new
+        new += 1
     return out
 
 
@@ -1210,13 +1247,18 @@ def engine_clash(fm4db, fh1db, engine_id):
 
 class Database:
     """Builds the DB patch: the selected cars' rows from FM4's database in FH1's tables.
-    merges: {FM4 make id: FH1 make id} (make_merges), the cars of those makes join FH1's."""
+    merges: {FM4 make id: FH1 make id} (make_merges), the cars of those makes join FH1's;
+    moves: {FM4 make id: new id} (make_moves), those makes and their cars take the new id."""
 
-    def __init__(self, fm4db, fh1db, merges=None):
+    def __init__(self, fm4db, fh1db, merges=None, moves=None):
         self.fm4, self.fh1 = fm4db, fh1db
         self.merges = dict(merges or {})
+        self.moves = dict(moves or {})
         # "_&N" references the rows take from FH1's own tables, not FM4's (strings() skips them)
         self.fh1_refs = set()
+        # the moved makes' names: FM4's own strings although FH1 has its make of the same id
+        # under the same key and IDS_ name (strings() adds them under a key of their own)
+        self.own_refs = set()
         self.fh1_tables = set(tables(fh1db))
         self.fm4_tables = set(tables(fm4db))
         self.rows = {}  # table -> {key tuple: dict row}
@@ -1290,13 +1332,22 @@ class Database:
                 if name and "MakeName" in r:
                     r["MakeName"] = name[0]
                     self.fh1_refs.add(name[0])
+            elif r.get("MakeID") in self.moves:
+                r["MakeID"] = self.moves[r["MakeID"]]
+                self.own_refs.add(r.get("MakeName"))
         # the stock wheels' rows: FH1's database has those of most FM4 cars, not of the DLC's
         # Porsche Expansion and some later packs (a car without its wheel row did not load)
         self._add("List_Wheels", self._select("List_Wheels", "ID", {
             r["StockWheelID"] for r in first.get("Data_Car", []) if r.get("StockWheelID") is not None}))
         makes = {r["MakeID"] for r in first.get("Data_Car", []) if r.get("MakeID") is not None}
         makes -= set(self.merges.values())  # FH1's own rows
-        self._add("List_CarMake", self._select("List_CarMake", "ID", makes))
+        back = {new: old for old, new in self.moves.items()}
+        make_rows = self._select("List_CarMake", "ID", {back.get(m, m) for m in makes})
+        for row in make_rows:
+            if row["ID"] in self.moves:
+                row["ID"] = self.moves[row["ID"]]
+                self.own_refs.update(row.get(c) for c in ("DisplayName", "Profile"))
+        self._add("List_CarMake", make_rows)
         all_rows = [r for rows in first.values() for r in rows] + level2
         for pat, table, col in REFS:
             keys = {v for r in all_rows for c, v in r.items() if pat.match(c) and v is not None}
@@ -1875,12 +1926,15 @@ class Converter:
             self.put("media/ui/textures/thumbnails/thumbnail_%d.xds" % cid, thumb)
         return donor
 
-    def strings(self, rows, report, fh1_refs=()):
+    def strings(self, rows, report, fh1_refs=(), own_refs=()):
         """<table>.str for each of FH1's languages: FH1's strings (with the DLC's) plus the new
         rows'. Rewrites the rows' references when a key had to move (another string of FH1's
-        table has it). fh1_refs: references to FH1's own strings, left as they are."""
+        table has it). fh1_refs: references to FH1's own strings, left as they are. own_refs:
+        references whose FM4 string is added even when FH1 has one of the same key and IDS_ name
+        (a moved make's name, Database.own_refs), under that name with _FM4 appended."""
         fm_langs = self.fm4.languages()
         langs = sorted(l for l in self.fh1.languages() if l not in ("dev", "loc"))
+        own = {int(r[2:]) for r in own_refs if isinstance(r, str) and re.match(r"_&\d+$", r)}
         moved_total = 0
         for table_name, users in STRING_TABLES.items():
             refs = []
@@ -1906,9 +1960,10 @@ class Converter:
                     if not e:
                         continue
                     have = table.entries.get(moved.get(n, key))
-                    if have is not None and have[1] == e[1]:
+                    if have is not None and have[1] == e[1] and n not in own:
                         continue  # FH1 has it
-                    new = table.add(e[1] or "IDS_FM4_%d" % key, e[0], e[3], moved.get(n, key))
+                    name = (e[1] or "IDS_FM4_%d" % key) + ("_FM4" if n in own else "")
+                    new = table.add(name, e[0], e[3], moved.get(n, key))
                     added = True
                     if new != key:
                         moved[n] = new
@@ -1941,8 +1996,9 @@ class Converter:
         added = []
         for low, member in sorted(self.fm4.logos().items()):
             if low.rsplit("/", 1)[1][:-4] in stems and low not in have:
-                self.put("media/ui/textures/" + member.info.filename, member=member)
-                added.append(member.info.filename)
+                rel = member.info.filename[-len(low):]  # UI4/Logos/<size>/L_MAN_<make>_Logo.xds
+                self.put("media/ui/textures/" + rel, member=member)
+                added.append(rel)
         report["logos"] = added
 
     def run(self, car_ids, progress=None, cancelled=lambda: False):
@@ -1960,9 +2016,11 @@ class Converter:
                 report["skipped"].append((cid, "%s: %s" % (name, reason)))
                 continue
             chosen.append((cid, name))
-        db = Database(self.fm4db, self.fh1db, make_merges(
-            self.fm4db, self.fh1db, self.fm4.strings("List_CarMake", "en"),
-            self.fh1.strings_raw("List_CarMake", "en")[1]))
+        fm4_names = self.fm4.strings("List_CarMake", "en")
+        fh1_names = self.fh1.strings_raw("List_CarMake", "en")[1]
+        merges = make_merges(self.fm4db, self.fh1db, fm4_names, fh1_names)
+        db = Database(self.fm4db, self.fh1db, merges,
+                      make_moves(self.fm4db, self.fh1db, fm4_names, fh1_names, merges))
         db.collect([c for c, _ in chosen])
         rows = db.finish(report)
         wheels = {r["StockWheelID"] for r in rows.get("Data_Car", [])}
@@ -2003,7 +2061,7 @@ class Converter:
                 for t, rs in rows.items()}
         self.logos(rows.get("List_CarMake", []), report)
         self.finish_package(report)
-        self.strings(rows, report, db.fh1_refs)
+        self.strings(rows, report, db.fh1_refs, db.own_refs)
         dbdir = os.path.join(self.out, "media", "db")
         os.makedirs(dbdir, exist_ok=True)
         write_full_db(self.fh1.db_file, self.fh1db, rows, os.path.join(dbdir, "gamedb.slt"))

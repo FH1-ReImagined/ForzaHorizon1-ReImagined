@@ -149,6 +149,19 @@ but Renault's, which come from FM4's `UI/Textures.zip` (`UI4/Logos/<size>/L_MAN_
 the same format; without them its Autoshow tile was black, #710). An FM4 make FH1 has under
 another id, by its English name, is FH1's: FM4's Eagle (87, the Talon) joins FH1's Eagle (102,
 the Speedster) instead of a second Eagle in the Autoshow (#710); Eagle is the only one.
+
+The DLC packs bring makes of their own: Porsche (39), smart (95), MG (98), Triumph (99), Viper
+(104) and Lincoln (105). Their logos (`L_MAN_POR`, `_SMA`, `_MG`, `_TRI`, `_VIP`, `_LIN`) are
+only in the packs' zips (`media/UI/Textures/UI4/Logos/<size>/...`), so the logos come from the
+packs as well as from Disc 1, a later pack's over an earlier one's (FH1's own `L_MAN_Porsche_Logo`
+is not the one FM4's Porsche row names; #772). Three FM4 make ids are FH1's for another make:
+80 (FM4's "GMC Truck", FH1's GMC: the same make, kept), 102 (FM4's Hennessey, FH1's Eagle) and
+105 (FM4's Lincoln, FH1's Viper; the 1962 Continental showed as a "Viper Continental", #772). A
+make whose id FH1 uses for another one joins FH1's make of its name when there is one (FM4's
+Hennessey, 102, is FH1's 103); otherwise it and its cars take a new id after the highest either
+game uses (the Lincoln: 108), and its name goes into FH1's string table under a key of its own
+(both games key a make's name by its id, so the Lincoln's and FH1's Viper's had the same key and
+`IDS_` name). FH1's DLC packs add make ids 62, 63, 76, 85 and 100, none above its own 107.
 Two cars have no model in those files and are left out. The Autovista pack (Disc 2, package 4)
 has only showroom models and is not used. All 381 convert (15 minutes on this PC
 from unpacked files; 5.6 GB of package, 10 MB of mod).
