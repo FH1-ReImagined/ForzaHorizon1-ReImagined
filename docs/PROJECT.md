@@ -156,7 +156,7 @@ Leaderboard screens, Windows and Steam Deck are not scripted: a hand run in the 
   first of 8 changes (Get In Car, 1,146,880 bytes, 170 ms after it), and once on a Back from
   My Cars after browsing; versions covering only the resource loader's blocks or only category
   0x21 stopped twice on the menu scene's 0x29 block. The final code: 5 changes in one session
-  where the first needed the overflow (the same 1,146,880 bytes at 61.1 of 62.5 MB, 170 ms after
+  where the first needed the overflow (the same 1,146,880 bytes with 61,139 of 62,464 KB in use, 170 ms after
   Get In Car; the menu drew as usual), 15 changes (13 different cars) and the garage's Change Car
   in another session that never needed it, and a session with the switch off (stock pause,
   driving: no overflow). The garage's Car Select shows two cars' pictures garbled on main too.
