@@ -295,7 +295,10 @@ namespace {
 // with the call chain of its saved stack; the fibers the threads are running now
 // (KTHREAD +0x164) are left out, the thread lines show them. A fiber that never ran still
 // has its first frame (stack top - 0x50) and is counted, not listed; so is a page whose saved
-// stack has no guest call chain (a fiber context left by a thread that has exited).
+// stack has no guest call chain (a fiber context left by a thread that has exited). A page
+// freed by DeleteFiber, or left by an exited thread, whose stack is still committed and still
+// holds a chain passes the shape check too: such a line is stale, so read the list as fibers
+// that may be waiting. It only reads guest memory.
 void LogWaitingFibers(const std::set<uint32_t>& running) {
   auto* kernel = rex::system::kernel_state();
   if (!kernel || !kernel->memory()) return;

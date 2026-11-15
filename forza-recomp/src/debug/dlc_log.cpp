@@ -83,7 +83,8 @@ namespace {
 
 // The display name in a package's header file (Headers/00000002/<name>.header, written by the
 // launcher, tools/install_dlc.py header_bytes: UTF-16BE at +8, 128 characters). Characters
-// outside ASCII are written as '?': it is only for the log.
+// outside ASCII are written as '?', and '"' as '\'' so the quoted field ends where it seems
+// to: it is only for the log.
 std::string HeaderDisplayName(const std::filesystem::path& header) {
   std::FILE* f = rex::filesystem::OpenFile(header, "rb");
   if (!f) return {};
@@ -94,7 +95,7 @@ std::string HeaderDisplayName(const std::filesystem::path& header) {
   for (size_t i = 8; i + 1 < got; i += 2) {
     const unsigned c = (unsigned(data[i]) << 8) | data[i + 1];
     if (!c) break;
-    name += (c >= 0x20 && c < 0x7F) ? char(c) : '?';
+    name += c == '"' ? '\'' : (c >= 0x20 && c < 0x7F) ? char(c) : '?';
   }
   return name;
 }

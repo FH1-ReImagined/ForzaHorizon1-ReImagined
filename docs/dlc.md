@@ -191,6 +191,21 @@ for each package, so a log names a package that is not one of the game's DLC: a 
 hung loads in #66, #76 and #115; `src/debug/dlc_log.cpp`) and warns when a TU4 build has no
 offer 1600; the launcher warns at Play too.
 
+The fan-made "Forza Horizon - Unicorn cars unlock (by Madmatoster)" pack (#115, the player
+confirmed it) shows in a log as offer 1975, the one offer of that log that no official package
+has, and its package has `Media/DLCZips/stringtables.xml` but no `zipmount.xml` (a
+`DLCRootN:\media\dlczips\zipmount.xml` FAILED line besides the FM4 cars import's). With it the
+first Single Player load after start stops right after `speechfacade_default.xex` registers: the
+job worker that loaded it opens nothing more (on a good load `game:\media\effects\` follows
+within 0.1 s), and the loading screen runs for ever. The #115 log has that stop on the public
+server, on a server on the player's own PC and on five offline starts. #771 has the same offers
+(plus the FM4 cars import) and the same mount lines, and there opening Multiplayer first and
+then Single Player loads every time (in that log the first speech facade load comes on the
+Multiplayer path and the load goes on to the effects). Why the Multiplayer path gets through is not reverse engineered. A package with only
+that shape (an empty `1975.puboffer` and an official `stringtables.xml`, no zips) loads, so it is
+the pack's content, not its offer number or layout. Removing the pack fixed the load in #115; the
+launcher's save editor adds the unicorn cars to a save without it ([unicorn_cars.md](unicorn_cars.md)).
+
 Checked 2026-10-14/15 with the TU4 build, offline, a scratch copy of the Xenia career save
 (rally progress: the Rally Heats event in progress) and scripted driving, at 30, 60 and
 144 fps.
