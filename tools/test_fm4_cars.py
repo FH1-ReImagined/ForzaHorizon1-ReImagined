@@ -466,7 +466,10 @@ class MovedMakeStringTests(unittest.TestCase):
         report = {}
         conv.strings(rows, report, set(), own_refs)
         path = os.path.join(tmp, "media", "stringtables", "en", "list_carmake.str")
-        table = fm4_cars.StringTable(open(path, "rb").read()) if os.path.exists(path) else None
+        table = None
+        if os.path.exists(path):
+            with open(path, "rb") as f:
+                table = fm4_cars.StringTable(f.read())
         return rows, table
 
     def test_a_moved_makes_name_gets_a_key_of_its_own(self):
@@ -481,6 +484,149 @@ class MovedMakeStringTests(unittest.TestCase):
         rows, table = self.run_strings(set())
         self.assertEqual(rows["List_CarMake"][0]["DisplayName"], self.REF)
         self.assertIsNone(table)  # nothing added
+
+
+class TrafficTwinTests(unittest.TestCase):
+    """#841: an FM4 car FH1 has only as a traffic car (the same id and MediaName, not
+    selectable, its model cut down) comes in as a car of its own beside it: 50000 + its id, a 5
+    after its make in its MediaName, its own rows, wheel and files, and its own copy of the parts
+    FH1 has only on traffic cars. FH1's traffic car is left as it is."""
+
+    def test_ids_names_and_files(self):
+        self.assertEqual(fm4_cars.twin_id(282), 50282)
+        self.assertEqual(fm4_cars.twin_id(1241), 51241)
+        self.assertEqual(fm4_cars.twin_id(30, {50030}), 60030)  # another wheel has 50030
+        part, limit = fm4_cars.PART_BASE, fm4_cars.ENGINE_ID_LIMIT
+        self.assertEqual(fm4_cars.twin_id(36, (), part, limit), 20036)
+        self.assertEqual(fm4_cars.twin_id(36, {20036}, part, limit), 30036)
+        self.assertIsNone(fm4_cars.twin_id(36, {20036, 30036}, part, limit))  # an engine id stays 16-bit
+        self.assertEqual(fm4_cars.twin_name("VW_Beetle_04"), "VW_5_Beetle_04")
+        f = fm4_cars.twin_file
+        self.assertEqual(f("VW_Beetle_04.carbin", "VW_Beetle_04", "VW_5_Beetle_04"), "VW_5_Beetle_04.carbin")
+        self.assertEqual(f("vw_beetle_04_caliperLF_LOD0.carbin", "VW_Beetle_04", "VW_5_Beetle_04"),
+                         "VW_5_Beetle_04_caliperLF_LOD0.carbin")
+        t, t5 = "FOR_TaurusSHO_10", "FOR_5_TaurusSHO_10"
+        self.assertEqual(f("DigitalGauge/Dash_FOR_TaurusSHO_10.fbf", t, t5), "DigitalGauge/Dash_FOR_5_TaurusSHO_10.fbf")
+        self.assertEqual(f("DigitalGauge/FOR_TAURUSSHO_10_D.xds", t, t5), "DigitalGauge/FOR_TAURUSSHO_10_D.xds")  # the .fbf names it
+        for same in ("damage.xds", "physics/maxdata.xml", "LiveryMasks/front.tga", "CarAttribs.xml"):
+            self.assertEqual(f(same, t, t5), same)
+        self.assertEqual(f("last_vw_beetle_04_tire.xml", "VW_Beetle_04", "VW_5_Beetle_04"), "last_VW_5_Beetle_04_tire.xml")
+        self.assertEqual(f("VW_Beetle_04.carbin", "VW_Beetle_04", "VW_Beetle_04"), "VW_Beetle_04.carbin")
+
+    def dbs(self):
+        fm4 = sqlite3.connect(":memory:")
+        fh1 = sqlite3.connect(":memory:")
+        self.addCleanup(fm4.close)
+        self.addCleanup(fh1.close)
+        fm4.execute("create table Data_Car (Id INTEGER, MediaName TEXT, StockWheelID INT, Thumbnail TEXT, MakeID INT)")
+        fh1.execute("create table Data_Car (Id INTEGER, MediaName TEXT, StockWheelID INT, Thumbnail TEXT, MakeID INT, "
+                    "IsSelectable INT)")
+        thumb = "game:\\Media\\UI\\Textures\\Thumbnails\\Thumbnail_%d.xds"
+        for cid, name, wid in ((282, "VW_Beetle_04", 30), (1215, "NUL_Car_00", 1), (1530, "FOR_Coupe_40", 40),
+                               (414, "CHR_PTCruiser_04", 60), (100, "AUD_A1_10", 50)):
+            fm4.execute("insert into Data_Car values (?,?,?,?,52)", (cid, name, wid, thumb % cid))
+        for cid, name, wid, sel in ((282, "VW_Beetle_04", 30, 0), (1215, "NUL_Car_00", 1, 0),
+                                    (1530, "TOY_RAV4Sport_04", 41, 0), (414, "CHR_PTCruiser_04", 60, 1),
+                                    (283, "VW_BoraVR6_03", 61, 1)):
+            fh1.execute("insert into Data_Car values (?,?,?,?,52,?)", (cid, name, wid, thumb % cid, sel))
+        for db in (fm4, fh1):
+            db.execute("create table List_Wheels (ID INTEGER, MediaName TEXT)")
+            db.executemany("insert into List_Wheels values (?,?)", [(30, "VW_Beetle_04"), (530, "ALF_Spider_95"),
+                                                                    (60, "CHR_PTCruiser_04")])
+            # the Beetle's rows, the same in both games (FH1's are the traffic car's)
+            db.execute("create table List_UpgradeAntiSwayFront (Id INTEGER, Ordinal INT, Level INT, AntiSwayPhysicsID INT)")
+            db.execute("insert into List_UpgradeAntiSwayFront values (282000, 282, 1, 282001)")
+            db.execute("create table List_AntiSwayPhysics (AntiSwayPhysicsID INTEGER, Ordinal INT, Value REAL)")
+            db.execute("insert into List_AntiSwayPhysics values (282001, 282, 5.97)")
+            db.execute("create table Combo_Engines (EngineComboID INTEGER, Ordinal INT, EngineID INT, IsStock INT)")
+            db.execute("insert into Combo_Engines values (37, 282, 36, 1)")
+            db.execute("create table List_UpgradeEngine (Id INTEGER, Ordinal INT, Level INT, EngineID INT, IsStock INT)")
+            db.execute("insert into List_UpgradeEngine values (282000, 282, 0, 36, 1)")
+            # a swap to the engine of FH1's Bora, a car you can drive in FH1
+            db.execute("insert into List_UpgradeEngine values (282002, 282, 1, 37, 0)")
+            db.execute("create table Data_Engine (EngineID INTEGER, MediaName TEXT)")
+            db.executemany("insert into Data_Engine values (?,?)", [(36, "VW_Beetle_04"), (37, "VW_BoraVR6_03")])
+            db.execute("create table List_UpgradeEngineCamshaft (Id INTEGER, EngineID INT, Level INT, "
+                       "TorqueCurveFullThrottleID INT)")
+            db.execute("insert into List_UpgradeEngineCamshaft values (36000, 36, 1, 36000)")
+            db.execute("create table List_TorqueCurve (TorqueCurveID INTEGER, TorqueScale REAL)")
+            db.execute("create table List_UpgradeCarBody (Id INTEGER, Ordinal INT, Level INT, CarBodyID INT)")
+            db.execute("insert into List_UpgradeCarBody values (282000, 282, 0, 282000)")
+            db.execute("create table Data_CarBody (Id INTEGER, Mass REAL)")
+            db.execute("insert into Data_CarBody values (282000, 1270.0)")
+            db.execute("create table List_UpgradeDrivetrain (Id INTEGER, Ordinal INT, Level INT, DrivetrainID INT)")
+            db.execute("insert into List_UpgradeDrivetrain values (282000, 282, 0, 35)")
+            db.execute("create table Data_Drivetrain (DrivetrainID INTEGER, DrivetypeID INT)")
+            db.execute("insert into Data_Drivetrain values (35, 1)")
+            db.execute("create table List_UpgradeDrivetrainTransmission (Id INTEGER, DrivetrainID INT, NumGears INT)")
+        fh1.execute("insert into List_UpgradeEngine values (283000, 283, 0, 37, 1)")
+        fm4.execute("insert into List_UpgradeEngine values (282001, 282, 1, 690, 0)")  # a swap FH1 lacks
+        fm4.execute("insert into Data_Engine values (690, 'VW_Golf_R32_03')")
+        # FH1 cut the traffic car's parts down: its torque curve and gearbox are not FM4's
+        fm4.execute("insert into List_TorqueCurve values (36000, 1.0)")
+        fh1.execute("insert into List_TorqueCurve values (36000, 0.5)")
+        fm4.execute("insert into List_UpgradeDrivetrainTransmission values (35000, 35, 2)")
+        fh1.execute("insert into List_UpgradeDrivetrainTransmission values (35000, 35, 6)")
+        return fm4, fh1
+
+    def test_which_cars_are_twins(self):
+        fm4, fh1 = self.dbs()
+        # the Beetle: FH1's 282 is the traffic car of that name. Not NUL_Car_00 (a placeholder),
+        # 1530 (FH1's is another car), 414 (selectable in FH1: FH1's own car), 100 (FH1 lacks it)
+        self.assertEqual(fm4_cars.traffic_twins(fm4, fh1), {282: (50282, "VW_5_Beetle_04", (50030, "VW_5_Beetle_04"))})
+        self.assertEqual(fm4_cars.traffic_twins(fm4, fh1, skip={"vw_beetle_04"}), {})  # an FH1 DLC car
+        # an installed DLC's car has 50282
+        self.assertEqual(fm4_cars.traffic_twins(fm4, fh1, taken={50282})[282][0], 60282)
+
+    def test_a_twin_is_a_car_of_its_own(self):
+        fm4, fh1 = self.dbs()
+        twins = fm4_cars.traffic_twins(fm4, fh1)
+        with mock.patch.object(fm4_cars, "Retune", _NoRetune):
+            db = fm4_cars.Database(fm4, fh1, twins=twins)
+        db.collect([282])
+        report = {}
+        rows = db.finish(report)
+
+        def table(name):
+            return sorted(tuple(r.values()) for r in rows[name])
+        car = rows["Data_Car"][0]
+        self.assertEqual((car["Id"], car["MediaName"], car["StockWheelID"]), (50282, "VW_5_Beetle_04", 50030))
+        self.assertTrue(car["Thumbnail"].endswith("\\Thumbnail_50282.xds"))
+        self.assertEqual(table("List_UpgradeAntiSwayFront"), [(50282000, 50282, 1, 50282001)])
+        self.assertEqual(table("List_AntiSwayPhysics"), [(50282001, 50282, 5.97)])
+        self.assertEqual(table("List_UpgradeCarBody"), [(50282000, 50282, 0, 50282000)])
+        self.assertEqual(table("Data_CarBody"), [(50282000, 1270.0)])
+        self.assertEqual(table("List_Wheels"), [(50030, "VW_5_Beetle_04")])
+        # its engine (36) and drivetrain (35) are FH1's traffic car's only: FM4's own copies, under
+        # 20000 + their ids, the engine named for its own EngineTuning; FH1's rows stay as they are
+        self.assertEqual(table("Combo_Engines"), [(38, 50282, 20036, 1)])  # a new key
+        self.assertEqual(table("List_UpgradeEngine"), [(50282000, 50282, 0, 20036, 1), (50282001, 50282, 1, 690, 0),
+                                                       (50282002, 50282, 1, 37, 0)])
+        # 690: FM4's, which FH1 lacks; 37: FH1's Bora's (a car you can drive), shared
+        self.assertEqual(table("Data_Engine"), [(690, "VW_Golf_R32_03"), (20036, "VW_Beetle_04_FM4")])
+        self.assertEqual(table("List_UpgradeEngineCamshaft"), [(20036000, 20036, 1, 20036000)])
+        self.assertEqual(table("List_TorqueCurve"), [(20036000, 1.0)])  # FM4's curve
+        self.assertEqual(table("List_UpgradeDrivetrain"), [(50282000, 50282, 0, 20035)])
+        self.assertEqual(table("Data_Drivetrain"), [(20035, 1)])
+        self.assertEqual(table("List_UpgradeDrivetrainTransmission"), [(20035000, 20035, 2)])  # FM4's gearbox
+        self.assertEqual(db.part_names, {(50282, "VW_Beetle_04"): "VW_Beetle_04_FM4"})
+        self.assertNotIn("conflicts", report)  # nothing of FH1's traffic car is left out or changed
+
+    def test_an_electric_car_without_an_engine_row(self):
+        """FM4's Leaf has an electric motor and no engine row; FH1 needs one (the Leaf twin is
+        left out for now). The Prius has both."""
+        db = sqlite3.connect(":memory:")
+        self.addCleanup(db.close)
+        db.execute("create table List_UpgradeMotor (Id INTEGER, Ordinal INT, MotorID INT)")
+        db.execute("create table List_UpgradeEngine (Id INTEGER, Ordinal INT, EngineID INT)")
+        db.executemany("insert into List_UpgradeMotor values (?,?,?)", [(1365000, 1365, 5), (1340000, 1340, 1)])
+        db.execute("insert into List_UpgradeEngine values (1340000, 1340, 800)")
+        self.assertTrue(fm4_cars.electric_only(db, 1365))
+        self.assertFalse(fm4_cars.electric_only(db, 1340))
+        self.assertFalse(fm4_cars.electric_only(db, 282))
+        bare = sqlite3.connect(":memory:")
+        self.addCleanup(bare.close)
+        self.assertFalse(fm4_cars.electric_only(bare, 1365))  # no motor tables
 
 
 class LogoTests(unittest.TestCase):
@@ -590,10 +736,10 @@ class EngineLevelTests(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         self.addCleanup(lambda: fm4_cars.ZIPS.close(self.tmp))
 
-    def game(self, name, ets, hts=None):
+    def game(self, name, ets, hts=None, cmts=None):
         media = os.path.join(self.tmp, name, "media")
         os.makedirs(os.path.join(media, "audio", "cars", "Engines"))
-        for zname, members in (("CarModelTuning.zip", {}), ("Engines/EngineTuning.zip", ets),
+        for zname, members in (("CarModelTuning.zip", cmts or {}), ("Engines/EngineTuning.zip", ets),
                                ("Engines/HarmonicTuning.zip", hts or {})):
             with zipfile.ZipFile(os.path.join(media, "audio", "cars", *zname.split("/")), "w") as z:
                 for m, data in members.items():
@@ -608,6 +754,7 @@ class EngineLevelTests(unittest.TestCase):
         conv.fh1 = self.game("fh1", fh1_ets, {"12N2_LP640_Exh_HT.xml": HT % b"12N2_LP640_Exh.fsb"})
         conv.fm4 = self.game("fm4", fm4_ets)
         conv.fh1db = sqlite3.connect(":memory:")
+        self.addCleanup(conv.fh1db.close)
         conv.fh1db.execute("create table Data_Engine (EngineID INT, MediaName TEXT)")
         conv.fh1db.execute("create table List_UpgradeEngine (Ordinal INT, EngineID INT)")
         conv.fh1db.execute("insert into Data_Engine values (5, 'HON_NSXRGT_05')")
@@ -662,6 +809,29 @@ class EngineLevelTests(unittest.TestCase):
         conv = self.converter({"FOR_FocusST_06_ET.xml": TRAFFIC_ET}, {"FOR_FocusST_06_ET.xml": S1_ET})
         with self.assertRaisesRegex(fm4_cars.ConvertError, "5T1_A200_1478_Exh_HT.xml is in none of the files"):
             conv.audio_plan("FOR_FocusST_06", ["FOR_FocusST_06"])  # checked, never left naming a missing file
+
+    def test_a_traffic_twin_takes_fm4s_car_tuning_under_its_own_name(self):
+        """#841: FH1's VW_Beetle_04_CMT.xml is the traffic car's; FM4's copy goes in as
+        VW_5_Beetle_04_CMT.xml, FH1's stays for the traffic car."""
+        conv = self.converter({}, {})
+        conv.fh1 = self.game("fh1b", {}, cmts={"VW_Beetle_04_CMT.xml": b"traffic"})
+        conv.fm4 = self.game("fm4b", {}, cmts={"VW_Beetle_04_CMT.xml": b"full"})
+        self.assertEqual(conv.audio_plan("VW_Beetle_04", []), [])  # FH1 has it
+        self.assertEqual(conv.audio_plan("VW_5_Beetle_04", [], source="VW_Beetle_04"), [
+            ("put", "media/audio/cars/carmodeltuning/VW_5_Beetle_04_CMT.xml", b"full", "VW_5_Beetle_04_CMT.xml")])
+
+    def test_a_twins_own_engine_takes_fm4s_tuning_under_its_new_name(self):
+        """#841: FH1's VW_Beetle_04_ET.xml is a traffic one, and FH1's traffic Beetle keeps it; the
+        twin's own copy of the engine (Database._own_parts), VW_Beetle_04_FM4, gets FM4's at FH1's
+        level (FH1's own file of the old name would win over the import's)."""
+        conv = self.converter({"VW_Beetle_04_ET.xml": TRAFFIC_ET}, {"VW_Beetle_04_ET.xml": ET})
+        conv.fh1db.execute("insert into Data_Engine values (36, 'VW_Beetle_04')")
+        conv.fh1db.execute("insert into List_UpgradeEngine values (282, 36)")
+        self.assertEqual(conv.audio_plan("VW_5_Beetle_04", [("VW_Beetle_04_FM4", "VW_Beetle_04")],
+                                         source="VW_Beetle_04"),
+                         [("louder", "media/audio/cars/engines/enginetuning/VW_Beetle_04_FM4_ET.xml",
+                           fm4_cars.louder_engine(ET), "VW_Beetle_04_FM4_ET.xml")])
+        self.assertEqual(conv.audio_plan("VW_Beetle_04", ["VW_Beetle_04"]), [])  # the traffic car's: FH1's
 
 
 NA_SLOTS = (b'<EngineAmbient><Upgrade L0="NA_EngAmb_HT.xml"/></EngineAmbient>\r\n'
