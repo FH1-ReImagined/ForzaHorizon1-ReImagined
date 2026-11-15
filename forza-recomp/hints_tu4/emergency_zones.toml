@@ -1,0 +1,43 @@
+# Streamed zones (#902, src/hooks/emergency_zones.cpp). CTrackPresentation::
+# ManageEmergencyPVSZLoading (sub_82E27480) appends every wanted zone without a streamed-zone slot
+# to m_EmergencyPVSZList[7] (this + 0xD994) on every pass, with no check against its size; on a
+# converted circuit at speed the slots ran out (zones the windows had passed kept theirs) and the
+# list overflowed. The entries live in the hook's own list instead, each zone listed once, and
+# slots nothing wants any more are let go of when slots run short. r3 gives the hooks the
+# context; r23 holds the count's address, r29 the release loop's index, r30 the zone's
+# m_ZonesToLoad entry, r31 the track presentation.
+
+# The release loop reads entry r29 (`lwz r4, 0(r30)`).
+[[midasm_hook]]
+address = 0x82E274BC
+name = "ForzaEmergencyZoneRead"
+registers = ["r3"]
+jump_address = 0x82E274C0
+
+# A released entry: the last one moves into its place (`lwzx r11, r11, r31`, `stw r11, 0(r30)`).
+[[midasm_hook]]
+address = 0x82E27520
+name = "ForzaEmergencyZoneRemove"
+registers = ["r3"]
+jump_address = 0x82E27528
+
+# After the release loop, before zones are asked for: slots of zones nothing wants are let go of.
+[[midasm_hook]]
+address = 0x82E27534
+name = "ForzaZoneSweep"
+registers = ["r3"]
+
+# The zone just asked for is appended (`lwz r10, 0(r30)` ... `stwx r10, r11, r31`) and counted
+# (0x82E27604), or, listed already, left out of the count (0x82E27610, `li r28, 1`).
+[[midasm_hook]]
+address = 0x82E275F0
+name = "ForzaEmergencyZoneAppend"
+registers = ["r3"]
+jump_address_on_true = 0x82E27610
+jump_address_on_false = 0x82E27604
+
+# Every zone wanted is in: the count goes back to 0 (`stw r22, 0(r23)`), logged when it was long.
+[[midasm_hook]]
+address = 0x82E276E0
+name = "ForzaEmergencyZoneDone"
+registers = ["r3"]
