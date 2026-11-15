@@ -695,6 +695,12 @@ class FH1:
         self.db_file = path
         return sqlite3.connect("file:%s?mode=ro" % path, uri=True)
 
+    def has_rally_expansion(self):
+        """True when FH1's Rally Expansion is installed (its DLC offer's zip, 1600_pri_65.zip, is
+        among the DLC): the imported cars then get rally parts (#924)."""
+        return any(re.match(r"(?i)%d_pri_\d+\.zip$" % RALLY_OFFER, os.path.basename(path))
+                   for _, path in self.dlc_zips)
+
     def dlc_patches(self):
         """Paths of the installed DLC packs' database patches: those in their zips (FH1's own DLC) and
         those next to them (fan packs such as UDLC)."""
@@ -1116,6 +1122,21 @@ RETUNED = ["PerformanceIndex", "BodyAeroForwardDownforceFront", "BodyAeroForward
            "SimBrakeDistance60MPH", "SimBrakeDistance100MPH", "SimLatGees60MPH",
            "SimLatGees120MPH", "SimSpeedQuarterMile"]
 
+# Rally parts (#924), as FH1's own cars have them (190 rows of each in the title update's database)
+# and as Forza Imported DLC Maker gives FM4 cars: measured there on the Rally Expansion's 16 cars
+# (its DLC offer 1600), matching UDLC's. Added only when the Rally Expansion is installed.
+RALLY_OFFER = 1600
+RALLY_TYRE = {"Level": 5, "TireCompoundID": 9, "Price": 10000}
+RALLY_GEARBOX = {"FinalDriveRatio": 4.4, "NumGears": 7, "GearRatio1": 3.3, "GearRatio2": 2.05, "GearRatio3": 1.5,
+                 "GearRatio4": 1.17, "GearRatio5": 0.97, "GearRatio6": 0.825, "GearRatio7": -1.0, "GearRatio8": -1.0}
+RALLY_SPRING_PER_L1 = 0.649             # rally spring rate / the car's level-1 spring's (median, front and rear)
+RALLY_SPRING_PER_L3 = (0.2914, 0.2354)  # front, rear: / the level-3 spring's, for a car with no level-1 row
+RALLY_BUMP = 0.1489                     # damper bump rate / spring rate
+RALLY_REBOUND = 0.0851                  # damper rebound rate / spring rate
+RALLY_BUMPSTOP = 80.0
+RALLY_RIDE = 1.166                      # rally ride height / the stock body's ride height (median)
+RALLY_MASS = 0.3                        # the rally suspension's MassDiff / level 3's
+
 
 def columns(db, table):
     return [r[1] for r in db.execute("pragma table_info([%s])" % table)]
@@ -1453,6 +1474,123 @@ class Database:
         for rt, old in self._copied:
             if (rt, old) not in named:
                 self.rows.get(rt, {}).pop(old, None)
+
+    def _fh1_keys(self, table):
+        """FH1's keys (first column) of a table, read once."""
+        cache = self.__dict__.setdefault("_fh1_key_cache", {})
+        if table not in cache:
+            cache[table] = set()
+            if table in self.fh1_tables:
+                pk = columns(self.fh1, table)[0]
+                cache[table] = {v for (v,) in self.fh1.execute("select [%s] from [%s]" % (pk, table))}
+        return cache[table]
+
+    def rally_parts(self, cars):
+        """Rally parts for the import's cars (their ids in the import, after collect; #924), as FH1's
+        own cars and the Rally Expansion's have them, and as Forza Imported DLC Maker gives FM4 cars:
+        - rally tyres, level 5 and compound 9 (RALLY_TYRE, from the car's highest other tyre), in
+          place of FM4's level-4 drag tyres, which are compound 9 too (FH1 has no level-4 tyre);
+        - a level-4 rally suspension: the level-3 one with RALLY_MASS of its mass, its springs,
+          dampers and ride height scaled from the car's own (the level-1 springs, the stock body's
+          ride height) the way the Rally Expansion's are;
+        - a level-4 rally gearbox (RALLY_GEARBOX) for each of their drivetrains that FH1 lacks (one
+          FH1 has keeps FH1's rows, which have theirs).
+        An electric car or a hybrid (a motor row) gets none, nor a car whose stock tyre is FM4's drag
+        tyre; a part whose key FH1 or the import already uses is not added. Returns the counts
+        ("cars": the cars that got tyres or a suspension)."""
+        rows = self.rows
+        done = {"tyres": 0, "suspension": 0, "gearbox": 0}
+        got = set()
+
+        def free(table, key):
+            return key not in rows.get(table, {}) and key not in self._fh1_keys(table)
+
+        def of(table, col, value):
+            return [r for r in rows.get(table, {}).values() if r.get(col) == value]
+
+        def level(r):
+            return r.get("Level") or 0
+
+        motor = {r.get("Ordinal") for r in rows.get("List_UpgradeMotor", {}).values()}
+        mine = [c for c in cars if c not in motor]
+        tyres = rows.setdefault("List_UpgradeTireCompound", {})
+        for car in mine:
+            own = of("List_UpgradeTireCompound", "Ordinal", car)
+            drag = [r for r in own if level(r) >= 4]
+            rest = sorted((r for r in own if level(r) < 4), key=level)
+            key = car * 1000 + RALLY_TYRE["Level"]
+            if rest and not any(r.get("IsStock") for r in drag) and (key in {r.get("Id") for r in drag}
+                                                                    or free("List_UpgradeTireCompound", key)):
+                for r in drag:
+                    tyres.pop(r["Id"], None)
+                tyres[key] = dict(rest[-1], Id=key, IsStock=0, **RALLY_TYRE)
+                done["tyres"] += 1
+                got.add(car)
+        springs = rows.setdefault("List_UpgradeSpringDamper", {})
+        physics = rows.setdefault("List_SpringDamperPhysics", {})
+        for car in mine:
+            own = of("List_UpgradeSpringDamper", "Ordinal", car)
+            u3 = next((r for r in own if level(r) == 3), None)
+            u1 = next((r for r in own if level(r) == 1), None)
+            stock_body = next((r for r in of("List_UpgradeCarBody", "Ordinal", car) if r.get("IsStock")), None)
+            body = rows.get("Data_CarBody", {}).get(stock_body.get("CarBodyID")) if stock_body else None
+            ids = (car * 1000 + 4, car * 1000 + 104)
+            if any(level(r) >= 4 for r in own) or not u3 or not body or not free("List_UpgradeSpringDamper", ids[0]) \
+                    or not all(free("List_SpringDamperPhysics", i) for i in ids):
+                continue
+            stock_springs = next((r for r in own if r.get("IsStock")), None)
+            new = []
+            for side, (pid, col) in enumerate(zip(ids, ("FrontSpringDamperPhysicsID", "RearSpringDamperPhysicsID"))):
+                p3 = physics.get(u3.get(col))
+                p1 = physics.get(u1.get(col)) if u1 else None
+                ride = body.get(("ModelFrontStockRideHeight", "ModelRearStockRideHeight")[side])
+                if p3 is None or ride is None:
+                    break
+                spring = (p1["DefSpringRate"] * RALLY_SPRING_PER_L1 if p1 and p1.get("DefSpringRate")
+                          else p3["DefSpringRate"] * RALLY_SPRING_PER_L3[side])
+                lowest = p3.get("MinRideHeight") or 0
+                ride = round(ride * RALLY_RIDE, 4)
+                if ride < lowest:
+                    # the body's ride height is out of line with the car's own suspension (the
+                    # Cayman R's body says 0.06 m, its springs 0.15 m; 26 of FM4's cars, race cars
+                    # such as the R8 LMS): from the stock suspension's instead. On FH1's own cars
+                    # the rally ride height is 1.2 times either (the medians).
+                    stock_ride = physics.get(stock_springs.get(col)) if stock_springs else None
+                    if stock_ride and stock_ride.get("DefRideHeight"):
+                        ride = round(stock_ride["DefRideHeight"] * RALLY_RIDE, 4)
+                # never below the suspension's lowest, as in all of FH1's own rally rows
+                ride = max(ride, lowest)
+                new.append(dict(p3, SpringDamperPhysicsID=pid, DefRideHeight=ride,
+                                MaxRideHeight=max(ride, p3.get("MinRideHeight") or 0), DefSpringRate=round(spring, 3),
+                                DefDampenBumpRate=round(spring * RALLY_BUMP, 4),
+                                DefDampenReboundRate=round(spring * RALLY_REBOUND, 4), BumpstopStiffness=RALLY_BUMPSTOP))
+            else:
+                for p in new:
+                    physics[p["SpringDamperPhysicsID"]] = p
+                springs[ids[0]] = dict(u3, Id=ids[0], Level=4, IsStock=0, MassDiff=(u3.get("MassDiff") or 0) * RALLY_MASS,
+                                       FrontSpringDamperPhysicsID=ids[0], RearSpringDamperPhysicsID=ids[1])
+                done["suspension"] += 1
+                got.add(car)
+        # the gearboxes: each drivetrain of those cars that FH1 lacks, but one a motor car uses
+        uses = {}
+        for r in rows.get("List_UpgradeDrivetrain", {}).values():
+            uses.setdefault(r.get("DrivetrainID"), set()).add(r.get("Ordinal"))
+        box = rows.get("List_UpgradeDrivetrainTransmission", {})
+
+        def drivetrain(r):  # the column naming the drivetrain, however the table spells it
+            return next((v for c, v in r.items() if c.lower() == "drivetrainid"), None)
+
+        for d in sorted(d for d, users in uses.items() if d is not None and users & set(mine) and not users & motor):
+            if d in self._fh1_keys("Data_Drivetrain"):
+                continue
+            own = [r for r in box.values() if drivetrain(r) == d]
+            key = d * 1000 + 4
+            if not own or any(level(r) >= 4 for r in own) or not free("List_UpgradeDrivetrainTransmission", key):
+                continue
+            box[key] = dict(max(own, key=level), Id=key, Level=4, IsStock=0, **RALLY_GEARBOX)
+            done["gearbox"] += 1
+        done["cars"] = len(got)
+        return done
 
     def _keys(self, table, col):
         """Every value of col in table, in either game's database and in the rows collected."""
@@ -2298,6 +2436,9 @@ class Converter:
         db = Database(self.fm4db, self.fh1db, merges,
                       make_moves(self.fm4db, self.fh1db, fm4_names, fh1_names, merges), renumber, parts)
         db.collect([c for c, _ in chosen])
+        # rally parts, with FH1's Rally Expansion only, as Forza Imported DLC Maker adds them (#924)
+        report["rally"] = (db.rally_parts([renumber.get(c, (c, n))[0] for c, n in chosen])
+                           if self.fh1.has_rally_expansion() else None)
         rows = db.finish(report)
         wheel_names = {}  # wheel id in the rows -> (FM4's wheel name, its name in the import)
         for cid, _ in chosen:
@@ -2434,6 +2575,11 @@ def main(argv=None):
             print("skipped %5d %s" % (cid, why))
         if rep.get("dlc_cars"):
             print("from the FM4 DLC: %d" % len(rep["dlc_cars"]))
+        if rep.get("rally"):
+            print("rally parts for %(cars)d cars: tyres for %(tyres)d, suspension for %(suspension)d, gearboxes for "
+                  "%(gearbox)d drivetrains" % rep["rally"])
+        elif rep.get("rally") is None:
+            print("no rally parts: FH1's Rally Expansion is not among the DLC")
         if rep.get("louder"):
             print("engine tunings at FH1's level: %d" % rep["louder"])
         for car, files in rep.get("audio", []):

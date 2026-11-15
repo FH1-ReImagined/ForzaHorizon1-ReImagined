@@ -1214,7 +1214,7 @@ def _build(cfg, tools, target, backup, work, disc1, disc2, progress, cancelled, 
     # engine_tuning 2: FM4's own engine tuning where FH1's is a cut traffic car's (#840)
     info = {"format": 1, "banks": True, "engine_tuning": 2, "cars": [c[1] for c in report["cars"]],
             "skipped": [s[1] for s in report["skipped"]],
-            "dlc": _dlc(cfg), "launcher": version}
+            "dlc": _dlc(cfg), "launcher": version, "rally": report.get("rally")}
     if dlc_packs or dlc:
         info["fm4_dlc"] = {"packs": [name for _, name in dlc_packs],
                            "cars": [c[1] for c in report.get("dlc_cars", [])], "notes": notes}
@@ -1272,6 +1272,11 @@ def _build(cfg, tools, target, backup, work, disc1, disc2, progress, cancelled, 
     _remove(old_package)
     n, skipped = len(info["cars"]), len(info["skipped"])
     more = f" {skipped} could not be converted (see the mod's {MARKER})." if skipped else ""
+    rally = report.get("rally")
+    if rally:
+        more += f" {rally['cars']} of them have rally parts (FH1's Rally Expansion is installed)."
+    elif "rally" in report and rally is None:
+        more += " Rally parts need FH1's Rally Expansion: install it and import again to add them."
     from_dlc = ""
     if "fm4_dlc" in info:
         from_dlc = f", {len(info['fm4_dlc']['cars'])} of them from your FM4 DLC"
