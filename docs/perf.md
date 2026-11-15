@@ -4351,6 +4351,21 @@ more: 0.0061 against 0.0048). On the GTX 1650 Ti, screenshots at two free roam s
 (540p and render scale 2) look the same; the camera's heading differs between sessions there, so they are compared
 by eye.
 
+**The forced path on Windows (RX 9070 XT, RDNA4).** With `FORZA_TEST_NO_STENCIL_EXPORT=1`, Colorado free roam at
+the festival, standing, render scale 2, 110 s a run with `--fh1_gpu_profile=5`, the switch off and on alternated
+three times, plus one run with the driver's stencil export:
+
+| | GPU frame, ms | Transfers, ms a frame |
+| --- | --- | --- |
+| Per sample (`vulkan_transfer_stencil_bit_per_pixel=false`) | 10.04, 9.93, 9.98 | 2.907, 2.905, 2.905 |
+| Per pixel (default) | 9.05, 8.88, 8.92 | 2.103, 2.036, 2.036 |
+| Stencil export (no test hook) | 8.78 | 1.626 |
+
+The per-pixel draws take 0.85 ms (29%) off the transfers and about 1.0 ms off the GPU frame, about two thirds of
+the way to stencil export. The pictures at the same moments are the same in all three (17 shots a run, none with a
+stencil artefact), each forced run logged 16,408 to 20,494 depth transfers without stencil export (68 to 71% with
+conditional bit draws), and none of the 7 runs faulted.
+
 **A device loss at render scale 2.** In 2 of the 24 render scale 2 runs the driver lost the device mid-benchmark,
 one with the switch on and one with it off, both at a draw with the vertex shader `0CBC533419F61E0D` (the GPU
 breadcrumbs, 0438). It comes from neither path. None of the 540p runs lost the device.
