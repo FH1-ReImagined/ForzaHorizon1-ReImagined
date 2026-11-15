@@ -1237,26 +1237,22 @@ def make_moves(fm4db, fh1db, fm4_names, fh1_names, merges):
     return out
 
 
-TWIN_BASE = 50000  # a traffic twin's car and wheel ids (twin_id)
-PART_BASE = 20000  # its own engines' and drivetrains' ids (Database._own_parts)
-# FH1's engine ids are 16-bit: an engine id of 41313 stopped the game at boot (Forza Imported DLC
-# Maker's FM4 importer, which numbers FM4's engines 20000 + id for the same reason).
-ENGINE_ID_LIMIT = 32768
+TWIN_BASE = 55000
+# FH1's car ids stay under 65536: with two cars of 551241 and 551340 in the database, no imported
+# car loaded (the game spawned its default car), while 55282 and 55414 did (#841).
+CAR_ID_LIMIT = 65536
 
 
-def twin_id(n, taken=(), base=TWIN_BASE, limit=None):
-    """The id of an FM4 car's (or wheel's) own copy next to FH1's traffic car (#841): 50000 + its
-    id, the number UDLC and Forza Imported DLC Maker give an FM4 car whose id another car keeps
-    (282 -> 50282, 1241 -> 51241); 60000 +, 70000 + ... while that id is taken. A part's own copy
-    (Database._own_parts) counts from PART_BASE, an engine's under ENGINE_ID_LIMIT. None when no
-    such id is free."""
-    for k in range(10):
-        new = base + 10000 * k + n
-        if limit is not None and new >= limit:
-            return None
-        if new not in taken:
-            return new
-    return None
+def twin_id(n, taken=(), limit=None):
+    """A new id for what an FM4 car FH1 has as a traffic car brings as its own (#841): the car
+    (and so its rows), its wheel, its engine or drivetrain. It is 55000 + the id, a 55 in front
+    of a three-digit one: 935 -> 55935, 282 -> 55282, 1241 -> 56241, engine 800 -> 55800. That
+    stays clear of the ids FH2 gave the FM4 cars it shares (a 5 in front: the SLK55 AMG's 51525),
+    which UDLC carries into FH1. None when that id is taken or not under limit."""
+    new = TWIN_BASE + n
+    if new in taken or (limit is not None and new >= limit):
+        return None
+    return new
 
 
 def made_from(v, key):
@@ -1324,7 +1320,7 @@ def traffic_twins(fm4db, fh1db, skip=(), taken=()):
         hit = fh.get(cid)
         if not hit or hit[0] != low or hit[1] or low in skip or low.startswith("nul_"):
             continue
-        new_id, new_name = twin_id(cid, ids), twin_name(name)
+        new_id, new_name = twin_id(cid, ids, CAR_ID_LIMIT), twin_name(name)
         if new_id is None or new_name.lower() in names:
             continue
         ids.add(new_id)
@@ -1533,8 +1529,8 @@ class Database:
         traffic cars (every FH1 car naming it has IsSelectable 0) becomes the twin's own (#841):
         FH1 cut those down for traffic (the Leaf's single gear became six, the Prius' CVT none,
         and the engines' EngineTuning is a traffic one, #840), and its traffic cars keep them.
-        FM4's rows of the part are copied under PART_BASE + its id (twin_id: engine 800 ->
-        20800, its rows 800000 + n -> 20800000 + n and so the torque curves in that range), an
+        FM4's rows of the part are copied under 55000 + its id (twin_id: engine 800 -> 55800,
+        its rows 800000 + n -> 55800000 + n and so the torque curves in that range), an
         engine's or motor's MediaName with "_FM4" after it: the game finds the EngineTuning by
         that name, and FH1's own file of the old name, the traffic one, wins over an import's (as
         in Forza Imported DLC Maker, which names such an engine the same way). A part an FH1 car
@@ -1574,7 +1570,7 @@ class Database:
             taken |= self._keys(t, c)
             if pk != c:  # a part's rows are keyed by its id x 1000 + n
                 taken |= {v // 1000 for v in self._keys(t, pk) if isinstance(v, int)}
-        new = twin_id(key, taken, PART_BASE, ENGINE_ID_LIMIT if fam == "engine" else None)
+        new = twin_id(key, taken)
         if new is None:
             return
 

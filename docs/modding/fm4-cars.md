@@ -308,22 +308,28 @@ beside each one as a car of its own (`traffic_twins`):
 
 | | FH1's traffic car | FM4's car in the import |
 |---|---|---|
-| id | 282 | 50282: 50000 + the id (`twin_id`), the number UDLC and Forza Imported DLC Maker give an FM4 car whose id another car keeps |
+| id | 282 | 55282: 55000 + the id (`twin_id`), a 55 in front of a three-digit id (the 1241 Taurus SHO is 56241) |
 | `MediaName`, files | `VW_Beetle_04` | `VW_5_Beetle_04`: its models, gauge and wheel files under that name (`twin_name`, `twin_file`). Files under the traffic car's name would lose to the disc's |
-| rows keyed by the car | 282000 + n | 50282000 + n, with the references between them kept. The engine combos get new keys |
-| stock wheel | 30 `VW_Beetle_04`, cut down too | its own: 50030 `VW_5_Beetle_04` |
-| engine, drivetrain | FH1's, cut down for traffic | its own copy of FM4's: 20000 + the id, engine `VW_Beetle_04_FM4` (below) |
-| picture, `CarModelTuning` | FH1's | FM4's, as `Thumbnail_50282.xds` and `VW_5_Beetle_04_CMT.xml` |
+| rows keyed by the car | 282000 + n | 55282000 + n, with the references between them kept. The engine combos get new keys |
+| stock wheel | 30 `VW_Beetle_04`, cut down too | its own: 55030 `VW_5_Beetle_04` |
+| engine, drivetrain | FH1's, cut down for traffic | its own copy of FM4's: 55000 + the id (55036, 55035), engine `VW_Beetle_04_FM4` (below) |
+| picture, `CarModelTuning` | FH1's | FM4's, as `Thumbnail_55282.xds` and `VW_5_Beetle_04_CMT.xml` |
+
+Every new id is 55000 + the old one. That stays clear of the ids FH2 gave the FM4 cars it shares,
+which have a 5 in front (FM4's 1525, the SLK55 AMG, is FH2's 51525), and which UDLC carries into
+FH1. A car id has to stay under 65536. With the Taurus SHO and the Prius at 551241 and 551340 (a
+55 in front of a four-digit id), no imported car loaded at all: the game spawned its default
+car, the Corrado. With 55282 and 56340, they load. Engine and drivetrain ids above 32767 work
+(the Prius' 55800 and 55744 below, and UDLC's engines up to 51038), and so do wheel ids above
+65535 (the Prius' 65895).
 
 FH1 cut down these cars' parts too. FH1's `EngineTuning` of each of their four engines is a
 traffic one ([`traffic_tuning`](#traffic-car-tunings-840)); FM4's is not. FH1's Prius gearbox is
 not a CVT (`CVTShiftTime` −1, FM4's 1.0), and its torque curves are not FM4's. FH1's Leaf has six
 gears (five forward); FM4's has one. So a part that FH1 has only on traffic cars (every FH1 car
 naming it has `IsSelectable` 0) becomes the twin's own (`Database._own_parts`). The engine,
-drivetrain, body or motor gets FM4's rows under 20000 + its id: engine 800 becomes 20800, its
-rows 800000 + n become 20800000 + n, and so do the torque curves in that range. FH1's engine ids
-are 16-bit, so an engine's new id stays under 32768 (Forza Imported DLC Maker had an engine id of
-41313 stop the game at boot). The game finds an engine's `EngineTuning` by the engine's
+drivetrain, body or motor gets FM4's rows under 55000 + its id: engine 800 becomes 55800, its
+rows 800000 + n become 55800000 + n, and so do the torque curves in that range. The game finds an engine's `EngineTuning` by the engine's
 `MediaName`, and the disc's file of the old name, the traffic one, would win over the import's.
 So the copy is named `<name>_FM4`, as Forza Imported DLC Maker names such an engine (its 2006
 Focus ST, Spark and xD were silent with FH1's traffic tuning). Its tuning is FM4's, at FH1's
@@ -555,9 +561,10 @@ the five cars, with their files in the package:
 
 | What | Result |
 |---|---|
-| Import | four added (50282 `VW_5_Beetle_04`, 50414 `CHR_5_PTCruiser_04`, 51241 `FOR_5_TaurusSHO_10`, 51340 `TOY_5_Prius_11`) and the Leaf listed as left out. Every id the twins' rows name is a row of the import. Their own engines are 20036, 20168, 20701 and 20800 (`<name>_FM4`), their own drivetrains 20035, 20167, 20645 and 20744. The Prius gearbox is FM4's CVT and its torque curves are FM4's. FH1's rows of the five traffic cars and their parts are unchanged, and `check` finds nothing missing. `list` with FM4's discs and DLC offers the four as cars to convert |
+| Import | four added (55282 `VW_5_Beetle_04`, 55414 `CHR_5_PTCruiser_04`, 56241 `FOR_5_TaurusSHO_10`, 56340 `TOY_5_Prius_11`) and the Leaf listed as left out. Every id the twins' rows name is a row of the import. Their own engines are 55036, 55168, 55701 and 55800 (`<name>_FM4`), their own drivetrains 55035, 55167, 55645 and 55744, their wheels 55030, 55153, 65794 and 65895. The Prius gearbox is FM4's CVT and its torque curves are FM4's. FH1's rows of the five traffic cars and their parts are unchanged, and `check` finds nothing missing. `list` with FM4's discs and DLC offers the four as cars to convert |
 | Change Car | the Beetle, added with the launcher's garage code, is listed as "Beetle, 2004 Volkswagen, D 209" with its picture, and Get In Car loaded it (seen with an earlier version of this change, which numbered it 5282 and shared FH1's engine) |
-| Drive | the Beetle and then the Prius, each the save's current car, spawned at the festival and drove off (15 mph and a turn). The game read `vw_beetle_04_fm4_et.xml` and `toy_prius_11_fm4_et.xml`, their own engines' tunings. The PT Cruiser and the Taurus SHO were not driven |
+| Drive | the Prius and then the Beetle, each the save's current car (in every garage slot of a copy of the save), spawned at the festival and drove off (16 mph and a turn). The game read `toy_prius_11_fm4_et.xml` and `vw_beetle_04_fm4_et.xml`, their own engines' tunings. The PT Cruiser and the Taurus SHO were not driven |
+| Car ids | with the Taurus SHO and the Prius at 551241 and 551340, not even the Beetle loaded, and the game spawned its default car instead. With every car id under 65536, it loaded. Moving only the Beetle's car (55282), wheel (5530), engine (5536) or drivetrain (5535) to a new id did not stop it loading |
 
 ## Not done yet
 
@@ -569,9 +576,10 @@ the five cars, with their files in the package:
 - FM4's title updates are not read. Of the DLC packs' extra content only the cars are used:
   liveries, events, tracks and achievements are not.
 - The 2011 Leaf, an electric car without an engine row ([above](#fh1s-traffic-cars-841)).
-- 13 FM4 DLC cars whose car id FH1 gives another car (the 2013 Viper, the Porsche Cayman R and
-  Cayenne, the 2013 Mustang Boss 302 and others) are left out as before: their engine and body
-  ids are other FH1 cars' too.
+- 25 FM4 DLC cars whose car id FH1 gives another car (the Porsche Cayman R and Cayenne, the 2013
+  Mustang Boss 302, the Lotus Eleven and others) are still left out without a word. They are
+  other cars, not FH1's, and could take 55000 + their id the same way. Two more, the Hennessey
+  Venom GT and the 2013 SRT Viper, are FH1's own cars under other ids and stay out.
 
 ## Credits
 

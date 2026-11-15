@@ -493,13 +493,14 @@ class TrafficTwinTests(unittest.TestCase):
     FH1 has only on traffic cars. FH1's traffic car is left as it is."""
 
     def test_ids_names_and_files(self):
-        self.assertEqual(fm4_cars.twin_id(282), 50282)
-        self.assertEqual(fm4_cars.twin_id(1241), 51241)
-        self.assertEqual(fm4_cars.twin_id(30, {50030}), 60030)  # another wheel has 50030
-        part, limit = fm4_cars.PART_BASE, fm4_cars.ENGINE_ID_LIMIT
-        self.assertEqual(fm4_cars.twin_id(36, (), part, limit), 20036)
-        self.assertEqual(fm4_cars.twin_id(36, {20036}, part, limit), 30036)
-        self.assertIsNone(fm4_cars.twin_id(36, {20036, 30036}, part, limit))  # an engine id stays 16-bit
+        self.assertEqual(fm4_cars.twin_id(935), 55935)
+        self.assertEqual(fm4_cars.twin_id(282), 55282)
+        self.assertEqual(fm4_cars.twin_id(1241), 56241)  # not 551241: a car id stays under 65536
+        self.assertEqual(fm4_cars.twin_id(800), 55800)  # an engine
+        self.assertEqual(fm4_cars.twin_id(30), 55030)  # a wheel
+        self.assertIsNone(fm4_cars.twin_id(282, {55282}))  # taken
+        self.assertEqual(fm4_cars.twin_id(10535, (), fm4_cars.CAR_ID_LIMIT), 65535)
+        self.assertIsNone(fm4_cars.twin_id(10536, (), fm4_cars.CAR_ID_LIMIT))
         self.assertEqual(fm4_cars.twin_name("VW_Beetle_04"), "VW_5_Beetle_04")
         f = fm4_cars.twin_file
         self.assertEqual(f("VW_Beetle_04.carbin", "VW_Beetle_04", "VW_5_Beetle_04"), "VW_5_Beetle_04.carbin")
@@ -573,10 +574,10 @@ class TrafficTwinTests(unittest.TestCase):
         fm4, fh1 = self.dbs()
         # the Beetle: FH1's 282 is the traffic car of that name. Not NUL_Car_00 (a placeholder),
         # 1530 (FH1's is another car), 414 (selectable in FH1: FH1's own car), 100 (FH1 lacks it)
-        self.assertEqual(fm4_cars.traffic_twins(fm4, fh1), {282: (50282, "VW_5_Beetle_04", (50030, "VW_5_Beetle_04"))})
+        self.assertEqual(fm4_cars.traffic_twins(fm4, fh1), {282: (55282, "VW_5_Beetle_04", (55030, "VW_5_Beetle_04"))})
         self.assertEqual(fm4_cars.traffic_twins(fm4, fh1, skip={"vw_beetle_04"}), {})  # an FH1 DLC car
-        # an installed DLC's car has 50282
-        self.assertEqual(fm4_cars.traffic_twins(fm4, fh1, taken={50282})[282][0], 60282)
+        # an installed DLC's car has 55282: no copy rather than two cars of one id
+        self.assertEqual(fm4_cars.traffic_twins(fm4, fh1, taken={55282}), {})
 
     def test_a_twin_is_a_car_of_its_own(self):
         fm4, fh1 = self.dbs()
@@ -590,26 +591,26 @@ class TrafficTwinTests(unittest.TestCase):
         def table(name):
             return sorted(tuple(r.values()) for r in rows[name])
         car = rows["Data_Car"][0]
-        self.assertEqual((car["Id"], car["MediaName"], car["StockWheelID"]), (50282, "VW_5_Beetle_04", 50030))
-        self.assertTrue(car["Thumbnail"].endswith("\\Thumbnail_50282.xds"))
-        self.assertEqual(table("List_UpgradeAntiSwayFront"), [(50282000, 50282, 1, 50282001)])
-        self.assertEqual(table("List_AntiSwayPhysics"), [(50282001, 50282, 5.97)])
-        self.assertEqual(table("List_UpgradeCarBody"), [(50282000, 50282, 0, 50282000)])
-        self.assertEqual(table("Data_CarBody"), [(50282000, 1270.0)])
-        self.assertEqual(table("List_Wheels"), [(50030, "VW_5_Beetle_04")])
-        # its engine (36) and drivetrain (35) are FH1's traffic car's only: FM4's own copies, under
-        # 20000 + their ids, the engine named for its own EngineTuning; FH1's rows stay as they are
-        self.assertEqual(table("Combo_Engines"), [(38, 50282, 20036, 1)])  # a new key
-        self.assertEqual(table("List_UpgradeEngine"), [(50282000, 50282, 0, 20036, 1), (50282001, 50282, 1, 690, 0),
-                                                       (50282002, 50282, 1, 37, 0)])
+        self.assertEqual((car["Id"], car["MediaName"], car["StockWheelID"]), (55282, "VW_5_Beetle_04", 55030))
+        self.assertTrue(car["Thumbnail"].endswith("\\Thumbnail_55282.xds"))
+        self.assertEqual(table("List_UpgradeAntiSwayFront"), [(55282000, 55282, 1, 55282001)])
+        self.assertEqual(table("List_AntiSwayPhysics"), [(55282001, 55282, 5.97)])
+        self.assertEqual(table("List_UpgradeCarBody"), [(55282000, 55282, 0, 55282000)])
+        self.assertEqual(table("Data_CarBody"), [(55282000, 1270.0)])
+        self.assertEqual(table("List_Wheels"), [(55030, "VW_5_Beetle_04")])
+        # its engine (36) and drivetrain (35) are FH1's traffic car's only: FM4's own copies under
+        # 55000 + their ids, the engine named for its own EngineTuning; FH1's rows stay as they are
+        self.assertEqual(table("Combo_Engines"), [(38, 55282, 55036, 1)])  # a new key
+        self.assertEqual(table("List_UpgradeEngine"), [(55282000, 55282, 0, 55036, 1), (55282001, 55282, 1, 690, 0),
+                                                       (55282002, 55282, 1, 37, 0)])
         # 690: FM4's, which FH1 lacks; 37: FH1's Bora's (a car you can drive), shared
-        self.assertEqual(table("Data_Engine"), [(690, "VW_Golf_R32_03"), (20036, "VW_Beetle_04_FM4")])
-        self.assertEqual(table("List_UpgradeEngineCamshaft"), [(20036000, 20036, 1, 20036000)])
-        self.assertEqual(table("List_TorqueCurve"), [(20036000, 1.0)])  # FM4's curve
-        self.assertEqual(table("List_UpgradeDrivetrain"), [(50282000, 50282, 0, 20035)])
-        self.assertEqual(table("Data_Drivetrain"), [(20035, 1)])
-        self.assertEqual(table("List_UpgradeDrivetrainTransmission"), [(20035000, 20035, 2)])  # FM4's gearbox
-        self.assertEqual(db.part_names, {(50282, "VW_Beetle_04"): "VW_Beetle_04_FM4"})
+        self.assertEqual(table("Data_Engine"), [(690, "VW_Golf_R32_03"), (55036, "VW_Beetle_04_FM4")])
+        self.assertEqual(table("List_UpgradeEngineCamshaft"), [(55036000, 55036, 1, 55036000)])
+        self.assertEqual(table("List_TorqueCurve"), [(55036000, 1.0)])  # FM4's curve
+        self.assertEqual(table("List_UpgradeDrivetrain"), [(55282000, 55282, 0, 55035)])
+        self.assertEqual(table("Data_Drivetrain"), [(55035, 1)])
+        self.assertEqual(table("List_UpgradeDrivetrainTransmission"), [(55035000, 55035, 2)])  # FM4's gearbox
+        self.assertEqual(db.part_names, {(55282, "VW_Beetle_04"): "VW_Beetle_04_FM4"})
         self.assertNotIn("conflicts", report)  # nothing of FH1's traffic car is left out or changed
 
     def test_an_electric_car_without_an_engine_row(self):
