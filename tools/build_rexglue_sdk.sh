@@ -82,11 +82,13 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # and 0900: a marked FM4 shadow fetch reads the shadow mask at the pixel's place in the frame, so
 # the car's shadow on a converted circuit is no longer drawn again up the road (#827).
 # and 1000: a picture drawn on the HUD target's fractional 1080p raster (a replay movie's frame, a
-# saved photo and its thumbnail, a Big Shot's tile) is copied back to guest memory at its full size (#879).
+# saved photo and its thumbnail) is copied back to guest memory at its full size (#879).
+# and 1010: fh1_hold_scene_layer, which the Big Shot's hook sets: its frames stay in the scene layer,
+# also in a rally stage, whose frames start with a draw to the front buffer (#879).
 # A reviewed full commit can be pinned before a maintainer publishes a tag.
 # When a tag is supplied, its target must still match this immutable commit.
 REIGLUE_TAG=
-REIGLUE_COMMIT=537f662d700c57b3db65057831ea4210e0caa024  # ReIGlue fix/879-captures-three-quarters: main (#62) + 1000
+REIGLUE_COMMIT=fd8181e9231239ff5e5d24693d01f66a1d1a0f86  # ReIGlue fix/879-captures-three-quarters: main (#62) + 1000, 1010
 REIGLUE_URL="${REIGLUE_URL:-https://github.com/FH1-ReImagined/ReIGlue}"
 NIGHTLY="${REXSDK_NIGHTLY:-$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64}"
 SRC="${REXSDK_SRC:-$HOME/rexglue-sdk-src-forza/sdk}"
