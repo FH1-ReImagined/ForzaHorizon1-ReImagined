@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QFileDialog, QHBoxL
                                QMessageBox, QProgressBar, QPushButton, QTableWidget,
                                QTableWidgetItem, QVBoxLayout, QWidget)
 
-from .. import GITHUB_URL, drag_tyres, fm4cars, mods
+from .. import GITHUB_URL, drag_tires, fm4cars, mods
 from .pages import open_folder, scroll_page
 from .widgets import card, label
 from . import theme
@@ -450,18 +450,18 @@ class ModsPage(FolderListPage):
         self._fm4_state()
         return c
 
-    # ---- Drag tyres (#924) ---------------------------------------------------------------------
+    # ---- Drag tires (#924) ---------------------------------------------------------------------
     def _drag_card(self):
         c, cl = card(spacing=10)
-        cl.addWidget(label("Drag tyres", "cardTitle"))
-        cl.addWidget(label("Give every car a drag tyre: a sixth tyre compound in Custom Upgrade, with far more "
+        cl.addWidget(label("Drag tires", "cardTitle"))
+        cl.addWidget(label("Give every car a drag tire: a sixth tire compound in Custom Upgrade, with far more "
                            "grip off the line and less in corners and on loose ground. Every car means FH1's own, "
-                           "your DLC's and your imported FM4 cars. The tyre is made from your game's files when "
+                           "your DLC's and your imported FM4 cars. The tire is made from your game's files when "
                            "you press Play, and again when your DLC or FM4 cars change. Before turning it off, "
-                           "fit another tyre to the cars that have it: a car with the drag tyre fitted does not "
+                           "fit another tire to the cars that have it: a car with the drag tire fitted does not "
                            "load without it.", "muted"))
-        self.drag_box = QCheckBox("Drag tyres for every car")
-        self.drag_box.setChecked(drag_tyres.enabled(self.cfg))
+        self.drag_box = QCheckBox("Drag tires for every car")
+        self.drag_box.setChecked(drag_tires.enabled(self.cfg))
         self.drag_box.toggled.connect(self._drag_toggled)
         cl.addWidget(self.drag_box)
         self.drag_message = label("", "muted")
@@ -470,13 +470,13 @@ class ModsPage(FolderListPage):
         return c
 
     def _drag_toggled(self, on):
-        # a car with the drag tyre fitted does not load without the mod: the game gives another car
-        if not on and not self._confirm("Turn off drag tyres", drag_tyres.OFF_WARNING):
+        # a car with the drag tire fitted does not load without the mod: the game gives another car
+        if not on and not self._confirm("Turn off drag tires", drag_tires.OFF_WARNING):
             self.drag_box.blockSignals(True)
             self.drag_box.setChecked(True)
             self.drag_box.blockSignals(False)
             return
-        drag_tyres.set_enabled(self.cfg, on)
+        drag_tires.set_enabled(self.cfg, on)
         self._drag_state()
 
     def refresh(self):
@@ -485,13 +485,13 @@ class ModsPage(FolderListPage):
             self._drag_state()
 
     def _drag_state(self):
-        info = drag_tyres.status(self.cfg) if drag_tyres.enabled(self.cfg) else None
-        if not drag_tyres.enabled(self.cfg):
+        info = drag_tires.status(self.cfg) if drag_tires.enabled(self.cfg) else None
+        if not drag_tires.enabled(self.cfg):
             text = ""
         elif info:
-            text = f"{info.get('cars', 0)} cars have the drag tyre."
+            text = f"{info.get('cars', 0)} cars have the drag tire."
         else:
-            text = "The drag tyre is made the next time you press Play."
+            text = "The drag tire is made the next time you press Play."
         self.drag_message.setText(text)
 
     def _tracks_changed(self):

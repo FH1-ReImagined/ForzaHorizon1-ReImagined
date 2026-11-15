@@ -1,15 +1,15 @@
-"""Drag tyres for every car (Mods > Drag tyres, off by default; #924).
+"""Drag tires for every car (Mods > Drag tires, off by default; #924).
 
-FH1's own cars have no drag tyre, and the FM4 cars import leaves FM4's out. With this on, a start
-gets a hidden mod, mods/.reimagined-drag-tyres. tools/drag_tyres.py builds it from the game's own
-files: a database patch that gives every car a drag tyre upgrade (tyre compound 10, the sixth tyre
-of Custom Upgrade, from warshack4874's drag tyre mod), and upgrades.str with its name and
+FH1's own cars have no drag tire, and the FM4 cars import leaves FM4's out. With this on, a start
+gets a hidden mod, mods/.reimagined-drag-tires. tools/drag_tires.py builds it from the game's own
+files: a database patch that gives every car a drag tire upgrade (tire compound 10, the sixth tire
+of Custom Upgrade, from warshack4874's drag tire mod), and upgrades.str with its name and
 description in every language. Every car means FH1's own, every installed DLC or fan pack's, and
 those of the FM4 cars import.
 
 The mod loads first, so a player's own mod with an upgrades.str wins. It is rebuilt only when the
 data file, the builder, the game's title update, the installed DLC or the FM4 cars import change.
-Off: no mod, no drag tyre. A car with the drag tyre fitted then does not load (the game gives
+Off: no mod, no drag tire. A car with the drag tire fitted then does not load (the game gives
 another car), so the Mods page asks first (OFF_WARNING). A failure never stops the game from
 starting: it starts without them, and the log says why.
 """
@@ -21,32 +21,32 @@ from pathlib import Path
 
 from . import datafolder, mods, paths
 
-MOD = ".reimagined-drag-tyres"
-MARKER = "drag_tyres.json"
-# What turning it off does to a car with the drag tyre fitted (seen in the game: the save's car did
+MOD = ".reimagined-drag-tires"
+MARKER = "drag_tires.json"
+# What turning it off does to a car with the drag tire fitted (seen in the game: the save's car did
 # not load, and the game spawned another car); the Mods page asks with this first.
-OFF_WARNING = ("A car with the drag tyre fitted does not load without it: the game gives you another car "
-               "instead. Fit another tyre compound to those cars first (Custom Upgrade), or turn drag tyres "
-               "back on to get them back.\n\nTurn drag tyres off?")
+OFF_WARNING = ("A car with the drag tire fitted does not load without it: the game gives you another car "
+               "instead. Fit another tire compound to those cars first (Custom Upgrade), or turn drag tires "
+               "back on to get them back.\n\nTurn drag tires off?")
 
 
 def enabled(cfg) -> bool:
-    return bool((cfg.d.get("drag_tyres") or {}).get("enabled"))
+    return bool((cfg.d.get("drag_tires") or {}).get("enabled"))
 
 
 def set_enabled(cfg, on: bool):
-    cfg.d.setdefault("drag_tyres", {})["enabled"] = bool(on)
+    cfg.d.setdefault("drag_tires", {})["enabled"] = bool(on)
     cfg.save()
 
 
 def _tools():
     paths.ensure_tools_importable()
-    import drag_tyres
-    return drag_tyres
+    import drag_tires
+    return drag_tires
 
 
 def _fm4_gamedb(cfg):
-    """The FM4 cars import's database (its cars get the tyre too), or None."""
+    """The FM4 cars import's database (its cars get the tire too), or None."""
     from . import fm4cars
     p = mods.mods_dir(cfg) / fm4cars.MOD / "media" / "db" / "gamedb.slt"
     return p if p.is_file() else None
@@ -82,7 +82,7 @@ def fingerprint(tools, cfg, game, update, dlc, fm4db) -> str:
 
 def ensure_mod(cfg, log=print):
     """The hidden mod's folder name when it is on and ready, else None. Builds or rebuilds it as
-    needed; any failure leaves the game without drag tyres (and says why in the log)."""
+    needed; any failure leaves the game without drag tires (and says why in the log)."""
     target = mods.mods_dir(cfg) / MOD
     if not enabled(cfg):
         return None
@@ -103,16 +103,16 @@ def ensure_mod(cfg, log=print):
                 report = tools.build(fh1, str(staged), [str(fm4db)] if fm4db else [])
             finally:
                 fh1.close()
-            (staged / "mod.toml").write_text('name = "Drag tyres"\n', encoding="utf-8")
+            (staged / "mod.toml").write_text('name = "Drag tires"\n', encoding="utf-8")
             (staged / MARKER).write_text(json.dumps({"stamp": stamp, "cars": report["cars"],
                                                      "languages": report["languages"]}), encoding="utf-8")
             if target.exists():
                 shutil.rmtree(target)
             staged.rename(target)
-        log(f"Drag tyres: every car has one ({report['cars']} cars)")
+        log(f"Drag tires: every car has one ({report['cars']} cars)")
         return MOD
-    except Exception as e:  # noqa: BLE001 - a drag tyre failure must never stop the game from starting
-        log(f"Drag tyres: {e}; the game starts without them")
+    except Exception as e:  # noqa: BLE001 - a drag tire failure must never stop the game from starting
+        log(f"Drag tires: {e}; the game starts without them")
         return None
 
 

@@ -29,7 +29,7 @@ from forza_launcher import builder  # noqa: E402
 # The tools the launcher imports or runs at play time: the same list as forza-launcher.spec's (#758:
 # loading tips, the radio and the FM4 imports read extract_map_points and the fm4_* converters).
 TOOLS = ("xcontent_extract.py", "xiso_extract.py", "install_dlc.py", "apply_title_update.py", "lzx_delta.py", "xdc_decode.py", "livery_codec.py",
-         "pipeline_list.py", "fxobj_shaders.py", "xxh3.py", "extract_map_points.py", "fm4_cars.py", "car_ids.py", "car_ids.json", "drag_tyres.py", "drag_tyre.json",
+         "pipeline_list.py", "fxobj_shaders.py", "xxh3.py", "extract_map_points.py", "fm4_cars.py", "car_ids.py", "car_ids.json", "drag_tires.py", "drag_tire.json",
          "fm4_carbin.py", "fm4_physdef.py",
          "carbin_dump.py", "native_menu_scene.py", "offline_cars_flow.py", "native_tuning_assets.py", "fm4_track_mod.py", "fm4_pvs.py",
          "fm4_col.py", "fm4_shaders.py", "fm4_spawn.py", "fm4_timing.py", "fm4_routes.py")

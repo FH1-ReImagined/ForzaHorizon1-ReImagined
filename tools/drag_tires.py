@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""A drag tyre for every car (#924), as a mod of its own: tyre compound 10, from warshack4874's drag
-tyre mod.
+"""A drag tire for every car (#924), as a mod of its own: tire compound 10, from warshack4874's drag
+tire mod.
 
-FH1's own cars have no drag tyre. Their tyres stop at level 3 (street, sport, race), apart from the
-Rally Expansion's rally tyre (level 5, compound 9), and the FM4 import leaves FM4's level-4 drag
-tyre out (docs/modding/fm4-cars.md). This gives every car of the game a drag tyre upgrade, the way
-warshack4874's mod does (docs/modding/drag-tyres.md):
+FH1's own cars have no drag tire. Their tires stop at level 3 (street, sport, race), apart from the
+Rally Expansion's rally tire (level 5, compound 9), and the FM4 import leaves FM4's level-4 drag
+tire out (docs/modding/fm4-cars.md). This gives every car of the game a drag tire upgrade, the way
+warshack4874's mod does (docs/modding/drag-tires.md):
 
-- drag_tyre.json, next to this script, holds:
+- drag_tire.json, next to this script, holds:
   - the compound (List_TireCompound 10) with its own friction values;
   - its 18 curves (List_TireFrictionMultiCurve 19-20, List_TireFrictionCurve 37-40,
     List_TireAffectCurve 109-120);
-  - its upgrade (Upgrades 273: tyre compound, level 6, with FM4's drag tyre icons, which FH1's UI
+  - its upgrade (Upgrades 273: tire compound, level 6, with FM4's drag tire icons, which FH1's UI
     textures have);
   - its English name and description.
 - Every car the game has gets a level-6 upgrade to it (List_UpgradeTireCompound, car id x 1000 + 6,
@@ -20,9 +20,9 @@ warshack4874's mod does (docs/modding/drag-tyres.md):
 The rows go into a database patch, PATCH, which the game merges over its database as it does a DLC
 pack's. The two strings go into each language's upgrades.str: FH1's table as the game merges it,
 with the strings added, in English in every language as in the mod. The launcher builds this as the
-hidden mod .reimagined-drag-tyres when Mods > Drag tyres is on (forza_launcher/drag_tyres.py).
+hidden mod .reimagined-drag-tires when Mods > Drag tires is on (forza_launcher/drag_tires.py).
 
-    python tools/drag_tyres.py --fh1 GAME [--update TU4] [--dlc DLC] [--cars-db GAMEDB ...] --out MOD
+    python tools/drag_tires.py --fh1 GAME [--update TU4] [--dlc DLC] [--cars-db GAMEDB ...] --out MOD
 """
 import argparse
 import json
@@ -36,7 +36,7 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 import fm4_cars  # noqa: E402  (FH1's files: its database, the DLC patches, the string tables)
 
-DATA = os.path.join(HERE, "drag_tyre.json")
+DATA = os.path.join(HERE, "drag_tire.json")
 PATCH = "media/db/patch/924006_merge.slt"
 STRING_TABLE = "Upgrades"
 CURVES = ("List_TireFrictionCurve", "List_TireAffectCurve", "List_TireFrictionMultiCurve")
@@ -155,7 +155,7 @@ def reference_high(fh1db):
 
 
 def write_patch(path, fh1db, cars, data, keys, hi, taken=()):
-    """The database patch: the compound, its curves and its upgrade, and each car's level-6 tyre
+    """The database patch: the compound, its curves and its upgrade, and each car's level-6 tire
     (skipping a car whose key some row has already). Tables as FH1 makes them. Returns the count
     of cars."""
     if os.path.exists(path):
@@ -199,7 +199,7 @@ def write_patch(path, fh1db, cars, data, keys, hi, taken=()):
 
 def build(fh1, out, extra=(), data=None):
     """The mod's files in out: PATCH and media/stringtables/<lang>/upgrades.str. fh1: an fm4_cars.FH1;
-    extra: paths of more databases whose cars get the tyre (an FM4 cars import's gamedb.slt).
+    extra: paths of more databases whose cars get the tire (an FM4 cars import's gamedb.slt).
     Returns {"cars", "languages", "keys"}."""
     data = data or load()
     fh1db = fh1.db()
@@ -236,7 +236,7 @@ def main(argv=None):
     ap.add_argument("--fh1", required=True, help="FH1's game folder")
     ap.add_argument("--update", help="the title update folder (with media.zip)")
     ap.add_argument("--dlc", help="the folder of installed DLC packages")
-    ap.add_argument("--cars-db", action="append", default=[], help="another database whose cars get the tyre "
+    ap.add_argument("--cars-db", action="append", default=[], help="another database whose cars get the tire "
                     "(an FM4 cars import's media/db/gamedb.slt)")
     ap.add_argument("--out", required=True, help="the mod folder to write")
     a = ap.parse_args(argv)
@@ -248,7 +248,7 @@ def main(argv=None):
         return 1
     finally:
         fh1.close()
-    print("drag tyres for %d cars, strings in %d languages (keys %s)" % (rep["cars"], len(rep["languages"]), rep["keys"]))
+    print("drag tires for %d cars, strings in %d languages (keys %s)" % (rep["cars"], len(rep["languages"]), rep["keys"]))
     return 0
 
 

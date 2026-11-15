@@ -671,8 +671,8 @@ class TrafficTwinTests(unittest.TestCase):
 
 class RallyPartsTests(unittest.TestCase):
     """#924: with FH1's Rally Expansion the imported cars get rally parts, as FH1's own cars have
-    them and as Forza Imported DLC Maker gives FM4 cars: level-5 rally tyres in place of FM4's
-    level-4 drag tyres, a level-4 rally suspension scaled from the car's own, a level-4 rally
+    them and as Forza Imported DLC Maker gives FM4 cars: level-5 rally tires in place of FM4's
+    level-4 drag tires, a level-4 rally suspension scaled from the car's own, a level-4 rally
     gearbox for each drivetrain FH1 lacks. Electric cars and hybrids get none."""
 
     def dbs(self):
@@ -707,7 +707,7 @@ class RallyPartsTests(unittest.TestCase):
             fm4.execute("insert into Data_Car values (?, ?)", (car, "CAR_%d" % car))
             fm4.executemany("insert into List_UpgradeTireCompound values (?,?,?,?,?,?,?)", [
                 (car * 1000, car, 0, 1, 4, 0, 0.0), (car * 1000 + 3, car, 3, 0, 8, 4000, -2.0),
-                (car * 1000 + 4, car, 4, 0, 9, 3000, -1.0)])  # FM4's drag tyre
+                (car * 1000 + 4, car, 4, 0, 9, 3000, -1.0)])  # FM4's drag tire
             fm4.execute("insert into List_UpgradeCarBody values (?,?,0,1,?)", (car * 1000, car, car * 1000))
             fm4.execute("insert into Data_CarBody values (?, 0.15, 0.16)", (car * 1000,))
             fm4.execute("insert into List_UpgradeSpringDamper values (?,?,3,-10.0,2500,0,?,?)",
@@ -741,15 +741,15 @@ class RallyPartsTests(unittest.TestCase):
 
     def test_rally_parts(self):
         counts, rows = self.rows()
-        self.assertEqual(counts, {"tyres": 2, "suspension": 2, "gearbox": 1, "cars": 2})
-        tyres = rows["List_UpgradeTireCompound"]
-        # rally tyres in place of the drag tyres, from the level-3 tyre (its mass)
-        self.assertEqual(tyres[300005], {"Id": 300005, "Ordinal": 300, "Level": 5, "IsStock": 0, "TireCompoundID": 9,
+        self.assertEqual(counts, {"tires": 2, "suspension": 2, "gearbox": 1, "cars": 2})
+        tires = rows["List_UpgradeTireCompound"]
+        # rally tires in place of the drag tires, from the level-3 tire (its mass)
+        self.assertEqual(tires[300005], {"Id": 300005, "Ordinal": 300, "Level": 5, "IsStock": 0, "TireCompoundID": 9,
                                          "Price": 10000, "MassDiff": -2.0})
-        self.assertNotIn(300004, tyres)
-        self.assertIn(302005, tyres)
-        # the hybrid gets no rally part (and no drag tyre either)
-        self.assertEqual(sorted(k for k in tyres if k // 1000 == 301), [301000, 301003])
+        self.assertNotIn(300004, tires)
+        self.assertIn(302005, tires)
+        # the hybrid gets no rally part (and no drag tire either)
+        self.assertEqual(sorted(k for k in tires if k // 1000 == 301), [301000, 301003])
         self.assertNotIn(301004, rows["List_UpgradeSpringDamper"])
         spring = rows["List_UpgradeSpringDamper"][300004]
         self.assertEqual((spring["Level"], spring["IsStock"], spring["Price"], spring["FrontSpringDamperPhysicsID"],
@@ -788,16 +788,16 @@ class RallyPartsTests(unittest.TestCase):
         self.assertEqual(phys[302104]["DefRideHeight"], 0.1866)  # the rear's body height is in line
         self.assertEqual((phys[300004]["DefRideHeight"], phys[300004]["MaxRideHeight"]), (0.1, 0.1))  # 0.0933: the lowest
 
-    def test_fm4s_drag_tyre_is_left_out(self):
-        """FM4's level-4 drag tyre is left out of every car, with or without rally parts: FH1's own
+    def test_fm4s_drag_tire_is_left_out(self):
+        """FM4's level-4 drag tire is left out of every car, with or without rally parts: FH1's own
         cars have none, nor do Forza Imported DLC Maker's FM4 cars. A stock one would be kept."""
         fm4, fh1 = self.dbs()
         fm4.execute("update List_UpgradeTireCompound set IsStock=1 where Id=302004")
         with mock.patch.object(fm4_cars, "Retune", _NoRetune):
             db = fm4_cars.Database(fm4, fh1)
         db.collect([300, 301, 302])
-        tyres = sorted(r["Id"] for r in db.finish({})["List_UpgradeTireCompound"])
-        self.assertEqual(tyres, [300000, 300003, 301000, 301003, 302000, 302003, 302004])
+        tires = sorted(r["Id"] for r in db.finish({})["List_UpgradeTireCompound"])
+        self.assertEqual(tires, [300000, 300003, 301000, 301003, 302000, 302003, 302004])
 
     def test_only_with_the_rally_expansion(self):
         tmp = tempfile.mkdtemp()

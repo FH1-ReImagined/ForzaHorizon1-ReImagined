@@ -1,4 +1,4 @@
-"""Synthetic tests of the drag tyre builder (#924): no game file is read or included."""
+"""Synthetic tests of the drag tire builder (#924): no game file is read or included."""
 import os
 import shutil
 import sqlite3
@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import drag_tyres  # noqa: E402
+import drag_tires  # noqa: E402
 import fm4_cars  # noqa: E402
 
 HIGH = 0x7091  # FH1's upgrades.str references: "_&N", N = HIGH << 16 | key
@@ -41,11 +41,11 @@ class FakeFH1:
         return b"", t
 
 
-class DragTyreTests(unittest.TestCase):
+class DragTireTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.tmp, True)
-        self.data = drag_tyres.load()
+        self.data = drag_tires.load()
 
     def game_db(self, path=":memory:", cars=(100, 101)):
         db = sqlite3.connect(path)
@@ -57,18 +57,18 @@ class DragTyreTests(unittest.TestCase):
                                           "ImagePath")))
         db.execute("insert into Upgrades (id, TypeId, Name, Level) values (78, '21', ?, 0)", ("_&%d" % (HIGH << 16 | 5),))
         db.execute(table_sql("List_TireCompound", list(self.data["compound"])))
-        for t in drag_tyres.CURVES:
+        for t in drag_tires.CURVES:
             db.execute(table_sql(t, list(self.data["curves"][t][0])))
         db.commit()
         return db
 
-    def patch(self, name, cars, tyres=()):
+    def patch(self, name, cars, tires=()):
         path = os.path.join(self.tmp, name)
         db = sqlite3.connect(path)
         db.execute("create table Data_Car (Id INTEGER, MediaName TEXT)")
         db.executemany("insert into Data_Car values (?, ?)", [(c, "DLC_%d" % c) for c in cars])
         db.execute(table_sql("List_UpgradeTireCompound", PART_COLUMNS))
-        db.executemany("insert into List_UpgradeTireCompound (Id, Ordinal, Level) values (?, ?, 6)", [(t, t // 1000) for t in tyres])
+        db.executemany("insert into List_UpgradeTireCompound (Id, Ordinal, Level) values (?, ?, 6)", [(t, t // 1000) for t in tires])
         db.commit()
         db.close()
         return path
@@ -77,16 +77,16 @@ class DragTyreTests(unittest.TestCase):
         tables = tables or {"en": {5: ["Stock", "IDS_Stock", 0, 0]}, "de": {5: ["Serie", "IDS_Stock", 0, 0]}}
         fh1 = FakeFH1(fh1db or self.game_db(), patches if patches is not None else [], tables)
         out = os.path.join(self.tmp, "mod")
-        return drag_tyres.build(fh1, out, list(extra), self.data), out
+        return drag_tires.build(fh1, out, list(extra), self.data), out
 
-    def test_every_car_gets_the_drag_tyre(self):
-        """FH1's cars, a DLC pack's (but the one that has a level-6 tyre already) and an FM4 cars
-        import's: each a level-6 tyre of compound 10, car id x 1000 + 6, the data's values."""
-        dlc = self.patch("dlc.slt", [1600, 1601], tyres=[1601006])
+    def test_every_car_gets_the_drag_tire(self):
+        """FH1's cars, a DLC pack's (but the one that has a level-6 tire already) and an FM4 cars
+        import's: each a level-6 tire of compound 10, car id x 1000 + 6, the data's values."""
+        dlc = self.patch("dlc.slt", [1600, 1601], tires=[1601006])
         fm4 = self.patch("fm4.slt", [100, 56541])  # an import's database holds FH1's cars too
         rep, out = self.build(patches=[dlc], extra=[fm4])
         self.assertEqual(rep["cars"], 4)
-        db = sqlite3.connect(os.path.join(out, *drag_tyres.PATCH.split("/")))
+        db = sqlite3.connect(os.path.join(out, *drag_tires.PATCH.split("/")))
         self.addCleanup(db.close)
         rows = db.execute("select Id, Ordinal, Level, IsStock, TireCompoundID, Price from List_UpgradeTireCompound "
                           "order by Id").fetchall()
@@ -95,7 +95,7 @@ class DragTyreTests(unittest.TestCase):
         # the compound, its curves and its upgrade, as the data has them
         compound = db.execute("select * from List_TireCompound").fetchall()
         self.assertEqual(compound, [tuple(self.data["compound"].values())])
-        for t in drag_tyres.CURVES:
+        for t in drag_tires.CURVES:
             self.assertEqual(sorted(db.execute("select * from [%s]" % t).fetchall()),
                              sorted(tuple(r.values()) for r in self.data["curves"][t]))
         up = db.execute("select id, TypeId, Level, Name, Description, IconPath from Upgrades").fetchall()
@@ -118,7 +118,7 @@ class DragTyreTests(unittest.TestCase):
             self.assertEqual(t.entries[63249][1], "IDS_Description_DragTire")
             self.assertTrue(t.entries[63249][0].startswith("Install drag racing tires"))
         self.assertEqual(t.entries[32624][:2], ["Andere", "IDS_Other"])
-        db = sqlite3.connect(os.path.join(out, *drag_tyres.PATCH.split("/")))
+        db = sqlite3.connect(os.path.join(out, *drag_tires.PATCH.split("/")))
         self.addCleanup(db.close)
         self.assertEqual(db.execute("select Name from Upgrades").fetchone()[0], "_&%d" % (HIGH << 16 | 32625))
 
@@ -132,7 +132,7 @@ class DragTyreTests(unittest.TestCase):
     def test_an_id_another_row_has_stops_it(self):
         db = self.game_db()
         db.execute("insert into List_TireCompound (TireCompoundID, DisplayName) values (10, 'SOMETHING_ELSE')")
-        with self.assertRaises(drag_tyres.DragError):
+        with self.assertRaises(drag_tires.DragError):
             self.build(fh1db=db)
 
     def test_the_same_rows_installed_another_way_are_fine(self):
@@ -144,7 +144,7 @@ class DragTyreTests(unittest.TestCase):
         self.assertEqual(rep["cars"], 2)
 
     def test_the_data_file_is_whole(self):
-        """Every curve the compound and its multi curves name is in the data; the upgrade is a tyre
+        """Every curve the compound and its multi curves name is in the data; the upgrade is a tire
         compound one at the part's level; the strings have names and texts."""
         d = self.data
         affect = {r["AffectCurveID"] for r in d["curves"]["List_TireAffectCurve"]}

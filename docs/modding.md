@@ -14,7 +14,7 @@ original back.
   ([modding/fm4-cars.md](modding/fm4-cars.md)).
 - Forza Motorsport 4's circuits from your own FM4 Disc 1 (experimental): **Import FM4 tracks…** on the
   Mods page ([fm4-tracks.md](fm4-tracks.md)).
-- A drag tyre for every car: **Drag tyres** on the Mods page ([modding/drag-tyres.md](modding/drag-tyres.md)).
+- A drag tire for every car: **Drag tires** on the Mods page ([modding/drag-tires.md](modding/drag-tires.md)).
 
 ## For players
 

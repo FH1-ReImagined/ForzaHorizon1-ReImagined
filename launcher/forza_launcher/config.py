@@ -30,8 +30,8 @@ def _default():
         "texture_packs": {"order": [], "disabled": []},
         # FM4 circuits (#648, fm4tracks.py, experimental): the one Play starts on ("": FH1's Colorado).
         "fm4_tracks": {"selected": ""},
-        # Drag tyres for every car (#924, drag_tyres.py, Mods page): off by default.
-        "drag_tyres": {"enabled": False},
+        # Drag tires for every car (#924, drag_tires.py, Mods page): off by default.
+        "drag_tires": {"enabled": False},
         "custom_radio": {"version": 1, "ffmpeg": "", "level": True, "stations": {}},
         "check_updates": True,    # one background check per packaged launcher session
         "game_package": "",       # the Games on Demand package (file)

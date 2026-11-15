@@ -1,5 +1,5 @@
 {
- "about": "The drag tyre compound of warshack4874's drag tyre mod: tyre compound 10 with its own friction values and curves, its upgrade (tyre compound level 6) and its English name and description, and the values of the level-6 upgrade every car gets (tools/drag_tyres.py, #924).",
+ "about": "The drag tire compound of warshack4874's drag tire mod: tire compound 10 with its own friction values and curves, its upgrade (tire compound level 6) and its English name and description, and the values of the level-6 upgrade every car gets (tools/drag_tires.py, #924).",
  "compound": {
   "TireCompoundID": 10,
   "DisplayName": "10_DragTire",
