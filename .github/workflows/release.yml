@@ -285,6 +285,11 @@ jobs:
           cmake --build "$RUNNER_TEMP/fm4-stream-textures" --config Release --parallel 2
           ctest --test-dir "$RUNNER_TEMP/fm4-stream-textures" -C Release --output-on-failure
       - if: runner.os == 'Linux'
+        name: The heap a request ends in, for the fixedGPU heap's overflow (#857)
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/fixed_gpu_heap_test.cpp -o "$RUNNER_TEMP/fixed-gpu-heap-test"
+          "$RUNNER_TEMP/fixed-gpu-heap-test"
+      - if: runner.os == 'Linux'
         name: Native renderer shadow mode records
         run: |
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/native_shadow_record_test.cpp -o "$RUNNER_TEMP/native-shadow-record-test"
