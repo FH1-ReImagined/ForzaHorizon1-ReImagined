@@ -1,10 +1,11 @@
-# The game's emergency zone loads keep their zones in a list of 7 and wrote past it (#902,
-# src/hooks/emergency_zones.cpp). CTrackPresentation::ManageEmergencyPVSZLoading (sub_82E27480)
-# appends every wanted zone without a streamed-zone slot to m_EmergencyPVSZList[7] (this + 0xD994)
-# with no check against its size. The entries live in the hook's own list of 64 instead; these
-# are the function's four places that read or write them. r3 gives the hooks the context; r23
-# holds the count's address, r29 the release loop's index, r30 the zone's m_ZonesToLoad entry,
-# r31 the track presentation.
+# Streamed zones (#902, src/hooks/emergency_zones.cpp). CTrackPresentation::
+# ManageEmergencyPVSZLoading (sub_82E27480) appends every wanted zone without a streamed-zone slot
+# to m_EmergencyPVSZList[7] (this + 0xD994) on every pass, with no check against its size; on a
+# converted circuit at speed the slots ran out (zones the windows had passed kept theirs) and the
+# list overflowed. The entries live in the hook's own list instead, each zone listed once, and
+# slots nothing wants any more are let go of when slots run short. r3 gives the hooks the
+# context; r23 holds the count's address, r29 the release loop's index, r30 the zone's
+# m_ZonesToLoad entry, r31 the track presentation.
 
 # The release loop reads entry r29 (`lwz r4, 0(r30)`).
 [[midasm_hook]]
@@ -20,17 +21,23 @@ name = "ForzaEmergencyZoneRemove"
 registers = ["r3"]
 jump_address = 0x82E27528
 
-# Before a zone is asked for: with the list full, the emergency stays unfinished (`li r28, 1`).
+# After the release loop, before zones are asked for: slots of zones nothing wants are let go of.
 [[midasm_hook]]
-address = 0x82E27590
-name = "ForzaEmergencyZoneListFull"
+address = 0x82E27534
+name = "ForzaZoneSweep"
 registers = ["r3"]
-jump_address_on_true = 0x82E27610
 
-# The zone just asked for is appended (`lwz r10, 0(r30)` ... `stwx r10, r11, r31`); the game then
-# counts it.
+# The zone just asked for is appended (`lwz r10, 0(r30)` ... `stwx r10, r11, r31`) and counted
+# (0x82E27604), or, listed already, left out of the count (0x82E27610, `li r28, 1`).
 [[midasm_hook]]
 address = 0x82E275F0
 name = "ForzaEmergencyZoneAppend"
 registers = ["r3"]
-jump_address = 0x82E27604
+jump_address_on_true = 0x82E27610
+jump_address_on_false = 0x82E27604
+
+# Every zone wanted is in: the count goes back to 0 (`stw r22, 0(r23)`), logged when it was long.
+[[midasm_hook]]
+address = 0x82E276E0
+name = "ForzaEmergencyZoneDone"
+registers = ["r3"]
