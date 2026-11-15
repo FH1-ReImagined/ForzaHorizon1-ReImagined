@@ -16,7 +16,7 @@ import install_dlc  # noqa: E402
 import xcontent_extract  # noqa: E402
 import xiso_extract  # noqa: E402
 
-from . import dlccheck, dlcscan, xex_reference, xexcheck  # noqa: E402
+from . import dlccheck, dlcscan, fan_dlc, xex_reference, xexcheck  # noqa: E402
 
 GOD = 0x7000
 # Not copied from a disc image: the console system update the disc carries (tools/xiso_extract.py).
@@ -189,27 +189,49 @@ def _dlc_key(folder: str):
 def dlc_cached(folder: str):
     """describe_dlc_folder's result if this folder was read already (and did not change), else None.
     Reads directory listings only (see _dlc_key)."""
-    return dlc_snapshot(folder)[1]
+    got = dlc_snapshot(folder)[1]
+    return got[:2] if got else None
 
 
 def dlc_snapshot(folder: str):
-    """Current directory snapshot and its cached result, for asynchronous UI probes."""
+    """Current directory snapshot and its cached result (found, skipped, names of the packages with
+    offer 1975), for asynchronous UI probes."""
     key = _dlc_key(folder)
     return key, _DLC_CACHE.get(key)
 
 
-def dlc_warning(found) -> str:
-    """Advisory for [(package filename, display name)], using the known package-name table.
-    This is recognition, not a check of the package's contents or authenticity. No file I/O."""
-    unknown = [(name, display) for name, display in found if name.upper() not in install_dlc.KNOWN_NAMES]
+def dlc_warning(found, fan=()) -> str:
+    """Advisory for [(package filename, display name)], using the known package-name table; `fan` names
+    the packages that have offer 1975 (the fan-made unicorn cars pack, fan_dlc), named first with what
+    it does. This is recognition, not a check of the package's contents or authenticity. No file I/O."""
+    fan = {n.upper() for n in fan}
+    unknown = [(name, display) for name, display in found
+               if name.upper() not in install_dlc.KNOWN_NAMES or name.upper() in fan]
     if not unknown:
         return ""
+    unknown.sort(key=lambda item: item[0].upper() not in fan)
     names = "\n".join(f"- {display or name} ({name})" if display and display != name else f"- {name}"
                       for name, display in unknown)
+    pack = [fan_dlc.Package(name, display or name, frozenset()) for name, display in unknown if name.upper() in fan]
     return ("Unrecognized DLC packages:\n" + names +
+            (f"\n{fan_dlc.fan_text(pack, installed=False)} Leave it out. {fan_dlc.UNICORNS}" if pack else "") +
             "\nThese are not in the launcher's known official package list. You can still install them, "
             "but unofficial or modified packs may cause endless loading. If the game hangs after "
             "installing DLC, try removing these packages first.")
+
+
+def _fan_names(packages, dirs):
+    """Names of the opened STFS packages [(path, display, package)] and extracted package folders
+    [(path, name, display, header)] that have offer 1975."""
+    out = set()
+    for f, _n, pkg in packages:
+        try:
+            if fan_dlc.is_fan_entries(e.path for e in pkg.entries()):
+                out.add(f.name)
+        except (SystemExit, Exception):
+            pass
+    out |= {name for d, name, _disp, _h in dirs if fan_dlc.is_fan_folder(d)}
+    return out
 
 
 def scan_dlc(folder: Path):
@@ -295,8 +317,11 @@ def describe_dlc_folder(folder: str):
     if key not in _DLC_CACHE:
         dirs, files, zips, skipped = scan_dlc(p)
         packages, dirs = _dedupe(_open_dlc_files(files, skipped), dirs, skipped)
-        for _f, _n, pkg in packages:
-            _close(pkg)
+        try:
+            fan = _fan_names(packages, dirs)
+        finally:
+            for _f, _n, pkg in packages:
+                _close(pkg)
         found = [(f.name, name) for f, name, _ in packages]
         found += [(n, disp) for _p, n, disp, _h in dirs]
         seen = {n.upper() for n, _ in found}
@@ -309,8 +334,8 @@ def describe_dlc_folder(folder: str):
                 else:
                     seen.add(n.upper())
                     found.append((n, f"{n} (in {os.path.basename(z)})"))
-        _DLC_CACHE[key] = (found, skipped)
-    return _DLC_CACHE[key]
+        _DLC_CACHE[key] = (found, skipped, fan)
+    return _DLC_CACHE[key][:2]
 
 
 def damaged_note(damaged) -> str:
@@ -363,7 +388,7 @@ def install_dlc_folder(folder: str, user_data: Path, progress, cancelled=lambda:
 
 def _install_found(found, dirs, skipped, user_data, progress, cancelled, log, damaged):
     warning = dlc_warning([(f.name, name) for f, name, _ in found] +
-                          [(name, display) for _, name, display, _ in dirs])
+                          [(name, display) for _, name, display, _ in dirs], _fan_names(found, dirs))
     if warning:
         log(warning)
     for n, why in skipped:
