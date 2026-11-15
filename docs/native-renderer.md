@@ -736,8 +736,11 @@ The list trace (game `FORZA_LIST_TRACE`, ReIGlue 0640: [Tools](#list-trace-game-
 the questions of the model list plan that only a run can. It changes nothing in a normal build:
 both options are off by default and compiled out.
 
-Every number below comes from the final binaries of this step (the game's code at this branch,
-ReIGlue 0640 as pinned; the CI commit after it changes no source) and names its runs. RX 9060 XT,
+Every number below comes from one set of builds of this step's code (the game's list trace and
+hooks as committed, ReIGlue 0640 on main as of #63) and names its runs. Main merged afterwards
+brought ReIGlue 0800 (stencil transfers without stencil export, which RADV has) and game changes to
+FM4 tracks and cars, none of which the trace or the measured scenes touch; the code comparison
+below is repeated at the merged heads. RX 9060 XT,
 RADV; 1280x720 on a hidden display, no `forza.toml`, a copy of the test save, Colorado, offline.
 "Other load" is the CPU that processes other than the game, its samplers and its hidden display
 used during a run's window, from `/proc` (cores).
@@ -760,13 +763,16 @@ and only after the PC's CPU over 10 s was below 0.3 cores; two rounds of four pa
   -5.8%, round 2 +1.0%; all 16 runs give -2.5% (t = -0.81), and the eight pairs bound the
   difference only to about ±8%. The A/B cannot see a smaller change; the code comparison shows
   there is none.
-- **The code is the same.** The two games' `.text` sections (64,157,141 bytes) differ in 15 bytes:
-  4 are source line numbers one higher in the log calls of two `scene_tiling.cpp` hooks (the
-  include line above them), 11 are the build's commit id, which the game embeds in its request
-  headers (`.rodata`'s 9 differing bytes are the same id). The two plugins' `.text` (3,175,290
-  bytes) differ in 38 bytes, line numbers a few higher in the log and assert macros of
-  `command_processor.cpp` and `graphics_system.cpp`, and `.rodata` in the version string. The
-  macros in the hooks compile to nothing and `list_trace.cpp` / `fh1_list_trace.cpp` are not built.
+- **The code is the same.** The timed binaries: the two games' `.text` sections (64,157,141 bytes)
+  differ in 15 bytes: 4 are source line numbers one higher in the log calls of two
+  `scene_tiling.cpp` hooks (the include line above them), 11 are the build's commit id, which the
+  game embeds in its request headers (`.rodata`'s 9 differing bytes are the same id). The two
+  plugins' `.text` (3,175,290 bytes) differ in 38 bytes, line numbers a few higher in the log and
+  assert macros of `command_processor.cpp` and `graphics_system.cpp`, and `.rodata` in the version
+  string. Rebuilt at the merged heads (main against this branch, options off): the games' `.text`
+  (64,166,069 bytes) differ in the same 4 line numbers and 10 bytes of the commit id, the plugins'
+  (3,180,282 bytes) in the same 38 bytes. The macros in the hooks compile to nothing and
+  `list_trace.cpp` / `fh1_list_trace.cpp` are not built.
 - A first attempt (16 runs on a PC with 0.9-3.8 cores of other load) showed -9% in one round of
   four pairs and +1.6% in the other: that was the other load, and it is replaced by the runs above.
 
