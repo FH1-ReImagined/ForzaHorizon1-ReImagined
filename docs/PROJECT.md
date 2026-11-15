@@ -150,18 +150,24 @@ Leaderboard screens, Windows and Steam Deck are not scripted: a hand run in the 
   XMemFree, XMemSize and the manager's free (`sub_82423490`) know those blocks. Covering only the
   resource loader's blocks was not enough: with the heap full, the next failure was a menu
   scene's 119,756 bytes (XMemAlloc from `82F222C8`, category 0x29). While the heap has room the game's own allocation
-  runs as before; when the arena has no room either, the game stops as it did. `FORZA_FIXED_GPU_OVERFLOW=0` turns it
-  off, `=always` serves every block of the heap from the arena.
+  runs as before; when the arena has no room either, the game stops as it did. "Ends in that heap" also takes in
+  vehicleGPU (0x26) and nuiGPU (0x22) blocks, which those heaps pass on to 0x21 when they are full (their links, read
+  in game). All of them take one lock, also the requests over 8 MB that the overflow cannot serve, so the cleared stop
+  byte never meets another thread's request. `FORZA_FIXED_GPU_OVERFLOW=0` turns it off, `=always` serves what it can
+  from the arena first and from the game's heap once the arena is full (a test of the path).
   Checked (TU4, Linux, the golden save, Native pause menu on, scripted pad): main stopped at the
   first of 8 changes (Get In Car, 1,146,880 bytes, 170 ms after it), and once on a Back from
   My Cars after browsing; versions covering only the resource loader's blocks or only category
   0x21 stopped twice on the menu scene's 0x29 block. The final code: 5 changes in one session
   where the first needed the overflow (the same 1,146,880 bytes with 61,139 of 62,464 KB in use, 170 ms after
-  Get In Car; the menu drew as usual), 15 changes (13 different cars) and the garage's Change Car
-  in another session that never needed it, and a session with the switch off (stock pause,
-  driving: no overflow). The garage's Car Select shows two cars' pictures garbled on main too.
-  With `=always` every block of the heap came from the arena (131,072 blocks, 64 MB) and
-  the world, the menus and My Cars' pictures drew as usual. Paint job detail 2x at Race Central
+  Get In Car; the menu drew as usual), and 15 changes (13 different cars) then the garage's Change
+  Car in another session, where the first change needed it too (1,146,880 and 884,736 bytes with
+  61,448 KB in use). With the Native pause menu off (stock pause twice, driving) no request ever
+  reached the overflow. The garage's Car Select shows the same two cars' pictures garbled on
+  main (a build without the overflow), so that is not from this. With `=always` the arena
+  reached its 64 MB in the first seconds (about 4,096 blocks), then gave out blocks again as they
+  came back, the rest from the game's heap, and the world, the menus and My Cars' pictures drew
+  as usual. Paint job detail 2x at Race Central
   (#787) fails in the same heap, for the paint job's 16 MB render texture (`sub_82D53420` ->
   `sub_82CF9058` -> `sub_82AA4A98`): larger than a chunk, so not covered; not tested here.
 

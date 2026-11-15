@@ -14,16 +14,21 @@
 // players' logs), and a menu scene's 119,756 bytes on the UI's loader, chain 82D83798 82F222C8.
 //
 // Now a block that heap 0x21 has no room for (fixed_gpu_heap.h Eligible) is taken from memory
-// kept for it instead: every allocation in the heap runs with its stop byte cleared, one at a
-// time, so the loop returns nothing instead of stopping, and the block comes from
+// kept for it instead: every allocation that ends in the heap runs with its stop byte cleared,
+// one at a time, so the loop returns nothing instead of stopping, and the block comes from
 // an arena of 8 MB chunks of the guest's 4 KB-page physical memory, taken as they are needed
 // and kept for the session (64 MB at most), as for a converted FM4 circuit's streamed textures
 // (fm4_stream_textures.h has why the memory is kept and why a block given back is not handed
 // out again for two seconds). XMemFree, XMemSize and the manager's free know these blocks.
 // When the arena has no room either, the game's own allocation runs again and stops as before.
 // A heap with room is never touched: the game runs exactly as it did until the heap is full.
-// FORZA_FIXED_GPU_OVERFLOW=0 turns this off; =always takes every such block from the arena
-// (a test of this path).
+// "Ends in the heap" is wider than the heap's own category: vehicleGPU (0x26) and nuiGPU (0x22)
+// pass what they have no room for on to 0x21 (their +0x160 links, read in game), so their
+// blocks take the same lock and can get the same overflow. One lock for all of them: none of
+// the heap classes' allocations calls the allocation loop again (a same-thread call would be
+// passed straight to the game's own, see Allocate).
+// FORZA_FIXED_GPU_OVERFLOW=0 turns this off; =always takes every block it can serve from the
+// arena first, the game's heap only once the arena is full (a test of this path).
 // tu_address_map: TU4 addresses
 #include "../platform/fixed_gpu_heap.h"
 #include "../platform/guest_addr.h"
@@ -71,7 +76,14 @@ uint64_t NowMs() {
                       std::chrono::steady_clock::now().time_since_epoch()).count());
 }
 
+constexpr uint32_t kFixedHeap = kArenas + (kCategory & 0xF) * kArenaSize + kHighHeap;
 std::mutex mutex;  // the heap's stop byte during a call, the arena and the sizes
+thread_local bool in_call = false;  // this thread is inside the heap's allocation (holds the lock)
+thread_local uint8_t stop_was = 0;  // the stop byte as the game had it before that call
+// The lock, unless this thread holds it already (a free from inside the heap's allocation).
+std::unique_lock<std::mutex> Lock() {
+  return in_call ? std::unique_lock<std::mutex>(mutex, std::defer_lock) : std::unique_lock<std::mutex>(mutex);
+}
 st::Arena arena;
 std::unordered_map<uint32_t, uint32_t> sizes;  // block -> the size asked for
 std::atomic<bool> any{false};                  // a block was given: frees may be ours
@@ -106,17 +118,38 @@ bool Allocate(PPCContext& ctx, uint8_t* base, Original original) {
       ctx.r4.u32, Load32(base, Load32(base, ctx.r13.u32) + 12380), Load32(base, ctx.r3.u32 + 12),
       [base](uint32_t a) { return Load32(base, a); },
       [base](uint32_t a) { return uint32_t(*forza::GuestPtr(base, a)); });
-  if (!Eligible(last, size, alignment, st::kChunkBytes)) return false;
+  if (last != kFixedHeap) return false;
   const uint32_t heap = last;
-  const PPCContext call = ctx;
-  std::lock_guard<std::mutex> lock(mutex);
-  if (mode != Mode::kAlways) {
-    uint8_t* stop = forza::GuestPtr(base, heap + kStopFlag);
-    const uint8_t was = *stop;
-    *stop = 0;
+  uint8_t* stop = forza::GuestPtr(base, heap + kStopFlag);
+  if (in_call) {
+    // An allocation from inside the heap's own one on this thread (none is known: the heap
+    // classes' allocations and what they call never come back here). The lock is held already,
+    // so no wait for it; the stop byte as the game set it, so a failure stops as before.
+    static std::atomic<bool> warned{false};
+    if (!warned.exchange(true))
+      REXLOG_WARN("FORZA: the fixedGPU heap's allocation called itself (from {:08X}) (#857)", uint32_t(ctx.lr));
+    const uint8_t now_was = *stop;
+    *stop = stop_was;
     original(ctx, base);
-    *stop = was;
-    if (ctx.r3.u32) return true;
+    *stop = now_was;
+    return true;
+  }
+  const PPCContext call = ctx;
+  // Every request that ends in this heap takes the lock, also one the overflow cannot serve
+  // (over 8 MB): with the stop byte cleared for another thread's request, its failure would
+  // return nothing instead of stopping the game.
+  std::lock_guard<std::mutex> lock(mutex);
+  struct InCall {
+    InCall() { in_call = true; }
+    ~InCall() { in_call = false; }
+  } in;
+  stop_was = *stop;
+  const bool eligible = Eligible(last, size, alignment, st::kChunkBytes);
+  if (!eligible || mode != Mode::kAlways) {
+    if (eligible) *stop = 0;
+    original(ctx, base);
+    *stop = stop_was;
+    if (ctx.r3.u32 || !eligible) return true;
   }
   const uint64_t now = NowMs();
   uint32_t block = arena.Take(size, now);
@@ -154,7 +187,7 @@ bool Allocate(PPCContext& ctx, uint8_t* base, Original original) {
 
 bool Free(uint32_t address) {
   if (!address || !any.load(std::memory_order_acquire)) return false;
-  std::lock_guard<std::mutex> lock(mutex);
+  const auto lock = Lock();
   if (!arena.Give(address, NowMs())) return false;
   sizes.erase(address);
   return true;
@@ -162,7 +195,7 @@ bool Free(uint32_t address) {
 
 uint32_t Size(uint32_t address) {
   if (!address || !any.load(std::memory_order_acquire)) return 0;
-  std::lock_guard<std::mutex> lock(mutex);
+  const auto lock = Lock();
   auto it = sizes.find(address);
   return it == sizes.end() ? 0 : it->second;
 }
