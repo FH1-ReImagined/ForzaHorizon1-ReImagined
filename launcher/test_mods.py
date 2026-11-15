@@ -311,6 +311,26 @@ class ModsPageTests(unittest.TestCase):
     def names(self):
         return [self.page.table.item(r, 0).text() for r in range(self.page.table.rowCount())]
 
+    def test_the_drag_tyres_box(self):
+        """#924: the box turns drag tyres on, and off only once the player says so (a car with the
+        drag tyre fitted does not load without it)."""
+        from forza_launcher import drag_tyres
+        box = self.page.drag_box
+        self.assertFalse(box.isChecked())
+        self.assertEqual(self.page.drag_message.text(), "")
+        box.setChecked(True)
+        self.assertTrue(drag_tyres.enabled(self.cfg))
+        self.assertIn("next time you press Play", self.page.drag_message.text())
+        with mock.patch.object(self.page, "_confirm", return_value=False) as ask:
+            box.setChecked(False)
+        ask.assert_called_once()
+        self.assertTrue(box.isChecked())
+        self.assertTrue(drag_tyres.enabled(self.cfg))
+        with mock.patch.object(self.page, "_confirm", return_value=True):
+            box.setChecked(False)
+        self.assertFalse(drag_tyres.enabled(self.cfg))
+        self.assertEqual(self.page.drag_message.text(), "")
+
     def test_lists_turns_off_and_reorders(self):
         self.assertEqual(self.names(), ["Alpha mod", "Beta"])
         self.page.table.item(0, 0).setCheckState(Qt.Unchecked)
