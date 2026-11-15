@@ -154,17 +154,22 @@ _NO_DLC = ("No DLC found in that folder or its subfolders. Pick the folder of yo
 
 
 def _dlc_key(folder: str):
-    """The folder plus the names and modification times of the folders and zips the scan visits
-    (the same bounded walk, directory listings only; extracted package folders are not entered)."""
+    """The folder plus the names, modification times and sizes of the folders and files the scan
+    visits: the same bounded walk from the same start (resolve_root, so in a Xenia content folder the
+    00000002 folder that holds the packages), directory listings only; extracted package folders are
+    not entered. Times and sizes come from os.stat, not from the listing: on Windows a listing's copy
+    of an entry's time (DirEntry.stat) can still be the old one and change later without anything
+    being written, so the key read before a scan would not match the one read after it."""
     p = Path(folder).expanduser()
+    root = install_dlc.resolve_root(os.path.abspath(str(p)))
     parts = []
 
     def walk(d, depth):
         try:
             st = os.stat(d)
             entries = sorted(os.scandir(d), key=lambda e: e.name)
-            # Directory timestamps may be coarse or settle after a Windows scan.
-            # Names must participate even when adding a file leaves the time equal.
+            # Directory timestamps may be coarse: names must participate even when adding a file
+            # leaves the time equal.
             parts.append((str(d), st.st_mtime_ns, tuple(e.name for e in entries)))
         except OSError:
             return
@@ -173,17 +178,17 @@ def _dlc_key(folder: str):
                 if e.is_symlink() or e.name.startswith(".") or e.name.lower() in dlcscan.SYSTEM_NAMES:
                     continue
                 if e.is_file():
-                    s = e.stat()
+                    s = os.stat(e.path)
                     parts.append((e.path, s.st_mtime_ns, s.st_size))
                 elif e.is_dir() and depth < dlcscan.MAX_DEPTH and not install_dlc.NAME_RE.fullmatch(e.name):
                     walk(e.path, depth + 1)
                 elif e.is_dir():
-                    parts.append((e.path, e.stat().st_mtime_ns))
+                    parts.append((e.path, os.stat(e.path).st_mtime_ns))
             except OSError:
                 continue
 
-    walk(p, 0)
-    return (str(p), tuple(parts))
+    walk(root, 0)
+    return (str(p), root, tuple(parts))
 
 
 def dlc_cached(folder: str):

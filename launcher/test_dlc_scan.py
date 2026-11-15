@@ -4,6 +4,7 @@ import os
 import stat
 import sys
 import tempfile
+import types
 import unittest
 import zipfile
 from pathlib import Path
@@ -103,6 +104,55 @@ class Folders(Base):
         self.assertIsNone(installer.dlc_cached(str(self.src)))
         found, _ = installer.describe_dlc_folder(str(self.src))
         self.assertEqual(len(found), 3)
+
+    def test_cache_notices_a_package_added_inside_a_content_folder(self):
+        root = self.src / DEST
+        extracted(root, A, "A")
+        found, _ = installer.describe_dlc_folder(str(self.src))
+        self.assertEqual([n for n, _ in found], [A])
+        before = root.stat()
+        extracted(root, B, "B")     # nothing above 00000002 changes
+        os.utime(root, ns=(before.st_atime_ns, before.st_mtime_ns))
+        self.assertIsNone(installer.dlc_cached(str(self.src)))
+        found, _ = installer.describe_dlc_folder(str(self.src))
+        self.assertEqual(sorted(n for n, _ in found), sorted([A, B]))
+        self.assertIsNotNone(installer.dlc_cached(str(self.src)))
+
+    def test_cache_key_does_not_take_times_from_the_listing(self):
+        """On Windows (NTFS) the time a folder listing gives for an entry can still be the old one and
+        change later with nothing written; the key read after the scan must match the one before it."""
+        extracted(self.src / "cars", A, "A")     # a package folder and a package file, in subfolders
+        packed(self.src / "more", B, "B")
+        seen = set()
+
+        class Entry:
+            """A listing entry whose first stat() gives the time from before the last change."""
+            def __init__(self, e):
+                self._e = e
+
+            def __getattr__(self, name):
+                return getattr(self._e, name)
+
+            def stat(self, **kw):
+                s = self._e.stat(**kw)
+                if self._e.path in seen:
+                    return s
+                seen.add(self._e.path)
+                old = s.st_mtime_ns - 5_000_000_000
+                return os.stat_result((*s[:7], s[7], old // 10**9, s[9]), {"st_mtime_ns": old})
+
+        def scandir(p="."):
+            with os.scandir(p) as it:
+                return [Entry(e) for e in it]
+
+        # Only the listings installer reads itself (the cache key's) change; the scan's are the real ones.
+        listing_os = types.ModuleType("os")
+        listing_os.__dict__.update(os.__dict__)
+        listing_os.scandir = scandir
+        with patch.object(installer, "os", listing_os):
+            found, _ = installer.describe_dlc_folder(str(self.src))
+            self.assertIsNotNone(installer.dlc_cached(str(self.src)))
+        self.assertEqual(sorted(n for n, _ in found), sorted([A, B]))
 
     def test_duplicates_install_once(self):
         packed(self.src / "one", A, "A")
