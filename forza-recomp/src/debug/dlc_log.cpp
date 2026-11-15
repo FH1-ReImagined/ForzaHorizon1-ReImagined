@@ -170,7 +170,8 @@ void LogDlcPackages(const std::filesystem::path& user_data_root) {
           "DLC: {} is the fan-made unicorn cars pack (offer 1975), not one of the game's DLC: with "
           "it the first Single Player load never finishes (the loading screen runs for ever). Move "
           "it out of the installed DLC (launcher: Setup or Play, \"Move the pack out\"); for the "
-          "unicorn cars without it: Saves > Edit profile > Unicorn cars > Add missing unicorns",
+          "unicorn cars without it: Library > Saves > Edit profile... > Unicorn cars > Add missing "
+          "unicorns",
           pack);
     }
     if (!bare.empty()) {

@@ -461,6 +461,9 @@ def carry_game_written_data(old: Path, new: Path, profile: str, log=None) -> int
 
 
 DLC_DIR = os.path.join("0000000000000000", "4D5309C9")   # under a user data root: 00000002 + Headers
+# Next to 00000002 under DLC_DIR, the same layout: the packages Setup's "Move the pack out" took out of
+# the installed DLC (fan_dlc.move_out; "DLC moved out (2)", (3)... on a name clash).
+DLC_MOVED_OUT = "DLC moved out"
 
 
 def dlc_packages(root) -> set:
@@ -494,15 +497,34 @@ def dlc_without_header(root) -> list:
     return sorted(n for n in dlc_packages(root) if not (h / (n + ".header")).is_file())
 
 
+def dlc_moved_out(root) -> set:
+    """Names (upper case) of the packages in the DLC_MOVED_OUT folders of the user data root `root`."""
+    base = Path(root) / DLC_DIR
+    out = set()
+    try:
+        for d in base.iterdir():
+            if d.name == DLC_MOVED_OUT or (d.name.startswith(DLC_MOVED_OUT + " (") and d.name.endswith(")")):
+                out |= {p.name.upper() for p in (d / "00000002").iterdir() if p.is_dir()}
+    except OSError:
+        pass
+    return out
+
+
 def carry_dlc(old: Path, new: Path, log=None) -> int:
-    """Copies the DLC packages (and their headers) of the user data root `old` that `new` does not have.
+    """Copies the DLC packages (and their headers) of the user data root `old` that `new` does not have,
+    except the ones moved out of `new`'s installed DLC (dlc_moved_out: they would hang the game again).
     Never overwrites or deletes; a package is copied into a .part folder and renamed into place, so a copy
     that fails half way leaves nothing the game would mount. Returns the number of packages copied."""
     old, new = Path(old), Path(new)
     if _samepath(old, new):
         return 0
     have = dlc_packages(new)
-    todo = sorted(dlc_packages(old) - have)
+    moved = dlc_moved_out(new)
+    todo = sorted(n for n in dlc_packages(old) - have if n.upper() not in moved)
+    left = sorted(n for n in dlc_packages(old) - have if n.upper() in moved)
+    if left and log:
+        log(f"left out the DLC package(s) {', '.join(left)} of {old}: they were moved out of the installed "
+            f"DLC ({DLC_MOVED_OUT})")
     n = 0
     for name in todo:
         src = paths.long_path(old / DLC_DIR / "00000002" / name)  # deep car packs (#586)

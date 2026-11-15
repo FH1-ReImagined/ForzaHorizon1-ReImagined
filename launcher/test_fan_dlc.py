@@ -1,6 +1,7 @@
 """The installed DLC is checked for packages that are not the game's own, the fan-made unicorn cars pack
 (offer 1975) is named on Setup and Play with a button that moves it out (#66, #76, #115, #771), and the
 install-time warning names it too."""
+import errno
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import struct
@@ -12,7 +13,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from forza_launcher import build_env, datafolder, fan_dlc, installer
+from forza_launcher import build_env, datafolder, fan_dlc, game, installer
 from forza_launcher.fm4cars import PACKAGE as FM4_CARS
 from test_xcontent import build as build_stfs
 
@@ -90,7 +91,7 @@ class Detection(unittest.TestCase):
         self.assertIn("not one of the game's DLC", text)
         self.assertIn(fan_dlc.MOVE_BUTTON, text)
         self.assertIn("nothing is deleted", text)
-        self.assertIn("Saves > Edit profile… > Unicorn cars > Add missing unicorns", text)
+        self.assertIn("Library > Saves > Edit profile… > Unicorn cars > Add missing unicorns", text)
         other = fan_dlc.unknown_text([p for p in got if not p.fan])
         self.assertIn("Some other pack", other)
         self.assertIn(UNKNOWN, other)
@@ -99,6 +100,23 @@ class Detection(unittest.TestCase):
     def test_any_case_of_media_and_offer_file(self):   # a copy made on Windows
         add_fan(self.home, media="media", offer_file="1975.PUBOFFER")
         self.assertEqual([p.name for p in fan_dlc.fan_packages(self.home)], [FAN])
+
+    def test_offer_names_are_read_as_the_game_log_reads_them(self):   # atoi, dlc_log.cpp
+        for stem, want in (("1975", "1975"), ("01975", "1975"), ("1975x", "1975"), ("+1975", "1975"),
+                           ("19750", "19750"), ("x1975", "x1975"), ("", "")):
+            self.assertEqual(fan_dlc.offer_number(stem), want, stem)
+        add_fan(self.home, offer_file="01975.puboffer")
+        self.assertEqual([p.name for p in fan_dlc.fan_packages(self.home)], [FAN])
+        self.assertTrue(fan_dlc.is_fan_entries(["Media/01975.puboffer"]))
+        self.assertTrue(fan_dlc.is_fan_entries(["/media/1975.PUBOFFER"]))
+        self.assertFalse(fan_dlc.is_fan_entries(["Media/19750.puboffer", "Media/x/1975.puboffer"]))
+
+    def test_a_header_named_in_another_case_gives_the_name(self):   # a copy made on Windows
+        add_fan(self.home)
+        h = dlc_root(self.home) / "Headers" / "00000002" / (FAN + ".header")
+        h.rename(h.with_name(FAN.lower() + ".HEADER"))
+        (got,) = fan_dlc.fan_packages(self.home)
+        self.assertEqual(got.display, FAN_DISPLAY)
 
     def test_offer_1975_under_an_official_name_is_still_the_pack(self):
         add_fan(self.home, name=OFFICIAL[0].lower())
@@ -201,6 +219,43 @@ class MoveOut(unittest.TestCase):
         self.assertIn("Nothing was moved", str(e.exception))
         self.assertIn("in use", str(e.exception))
         self.assert_in_place()
+        self.assertFalse((dlc_root(self.home) / fan_dlc.MOVED).exists())   # no empty folders left
+
+    def test_another_drive_says_to_move_it_by_hand(self):   # 00000002 is a link to another drive
+        with patch.object(fan_dlc.os, "rename", side_effect=OSError(errno.EXDEV, "Invalid cross-device link")):
+            with self.assertRaises(fan_dlc.MoveError) as e:
+                fan_dlc.move_out(self.home, FAN)
+        msg = str(e.exception)
+        self.assertIn("another drive", msg)
+        self.assertIn("by hand", msg)
+        self.assertNotIn("close the game", msg)
+        self.assert_in_place()
+        self.assertFalse((dlc_root(self.home) / fan_dlc.MOVED).exists())
+
+    def test_a_header_named_in_another_case_moves_with_it(self):
+        other = self.src_hdr.with_name(FAN.lower() + ".HEADER")
+        self.src_hdr.rename(other)
+        if self.src_hdr.exists():
+            self.skipTest("file names here are not case-sensitive")
+        root = fan_dlc.move_out(self.home, FAN)
+        self.assertFalse(other.exists())
+        self.assertEqual((root / "Headers" / "00000002" / other.name).read_bytes(), self.header)
+
+    def test_a_folder_not_named_in_hex_is_restored_by_hand(self):
+        # The installer names a folder after the file it came from; Install DLC skips other names.
+        name = "Unicorn cars unlock"
+        add_fan(self.home, name=name)
+        root = fan_dlc.move_out(self.home, name)
+        text = fan_dlc.moved_text([fan_dlc.Package(name, FAN_DISPLAY, frozenset({"1975"}))], root, self.home)
+        self.assertNotIn("press Install DLC", text)
+        self.assertIn("Install DLC does not take a folder of that name", text)
+        self.assertIn(f"move {name} back into", text)
+        hex_text = fan_dlc.moved_text([fan_dlc.Package(FAN, FAN_DISPLAY, frozenset({"1975"}))], root, self.home)
+        self.assertIn("press Install DLC", hex_text)
+        installer._DLC_CACHE.clear()
+        self.addCleanup(installer._DLC_CACHE.clear)
+        with self.assertRaises(Exception):   # what the text no longer offers
+            installer.install_dlc_folder(str(root), self.home, lambda *_: None, log=lambda _l: None)
 
     def test_a_header_that_cannot_move_puts_the_folder_back(self):
         real = os.rename
@@ -217,6 +272,7 @@ class MoveOut(unittest.TestCase):
         self.assertIn("Nothing was moved", str(e.exception))
         self.assertEqual(len(calls), 3)   # the folder out, the header (fails), the folder back
         self.assert_in_place()
+        self.assertFalse((dlc_root(self.home) / fan_dlc.MOVED).exists())
 
     def test_a_failed_put_back_says_where_everything_is(self):
         real = os.rename
@@ -246,6 +302,95 @@ class MoveOut(unittest.TestCase):
         with self.assertRaises(fan_dlc.MoveError):
             fan_dlc.move_out(self.home, UNKNOWN)
         self.assert_in_place()
+
+
+XUID = "E000000000000001"
+
+
+class XeniaCopy(unittest.TestCase):
+    """A Xenia save's root (xenia-<XUID>) whose 0000000000000000 is a copy of the installed DLC: the
+    launcher mirrors it when it cannot link it (game.share_dlc)."""
+
+    def setUp(self):
+        t = tempfile.TemporaryDirectory()
+        self.addCleanup(t.cleanup)
+        self.home = Path(t.name) / "data"
+        self.root = self.home / f"xenia-{XUID}"
+        self.root.mkdir(parents=True)
+        add_official(self.home)
+        add_fan(self.home)
+
+    def share(self, link=False):
+        if link:
+            return game.share_dlc(self.home, self.root, log=lambda _l: None)
+        with patch.object(game, "_link_dir"):   # no link can be made
+            return game.share_dlc(self.home, self.root, log=lambda _l: None)
+
+    def test_the_copy_loses_the_pack_too_and_the_next_play_keeps_it_out(self):
+        self.assertEqual(self.share(), "mirrored")
+        self.assertIn(FAN, datafolder.dlc_packages(self.root))
+        self.assertEqual(fan_dlc.mirrors(self.home), [self.root])
+        root = fan_dlc.move_out(self.home, FAN)
+        for r in (self.home, self.root):
+            self.assertEqual(datafolder.dlc_packages(r), set(OFFICIAL), r)
+        self.assertTrue((root / "00000002" / FAN).is_dir())
+        self.assertTrue((self.root / datafolder.DLC_DIR / fan_dlc.MOVED / "00000002" / FAN).is_dir())
+        self.assertEqual(self.share(), "mirrored")   # the next Play
+        for r in (self.home, self.root):
+            self.assertEqual(datafolder.dlc_packages(r), set(OFFICIAL), r)
+        self.assertEqual(fan_dlc.fan_packages(self.home), [])
+
+    def test_a_copy_that_cannot_move_leaves_the_installed_pack(self):
+        self.share()
+        real = os.rename
+
+        def rename(a, b):
+            if Path(a).is_relative_to(self.root):
+                raise PermissionError("in use")
+            return real(a, b)
+        with patch.object(fan_dlc.os, "rename", side_effect=rename):
+            with self.assertRaises(fan_dlc.MoveError) as e:
+                fan_dlc.move_out(self.home, FAN)
+        self.assertIn(f"xenia-{XUID}", str(e.exception))
+        self.assertIn(FAN, datafolder.dlc_packages(self.home))   # the notice stays
+        self.assertIn(FAN, datafolder.dlc_packages(self.root))
+
+    def test_a_linked_root_is_not_a_copy(self):
+        if self.share(link=True) != "linked":
+            self.skipTest("no links here")
+        self.assertEqual(fan_dlc.mirrors(self.home), [])
+        fan_dlc.move_out(self.home, FAN)
+        self.assertEqual(datafolder.dlc_packages(self.root), set(OFFICIAL))
+        self.assertEqual(self.share(link=True), "linked")
+        self.assertEqual(datafolder.dlc_packages(self.home), set(OFFICIAL))
+
+
+class CarryDlc(unittest.TestCase):
+    """datafolder.carry_dlc (a Xenia copy into the installed DLC; on Windows, Documents\\forza into the
+    launcher's folder when it has no DLC) leaves out a package that was moved out."""
+
+    def test_a_moved_out_package_is_not_copied_back(self):
+        t = tempfile.TemporaryDirectory()
+        self.addCleanup(t.cleanup)
+        old, new = Path(t.name) / "Documents-forza", Path(t.name) / "data"
+        add_official(old)
+        add_fan(old)
+        add_fan(new)
+        fan_dlc.move_out(new, FAN)   # the player's only package, moved out: no DLC installed
+        self.assertEqual(datafolder.dlc_packages(new), set())
+        logs = []
+        self.assertEqual(datafolder.carry_dlc(old, new, logs.append), len(OFFICIAL))
+        self.assertEqual(datafolder.dlc_packages(new), set(OFFICIAL))
+        self.assertFalse((dlc_root(new) / "Headers" / "00000002" / (FAN + ".header")).exists())
+        self.assertTrue(any("left out" in line and FAN in line for line in logs), logs)
+        # in a "DLC moved out (2)" folder, or in another case, too
+        (dlc_root(new) / fan_dlc.MOVED).rename(dlc_root(new) / (fan_dlc.MOVED + " (2)"))
+        self.assertEqual(datafolder.dlc_moved_out(new), {FAN.upper()})
+        add_fan(old, name=UNKNOWN.lower())
+        add_fan(new, name=UNKNOWN)
+        fan_dlc.move_out(new, UNKNOWN)
+        self.assertEqual(datafolder.carry_dlc(old, new), 0)
+        self.assertEqual(datafolder.dlc_packages(new), set(OFFICIAL))
 
 
 class InstallTime(unittest.TestCase):
@@ -376,6 +521,35 @@ class Notices(unittest.TestCase):
         self.assertTrue(play.fan_dlc.isHidden())
         self.assertTrue(setup.fan_dlc.isHidden())
         self.assertIn(str(dlc_root(self.home) / fan_dlc.MOVED), play.warn.text() + play.msg.text())
+
+    def test_not_while_a_setup_task_changes_the_data_folder(self):
+        add_fan(self.home)
+        self.refresh()
+        notice = self.win.play.fan_dlc
+        with patch.object(self.win.setup, "busy", return_value=True), \
+                patch.object(QMessageBox, "information") as info:
+            notice.move.click()
+        info.assert_called_once()
+        self.assertIn("Wait for the task", info.call_args[0][2])
+        self.win._busy = True
+        self.addCleanup(setattr, self.win, "_busy", False)
+        with patch.object(QMessageBox, "information") as info:
+            notice.move.click()
+        info.assert_called_once()
+        self.assertTrue((dlc_root(self.home) / "00000002" / FAN).is_dir())
+        self.assertFalse(notice.isHidden())
+
+    def test_the_installed_dlc_is_read_again_at_the_click(self):
+        add_fan(self.home)
+        self.refresh()
+        gone = self.root / "elsewhere"
+        (dlc_root(self.home) / "00000002" / FAN).rename(gone)   # moved by hand after the notice showed
+        with patch.object(QMessageBox, "warning") as warn:
+            self.win.play.fan_dlc.move.click()
+        warn.assert_not_called()
+        self.assertTrue(gone.is_dir())
+        self.assertFalse((dlc_root(self.home) / fan_dlc.MOVED).exists())
+        self.assertTrue(self.win.play.fan_dlc.isHidden())
 
     def test_a_failed_move_is_shown_and_nothing_moves(self):
         add_fan(self.home)

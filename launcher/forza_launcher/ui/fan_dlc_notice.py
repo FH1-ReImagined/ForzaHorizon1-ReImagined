@@ -36,14 +36,25 @@ class FanDlcNotice(QFrame):
         self.text.setText(fan_dlc.fan_text(self.packages) if self.packages else "")
         self.setVisible(bool(self.packages))
 
+    def busy(self) -> bool:
+        """Something else is changing the data folder: Install DLC, a build or a data folder move (Setup),
+        or another task that holds the window busy."""
+        setup = getattr(self.window, "setup", None)
+        return bool((setup is not None and setup.busy()) or getattr(self.window, "_busy", False))
+
     def move_out(self):
         running = getattr(self.window, "running", lambda: False)
         if running():
             QMessageBox.information(self, fan_dlc.MOVE_BUTTON, "Close the game first: it is using its DLC.")
             return
+        if self.busy():
+            QMessageBox.information(self, fan_dlc.MOVE_BUTTON,
+                                    "Wait for the task in Setup to finish (it is changing the data folder), "
+                                    "then press it again.")
+            return
         home = self.cfg.data_home()
         done = []
-        for p in self.packages:
+        for p in fan_dlc.fan_packages(home):   # read again: the installed DLC may have changed since
             try:
                 done.append((p, fan_dlc.move_out(home, p.name)))
             except fan_dlc.MoveError as e:

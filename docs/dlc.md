@@ -215,9 +215,11 @@ What the launcher and the game do about it now (details in [launcher.md](launche
 - The installed DLC is checked as well (not only the folder in the DLC field), so a player who
   installed the pack earlier is told: an amber notice on Setup's DLC card and on Play, with **Move
   the pack out**, which moves the package and its header into `DLC moved out` next to the
-  installed DLC (nothing is deleted; installing that folder again from Setup, or moving it back,
-  restores it). Other installed packages that are not the game's are listed on the DLC card. The
-  launcher's own packages (Import FM4 cars, offer 64800) are not.
+  installed DLC (nothing is deleted; moving it back restores it, and so does installing that folder
+  again from Setup when the package folder has a hex name). A Xenia save's copy of the installed
+  DLC loses it too, and the launcher does not copy a moved-out package back into the installed DLC.
+  Other installed packages that are not the game's are listed on the DLC card. The launcher's own
+  packages (Import FM4 cars, offer 64800) are not.
 - The game's log has one `WARNING` line for such a package right after the DLC list:
   `DLC: <folder> "<display name>" is the fan-made unicorn cars pack (offer 1975), not one of the
   game's DLC: with it the first Single Player load never finishes ...`, so a log attached to a
