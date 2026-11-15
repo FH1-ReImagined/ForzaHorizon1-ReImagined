@@ -207,6 +207,25 @@ that shape (an empty `1975.puboffer` and an official `stringtables.xml`, no zips
 the pack's content, not its offer number or layout. Removing the pack fixed the load in #115; the
 launcher's save editor adds the unicorn cars to a save without it ([unicorn_cars.md](unicorn_cars.md)).
 
+What the launcher and the game do about it now (details in [launcher.md](launcher.md)):
+
+- Setup's "Unrecognized DLC packages" warning (the folder in the DLC field, before installing)
+  names a package with offer 1975 first: it is the fan-made unicorn cars pack, not one of the
+  game's DLC, and with it the first Single Player load never finishes. The install is not refused.
+- The installed DLC is checked as well (not only the folder in the DLC field), so a player who
+  installed the pack earlier is told: an amber notice on Setup's DLC card and on Play, with **Move
+  the pack out**, which moves the package and its header into `DLC moved out` next to the
+  installed DLC (nothing is deleted; moving it back restores it, and so does installing that folder
+  again from Setup when the package folder has a hex name). A Xenia save's copy of the installed
+  DLC loses it too, and the launcher does not copy a moved-out package back into the installed DLC.
+  Other installed packages that are not the game's are listed on the DLC card. The launcher's own
+  packages (Import FM4 cars, offer 64800) are not.
+- The game's log has one `WARNING` line for such a package right after the DLC list:
+  `DLC: <folder> "<display name>" is the fan-made unicorn cars pack (offer 1975), not one of the
+  game's DLC: with it the first Single Player load never finishes ...`, so a log attached to a
+  report shows the cause at once (checked with a stand-in package: offer 1975, a
+  `stringtables.xml`, no `zipmount.xml`, no zips).
+
 Checked 2026-10-14/15 with the TU4 build, offline, a scratch copy of the Xenia career save
 (rally progress: the Rally Heats event in progress) and scripted driving, at 30, 60 and
 144 fps.

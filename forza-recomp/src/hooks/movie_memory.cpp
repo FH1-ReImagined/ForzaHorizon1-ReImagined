@@ -27,6 +27,7 @@
 // memory has none either, the game stops as before, with that logged.
 // FORZA_MOVIE_FALLBACK=0 switches this off; =always takes every such block from physical
 // memory (tests this path).
+#include "../platform/fixed_gpu_heap.h"
 #include "../platform/game_heap.h"
 #include "../platform/guest_addr.h"
 #include "../platform/guest_memory.h"
@@ -160,6 +161,7 @@ extern "C" REX_FUNC(sub_82E5B7C8) {
 
 // XMemFree(address, attributes).
 extern "C" REX_FUNC(sub_82CC1DA0) {
+  if (forza::fixed_gpu_heap::Free(ctx.r3.u32)) return;  // #857, fixed_gpu_heap.cpp
   if (Blocks().Take(ctx.r3.u32)) {
     REXLOG_INFO("FORZA: movie block at {:08X} back to physical memory", ctx.r3.u32);
     const uint64_t lr = ctx.lr;
@@ -172,6 +174,10 @@ extern "C" REX_FUNC(sub_82CC1DA0) {
 
 // XMemSize(address, attributes).
 extern "C" REX_FUNC(sub_82CC1ED8) {
+  if (const uint32_t size = forza::fixed_gpu_heap::Size(ctx.r3.u32)) {  // #857
+    ctx.r3.u64 = size;
+    return;
+  }
   if (const uint32_t size = Blocks().Size(ctx.r3.u32)) {
     ctx.r3.u64 = size;
     return;
