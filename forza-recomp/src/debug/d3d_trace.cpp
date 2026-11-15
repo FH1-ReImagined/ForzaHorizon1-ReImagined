@@ -206,6 +206,15 @@ void Enter(uint32_t id, bool device, PPCContext& ctx, uint8_t* base) {
   // last device.
   uint32_t dev = Known(s, r3) ? r3 : t_dev;
   if (dev == r3) t_dev = r3;
+  if (dev) {
+    const uint32_t n = __atomic_load_n(&s->ndev, __ATOMIC_ACQUIRE);
+    for (uint32_t i = 0; i < n && i < uint32_t(fh1pm4::kDevices); ++i) {
+      if (s->devs[i] == dev) {
+        Add(s->dev_calls[i][id], 1);
+        break;
+      }
+    }
+  }
   if (t_depth > 0 && t_depth <= kDepth) Flush(s, base, t_stack[t_depth - 1]);
   if (t_depth == 0) {
     Add(s->outer_calls[id], 1);

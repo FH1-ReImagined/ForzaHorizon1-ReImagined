@@ -730,14 +730,232 @@ What the files settled for the next steps:
   1, 2 and 4, and `FFFFFFF7` in the third mask of both for passes 0 and 6, in all 410,639 lists.
   Whether the headers in memory are the files' needs a run.
 
-**Not done yet** (the rest of M4's list work, in order): a measurement build that answers what
-only a run can (RunCommandBuffer calls by device and pass group, the live header masks, whether
-a live shader address keeps the file's low two bits, the time the command processor spends inside
-list buffers); the registry (conversion when a model loads, invalidation by the game's one fixup
-dispatcher) with a shadow compare of every list draw in the running game; replay of the templates
-in the command processor; then native passes, which also need M3's executor and a path for the
-command buffers D3D records at run time (the cars). FM4's `SET_CONSTANT2` tile blocks are a
-decision for after that census.
+### M4, second step: what the game's command lists cost (the measurement build)
+
+The list trace (game `FORZA_LIST_TRACE`, ReIGlue 0640: [Tools](#list-trace-game-and-sdk)) answers
+the questions of the model list plan that only a run can. It changes nothing in a normal build:
+both options are off by default and compiled out.
+
+Every number below comes from one set of builds of this step's code (the game's list trace and
+hooks as committed, ReIGlue 0640 on main as of #63) and names its runs. Main merged afterwards
+brought ReIGlue 0800 (stencil transfers without stencil export, which RADV has) and game changes to
+FM4 tracks and cars, none of which the trace or the measured scenes touch; the code comparison
+below is repeated at the merged heads. RX 9060 XT,
+RADV; 1280x720 on a hidden display, no `forza.toml`, a copy of the test save, Colorado, offline.
+"Other load" is the CPU that processes other than the game, its samplers and its hidden display
+used during a run's window, from `/proc` (cores).
+
+**No change with the options off [M].** Main (M) against this branch built with both options off
+(O); the benchmark, uncapped, window 60-130 s; each run alone (no other game, the benchmark lock)
+and only after the PC's CPU over 10 s was below 0.3 cores; two rounds of four pairs:
+
+| Benchmark, 16 runs | Main (M) | Options off (O) | O against M (95% from the 8 pairs) |
+| --- | ---: | ---: | ---: |
+| fps (result.json) | 178.6 (162.2-195.2) | 174.2 (161.2-194.0) | -4.5 (-2.5%) ± 13.9, t = -0.81 |
+| ... round 1, M O O M M O O M | 185.4 | 174.7 | -10.7 (-5.8%), t = -1.57 |
+| ... round 2, O M M O O M M O | 171.9 | 173.6 | +1.7 (+1.0%), t = +0.21 |
+| window fps (60-130 s) | 190.5 | 189.6 | -0.9 (-0.5%) ± 16.0 |
+| decoder / recorder / render thread, ms a frame | 2.41 / 4.37 / 2.82 | 2.45 / 4.42 / 2.86 | +0.04 ± 0.14 / +0.05 ± 0.28 / +0.04 ± 0.41 |
+| other load before the run / in its window | 0.17-0.24 / 0.23-1.93 | 0.18-0.23 / 0.22-0.97 | |
+
+- **No difference within the noise, and the noise is the benchmark's own.** On a quiet PC a run's
+  fps still varies by about 11 fps (6%): the AI race differs from run to run. Round 1 alone showed
+  -5.8%, round 2 +1.0%; all 16 runs give -2.5% (t = -0.81), and the eight pairs bound the
+  difference only to about ±8%. The A/B cannot see a smaller change; the code comparison shows
+  there is none.
+- **The code is the same.** The timed binaries: the two games' `.text` sections (64,157,141 bytes)
+  differ in 15 bytes: 4 are source line numbers one higher in the log calls of two
+  `scene_tiling.cpp` hooks (the include line above them), 11 are the build's commit id, which the
+  game embeds in its request headers (`.rodata`'s 9 differing bytes are the same id). The two
+  plugins' `.text` (3,175,290 bytes) differ in 38 bytes, line numbers a few higher in the log and
+  assert macros of `command_processor.cpp` and `graphics_system.cpp`, and `.rodata` in the version
+  string. Rebuilt at the merged heads (main against this branch, options off): the games' `.text`
+  (64,166,069 bytes) differ in the same 4 line numbers and 10 bytes of the commit id, the plugins'
+  (3,180,282 bytes) in the same 38 bytes. The macros in the hooks compile to nothing and
+  `list_trace.cpp` / `fh1_list_trace.cpp` are not built.
+- A first attempt (16 runs on a PC with 0.9-3.8 cores of other load) showed -9% in one round of
+  four pairs and +1.6% in the other: that was the other load, and it is replaced by the runs above.
+
+**Runs [M]** (trace builds of both sides unless marked; times are a frame's, over the window):
+
+| Run | Scene | Window | Other load |
+| --- | --- | --- | --- |
+| el-1 ... el-8, el-10, el-11 | the built-in benchmark race (8 cars), uncapped, each alone on a quiet PC; E: elision on (as shipped), N: `--gpu_split_elide_unchanged_registers=false`; order E N N E E N N E, then N E (el-10, el-11; a run first numbered el-9 was overwritten by a script error and is not used) | 60-130 s, 11,700-12,300 frames | 0.21-0.56 (el-1: 1.8, the desktop file indexer) |
+| stand | free roam at 30 fps, standing at the spawn (no input after the menus) | 100-190 s | 2.6 |
+| free | free roam at 30 fps, driving (throttle held) on the road from the spawn | 100-190 s | 1.5 |
+| race | GoPro Millennia Masters at the spawn, 8 cars, standing on the grid, 30 fps | 160-220 s | 1.0 |
+| race2x | the benchmark race at 30 fps with `scene_msaa=2x`: the game's two-tile render scenario, the one its 12- and 16-car races use (below) | 60-130 s | 1.2 |
+| photo | photo mode (TAKE PHOTO) at the spawn, 30 fps | 105-165 s | 1.1 |
+| msaaoff | free roam driving at 30 fps with `scene_msaa=off` (one pass, pass 4's lists untiled) | 100-160 s | 1.2 |
+| attr | the benchmark at 30 fps with the D3D and PM4 traces as well (calls by device, every foreign buffer); not for times | whole run | |
+
+- The 30 fps runs are not timed runs: another short game check ran next to some of them (other
+  load 1.0-2.6 cores). Counts do not depend on it; their shares of the decoder's time a little.
+- **A 16-car race cannot be run offline.** Every event in the game's database has 8 cars (105 with
+  7 drivers, 14 with 0 or 1, `Events.NumberOfDrivers`), Custom Race allows at most 7 opponents,
+  and online lobbies are 8 players ([#766](https://github.com/FH1-ReImagined/ForzaHorizon1-ReImagined/issues/766)
+  is open). What a 16-car race changes for the lists is its render scenario: the game picks the
+  two-tile 2x MSAA one (`16-Car_Race.xml`, as for 12 cars), whose scene pass is 3, so pass 4's
+  lists run without their tile layout. `scene_msaa=2x` forces that scenario on the 8-car
+  benchmark race (race2x). It measures the lists' path of a 16-car race, not the cost of 16 cars
+  (more clones and draws).
+- The first version of this section used runs of intermediate builds; none of them is used here.
+
+Reading the classes below: "D3D segments" are the device's own command buffer segments the ring
+runs (the state flush in front of each list, D3D's draws); "model lists" are the files' lists
+(told by the files' marker after the patch table, which the loader keeps); "clones" are command
+buffers of type 9 made by D3D's command buffer clone (below): the cars and other objects drawn the
+same way; the HUD's command buffer slots are counted with them.
+
+**Where the decoder's time goes [M]** (ms a frame: the buffers' own time measured with the time
+stamp counter, in the trace build; % of the decoder's time in all buffers; the decoder thread's
+CPU from `/proc`; ns a dword: the class's own time over its dwords):
+
+| Run | fps | Decoder thread, CPU | In the buffers | D3D segments | **Model lists** | ... pass 4 | ... passes 0, 1, 6 | Clones | ... cars | ns a list dword | ns a segment dword |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| bench el-1 | 169 | 2.67 | 2.43 | 0.94 (39%) | **1.00 (41%)** | 0.80 | 0.20 | 0.49 (20%) | 0.23 | 2.36 | 1.41 |
+| bench el-4 | 179 | 2.60 | 2.27 | 0.90 (39%) | **0.98 (43%)** | 0.79 | 0.19 | 0.39 (17%) | 0.17 | 2.34 | 1.38 |
+| bench el-5 | 177 | 2.65 | 2.48 | 0.91 (37%) | **0.80 (32%)** | 0.61 | 0.20 | 0.76 (31%) | 0.37 | 2.33 | 1.47 |
+| bench el-8 | 175 | 2.73 | 2.52 | 0.94 (37%) | **0.90 (36%)** | 0.70 | 0.20 | 0.68 (27%) | 0.32 | 2.37 | 1.43 |
+| bench el-11 | 183 | 2.66 | 2.39 | 0.92 (39%) | **0.94 (40%)** | 0.75 | 0.20 | 0.51 (21%) | 0.24 | 2.39 | 1.42 |
+| stand | 30 | 2.14 | 1.92 | 0.72 (38%) | **0.71 (37%)** | 0.52 | 0.20 | 0.47 (25%) | 0.23 | 2.61 | 1.85 |
+| free | 30 | 2.10 | 1.87 | 0.71 (38%) | **0.74 (40%)** | 0.55 | 0.20 | 0.41 (22%) | 0.19 | 2.57 | 1.78 |
+| race | 30 | 2.28 | 2.06 | 0.95 (46%) | **0.73 (36%)** | 0.51 | 0.22 | 0.37 (18%) | 0.16 | 2.56 | 1.67 |
+| race2x | 30 | 2.19 | 1.95 | 0.76 (39%) | **0.92 (47%)** | 0.69 | 0.23 | 0.27 (14%) | 0.10 | 2.53 | 1.66 |
+| photo | 30 | 2.74 | 2.32 | 0.72 (31%) | **0.82 (35%)** | 0.64 | 0.18 | 0.77 (33%) | 0.44 | 2.48 | 1.66 |
+| msaaoff | 30 | 1.27 | 1.13 | 0.39 (34%) | **0.38 (34%)** | 0.24 | 0.15 | 0.35 (31%) | 0.17 | 2.59 | 2.10 |
+
+- **The milliseconds are the trace build's wall times, not a normal build's.** The decoder can be
+  preempted inside a buffer, and the trace's bookkeeping between buffers (registry lookups, the
+  per-run counters) is counted in the D3D segments' own time, which makes their share and ns a
+  dword a little high and the lists' share conservative. The trace itself costs the decoder thread about 0.2 ms a frame in the benchmark: 2.60-2.73 ms in the elision-on runs against 2.30-2.57 ms (mean 2.45) with the options off. Use the shares; times for
+  PR 4 come from PR 4's own baseline (below).
+- The benchmark's 60-130 s window catches different parts of the race from run to run (loading
+  takes longer or shorter): lists 345,000-423,000 dwords a frame, clones 191,000-382,000. Hence the
+  ranges; a single run's figure is never the benchmark's.
+- Model lists never ran while the decoder waited for the recorder (0 synced runs in every run),
+  so their time is their own. `sub_8249F310`'s 15 small buffers a frame (675 dwords) are 0.01 ms.
+
+**Answers [M unless marked]** (bench = el-1, el-4, el-5, el-8 and el-11, the elision-on runs):
+
+| # | Question (plan section 7, PR 1) | Answer | Numbers | Run, counter |
+| --- | --- | --- | --- | --- |
+| 1 | Live header masks and flags against the files | **Masks: the files'.** **Flags: not the files'**: the loader sets 0x101 and clears 0x6 (the files' 0x86 / 0x886 are 0x181 / 0x981 in memory), and the texture and surface fixups set 0x2000. The live list with its flags put back in the files' form has the key of a file list (the whole static part: masks, flags, patch table, PM4 outside the places) | first looks: passes 1 and 4 all ones, passes 0 and 6 `FFFFFFF7` in the third pair, inherited = untouched, in every list of every run; flags 0x181, 0x2181 (passes 0, 1, 6), 0x2981 (pass 4), nothing else. Keys in the files' set (Colorado's distinct models, the converter of PR 1): every converted list of every run, 16,998 of 16,998 (bench 1,930-2,071 a session, stand 223, free 1,848, race 769, race2x 1,097, photo 334, msaaoff 836, attr 1,978), with the same pass group. Later calls: the masks never changed; the flags changed only in 0x2000 | all runs; game counters 6, 7, 25; `FH1_LIST_KEYS` against `native_list_check` keys |
+| 2 | RunCommandBuffer calls by device, mode, flags, pass group, caller; the queued path | **One device, no recording, no queue.** Every call is on the main device (40162C00); its mode byte is 0x00, 0x20 or 0x21 (only 0x00 with `scene_msaa=off`; never 0x80, so no call is recorded into another buffer), and no list is copied inline (flag 0x20 never set). `sub_824467A8` never takes the queued path (its thread flag is 0 on every call) and `sub_82CE9258` is never called. Callers: `sub_824467A8` (from 0x8244706C: track and procedural models; 0x8246CF14: cars; 0x82469998, 0x8244A254, 0x8247C2B4, 0x8247D41C, 0x8247D968, 0x82426B9C, and in photo mode 0x82E5A300-0x82E5A894: the other clones) for all but the HUD's 0.9-2.6 a frame (`sub_8249E0E0`, 0x8249E118) | calls a frame in the window: bench 789-934 (model lists 520-656, clones 150-379, of them cars 37-98); stand 439 (292 lists, 147 clones), free 466, race 538, race2x 747, photo 634 (269 clones), msaaoff 453 | game counters 1-5, 15, 16, 24 |
+| 3 | The exact split of the other foreign class | **Every buffer is classified, not only the 60 most read.** Dwords the command processor read a frame: bench 1.26-1.37 M: D3D segments 46-52%, model lists 26-33% (pass 4 19-27%, passes 0, 1, 6 6.2-6.5%), clones 15-28% (cars 83,000-181,000 dwords), `sub_8249F310`'s buffers 675. The plan's "26-43%" for model lists: inside it, near its floor in the benchmark. The class "foreign without SET_CONSTANT" of M0 is the untiled model lists plus every clone | lists / clones: stand 31.8% / 22.7%, free 33.3% / 20.4%, race 27.9% / 16.2%, race2x 38.8% / 12.4%, photo 29.3% / 31.9%, msaaoff 30.8% / 30.8% | `C` records, depth 2; `.lists` |
+| 4 | Decoder time inside list buffers, by class (the ceiling of replay) | **Model lists are a third or more of the decoder's time in the buffers in every scene: 32-47%**, 2.3-2.6 ns a list dword. Replay can save at most that share of the decoder, and less: see below | bench 32%, 36%, 40%, 41%, 43% (el-5, el-8, el-11, el-1, el-4: the share follows the window's content, table above); stand 37%, free 40%, race 36%, race2x 47%, photo 35%, msaaoff 34%; pass 4 three quarters of it (76-81% in the bench). D3D segments 1.4-2.1 ns a dword of their own (mostly constant blocks) | `C` records (`ticks`, `sync_runs`) |
+| 5 | Recorder cost of un-elided register runs | **78% of the register writes in model lists are elided today** (74-79% in every scene): unchanged values the decoder never hands to the recorder. A replay that copied the lists' runs without that check would hand the recorder about 240,000 more writes a frame in the benchmark. **That is not shown to fit PR 4's recorder limit (0.05 ms): replay must elide.** Priced from five alternating pairs with the elision off for everything (1.07 M more writes a frame), the lists' extra writes cost the recorder 0.01-0.04 ms a frame by the best estimates, but the upper ends of the 95% intervals are 0.06-0.07 ms. The decoder, which no longer compares, spent 0.16 ms less a frame (for all 1.07 M writes) | five pairs, N then E or E then N (el-1/2, 3/4, 5/6, 7/8, 10/11): recorder +0.049 ms a pair (sd 0.185), the lists' 245,003 extra writes +0.010 ms (95% -0.044 to +0.064); the four quiet pairs (el-1 had 1.8 cores of other load): +0.026 ms (95% -0.015 to +0.067); the recorder's time fitted against the writes handed on and the writes read (the window's content): all ten runs 0.139 ns a write (se 0.041), +0.034 ms (95% +0.010 to +0.058), the eight quiet runs 0.164 ns a write (se 0.033), +0.039 ms (95% +0.019 to +0.060). Lists' writes read / handed on a frame: bench 279,310-334,456 / 60,354-71,379; stand 221,240 / 57,420; race2x 284,790 / 62,894 | `C` records `rin`, `rout`; thread CPU from `/proc`; `--gpu_split_elide_unchanged_registers=false` |
+| 6 | Runs per call for pass 4 lists, and what restricts a call to some tiles | **Every pass 4 call is read once per tile (three times; twice with two tiles) and runs on fewer**: the INDIRECT_BUFFER packet is predicated, and the bin mask in force when it is read (set by D3D before the call, from the game's predication `sub_8246BFE8`, 590-810 calls a frame in attr) excludes the tiles the object does not touch. The emulator writes full-screen EVENT_WRITE_EXT extents, so they are not what restricts it | runs / reads a call of pass 4 lists: bench 1.83-1.99 / 3.00; stand 2.26, free 2.19, race 2.08, photo 2.33 / 3.00; race2x 1.50 / 2.00; msaaoff 1.00 / 1.00. Untiled passes 1.000-1.001 runs a call (in four bench sessions 1,089-3,753 of their 5.1-5.7 M calls were predicated off) | `.lists` (calls, runs, skipped); attr `G 24` |
+| 7 | What the second context records each frame; IBs to model lists in its buffers | **The HUD, and no model list.** The second context (4037FD80) records DrawIndexedVertices with their setters and makes no RunCommandBuffer call: its buffers hold no INDIRECT_BUFFER to a list. The main device runs the HUD's command buffer slots with `sub_8249E0E0` (flags 0x1); their words change from frame to frame (re-recorded). Every list and every clone runs at depth 2 (ring, D3D segment, buffer) | attr, per block of 300 frames: 4037FD80 made 0 RunCommandBuffer calls in all 11 of its blocks and 50,677-63,155 DrawIndexedVertices in the full blocks (169-211 a frame); every RunCommandBuffer was on 40162C00. HUD slots: 31-63 buffers a session, their sampled words changed 20-1,208 times | attr `GD`; `.lists`; `C` depths |
+| 10 | Who records the 0x14D-0x161 buffers; are they re-recorded | **D3D's command buffer clone, `sub_82AA8220`**: it copies a command buffer's PM4 and tables into new memory (`sub_82AA8028`, memcpy) and marks the copy with 0x00100000 in its first word, which every buffer of this class has (0x00500009 against the files' lists' 0x00400009). It is called from the car presentation's `sub_82E98930` (return address 0x82E98AFC, 7,588-9,657 times a session) and 6 times a session from `sub_824269E8` (0x82426ED4): those are the six buffers with flags 0x8281, which `sub_824269E8`'s caller 0x82426B9C runs. Every type-9 buffer that runs and is not a clone is a HUD slot (flags 0x1): the first looks not made by the clone equal the HUD slots' first looks in every run (bench 444-529 of 2,357-2,664). The sources are command buffers of type 9 without the files' marker that never run themselves; who records them is open. **Re-recorded: not known.** The trace hashes a buffer's words every 64th run and does not restart the hash when a command buffer object is bound to another buffer (3,347-4,134 rebinds of clone objects a bench session), so its count of changes mixes reuse and rewriting and can miss a rewrite: clones (flags 0x281, 0xA81) changed 0-14 times a session in 2.5-6.7 M runs of each kind, the HUD slots hundreds of times. No measured scene damages, upgrades or repaints a car, which is what a re-recording would follow | first words found written by the clone's memcpy (0x82AA808C): bench 623-740 a session | game counters 6, 20, 28-30; `.lists` `changes` |
+| 11 | Type 10 buffers, `sub_82D10908`, `sub_82CE9258` | **None of them runs in these scenes**: 0 command buffers of type 10, 0 calls of `sub_82D10908` (RunCommandBuffer's third caller), 0 of `sub_82CE9258` (the queued path's end) | 0 in every run | game counters 1, 15, 16 |
+| 12 | Readers of SCRATCH_REG6/7 (and of SHADER_CONSTANT_FLUSH_FETCH) and of the EVENT_WRITE_EXT extents | **Nothing reads the marks.** SCRATCH_UMSK is 0x37 at the start of every buffer (bits 6 and 7 clear: scratch registers 6 and 7 are never written back to memory); no packet reads them; the CPU reads none of them through MMIO (its 2 register reads a frame are other registers); the emulator gives 0x5000-0x5002 no meaning. The extents: not what decides a list's tiles (row 6); whether guest code reads them is not closed | whole runs: UMSK 0x37 on every buffer start; register-reading packets: WAIT_REG_MEM on 0x0A31 (most), memory polls, REG_RMW on 0x1841 (once a frame) and once a session on 0x0081, 0x0082 and 0x1E4E, COND_WRITE on 0x1924 (7,808 a session), WAIT_REG_MEM on 0x1973 twice a session; none on 0x578-0x57F or 0x5000-0x5002 | `UMSK`, `READ`, `CPUREAD` |
+| PR 1 | Live IM_LOAD address words keep their low two bits | **Yes**: every live IM_LOAD address word has 0 or 1 in its low bits (bits 2 and 3 never), and the keys (which keep those bits) are the files'. After a shader fixup the bits stay, but that rests on a few dozen checks, all in benchmark sessions: in free roam, the race start, photo mode and with `scene_msaa=off` no list was checked after a shader fixup (the fixups there hit command buffer objects being reused, which a first look resets). No key was ever checked on an untiled run (0 untiled checks in every run), so "the key is the same tiled and untiled" is not shown live | first looks: pass 4 pixel shader (1) first, vertex (0) second in every pair (bench 2,471-2,577 pairs a session); after a shader fixup: el-1 5 pass 4 pairs, el-4 4 pass 1 pairs, el-5 4 pass 4, 2 pass 0 and 3 pass 6 pairs, el-11 8 pass 4 pairs, attr 8 pass 4 pairs, race2x 1 pass 0 and 1 pass 6 pair, all keeping 1/0; other runs 0 | counter 13 (`when`); counter 11 (untiled bit) |
+| PR 1 | Where area C's length is at run time | **At +0x80 of the header (words), as in the files; its address (+0x94) is 0 in memory for every Horizon model list**: area C is not kept. A converter at run time takes the lists without it, as the trace does; their keys then match the files' keys computed without area C | the files: +0x80 equal to the area C length in 996 of 996 sampled lists (offline, `tools/rmb_lists.py`); in memory +0x94 = 0 at every first look of every run | counter 10 |
+| PR 1 | Can a list reach its first conversion untiled | **Yes, every pass 4 list with `scene_msaa=off` and with the two-tile scenario of the 12- and 16-car races**: its first run is for pass 5 or pass 3, already untiled. The lazy net at RunCommandBuffer must convert a retiled copy (`scene_tiling.cpp` keeps the headers) or the registry must convert at load | msaaoff: 543 of 543 pass 4 lists refused `untiled` at their first look; race2x: 1,010 of 1,010; passes 0, 1, 6 converted (msaaoff 836, race2x 1,097) | counter 8 |
+| PR 1 | Does anything write a list's static words at run time | **Not in free roam (standing or driving), the race start, photo mode or with `scene_msaa=off`**: every key check agreed with the list's first look. **In four of seven benchmark sessions, yes:** one model's lists got another value in the first vertex constant words they load (dwords 4 and 5 in passes 0 and 6; dwords 64 and 65 in pass 4) after their first run, words no place names; who writes them is open. Command buffer objects are reused: an unloaded list's object later holds another list | key checks: stand 1,467,624, free 1,569,824, race 2,021,914, photo 1,429,628, msaaoff 408,294, all the same; bench el-1 14.0 M, el-4 14.6 M, el-8 14.0 M all the same, el-5 26,588 of 12.2 M differ (passes 0, 4, 6 of one model, from the change on), el-11 341 of 15.0 M (pass 4, dword 65); attr 996 of 2.27 M (one pass 4 list, dword 64); race2x 578 of 0.86 M (passes 0 and 6, dword 4). Reused objects: model lists 12-50 a session, clones 19-552 | counters 11, 12, 26, 27; the log's first changes |
+| PR 1 | Bin select per tile; the bin mask when an untiled-pass list starts | **Selects 0x80000003, 0x0000000C, 0x00000030** (the first tile also has bit 31); the masks a pass 4 list starts with vary (row 6). Lists of passes 0 and 1 start with select and mask 0xFFFFFFFF. **Pass 6 lists mostly do, but not all:** some start with mask 0x8 or 0xA (0x2 with two tiles). Their draws pass (select and mask overlap), but a replay must take the live mask, not assume 0xFFFFFFFF | pass 6 starts with another mask: bench 1,682-8,377 of 5.1-5.5 M untiled-pass starts, free 2,757 of 603,083, race 883 of 873,304, race2x 47, attr 2,523; none in stand, photo, msaaoff | `BIN` |
+| PR 1 | Template memory in a real session | 2.05 words of template a list dword, as offline (2.03-2.06 in every run that converts pass 4); a session converts every list it runs once | bench sessions 1,930-2,071 lists, 2.08-2.19 M template words (8.3-8.7 MB); free 1,848 lists, 2.27 M (9.1 MB) | counter 9 |
+
+**What the answers mean for the next steps:**
+
+- **Replay goes ahead (the plan's rule: list decode at least 15% of the decoder's time in the
+  race or the 16-car race).** Model lists are 32-47% of the decoder's time in the buffers in every
+  scene measured: 36% at the race start, 47% with the 16-car races' two-tile scenario, 32-43% in
+  the benchmark, 34-40% in free roam (standing or driving), photo mode and with `scene_msaa=off`;
+  pass 4 three quarters of it. **That share is the ceiling of replay, and replay will not reach
+  it**: the decoder still has to put each list's register values into its register file, decide
+  which changed and hand those to the recorder, issue the draws (1.8-2.3 runs a call) and the
+  literal loads; replay saves the parsing of the packets, 2.3-2.6 ns of the decoder per list dword
+  in the trace build.
+- **PR 4's targets are re-based on PR 4's own baseline.** The milliseconds of this section are the
+  trace build's wall times. PR 4 takes the lists' share from here (32-43% of the decoder's time in the buffers
+  in the benchmark, 34-40% in free roam) and applies it to its own baseline: a build with the options
+  off, the same scene and PC, four runs. On this PC the options-off decoder thread used 2.30-2.57 ms
+  a frame in the benchmark (the 8 O runs above, mean 2.45), so half of the ceiling is about
+  0.4-0.5 ms a frame there; free roam at 30 fps needs PR 4's own free-roam baseline. (The first
+  version of this section derived 0.33 and 0.49 ms from trace times.)
+- **Replay and elision:** **replay must elide.** A template's register runs handed to the recorder as the list
+  writes them would add about 240,000 writes a frame in the benchmark. Five alternating pairs with
+  the elision off for everything price them at 0.01-0.04 ms a frame of recorder time (by pair and
+  by a fit against the window's content), but the 95% intervals reach 0.06-0.07 ms, past PR 4's
+  "recorder CPU not up by more than 0.05 ms". So replay compares each value a template writes with
+  the decoder's register file and hands the recorder only the changed ones, as the emulated path
+  does. The compare costs the decoder about 0.15 ns a write (0.16 ms a frame less without it for
+  all 1.07 M writes; about 0.04 ms for the lists' runs), which comes out of replay's saving.
+- **Step 3's converter input differs from the files' in two ways the plan did not foresee:**
+  1. **the flags**: in memory every model list has 0x101 set and 0x6 cleared by the loader, so
+     the converter of PR 1 refuses every live list (`flags`). Converted with the flags put back in
+     the files' form, `(flags & ~0x2101) | 0x6`, every live list converts and has its file key
+     (every run: 16,998 of 16,998 first looks). Step 3 takes the flags that way, or its key leaves
+     0x101 and 0x6 out the way it leaves 0x2000 out;
+  2. **area C is not in memory** (+0x94 is 0): the key and the slots come from the header, the
+     patch table and the PM4 alone, which PR 1 already showed gives the same slots for every
+     Horizon list. The key then covers area C's length (+0x80) at most.
+- **The lazy net needs the original words.** With `scene_msaa=off` (the Deck, VR and power-saving
+  presets) and with the two-tile scenario of the 12- and 16-car races every pass 4 list first runs
+  untiled (543 of 543 and 1,010 of 1,010), so a conversion at the first RunCommandBuffer refuses
+  them. Step 3 either converts at model load or converts a copy retiled from the headers
+  `scene_tiling.cpp` keeps (`g_untiled`). Nothing yet shows that a list's key is the same tiled
+  and untiled in a running game (no untiled run was checked): step 3's shadow compare must.
+- **The registry by physical address is right, and needs the unload:** a command buffer object is
+  reused for another list after an unload (12-50 model list objects a session), so an object
+  pointer alone is not a key, and a dropped list's PM4 address can carry another list later.
+  `kOpListDrop` at unload, or a check of the length the INDIRECT_BUFFER packet carries against the
+  registered one at every lookup (free: the IB has it).
+- **Where the plan worried, the runs show no case:** in every scene, the standing free roam and
+  the two-tile race included, every RunCommandBuffer is on the main device, never recorded into
+  another buffer (mode 0x80), never copied inline (flag 0x20), never queued for the deferred
+  context; there is no type 10 buffer and no call of `sub_82D10908`. The second context records
+  the HUD and no IB to a list. Every list runs at depth 2. The fallback stays, but the shadow
+  compare can treat any of these as "unexpected" and count it.
+- **Tiling at replay:** a pass 4 list is read for each tile, and the predicate of its
+  INDIRECT_BUFFER packet (D3D's bin mask, from the game's own predication) already decides which
+  runs, before the decoder reaches the list. Replay works per run, with the live bin select and
+  the live mask: the first tile's select is 0x80000003, not the 0x3 of PR 1's proof (the same
+  result for every mask a list writes; D3D's own mask after a list, 0x80000000, matches only the
+  first tile), and pass 6 lists sometimes start with mask 0x8, 0xA or 0x2, not 0xFFFFFFFF.
+- **The marks can go:** nothing reads SCRATCH_REG6/7 or 0x5000-0x5002 (no packet, no CPU read, no
+  write-back to memory), so a replay may drop them; the register file then differs from the
+  emulated path only in registers nothing reads, which step 3's end-of-list compare must exclude.
+- **Static words:** in free roam (standing and driving), the race start, photo mode and with
+  `scene_msaa=off` no static word of a converted list changed in 6.9 million checks. In four of
+  seven benchmark sessions one model's lists (passes 0, 4 and 6, or some of them) had their first
+  vertex constant words changed after their first run, words no place names. So the plan's check
+  of the static words on every run in step 3 is needed, and a list whose key no longer matches
+  runs as PM4, as planned.
+- **The clones are 12-32% of the dwords** (cars 37-54% of them) and up to a third of the decoder's
+  buffer time (photo mode, one benchmark window). They are made by D3D's command buffer clone
+  (`sub_82AA8220`) when the car presentation (`sub_82E98930`) sets an object up, copies of command
+  buffers that never run themselves, with resolved addresses; a decode-once cache at the
+  INDIRECT_BUFFER or a conversion at clone time is step 5's choice. Whether a clone is re-recorded
+  when a car is damaged, upgraded or repainted was not measured.
+
+**Still open:**
+
+- **Who records the clones' sources** (command buffers of type 9 without the files' marker that
+  never run): a hook on D3D's command buffer recording (begin and end on a recording device) or a
+  write watchpoint on one source's first word at a car's load.
+- **Whether clones are re-recorded** when a car is damaged, upgraded or repainted: a scene that
+  does it, with a hash that restarts when a command buffer object is rebound.
+- **Who writes the benchmark model's vertex constant words** (row "static words"): the trace can
+  log the word's address at the first difference; a write watchpoint armed then names the writer.
+- **Whether guest code reads the EVENT_WRITE_EXT extents** (row 12): a read watchpoint on one
+  tiled call's entry, or a plugin that writes distinctive extents and a run that looks for a change
+  in the bin masks.
+- **The key of an untiled run** (row IM_LOAD): no key check ran on an untiled run; step 3's shadow
+  compare covers it.
+- **A real 16-car race** needs 16-car lobbies (#766); here its render scenario was measured on 8
+  cars. **The GTX 1650 Ti and Windows** were not run in this step.
+- **Plan questions 8, 9, 13 and 14** were not this step's: the load hook (step 3), fixups against
+  run order while streaming (step 3's shadow compare), fixup rates in a 16-car race and the Big
+  Shot (photo mode here), and which 256x256 pass is the reflection cube.
+
+**Not done yet** (the rest of M4's list work, in order): the registry (conversion when a model
+loads, a retiled copy for lists first seen untiled, invalidation by the fixup dispatcher and at
+unload) with a shadow compare of every list draw in the running game; replay of the templates in
+the command processor; then native passes, which also need M3's executor and a path for the
+clones (the cars). FM4's `SET_CONSTANT2` tile blocks are a decision for after that census.
 
 ## Tools
 
@@ -766,6 +984,52 @@ What the command processor executes, counted by the D3D function that wrote it:
 Both sides must be the trace builds for tags; with only the SDK side every packet counts as
 foreign or primary ring. Run it as any test game (a hidden display, a scratch user data folder,
 `--audio_mute`), at a fixed frame rate: the counts are per frame, not timed.
+
+Since M4 the PM4 trace also counts each device's calls by function (`GD` lines in the report file;
+the shared layout is version 3 on both sides) and, with `FH1_PM4_STATS_ALL=1`, writes every
+foreign buffer (`F`), not only the 60 most read.
+
+### List trace (game and SDK)
+
+What the game's RunCommandBuffer calls run and what they cost the command processor, for M4's
+model lists. A measurement build on both sides; off (the default) neither the game nor the plugin
+has any of it:
+
+- **Game:** `-DFORZA_LIST_TRACE=ON` (TU4, Linux) adds `src/debug/list_trace.cpp`. One line in the
+  hooks of RunCommandBuffer (`sub_824469B0`, `cockpit_gauges.cpp`) and of `sub_824467A8`
+  (`scene_tiling.cpp`), and a pass-group scope in the track's, the procedural models' and the
+  car's draw functions (`FORZA_LIST_TRACE_CONTEXT`, `src/debug/list_trace.h`); the macros are
+  empty in other builds. Per call it counts, into keyed counters in shared memory
+  (`src/debug/list_trace_shm.h`): the device and its mode byte, the command buffer's type, flags
+  and class (a model's list from the files, told by the files' marker after its patch table; any
+  other command buffer of type 9, which D3D recorded; type 10), the pass group, whether the list
+  is untiled, the caller, and whether `sub_824467A8` queued the list. It registers the buffers
+  the call names by physical address. The first time a command buffer is seen, its header is
+  classified and a model list is converted (`native_list.h`) from a copy, with its flags in the
+  files' form; every later call compares the masks and flags with that first look and the live
+  list's key with the template's. The fixup dispatcher (`sub_82D19210`), `sub_82D10908` and
+  `sub_82CE9258` are hooked to count their calls by type or caller, and D3D's command buffer clone
+  (`sub_82AA8220`) and memcpy (`sub_82B3A7E0`) to tell who wrote a command buffer that is not a
+  file list when it first runs. It costs every RunCommandBuffer call (a lookup and a hash of the
+  list's static words) and every memcpy: never for players.
+- **SDK:** ReIGlue built with `-DREXGLUE_FH1_LIST_TRACE=ON` (patch 0640). With
+  `FH1_LIST_STATS=<file>` the command processor times every indirect buffer it runs (the time
+  stamp counter around `ExecuteIndirectBuffer`; a run in which the decoder waited for the
+  recorder is counted apart) and counts it by the class the game registered, pass group and
+  depth: runs, dwords, the register writes the packets made and the ones handed to the recorder
+  (the others were unchanged and elided), INDIRECT_BUFFER packets predicated off, the bin select
+  and mask a list starts with, SCRATCH_UMSK. It also counts packets and CPU reads of the scratch
+  registers and the decoder's CPU time in the ring. Every `FH1_LIST_STATS_EVERY` swaps (600) it
+  appends a block with the game's counters, and `<file>.lists` holds every registered buffer's
+  totals (calls, runs, runs predicated off, time).
+- **Report:** `tools/list_trace_report.py <file> [--blocks A-B] [--json OUT]`. The time of the
+  runs that waited for the recorder is taken at the mean of the others.
+- `FH1_LIST_KEYS=<file>`: the key of every list converted at its first look; `FH1_LIST_CHECK_EVERY=N`
+  checks a list's key on every Nth call only; `FH1_LIST_DUMP=N`: the first N command buffers of
+  each kind word by word in the log.
+
+The two can be combined with the D3D and PM4 traces (the fixup dispatcher's wrapper then opens
+the D3D trace's scope). For times, use the list trace alone.
 
 ### Model list check (offline)
 
