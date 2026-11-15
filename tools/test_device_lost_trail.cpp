@@ -102,6 +102,20 @@ int main() {
     CHECK(!Has(r, "last finished in"));  // the same render pass
     r = t::DescribeDetails(d, f, u);
     CHECK(Has(r, "the GPU finished that work: it hung in the draw itself"));
+    // With gpu_device_lost_setup_breadcrumbs off (the default) there is no marker before the
+    // draw: the line names the work and the setting that tells it from the draw.
+    {
+      static t::Trail o;
+      const uint32_t of = o.Record(t::Kind::kDraw, 9, 300, 14, 0x29DFull, 0x147Bull, car);
+      t::Details unmarked = with_work;
+      unmarked.setup_marked = false;
+      o.Record(t::Kind::kDraw, 9, 300, 5065, 0x8228ull, 0x66A4ull, unmarked);
+      r = t::DescribeDetails(o, of, 0);
+      std::printf("%s\n", r.c_str());
+      CHECK(Has(r, "recorded before the draw command: 1 render pass, 3 draws, 2 barriers; in that "
+                   "work or in the draw: gpu_device_lost_setup_breadcrumbs tells them apart"));
+      CHECK(!Has(r, "finish that work"));
+    }
     // Nothing recorded between the two: the draw itself.
     t::Details bare = car;
     bare.render_pass_key = 2;  // 4x, no attachments

@@ -704,6 +704,12 @@ add("log_noisy", "Noisy logging", "Advanced", "bool", False,
     "High-frequency log messages.", "Log")
 add("log_flush_interval", "Log flush interval (s)", "Advanced", "int", 0,
     "0 flushes at exit only.", "Log", lo=0, hi=60, restart=True)
+# ReIGlue 1100 (#913): the marker before a draw's own work; off in the SDK too (its GPU time).
+add("gpu_device_lost_setup_breadcrumbs", "Detailed GPU reset report", "Advanced", "bool", False,
+    "For a game that stops with a GPU reset (\"device lost\" in forza.log): on, the log of the "
+    "next reset also says whether the graphics card stopped in a draw or in the work before it. "
+    "AMD graphics cards with Vulkan only. Costs a little GPU time, so leave it off unless a bug "
+    "report asks for it. Applies on the next game launch.", "Log", restart=True)
 add("vulkan_device", "Vulkan device", "Advanced", "int", -1,
     "-1 picks the best GPU. Use another index on multi-GPU systems.", "GPU", lo=-1, hi=16,
     restart=True)

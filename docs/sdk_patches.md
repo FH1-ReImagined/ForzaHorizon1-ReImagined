@@ -1000,8 +1000,13 @@ not say which of the two the GPU hung on.
 breadcrumbs are on (render pass begins, draws, dispatches, barriers, copies, attachment clears, query
 begins, conditional rendering begins; the hoisted uploads run before the render pass and are not
 counted), and the trail keeps the counts taken before each draw command, with the draw's shader
-modifications and render pass key. A draw with work of its own gets a second `VK_AMD_buffer_marker`
-right before its draw command (offset 8, bottom of the pipe), written once that work has finished
-(`gpu_device_lost_setup_breadcrumbs`, on, read at start). A loss logs a second line (see
-[rendering.md](rendering.md#device-lost-which-draw-the-gpu-was-on-551)). Not built or run here:
-`tools/test_device_lost_trail.cpp` covers the trail and the line, and the cost is not measured.
+modifications and render pass key. The guest draw's own draw command is not counted: a draw right
+after another has no work of its own, and the marker after the draw before already says that
+everything before it finished. With `gpu_device_lost_setup_breadcrumbs` (off, read at start;
+Advanced > Log > Detailed GPU reset report in the launcher) a draw with work of its own also gets a
+second `VK_AMD_buffer_marker` right before its draw command (offset 8, bottom of the pipe), written
+once that work has finished. A loss logs a second line (see
+[rendering.md](rendering.md#device-lost-which-draw-the-gpu-was-on-551)): with the setting on, whether
+the GPU finished that work; off, the setting's name. Checked on RADV with a stream dump of one frame,
+the simulated loss and the cost with the setting on and off (rendering.md);
+`tools/test_device_lost_trail.cpp` covers the trail and the line.

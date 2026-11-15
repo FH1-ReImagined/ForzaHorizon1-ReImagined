@@ -1389,9 +1389,11 @@ Other settings turns it off):
   use. The marker after a draw is written once the draw and everything recorded before it has
   finished, so "unfinished" also covers the work the emulator recorded for that draw first (a
   new render pass, render target transfers, texture loads, barriers). Since ReIGlue 1100 (#913)
-  a second line says what that work was and whether the GPU finished it: a draw with work of its
-  own gets a second marker right before its draw command (`gpu_device_lost_setup_breadcrumbs`,
-  on), and the trail keeps the draw's shader modifications and render pass:
+  a second line says what that work was, with the draw's shader modifications and render pass.
+  With `gpu_device_lost_setup_breadcrumbs` on (Advanced > Log > Detailed GPU reset report in the
+  launcher; off by default, for a player whose GPU resets) a draw with work of its own also gets
+  a second marker right before its draw command, and the line says whether the GPU finished that
+  work:
 
   ```
   GPU breadcrumbs, unfinished #40970478 (draw): VS modification 000000400000003F, PS modification
@@ -1400,10 +1402,27 @@ Other settings turns it off):
   in the draw itself
   ```
 
-  (or `the GPU did not finish that work: it hung in it, not in the draw`; with nothing recorded
-  between the two draws, `nothing else was recorded after #N: it hung in the draw itself`). The
-  counts are of the main command stream; the hoisted uploads run before the render pass, before
-  the draws already finished, and are not counted.
+  (or `the GPU did not finish that work: it hung in it, not in the draw`; with the setting off,
+  `in that work or in the draw: gpu_device_lost_setup_breadcrumbs tells them apart`). A draw
+  with nothing recorded between it and the draw before needs no marker: the one after the draw
+  before says that everything before it finished, and the line ends `nothing else was recorded
+  after #N: it hung in the draw itself`, with the setting on or off. The counts are of the main
+  command stream, without the draw command itself; the hoisted uploads run before the render
+  pass, before the draws already finished, and are not counted.
+
+  Checked on an RX 9060 XT (RADV, free roam at 720p, 2026-11-15) with a stream dump of one
+  frame (a local debug build, not in the SDK): 125 of its 3851 guest draws had work of their own
+  and got the marker, each right before its draw command and after that work (mostly a new
+  render pass after a resolve: `R b c r x`); the other 3726 followed another draw with nothing
+  in between. `FORZA_TEST_GPU_LOSS_AT_FRAME` logged the line (`render pass 0x0000038E (4x, depth
+  D24FS8, color 0 2_10_10_10_FLOAT); recorded before the draw command: nothing; nothing else was
+  recorded after #43510445: it hung in the draw itself`; the loss is simulated, so the GPU was
+  only behind, not hung); with the setting off the line ended `recorded before the draw command: 1
+  render pass, 1 dispatch, 3 barriers, 1 copy; in that work or in the draw:
+  gpu_device_lost_setup_breadcrumbs tells them apart`. GPU time a frame over the same free roam
+  minute (`fh1_gpu_profile`, three runs each, up to 240 fps): 3.770 ms off, 3.815 ms on, a
+  difference within the runs' noise (+0.044 ms, standard error 0.065 ms): 125 markers a frame next
+  to the 3950 the draws and resolves already have.
 - **Direct3D 12**: DRED (auto-breadcrumbs, page faults) is on without the debug layer. The log
   names the operation each unfinished command list was on (`DrawIndexedInstanced (draw 412 of
   the list's 980)`), the four before it, and the allocations at a page fault's address.
@@ -1437,7 +1456,8 @@ a session, after about 32 minutes of play on average on Vulkan from 0.2.0 to 0.2
 session of 0.3.1 ran 58 minutes without one, which that average gives about one chance in six.
 The frames before were as in the rest of the session (typically 33-40 ms, with single frames of
 50-530 ms), and device-local memory stayed at 240 of 486 MB from 0.2.2 on: the GPU stops at
-once, it does not slow down or run out of memory. A `TdrDelay` of 8 s did not change it.
+once, it does not slow down or run out of memory. A `TdrDelay` of 8 s was tried, but it did not
+apply: the device was still lost about 2 s after the last frame, Windows' default limit.
 
 Two of the losses had breadcrumbs, and both unfinished draws were the paint of a car's body:
 
@@ -1460,4 +1480,4 @@ writes, stencil always replace, blending by source alpha, no sample-rate shading
 modification (#164). The last finished draws use other car shaders in the same state. Two named
 losses, both on car paint among the 2,000-4,000 draws of a race's frame, point at the car's
 draws; they do not show whether the GPU hung in the paint draw or in the work recorded for it
-first, which is what 1100's line says.
+first, which 1100's line says once the player turns on Detailed GPU reset report.
