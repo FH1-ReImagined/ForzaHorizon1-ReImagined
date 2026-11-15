@@ -395,6 +395,94 @@ class MakeTests(unittest.TestCase):
         self.assertEqual(db.fh1_refs, {"_&%d" % (0x33230000 | 9)})
 
 
+class MakeIdTests(unittest.TestCase):
+    """#772: an FM4 make whose id FH1 uses for another make. FM4's Lincoln (105) was shown as
+    FH1's 105, Viper ("Viper Continental"); FM4's Hennessey (102) as FH1's 102, Eagle. FM4's
+    "GMC Truck" (80) is FH1's "GMC" (80)."""
+
+    def setUp(self):
+        self.fm4 = make_db([(80, 1, "GMC"), (87, 2, "Eagle"), (102, 3, "HEN"), (104, 4, "VIP"), (105, 5, "LIN")],
+                           [(1300, "GMC_Syclone_92", 80, 1), (462, "EAG_Talon_98", 87, 2),
+                            (1200, "HEN_VenomGT_12", 102, 3), (1590, "VIP_GTS_13", 104, 4),
+                            (1586, "LIN_Continental_62", 105, 5)])
+        self.fh1 = make_db([(80, 11, "GMC"), (102, 12, "Eagle"), (103, 13, "HEN"), (105, 14, "Viper"),
+                            (107, 15, "KEN")], [(1519, "EAE_Speedster_12", 102, 12)])
+        self.fm4_names = names({1: "GMC Truck", 2: "Eagle", 3: "Hennessey", 4: "Viper", 5: "Lincoln"})
+        self.fh1_names = names({11: "GMC", 12: "Eagle", 13: "Hennessey", 14: "Viper", 15: "Kenworth"})
+
+    def plan(self):
+        merges = fm4_cars.make_merges(self.fm4, self.fh1, self.fm4_names, self.fh1_names)
+        return merges, fm4_cars.make_moves(self.fm4, self.fh1, self.fm4_names, self.fh1_names, merges)
+
+    def test_a_reused_id_joins_fh1s_make_of_its_name_or_takes_a_new_id(self):
+        merges, moves = self.plan()
+        self.assertEqual(merges, {87: 102, 102: 103, 104: 105})
+        self.assertEqual(moves, {105: 108})  # after FH1's highest id, 107
+
+    def test_cars_and_the_make_row_take_the_new_id(self):
+        merges, moves = self.plan()
+        with mock.patch.object(fm4_cars, "Retune", _NoRetune):
+            db = fm4_cars.Database(self.fm4, self.fh1, merges, moves)
+        db.collect([1300, 462, 1200, 1590, 1586])
+        rows = db.finish({})
+        cars = {r["Id"]: r["MakeID"] for r in rows["Data_Car"]}
+        self.assertEqual(cars, {1300: 80, 462: 102, 1200: 103, 1590: 105, 1586: 108})
+        makes = {r["ID"]: r for r in rows["List_CarMake"]}
+        self.assertEqual(sorted(makes), [108])  # FH1 keeps its own 80 (GMC), as before; Lincoln's, moved
+        self.assertEqual(makes[108]["IconPath"], LOGO % ("I", "LIN"))
+        # the Lincoln's name (its row's and its car's) is FM4's own string, not FH1's Viper's
+        lincoln = "_&%d" % (0x33230000 | 5)
+        self.assertEqual(db.own_refs, {lincoln, "_&1"})  # its row's DisplayName and Profile, its car's MakeName
+
+    def test_unknown_names_keep_the_id(self):
+        fm4_names = names({2: "Eagle", 4: "Viper"})  # no text for 80, 102, 105
+        merges = fm4_cars.make_merges(self.fm4, self.fh1, fm4_names, self.fh1_names)
+        self.assertEqual(merges, {87: 102, 104: 105})
+        self.assertEqual(fm4_cars.make_moves(self.fm4, self.fh1, fm4_names, self.fh1_names, merges), {})
+
+
+class MovedMakeStringTests(unittest.TestCase):
+    """#772: a moved make's name. FM4's Lincoln and FH1's Viper both have List_CarMake id 105,
+    so their names have the same key and IDS_ name; the Lincoln's goes in under a key of its own."""
+
+    REF = "_&%d" % (0x33230000 | 105)
+
+    def run_strings(self, own_refs):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(tmp, ignore_errors=True))
+        fm4_table = fm4_cars.StringTable()
+        fm4_table.entries = {105: ["Lincoln", "IDS_CarMake_105", 0, 0]}
+        conv = fm4_cars.Converter.__new__(fm4_cars.Converter)
+        conv.out, conv.pack = tmp, None
+        conv.fm4 = mock.Mock(languages=lambda: {"en": "en.zip"}, strings=lambda t, l: fm4_table)
+
+        def fh1_table(t, l):
+            table = fm4_cars.StringTable()
+            table.entries = {105: ["Viper", "IDS_CarMake_105", 0, 0], 3: ["Audi", "IDS_CarMake_3", 1, 0]}
+            return None, table
+        conv.fh1 = mock.Mock(languages=lambda: {"en": "en.zip"}, strings_raw=fh1_table)
+        rows = {"List_CarMake": [{"ID": 108, "DisplayName": self.REF, "Profile": None}],
+                "Data_Car": [{"MakeName": self.REF, "DisplayName": None, "ModelShort": None}]}
+        report = {}
+        conv.strings(rows, report, set(), own_refs)
+        path = os.path.join(tmp, "media", "stringtables", "en", "list_carmake.str")
+        table = fm4_cars.StringTable(open(path, "rb").read()) if os.path.exists(path) else None
+        return rows, table
+
+    def test_a_moved_makes_name_gets_a_key_of_its_own(self):
+        rows, table = self.run_strings({self.REF})
+        ref = rows["List_CarMake"][0]["DisplayName"]
+        self.assertEqual(rows["Data_Car"][0]["MakeName"], ref)
+        self.assertNotEqual(ref, self.REF)
+        self.assertEqual(table.text(ref), "Lincoln")
+        self.assertEqual(table.text(self.REF), "Viper")  # FH1's own name is kept
+
+    def test_without_the_move_fh1s_string_is_taken(self):
+        rows, table = self.run_strings(set())
+        self.assertEqual(rows["List_CarMake"][0]["DisplayName"], self.REF)
+        self.assertIsNone(table)  # nothing added
+
+
 class LogoTests(unittest.TestCase):
     """#710: the logos of a make FH1 lacks come from FM4 (Renault's tile was black); FH1's own
     logos are not replaced."""
@@ -436,6 +524,37 @@ class LogoTests(unittest.TestCase):
         with open(got, "rb") as f:
             self.assertEqual(f.read(), b"fm4.zipUI4/Logos/Manufacturer_Logos_LG/L_MAN_Renault_Logo.xds")
         self.assertFalse(os.path.exists(got.replace("Renault", "Acura")))
+
+    def test_dlc_makes_logos_come_from_their_packs(self):
+        """#772: MG's, Porsche's, smart's, Triumph's and Lincoln's logos are only in FM4's DLC
+        packs (media/UI/Textures/UI4/Logos/...), a later pack's over an earlier one's."""
+        disc = os.path.join(self.tmp, "disc1", "Media", "UI")
+        os.makedirs(disc)
+        os.replace(self.textures("disc.zip", ["UI4/Logos/Manufacturer_Logos_LG/L_MAN_Renault_Logo.xds"]),
+                   os.path.join(disc, "Textures.zip"))
+        pack1 = self.textures("31_pri_65.zip", [
+            "media/UI/Textures/UI4/Logos/Manufacturer_Logos_SM/L_MAN_MG_Logo.xds",
+            "media/UI/Textures/UI4/Logos/Manufacturer_Logos_LG/L_MAN_POR_Logo.xds",
+            "media/UI/Textures/Thumbnails/Thumbnail_1586.xds"])
+        pack2 = self.textures("37_pri_65.zip", ["media/UI/Textures/UI4/Logos/Manufacturer_Logos_SM/L_MAN_MG_Logo.xds"])
+        fm4 = fm4_cars.FM4.__new__(fm4_cars.FM4)
+        fm4.media, fm4.packs = os.path.join(self.tmp, "disc1", "Media"), [(pack1, None), (pack2, None)]
+        self.assertEqual(sorted(fm4.logos()), [
+            "ui4/logos/manufacturer_logos_lg/l_man_por_logo.xds",
+            "ui4/logos/manufacturer_logos_lg/l_man_renault_logo.xds",
+            "ui4/logos/manufacturer_logos_sm/l_man_mg_logo.xds"])
+        conv = fm4_cars.Converter.__new__(fm4_cars.Converter)
+        conv.out, conv.pack = os.path.join(self.tmp, "out"), None
+        conv.fm4, conv.fh1 = fm4, mock.Mock(logos=lambda: set())
+        report = {}
+        conv.logos([{"IconPath": LOGO % ("I", "MG")}, {"IconPath": LOGO % ("I", "POR")}], report)
+        self.assertEqual(sorted(report["logos"]), [
+            "UI4/Logos/Manufacturer_Logos_LG/L_MAN_POR_Logo.xds",
+            "UI4/Logos/Manufacturer_Logos_SM/L_MAN_MG_Logo.xds"])
+        got = os.path.join(conv.out, "media", "ui", "textures", "UI4", "Logos", "Manufacturer_Logos_SM",
+                           "L_MAN_MG_Logo.xds")
+        with open(got, "rb") as f:
+            self.assertEqual(f.read(), b"37_pri_65.zipmedia/UI/Textures/UI4/Logos/Manufacturer_Logos_SM/L_MAN_MG_Logo.xds")
 
 
 ET = (b'<Engine>\r\n  <VolumeAdjustments EngineVolume="0.800000" TransmissionVolume="0.600000"/>\r\n'
