@@ -99,7 +99,9 @@ Works:
 
 - Free driving on the circuit: its buildings, stands, crowds, road and kerbs, and its collision
   (walls and the ground). A circuit imported with an earlier launcher loads its scenery only a
-  short way ahead of the car, so at speed it appears as you drive: import it again.
+  short way ahead of the car, so at speed it appears as you drive: import it again. Trackside
+  scenery (trees, fences, signs) is drawn from about 150 to 300 m ahead of the car; on a long
+  straight at high speed you can see it appear.
 - Timed laps with sectors, the best-lap ghost and the laps page.
 - The circuit's road on the minimap and on the map (the Back button), from FM4's AI line,
   drawn in white all the way round from the first metre. (FH1 draws a road you have not
