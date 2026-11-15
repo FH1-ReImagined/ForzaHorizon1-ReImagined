@@ -7,9 +7,11 @@
 // cars the game counts as installed and owned.
 //
 // LogDlcPackages (always, at start) lists the DLC packages in the user data folder by their
-// offers (Media/<offer>.puboffer: 1600 the Rally Expansion Pack, 2700 the 1000 Club), and warns
-// when a Title Update 4 build has no Rally Expansion Pack: Horizon Rally then says "Xbox LIVE
-// Marketplace error: Failed to download required Xbox LIVE Marketplace data" (#79).
+// offers (Media/<offer>.puboffer: 1600 the Rally Expansion Pack, 2700 the 1000 Club), then one
+// line per package with its folder, offers and the display name of its header, so a log names
+// a package that is not one of the game's DLC (a fan-made pack hung loads in #66, #76, #115;
+// #771), and warns when a Title Update 4 build has no Rally Expansion Pack: Horizon Rally then
+// says "Xbox LIVE Marketplace error: Failed to download required Xbox LIVE Marketplace data" (#79).
 
 #include "../kernel/live.h"
 #include "../platform/guest_addr.h"
@@ -22,6 +24,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <mutex>
@@ -76,6 +79,28 @@ extern "C" REX_FUNC(sub_824F1A80) {
 
 namespace forza {
 
+namespace {
+
+// The display name in a package's header file (Headers/00000002/<name>.header, written by the
+// launcher, tools/install_dlc.py header_bytes: UTF-16BE at +8, 128 characters). Characters
+// outside ASCII are written as '?': it is only for the log.
+std::string HeaderDisplayName(const std::filesystem::path& header) {
+  std::FILE* f = rex::filesystem::OpenFile(header, "rb");
+  if (!f) return {};
+  unsigned char data[8 + 256] = {};
+  const size_t got = std::fread(data, 1, sizeof(data), f);
+  std::fclose(f);
+  std::string name;
+  for (size_t i = 8; i + 1 < got; i += 2) {
+    const unsigned c = (unsigned(data[i]) << 8) | data[i + 1];
+    if (!c) break;
+    name += (c >= 0x20 && c < 0x7F) ? char(c) : '?';
+  }
+  return name;
+}
+
+}  // namespace
+
 void LogDlcPackages(const std::filesystem::path& user_data_root) {
   namespace fs = std::filesystem;
   const fs::path title = user_data_root / "0000000000000000" / "4D5309C9";
@@ -87,6 +112,7 @@ void LogDlcPackages(const std::filesystem::path& user_data_root) {
   std::error_code ec;
   std::set<int> offers;
   std::vector<std::string> bare;
+  std::vector<std::string> lines;  // one per package: offers, folder, display name
   int packages = 0;
   for (const auto& pkg : fs::directory_iterator(dir, ec)) {
     std::error_code e2;
@@ -94,9 +120,10 @@ void LogDlcPackages(const std::filesystem::path& user_data_root) {
     const std::string name = pkg.path().filename().string();
     if (name.size() > 5 && name.compare(name.size() - 5, 5, ".part") == 0) continue;
     ++packages;
-    if (!fs::is_regular_file(title / "Headers" / "00000002" / (name + ".header"), e2)) {
-      bare.push_back(name);
-    }
+    const fs::path header = title / "Headers" / "00000002" / (name + ".header");
+    const bool has_header = fs::is_regular_file(header, e2);
+    if (!has_header) bare.push_back(name);
+    std::string own;  // this package's offers
     for (const auto& sub : fs::directory_iterator(pkg.path(), e2)) {
       if (lower(sub.path().filename().string()) != "media") continue;
       std::error_code e3;
@@ -104,10 +131,14 @@ void LogDlcPackages(const std::filesystem::path& user_data_root) {
         const std::string fname = lower(f.path().filename().string());
         if (fname.size() > 9 && fname.compare(fname.size() - 9, 9, ".puboffer") == 0) {
           offers.insert(std::atoi(fname.c_str()));
+          own += (own.empty() ? "" : ",") + std::to_string(std::atoi(fname.c_str()));
         }
       }
     }
+    lines.push_back("offer " + (own.empty() ? std::string("none") : own) + " " + name + " \"" +
+                    (has_header ? HeaderDisplayName(header) : std::string()) + "\"");
   }
+  std::sort(lines.begin(), lines.end());
   {
     std::set<uint32_t> installed;
     for (int o : offers) {
@@ -121,6 +152,7 @@ void LogDlcPackages(const std::filesystem::path& user_data_root) {
     std::string list;
     for (int o : offers) list += (list.empty() ? "" : " ") + std::to_string(o);
     REXLOG_INFO("DLC: {} packages in {}, offers {}", packages, rex::path_to_utf8(dir), list);
+    for (const std::string& line : lines) REXLOG_INFO("DLC:   {}", line);
     if (!bare.empty()) {
       REXLOG_WARN("DLC: {} package(s) without a header in Headers\\00000002 (first {})", bare.size(),
                   bare.front());

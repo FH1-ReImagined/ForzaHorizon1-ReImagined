@@ -294,12 +294,13 @@ namespace {
 // out with (u64). A page whose words have that shape (a guest stack, r1 inside it) is listed
 // with the call chain of its saved stack; the fibers the threads are running now
 // (KTHREAD +0x164) are left out, the thread lines show them. A fiber that never ran still
-// has its first frame (stack top - 0x50) and is counted, not listed.
+// has its first frame (stack top - 0x50) and is counted, not listed; so is a page whose saved
+// stack has no guest call chain (a fiber context left by a thread that has exited).
 void LogWaitingFibers(const std::set<uint32_t>& running) {
   auto* kernel = rex::system::kernel_state();
   if (!kernel || !kernel->memory()) return;
   uint8_t* base = kernel->memory()->virtual_membase();
-  int listed = 0, fresh = 0;
+  int listed = 0, fresh = 0, stale = 0;
   for (uint32_t page = 0x30000000; page < 0x40000000 && listed < 64; page += 0x1000) {
     if (!GuestReadable(page) || !GuestReadable(page + 0x34)) continue;
     const uint32_t alloc_base = Load32(forza::GuestPtr(base, page + 0x04));
@@ -317,11 +318,17 @@ void LogWaitingFibers(const std::set<uint32_t>& running) {
       ++fresh;
       continue;
     }
+    const std::string chain = GuestChain(base, sp, 16);
+    if (chain.empty()) {
+      ++stale;
+      continue;
+    }
     ++listed;
     REXLOG_INFO("  fiber {:08X} (not running) stack {:08X}-{:08X} sp {:08X} chain{}", page,
-                stack_limit, stack_base, sp, GuestChain(base, sp, 16));
+                stack_limit, stack_base, sp, chain);
   }
   if (fresh) REXLOG_INFO("  {} more fiber(s) not started yet", fresh);
+  if (stale) REXLOG_INFO("  {} fiber page(s) with no call chain", stale);
 }
 
 }  // namespace
