@@ -89,10 +89,12 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # also in a rally stage, whose frames start with a draw to the front buffer (#879).
 # and 0640: the list trace, a study build option (REXGLUE_FH1_LIST_TRACE, off: the plugin is
 # unchanged) that times the command lists the game runs (native renderer M4).
+# and 1100: a device loss also says what was recorded for the unfinished draw before its draw
+# command and whether the GPU finished that work, with the draw's render pass (#913).
 # A reviewed full commit can be pinned before a maintainer publishes a tag.
 # When a tag is supplied, its target must still match this immutable commit.
 REIGLUE_TAG=
-REIGLUE_COMMIT=18fa1cc468d4d8b3a2ee5aa8f0480bae68e734b9  # ReIGlue main: 0530, 0570-0640, 0700, 0800, 0900, 1000, 1010 (#65)
+REIGLUE_COMMIT=e4702f243617ff9beb82dd0242d05a0df53c7255  # ReIGlue main (#65) and 1100 (#913, ReIGlue #67)
 REIGLUE_URL="${REIGLUE_URL:-https://github.com/FH1-ReImagined/ReIGlue}"
 NIGHTLY="${REXSDK_NIGHTLY:-$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64}"
 SRC="${REXSDK_SRC:-$HOME/rexglue-sdk-src-forza/sdk}"
