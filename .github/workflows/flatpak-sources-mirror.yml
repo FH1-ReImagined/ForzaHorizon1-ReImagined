@@ -1,0 +1,76 @@
+# Keeps the project's GitHub copy of every file the Flatpak manifest downloads
+# (flatpak/io.github.dyotson.ForzaHorizon1ReImagined.yml: MIT Kerberos's tarball from kerberos.org,
+# the Python wheels from files.pythonhosted.org). They live in the pre-release ci-flatpak-sources,
+# which is never the latest release, one file per source under the file name of its url. Each source
+# in the manifest names its copy there as its mirror-urls entry, so release.yml's flatpak job still
+# builds when a source's own host is down: flatpak-builder tries the url first, the copy only when
+# that fails, and checks the manifest's sha256 either way.
+#
+# Every file is downloaded from the url the manifest names and checked against the sha256 it pins
+# before it is added. Files are only ever added: a file the release already holds with other bytes
+# stops the run and is named in its log.
+#
+# On every change to the manifest on main (a new or updated source), weekly, and by hand. A run
+# whose release already holds every source doesn't download anything.
+name: flatpak-sources-mirror
+
+on:
+  push:
+    branches: [main, ci/flatpak-source-mirror]
+    paths:
+      - flatpak/io.github.dyotson.ForzaHorizon1ReImagined.yml
+      - launcher/packaging/flatpak_sources_mirror.py
+      - .github/workflows/flatpak-sources-mirror.yml
+  workflow_dispatch:
+  schedule:
+    - cron: "41 6 * * 3"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flatpak-sources-mirror
+  cancel-in-progress: false
+
+env:
+  TAG: ci-flatpak-sources
+
+jobs:
+  mirror:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      # Creates the pre-release and uploads its files; nothing else in the repository has this.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Test the mirror helper and check the manifest
+        run: |
+          python3 -m unittest launcher/test_flatpak_sources_mirror.py
+          python3 launcher/packaging/flatpak_sources_mirror.py check
+      - id: status
+        name: Does the release already hold every source?
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 0: complete, 10: files to add; anything else (a release file that differs) fails here.
+          status=0
+          python3 launcher/packaging/flatpak_sources_mirror.py status "$GITHUB_REPOSITORY" "$TAG" || status=$?
+          case "$status" in
+            0) echo "complete=true" >> "$GITHUB_OUTPUT" ;;
+            10) ;;
+            *) exit "$status" ;;
+          esac
+      - if: steps.status.outputs.complete != 'true'
+        name: Download the sources, checked against the manifest's sha256
+        run: python3 launcher/packaging/flatpak_sources_mirror.py fetch "$RUNNER_TEMP/sources"
+      - if: steps.status.outputs.complete != 'true'
+        name: Add them to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # A new release is tagged on the default branch, whichever branch ran this.
+        run: |
+          python3 launcher/packaging/flatpak_sources_mirror.py upload "$RUNNER_TEMP/sources" \
+            "$GITHUB_REPOSITORY" "$TAG" --target "${{ github.event.repository.default_branch }}"

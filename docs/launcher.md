@@ -1464,6 +1464,19 @@ Files: `flatpak/` (manifest `io.github.dyotson.ForzaHorizon1ReImagined.yml`, `.d
 `flatpak install --user flathub org.flatpak.Builder org.freedesktop.Sdk//26.08
 org.freedesktop.Sdk.Extension.llvm22//26.08`; big files go to `~/.cache/forza-flatpak/`).
 
+Downloaded sources: MIT Kerberos's tarball (kerberos.org) and the pinned wheels (PySide6
+Essentials/Addons/WebEngine, shiboken6, PySDL2, pysdl2-dll, certifi; files.pythonhosted.org). Each pins
+its sha256 and has one `mirror-urls` entry, its copy in this repository's pre-release
+`ci-flatpak-sources` (never the latest release). flatpak-builder tries the url first and the copy only
+when that fails (a host down or timing out, as kerberos.org did on 2026-11-15), and checks the same sha256
+either way. `flatpak-sources-mirror.yml` keeps the release: on every manifest change on main, weekly
+and by hand it downloads each source from its own url, checks it against the manifest's sha256 and adds
+what the release lacks; it never replaces a file with other bytes, and files older manifests named
+stay. **Adding or updating a source:** give it the `mirror-urls` line too;
+`python3 launcher/packaging/flatpak_sources_mirror.py check` (run by the launcher tests,
+`launcher/test_flatpak_sources_mirror.py`) prints the exact line a source lacks. Until the change is on
+main and the workflow has run, that source has no copy yet and its own url is the only one.
+
 Design: the app's runtime is `org.freedesktop.Sdk//26.08` itself (glibc 2.44, g++ 16 headers, cmake 4.4,
 ninja, python 3.14 are there at run time), and `org.freedesktop.Sdk.Extension.llvm22` (clang 22.1.8,
 accepted: the launcher needs >= 21) is declared as the app's extension with `autodownload`. On SteamOS
