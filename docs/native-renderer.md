@@ -1007,7 +1007,8 @@ has any of it:
   the call names by physical address. The first time a command buffer is seen, its header is
   classified and a model list is converted (`native_list.h`) from a copy, with its flags in the
   files' form; every later call compares the masks and flags with that first look and the live
-  list's key with the template's. The fixup dispatcher (`sub_82D19210`), `sub_82D10908` and
+  list's key with the template's. The fixup dispatcher (`sub_82D19210`, whose hook is
+  `native_lists.cpp`'s: it calls the trace's `FORZA_LIST_TRACE_FIXUP`), `sub_82D10908` and
   `sub_82CE9258` are hooked to count their calls by type or caller, and D3D's command buffer clone
   (`sub_82AA8220`) and memcpy (`sub_82B3A7E0`) to tell who wrote a command buffer that is not a
   file list when it first runs. It costs every RunCommandBuffer call (a lookup and a hash of the
