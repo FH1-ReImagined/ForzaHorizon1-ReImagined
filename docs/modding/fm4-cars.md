@@ -346,7 +346,8 @@ table renumbers takes its new id there too: the Cayman R's FM4 1541 is FH1's Exp
 FM4's level-4 tire is its drag tire (compound 9). FH1's own cars have none: their tires stop at
 level 3, apart from the rally tire at level 5. Forza Imported DLC Maker leaves it out too, and so
 the import leaves it out of every car (`Database._drop_drag_tires`), with or without the Rally
-Expansion. A drag tire for every car may come back later as an option of its own.
+Expansion. **Mods → Drag tires** gives every car, the imported ones too, a drag tire of its own
+instead ([drag-tires.md](drag-tires.md)).
 
 ### Strings
 
@@ -699,8 +700,6 @@ Windows, the 0.3.7 release runtime, a copy of a save, offline.
 - The 2011 Leaf, an electric car without an engine row ([above](#fh1s-traffic-cars-841)).
 - The rest of #924: the launcher moving a save's cars and parts to the ids the table gives them
   (`renumbered`), and FH2 and Fast & Furious as sources to import from.
-- A drag tire for every car, as an option. FM4's own drag tire is left out
-  ([above](#rally-parts-924)).
 
 ## Credits
 
