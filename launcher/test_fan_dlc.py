@@ -232,6 +232,17 @@ class MoveOut(unittest.TestCase):
         self.assert_in_place()
         self.assertFalse((dlc_root(self.home) / fan_dlc.MOVED).exists())
 
+    def test_no_write_access_says_so(self):   # a read-only folder (EACCES), or on Windows a file held open
+        with patch.object(fan_dlc.os, "rename", side_effect=PermissionError(errno.EACCES, "Permission denied")):
+            with self.assertRaises(fan_dlc.MoveError) as e:
+                fan_dlc.move_out(self.home, FAN)
+        msg = str(e.exception)
+        self.assertIn("Nothing was moved", msg)
+        self.assertIn("may not be allowed to change", msg)
+        self.assertIn("write to it", msg)
+        self.assert_in_place()
+        self.assertFalse((dlc_root(self.home) / fan_dlc.MOVED).exists())
+
     def test_a_header_named_in_another_case_moves_with_it(self):
         other = self.src_hdr.with_name(FAN.lower() + ".HEADER")
         self.src_hdr.rename(other)
@@ -391,6 +402,26 @@ class CarryDlc(unittest.TestCase):
         fan_dlc.move_out(new, UNKNOWN)
         self.assertEqual(datafolder.carry_dlc(old, new), 0)
         self.assertEqual(datafolder.dlc_packages(new), set(OFFICIAL))
+
+
+    def test_a_moved_out_folder_without_packages_does_not_hide_the_others(self):
+        t = tempfile.TemporaryDirectory()
+        self.addCleanup(t.cleanup)
+        old, new = Path(t.name) / "Documents-forza", Path(t.name) / "data"
+        add_official(old)
+        add_fan(old)
+        add_official(new)
+        add_fan(new)
+        root = fan_dlc.move_out(new, FAN)
+        root.rename(dlc_root(new) / (fan_dlc.MOVED + " (2)"))
+        (dlc_root(new) / fan_dlc.MOVED / "Headers").mkdir(parents=True)   # only Headers, no 00000002
+        (dlc_root(new) / (fan_dlc.MOVED + " (3)")).write_bytes(b"")      # a file of that name
+        listing = Path.iterdir
+        for backwards in (False, True):   # whichever the folder listing gives first
+            with patch.object(Path, "iterdir", lambda d: iter(sorted(listing(d), reverse=backwards))):
+                self.assertEqual(datafolder.dlc_moved_out(new), {FAN.upper()})
+                self.assertEqual(datafolder.carry_dlc(old, new), 0)
+            self.assertNotIn(FAN, datafolder.dlc_packages(new))
 
 
 class InstallTime(unittest.TestCase):

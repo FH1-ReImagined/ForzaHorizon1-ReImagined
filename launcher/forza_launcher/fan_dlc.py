@@ -198,6 +198,10 @@ def _why(e: OSError, src_dir: Path, dst_dir: Path) -> str:
     if e.errno == errno.EXDEV:
         return (f": {src_dir} is on another drive than {dst_dir} ({e}). Nothing was moved: move it out of "
                 f"{src_dir} by hand.")
+    if e.errno in (errno.EACCES, errno.EPERM):   # no write access; on Windows also a file held open
+        return (f" ({e}). Nothing was moved: your user may not be allowed to change {src_dir} or {dst_dir}, "
+                "or a program has a file in it open. Close the game and any program using that folder, check "
+                "that you can write to it, and try again.")
     return f" ({e}). Nothing was moved: close the game if it is running and try again."
 
 

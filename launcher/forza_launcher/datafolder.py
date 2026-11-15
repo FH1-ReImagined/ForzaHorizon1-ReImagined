@@ -502,11 +502,15 @@ def dlc_moved_out(root) -> set:
     base = Path(root) / DLC_DIR
     out = set()
     try:
-        for d in base.iterdir():
-            if d.name == DLC_MOVED_OUT or (d.name.startswith(DLC_MOVED_OUT + " (") and d.name.endswith(")")):
-                out |= {p.name.upper() for p in (d / "00000002").iterdir() if p.is_dir()}
+        folders = [d for d in base.iterdir()
+                   if d.name == DLC_MOVED_OUT or (d.name.startswith(DLC_MOVED_OUT + " (") and d.name.endswith(")"))]
     except OSError:
-        pass
+        return out
+    for d in folders:   # one that is empty, a file or unreadable does not hide the others
+        try:
+            out |= {p.name.upper() for p in (d / "00000002").iterdir() if p.is_dir()}
+        except OSError:
+            pass
     return out
 
 
