@@ -309,7 +309,7 @@ gives FM4 cars, measured there on the Rally Expansion's cars:
 
 | Part | Rows | Made from |
 |---|---|---|
-| Rally Tire Compound | `List_UpgradeTireCompound`, level 5, compound 9, 10,000 Cr, key car id × 1000 + 5 | the car's level-3 tyre with those values. FM4's level-4 drag tyre is compound 9 too, and FH1 has no level-4 tyre: the rally tyre takes its place |
+| Rally Tire Compound | `List_UpgradeTireCompound`, level 5, compound 9, 10,000 Cr, key car id × 1000 + 5 | the car's level-3 tyre with those values |
 | rally suspension | `List_UpgradeSpringDamper` level 4 (car id × 1000 + 4), with its own `List_SpringDamperPhysics` rows (car id × 1000 + 4 and + 104) | the level-3 suspension, with 0.3 of its mass. The spring rate is the level-1 spring's × 0.649 (without one, the level-3 spring's × 0.2914 front, × 0.2354 rear). The dampers are 0.1489 (bump) and 0.0851 (rebound) of the spring rate, the bump stop 80. The ride height is the stock body's × 1.166 (below) |
 | rally transmission | `List_UpgradeDrivetrainTransmission` level 4, key drivetrain id × 1000 + 4 | the level-3 transmission with a final drive of 4.4 and gear ratios 3.3 to 0.825, for each of the cars' drivetrains that FH1 lacks. A drivetrain FH1 has keeps FH1's rows, which have their own |
 
@@ -334,8 +334,19 @@ them in 100).
 Some cars get no rally parts:
 - An electric car or a hybrid (one with a motor row) gets none, as in Forza Imported DLC Maker:
   the Tesla Roadster, the CR-Z, the Prius, the CT200h and the Volt.
-- Without the Rally Expansion no car gets them, and the cars keep FM4's drag tyre as before. The
-  import says so: install the expansion and import again.
+- Without the Rally Expansion no car gets them. The import says so: install the expansion and
+  import again.
+
+The game's car view (`Restrictions_Data_Car`, `src/platform/car_view.h`) decides which cars can
+rally. A car counts when it has a level-4 springs row, a level-5 tyre row and a level-4
+transmission on one of its drivetrains (`CouldRally`), and it is a rally car when all three are
+stock (`IsRally`). The view finds the rows by the car's `ModelId`, which is its id. A car the id
+table renumbers takes its new id there too: the Cayman R's FM4 1541 is FH1's Explorer's.
+
+FM4's level-4 tyre is its drag tyre (compound 9). FH1's own cars have none: their tyres stop at
+level 3, apart from the rally tyre at level 5. Forza Imported DLC Maker leaves it out too, and so
+the import leaves it out of every car (`Database._drop_drag_tyres`), with or without the Rally
+Expansion. A drag tyre for every car may come back later as an option of its own.
 
 ### Strings
 
@@ -688,8 +699,8 @@ Windows, the 0.3.7 release runtime, a copy of a save, offline.
 - The 2011 Leaf, an electric car without an engine row ([above](#fh1s-traffic-cars-841)).
 - The rest of #924: the launcher moving a save's cars and parts to the ids the table gives them
   (`renumbered`), and FH2 and Fast & Furious as sources to import from.
-- Without the Rally Expansion the cars keep FM4's level-4 drag tyre, which FH1's own cars do not
-  have (Forza Imported DLC Maker always leaves it out).
+- A drag tyre for every car, as an option. FM4's own drag tyre is left out
+  ([above](#rally-parts-924)).
 
 ## Credits
 

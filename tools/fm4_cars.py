@@ -1458,6 +1458,16 @@ class Database:
         self._renumber_cars()
         self._move_parts()
         self._drop_unnamed()
+        self._drop_drag_tyres()
+
+    def _drop_drag_tyres(self):
+        """FM4's level-4 tyre is its drag tyre (compound 9). FH1's own cars have none: their tyres
+        stop at level 3 but for the rally tyre (level 5, compound 9; rally_parts), and Forza Imported
+        DLC Maker leaves it out of every car too. A drag tyre for every car may come back later as
+        an option of its own (#924). A stock tyre is kept (no FM4 car has one at level 4)."""
+        tyres = self.rows.get("List_UpgradeTireCompound", {})
+        for key in [k for k, r in tyres.items() if (r.get("Level") or 0) >= 4 and not r.get("IsStock")]:
+            del tyres[key]
 
     def _drop_unnamed(self):
         """A torque curve or aero row copied under a new id (_renumber_cars, _move_part) goes from
@@ -1488,15 +1498,15 @@ class Database:
     def rally_parts(self, cars):
         """Rally parts for the import's cars (their ids in the import, after collect; #924), as FH1's
         own cars and the Rally Expansion's have them, and as Forza Imported DLC Maker gives FM4 cars:
-        - rally tyres, level 5 and compound 9 (RALLY_TYRE, from the car's highest other tyre), in
-          place of FM4's level-4 drag tyres, which are compound 9 too (FH1 has no level-4 tyre);
+        - rally tyres, level 5 and compound 9 (RALLY_TYRE, from the car's highest tyre: FM4's
+          level-4 drag tyres, compound 9 too, are gone, _drop_drag_tyres);
         - a level-4 rally suspension: the level-3 one with RALLY_MASS of its mass, its springs,
           dampers and ride height scaled from the car's own (the level-1 springs, the stock body's
           ride height) the way the Rally Expansion's are;
         - a level-4 rally gearbox (RALLY_GEARBOX) for each of their drivetrains that FH1 lacks (one
           FH1 has keeps FH1's rows, which have theirs).
-        An electric car or a hybrid (a motor row) gets none, nor a car whose stock tyre is FM4's drag
-        tyre; a part whose key FH1 or the import already uses is not added. Returns the counts
+        An electric car or a hybrid (a motor row) gets none, nor a part a car has at that level
+        already; a part whose key FH1 or the import already uses is not added. Returns the counts
         ("cars": the cars that got tyres or a suspension)."""
         rows = self.rows
         done = {"tyres": 0, "suspension": 0, "gearbox": 0}
@@ -1515,15 +1525,10 @@ class Database:
         mine = [c for c in cars if c not in motor]
         tyres = rows.setdefault("List_UpgradeTireCompound", {})
         for car in mine:
-            own = of("List_UpgradeTireCompound", "Ordinal", car)
-            drag = [r for r in own if level(r) >= 4]
-            rest = sorted((r for r in own if level(r) < 4), key=level)
+            own = sorted(of("List_UpgradeTireCompound", "Ordinal", car), key=level)
             key = car * 1000 + RALLY_TYRE["Level"]
-            if rest and not any(r.get("IsStock") for r in drag) and (key in {r.get("Id") for r in drag}
-                                                                    or free("List_UpgradeTireCompound", key)):
-                for r in drag:
-                    tyres.pop(r["Id"], None)
-                tyres[key] = dict(rest[-1], Id=key, IsStock=0, **RALLY_TYRE)
+            if own and level(own[-1]) < 4 and free("List_UpgradeTireCompound", key):
+                tyres[key] = dict(own[-1], Id=key, IsStock=0, **RALLY_TYRE)
                 done["tyres"] += 1
                 got.add(car)
         springs = rows.setdefault("List_UpgradeSpringDamper", {})
