@@ -75,6 +75,81 @@ class ParseTests(unittest.TestCase):
         text = MANIFEST.replace("type: archive", "type: git")
         self.assertIn("git source", mirror.problems(mirror.parse_sources(text))[0])
 
+    def test_a_source_whatever_key_it_starts_with(self):
+        # url first, then sha256 first: still sources, read the same as written type first.
+        for first in ("url", "sha256"):
+            with self.subTest(first=first):
+                text = self.reordered(first)
+                sources = mirror.parse_sources(text)
+                self.assertEqual([s["url"] for s in sources],
+                                 ["https://example.org/dist/one-1.0.tar.gz",
+                                  "https://example.org/p/two-2.0-py3-none-any.whl"])
+                self.assertEqual(sources[0]["type"], "archive")
+                self.assertEqual(sources[0]["mirror-urls"], [BASE + "one-1.0.tar.gz"])
+                self.assertEqual(mirror.problems(sources), [])
+                self.assert_reads_like_yaml(text)
+
+    def test_names_a_source_without_its_mirror_whatever_key_it_starts_with(self):
+        for first in ("type", "url", "sha256"):
+            with self.subTest(first=first):
+                text = self.reordered(first).replace(f"        mirror-urls:\n          - {BASE}one-1.0.tar.gz\n", "")
+                self.assertNotIn(f"{BASE}one-1.0", text)
+                found = mirror.problems(mirror.parse_sources(text))
+                self.assertEqual(len(found), 1, found)
+                self.assertIn("(https://example.org/dist/one-1.0.tar.gz): needs", found[0])
+                self.assertIn(f"- {BASE}one-1.0.tar.gz", found[0])
+
+    def test_lists_at_the_keys_indent_and_nested_mappings(self):
+        text = MANIFEST.replace(f"        mirror-urls:\n          - {BASE}one-1.0.tar.gz\n",
+                                f"        mirror-urls:\n        - {BASE}one-1.0.tar.gz\n"
+                                "        x-checker-data:\n          type: anitya\n"
+                                "          url: https://example.org/releases.json\n")
+        sources = mirror.parse_sources(text)
+        self.assertEqual(sources[0]["mirror-urls"], [BASE + "one-1.0.tar.gz"])
+        self.assertEqual(mirror.problems(sources), [])
+        self.assert_reads_like_yaml(text)
+
+    def test_a_url_it_cant_place_stops_the_run(self):
+        for text in (MANIFEST.replace("      - type: dir\n", "      - {type: file, url: https://example.org/x.whl}\n      - type: dir\n"),
+                     MANIFEST.replace("  - name: two\n", "  - name: two\n    url: https://example.org/x.whl\n"),
+                     MANIFEST.replace("        url: https://example.org/dist", "         url: https://example.org/dist")):
+            with self.subTest(text=text):
+                with self.assertRaises(SystemExit):
+                    mirror.parse_sources(text)
+
+    @staticmethod
+    def reordered(first):
+        """MANIFEST with each downloaded source's `first` key moved to the start of its item."""
+        lines, out = MANIFEST.splitlines(), []
+        i = 0
+        while i < len(lines):
+            if lines[i].startswith("      - type: ") and i + 1 < len(lines) and "url:" in lines[i + 1]:
+                block = [lines[i][8:]]
+                i += 1
+                while i < len(lines) and lines[i].startswith("        "):
+                    block.append(lines[i][8:])
+                    i += 1
+                keys = [n for n, l in enumerate(block) if not l.startswith(" ")]
+                at = next(n for n in keys if block[n].startswith(first + ":"))
+                end = next((n for n in keys if n > at), len(block))
+                block = block[at:end] + block[:at] + block[end:]
+                out += ["      - " + block[0]] + ["        " + l for l in block[1:]]
+            else:
+                out.append(lines[i])
+                i += 1
+        return "\n".join(out) + "\n"
+
+    def assert_reads_like_yaml(self, text):
+        try:
+            import yaml
+        except ImportError:
+            return
+        data = yaml.safe_load(text)
+        expected = [(s["type"], s["url"], s["sha256"], s.get("mirror-urls", []))
+                    for module in data["modules"] for s in module.get("sources", []) if "url" in s]
+        self.assertEqual([(s["type"], s["url"], s["sha256"], s["mirror-urls"])
+                          for s in mirror.parse_sources(text)], expected)
+
     def test_the_real_manifest_passes(self):
         sources = mirror.parse_sources(mirror.MANIFEST.read_text(encoding="utf-8"))
         self.assertEqual(mirror.problems(sources), [])

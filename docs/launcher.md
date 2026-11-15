@@ -1470,11 +1470,12 @@ its sha256 and has one `mirror-urls` entry, its copy in this repository's pre-re
 `ci-flatpak-sources` (never the latest release). flatpak-builder tries the url first and the copy only
 when that fails (a host down or timing out, as kerberos.org did on 2026-11-15), and checks the same sha256
 either way. `flatpak-sources-mirror.yml` keeps the release: on every manifest change on main, weekly
-and by hand it downloads each source from its own url, checks it against the manifest's sha256 and adds
+and by hand (from main only) it downloads each source from its own url, checks it against the manifest's sha256 and adds
 what the release lacks; it never replaces a file with other bytes, and files older manifests named
 stay. **Adding or updating a source:** give it the `mirror-urls` line too;
 `python3 launcher/packaging/flatpak_sources_mirror.py check` (run by the launcher tests,
-`launcher/test_flatpak_sources_mirror.py`) prints the exact line a source lacks. Until the change is on
+`launcher/test_flatpak_sources_mirror.py`) prints the exact line a source lacks, whatever key its list item starts with, and stops on a
+`url:` line it can't read as a source's own. Until the change is on
 main and the workflow has run, that source has no copy yet and its own url is the only one.
 
 Design: the app's runtime is `org.freedesktop.Sdk//26.08` itself (glibc 2.44, g++ 16 headers, cmake 4.4,

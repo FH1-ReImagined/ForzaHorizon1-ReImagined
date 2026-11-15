@@ -59,41 +59,69 @@ Public License 2.0.
 
 def parse_sources(text):
     """[{"type", "url", "sha256", "mirror-urls", "line"}] for each source of the manifest that has
-    a url. Reads the manifest's own style of YAML (block lists, "key: value", flow lists in [])."""
-    sources, current, key_indent, list_key = [], None, None, None
+    a url. Reads the manifest's own style of YAML (block lists, "key: value", flow lists in []).
+
+    Every item of every "sources:" list is a source, whatever key it starts with. A "url:" line
+    anywhere in the file that isn't a source's own url stops the run, so a source the parser
+    can't read is never skipped without a word."""
+    sources, current, list_key = [], None, None
+    sources_indent = item_indent = key_indent = None
+    own_url_lines, nested_lines = set(), set()
     for number, raw in enumerate(text.splitlines(), 1):
         line = raw.split(" #", 1)[0].rstrip() if not raw.lstrip().startswith("#") else ""
         if not line.strip():
             continue
         indent = len(line) - len(line.lstrip())
         stripped = line.strip()
-        start = re.fullmatch(r"- type: *(\S+)", stripped)
-        if start:
-            current = {"type": start.group(1), "line": number, "mirror-urls": []}
-            sources.append(current)
-            key_indent, list_key = indent + 2, None
+        if sources_indent is not None and (
+                indent < sources_indent or (indent == sources_indent and not stripped.startswith("- "))):
+            sources_indent = item_indent = key_indent = current = list_key = None
+        if sources_indent is None:
+            if re.fullmatch(r"(- +)?sources:", stripped):
+                sources_indent = indent + (len(stripped) - len(stripped.lstrip("- ")))
             continue
+        if stripped.startswith("- ") and (item_indent is None or indent == item_indent):
+            item_indent, list_key = indent, None
+            body = stripped[2:].strip()
+            key_indent = indent + (len(stripped) - len(body))
+            current = None
+            if body.startswith("{"):
+                raise SystemExit(f"line {number}: write the source as a block mapping, one key a line")
+            if not re.fullmatch(r"[A-Za-z0-9_-]+:.*", body):
+                continue  # a string item: a separate file of sources, which this check can't see into
+            current = {"line": number, "mirror-urls": []}
+            sources.append(current)
+            stripped, indent = body, key_indent
         if current is None:
             continue
-        if indent < key_indent or (indent == key_indent - 2 and stripped.startswith("- ")):
-            current, list_key = None, None
-            continue
-        if list_key and stripped.startswith("- ") and indent >= key_indent:
-            current[list_key].append(stripped[2:].strip().strip("'\""))
+        if list_key and (indent > key_indent or (indent == key_indent and stripped.startswith("- "))):
+            # a list item of the key above (mirror-urls), or a line of a nested mapping
+            # (x-checker-data and the like) that this check doesn't need
+            nested_lines.add(number)
+            if list_key and stripped.startswith("- "):
+                current[list_key].append(stripped[2:].strip().strip("'\""))
             continue
         match = re.fullmatch(r"([A-Za-z0-9_-]+): *(.*)", stripped)
-        if match and indent == key_indent:
-            key, value = match.group(1), match.group(2).strip()
-            list_key = None
-            if key == "mirror-urls":
-                if value.startswith("[") and value.endswith("]"):
-                    current[key] = [v.strip().strip("'\"") for v in value[1:-1].split(",") if v.strip()]
-                elif value:
-                    raise SystemExit(f"line {number}: mirror-urls must be a list")
-                else:
-                    list_key = key
-            else:
-                current[key] = value.strip("'\"")
+        if not match or indent != key_indent:
+            raise SystemExit(f"line {number}: can't read this line of a source")
+        key, value = match.group(1), match.group(2).strip()
+        list_key = None
+        if key == "mirror-urls" and value and not (value.startswith("[") and value.endswith("]")):
+            raise SystemExit(f"line {number}: mirror-urls must be a list")
+        if key == "url":
+            if not value:
+                raise SystemExit(f"line {number}: write the url on the same line as url:")
+            own_url_lines.add(number)
+        if value.startswith("[") and value.endswith("]"):
+            current[key] = [v.strip().strip("'\"") for v in value[1:-1].split(",") if v.strip()]
+        elif value:
+            current[key] = value.strip("'\"")
+        else:
+            current[key], list_key = [], key
+    for number, raw in enumerate(text.splitlines(), 1):
+        if (re.match(r" *(- +)?url:", raw) and number not in own_url_lines
+                and number not in nested_lines):
+            raise SystemExit(f"line {number}: a url that isn't read as a source's own url")
     return [source for source in sources if source.get("url")]
 
 
@@ -113,8 +141,8 @@ def problems(sources):
     found, names = [], {}
     for source in sources:
         where = f"line {source['line']} ({source['url']})"
-        if source["type"] not in ("archive", "file"):
-            found.append(f"{where}: a {source['type']} source can't use mirror-urls; "
+        if source.get("type") not in ("archive", "file"):
+            found.append(f"{where}: a {source.get('type', 'untyped')} source can't use mirror-urls; "
                          "use an archive or file source")
             continue
         if not re.fullmatch(r"[0-9a-f]{64}", source.get("sha256", "")):

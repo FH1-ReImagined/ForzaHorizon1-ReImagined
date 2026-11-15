@@ -10,8 +10,9 @@
 # before it is added. Files are only ever added: a file the release already holds with other bytes
 # stops the run and is named in its log.
 #
-# On every change to the manifest on main (a new or updated source), weekly, and by hand. A run
-# whose release already holds every source doesn't download anything.
+# On every change to the manifest on main (a new or updated source), weekly, and by hand from main
+# (the job skips a run from any other branch). A run whose release already holds every source
+# doesn't download anything.
 name: flatpak-sources-mirror
 
 on:
@@ -37,6 +38,9 @@ env:
 
 jobs:
   mirror:
+    # main only: a run by hand from another branch would run that branch's helper with write access
+    # and could add a file name to the add-only release before main does.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -70,7 +74,7 @@ jobs:
         name: Add them to the release
         env:
           GH_TOKEN: ${{ github.token }}
-        # A new release is tagged on the default branch, whichever branch ran this.
+        # A new release is tagged on the default branch.
         run: |
           python3 launcher/packaging/flatpak_sources_mirror.py upload "$RUNNER_TEMP/sources" \
             "$GITHUB_REPOSITORY" "$TAG" --target "${{ github.event.repository.default_branch }}"
