@@ -4,6 +4,7 @@ import os
 import stat
 import sys
 import tempfile
+import types
 import unittest
 import zipfile
 from pathlib import Path
@@ -122,38 +123,33 @@ class Folders(Base):
         change later with nothing written; the key read after the scan must match the one before it."""
         extracted(self.src / "cars", A, "A")     # a package folder and a package file, in subfolders
         packed(self.src / "more", B, "B")
-        real = os.scandir
         seen = set()
 
         class Entry:
+            """A listing entry whose first stat() gives the time from before the last change."""
             def __init__(self, e):
-                self._e, self.name, self.path = e, e.name, e.path
+                self._e = e
 
-            def is_file(self, **kw):
-                return self._e.is_file(**kw)
-
-            def is_dir(self, **kw):
-                return self._e.is_dir(**kw)
-
-            def is_symlink(self):
-                return self._e.is_symlink()
+            def __getattr__(self, name):
+                return getattr(self._e, name)
 
             def stat(self, **kw):
                 s = self._e.stat(**kw)
-                if self.path in seen:
+                if self._e.path in seen:
                     return s
-                seen.add(self.path)        # the first read is the time from before the last change
+                seen.add(self._e.path)
                 old = s.st_mtime_ns - 5_000_000_000
                 return os.stat_result((*s[:7], s[7], old // 10**9, s[9]), {"st_mtime_ns": old})
 
-        class Listing(list):
-            def __enter__(self):
-                return self
+        def scandir(p="."):
+            with os.scandir(p) as it:
+                return [Entry(e) for e in it]
 
-            def __exit__(self, *_):
-                return False
-
-        with patch.object(os, "scandir", lambda p=".": Listing(Entry(e) for e in real(p))):
+        # Only the listings installer reads itself (the cache key's) change; the scan's are the real ones.
+        listing_os = types.ModuleType("os")
+        listing_os.__dict__.update(os.__dict__)
+        listing_os.scandir = scandir
+        with patch.object(installer, "os", listing_os):
             found, _ = installer.describe_dlc_folder(str(self.src))
             self.assertIsNotNone(installer.dlc_cached(str(self.src)))
         self.assertEqual(sorted(n for n, _ in found), sorted([A, B]))
