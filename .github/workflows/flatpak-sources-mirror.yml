@@ -16,7 +16,7 @@ name: flatpak-sources-mirror
 
 on:
   push:
-    branches: [main, ci/flatpak-source-mirror]
+    branches: [main]
     paths:
       - flatpak/io.github.dyotson.ForzaHorizon1ReImagined.yml
       - launcher/packaging/flatpak_sources_mirror.py
