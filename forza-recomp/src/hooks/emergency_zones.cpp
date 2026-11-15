@@ -40,7 +40,9 @@
 //   unwanted for a second are let go of through the game's own UnloadStreamingZone, as DecOld
 //   would have. FORZA_ZONE_SWEEP=0 turns it off, =1 turns it on for any track.
 // `ZONES:` lines log what both do.
+// tu_address_map: TU4 addresses
 
+#include "../platform/guest_addr.h"
 #include "../platform/guest_memory.h"
 #include "fm4_track_mount.h"
 
@@ -59,6 +61,8 @@
 #include <cstdlib>
 #include <mutex>
 #include <unordered_map>
+
+#if FORZA_TU4  // the hooks are Title Update 4's (hints_tu4/emergency_zones.toml)
 
 extern "C" REX_FUNC(sub_82E1AFD8);  // CTrackPresentation::UnloadStreamingZone(int zoneIndex)
 
@@ -263,3 +267,5 @@ void ForzaEmergencyZoneDone(PPCRegister& r3) {
     }
   }
 }
+
+#endif  // FORZA_TU4

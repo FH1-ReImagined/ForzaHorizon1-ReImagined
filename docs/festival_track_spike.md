@@ -1601,6 +1601,92 @@ circuit's buildings and trees still cast no shadow of FH1's (see below). ReGPU a
 no marked fetch and draw no shadow on a circuit, as before; the converter's half was not run
 there.
 
+## Streamed zones that kept their slots, and the emergency list past its end (#902)
+
+Reported on the Nordschleife (0.3.7, a Radeon 860M): the game stopped on a timed lap at about
+the same place each time, 34 to 35 s after sector 13 (three logs). The fault was in the game's
+own `CTrackPresentation::ProcessDirty` (82420680, `lwz r11, 0xC(r11)`), on the render thread:
+zone window 0 held `m_CurrentRenderModelInstanceVisibilityInfoList` = -1, and its
+`m_RenderModelInstanceList` had 65535 entries and data 0xFFFFFFFF (two logs) or 0x7D2 (one: zone
+2002 of the circuit's 2,226). The game never writes those values there, so something had written
+over the window. Driving the other way without a lap, the reporter got past the place.
+
+**Reproduced** with 0.3.7's build of the launcher's own import and the autopilot round the lap
+(`tools/fm4_line.py` on FM4's AI line, `FORZA_AUTOPILOT` with a speed factor): 1.25 times the
+line's speeds (sector 13 at about 9:03), the game stopped 50.2 s after sector 13 in 3 runs of 3
+(a run at the line's own speeds ended at its time limit 25 s after sector 13, so it says nothing
+about the place), in `CTrackPresentation::ManageEmergencyPVSZLoading` reading
+its list with a count of 0x3F800000 or past it. One of the three had the FM4 texture fallback off
+(`FORZA_FM4_TEX_FALLBACK=0`), as had one of the reporter's, so it is not #895's memory.
+
+**The list.** The track presentation streams its zones (the `.pvsz` files) into 30 slots
+(`m_PVSStreamedZones`, made in `InitializePVSZoneList`). Each pass of
+`ManageEmergencyPVSZLoading` (TU4 sub_82E27480) walks `m_ZonesToLoad` (14 entries: the two zone
+windows' 7), registers the zones that have loaded, and asks the extra-file streaming for the file
+of every zone there without a slot, appending that zone to `m_EmergencyPVSZList` and counting it
+in `m_NumEmergencyPVSZ`. Until every zone in the list is loaded the function reports the zones as
+not ready, and the game skips its ordinary streaming (`CZoneWindow::AddCurrent`, `DecOld`,
+`AddNew`). The PVS thread gives a requested zone a slot only when one is free and drops the
+request otherwise (`UpdatePVS`), so the function asks again on every pass for a zone still
+without a slot and appended it again each time. The list has 7 entries (+0xD994), the count is
+the word after it (+0xD9B0), and the first zone window follows (+0xD9C0). Nothing checks the
+count against the 7: once the list had more than seven appends, the eighth wrote a zone number
+over the count, the next appends went past the object, and the releases (each copies the last
+entry over the one it drops) copied far-off memory and zone numbers over the zone windows. FH2's
+build has the same code.
+
+**Why the zones waited: slots nobody let go of.** At the first emergency past 7 entries (50.2 s
+after sector 13, zone 2002 the eighth, as in the reporter's log), all 30 slots were taken and
+only 4 to 6 held zones the windows wanted; 16 held zones a kilometre or more behind (230, 266,
+274, 302, 362, 386, 467, 510, 536, 1058, 1294, 1376, 1417, 1499, 1755, 1798: the same 16 in every
+run). A trace of every slot load, release and window change (a test build) showed each of them
+loaded once, dropped from window 0's loaded zones by `CZoneWindow::SetCurrent` together with two
+or three others, and never released, while the others were (414 loads, 384 releases by sector
+13). `DecOld` lets go of a zone only when it was registered (its `CStreamedZone` has a `CZone`)
+and is not marked as newly registered (+0x10); a zone whose file finished loading after the
+windows had moved on is never registered, and one registered after it became current stays
+marked, so `DecOld` skips both and their slots stay taken for good. At racing speed on 100 m
+zones that happens every few hundred metres. With no free slot, the next zones never loaded, the
+emergency never ended, and the list overflowed. A list that cannot overflow alone (a first
+version of the fix) did not crash, but the emergency then stayed open for minutes, the ordinary
+streaming with it, and the circuit unloaded around the car: from sector 14 only FH1's flat
+ground was drawn.
+
+**The fix** (`src/hooks/emergency_zones.cpp`, `hints_tu4/emergency_zones.toml`):
+- The list's entries live in the hook, for each track presentation, and the function's three
+  places that read or write an entry use it. A zone is listed once: asked for again while it
+  waits for a slot, as the game does, but not appended again (a second release of the same zone
+  finds no slot and does nothing). At most the 14 zones wanted at once are listed. The count
+  stays in the game's memory; the requests, the releases and their order are the game's own.
+  Only this function reads or writes +0xD994 to +0xD9B4 (a scan of TU4's code), so the game's 7
+  entries, now unused, are left as they are.
+- With an FM4 circuit mounted, before each pass asks for zones: when fewer than 10 slots are
+  free, the slots of zones that no zone window wants or holds (`m_ZonesToLoad`, `m_ZonesLoaded`),
+  that the emergency has not listed and that have gone unwanted for a second are let go of
+  through the game's own `UnloadStreamingZone`, called as the emergency path and the load changes
+  call it. `FORZA_ZONE_SWEEP=0` turns it off, `=1` turns it on for any track.
+
+`ZONES:` lines in the log count the emergencies past 7 zones or over a second and the slots let
+go of. A first try left zones out once the 7 were full without keeping the emergency unfinished:
+the function's end then took the camera's zone as loaded while it was missing and read a null
+zone (`lwz r9, 0x24(r11)` at 82E2768C), 22 s into the second lap.
+
+Checked on Windows 11 with an RX 9070 XT (Vulkan), the launcher's build of this branch with 0.3.7's
+SDK, the Nordschleife from the launcher's import, the autopilot at 1.25 times the line's speeds
+on a timed lap:
+
+| Build | Runs | Result |
+| --- | --- | --- |
+| 0.3.7 | 3 | stopped 50.2 s after sector 13, each |
+| the first try (7 entries, zones left out) | 2 | lap 1 done; a null zone 22 s into lap 2, both |
+| a list that cannot overflow, no sweep | 1 | no fault; from 50.2 s after sector 13 the emergency stayed open (its list full for the 4 minutes logged) and the circuit unloaded |
+| this fix | 2 | two laps each (12:31.86 and 12:22.93; 12:29.23 and 12:11.34) and into a third, no fault; 20 slots let go by sector 14 (10 at sector 10, 10 at 50 s after sector 13), 32 in all; no emergency past 7 zones or over a second; the circuit drawn in every picture (one each 10 s) |
+
+Colorado (the festival's free roam, standing, 170 s) loads and runs with the fix: no `ZONES:`
+line, no fault. The built-in benchmark's race does not start in this test setup, with 0.3.7
+either, so there is no benchmark number. The other converted circuits, NVIDIA, Linux and D3D12
+were not run.
+
 ## Open
 
 - (c) The road, terrain and buildings draw with FM4's own shaders, at 13:00, over a ground.
