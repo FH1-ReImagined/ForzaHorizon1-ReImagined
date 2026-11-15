@@ -203,7 +203,7 @@ class TwinConverter(FakeConverter):
 
 class RallyConverter(FakeConverter):
     """#924: the tool's report says what rally parts it added, None without the Rally Expansion."""
-    rally = {"tyres": 1, "suspension": 1, "gearbox": 1, "cars": 1}
+    rally = {"tires": 1, "suspension": 1, "gearbox": 1, "cars": 1}
 
     def run(self, ids, progress=None, cancelled=lambda: False):
         report = super().run(ids, progress, cancelled)
