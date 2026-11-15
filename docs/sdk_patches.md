@@ -901,3 +901,72 @@ in every run. What differs is traffic (a car crosses photo mode's picture in 090
 in the title scene, which frame of the moving fly-over a shot caught (the frames themselves are
 bit-identical, above). The mean colour of the title, noon, cockpit and race start scenes differs
 by 0.3 of 255 or less between the plugins.
+
+## ReIGlue 1000: a picture drawn on the HUD target is copied back at its full size (#879)
+
+With the scene and the HUD split at a 1080p output (measured with FSR 3 and SMAA; DLSS and DLAA take
+the same path and were not run), the HUD's render targets are 2560x1440 and their raster is the
+output's 1920x1080: every display-scale draw there goes to 0.75 of its target, and the HUD's shaders
+read every screen texture at 0.75 of its coordinates (0150, 0409, 0490). That holds for whatever is
+drawn in that layer, also for a picture the game then reads on the CPU. The copy of a resolve to
+guest memory (`readback_resolve`, `IssueCopy_ReadbackResolvePath`) took its pixels from the whole
+scaled surface, so guest memory got the picture at three quarters of its size in the top left of the
+texture, the rest black. What came out that way:
+
+- a replay movie's frames (640x360: the picture in the top-left 480x270), from the second on with
+  FSR 3 and all of them with SMAA. The layer changes at a frame's first HUD draw. Traced with
+  FSR 3: in the movie's first frame the capture's quad is drawn before it, in the scene layer; from
+  the second frame on after it, on a 640-pixel-pitch target in the HUD layer: a 1280x720 viewport
+  that becomes 960x540;
+- a photo saved in photo mode (1280x720: 960x540) and its thumbnail (416x240: 312x180), both
+  drawn in the HUD layer when the photo is saved;
+- a Big Shot's tiles when the frame's scene is drawn in the HUD layer, which is what happens in a
+  paused stage of the Rally expansion (1010, below): the tile is the scene's own resolve of the
+  front buffer, on the fractional raster too.
+
+1000 gives the copy to guest memory of such a resolve the raster's part: every guest pixel of the
+picture is the average of the host pixels it covers there (1.5 x 1.5 at 1080p; 8:8:8:8 and
+2:10:10:10, the nearest host pixel for other 32-bit formats), by a compute shader that addresses the
+scaled resolve's 16-byte quads (`Fh1RasterReadback`). It runs after the ordinary copy's dispatch and
+writes only the picture's pixels; the readback covers a run of whole 32x32 tiles, and the rest of
+that run (the texture's padding) keeps the ordinary copy's values. Only a whole picture is taken
+this way: the color target the last draw rendered to on the fractional raster, copied from the
+surface's origin to the texture's first tile and reaching the texture's last column of tiles, the
+copy holding all of that draw's viewport, 32 bits a pixel (`VulkanRenderTargetCache::Resolve` notes
+it; `fh1_screen_raster.h` has the sizes and the shares, `tests/fh1_screen_raster_test.cpp` checks
+them). A predicated tiling tile (0490), a corner of a larger view, a copy narrower than its texture
+(the run of such a copy holds other pictures' tiles: a car picture's two views, 608 and 160 wide,
+share a 768x288 texture), depth and other pixel sizes keep the ordinary copy, and so does every
+resolve on an integer raster: 1440p and 4K outputs, FSR 1, render scale 1 to 3 without the split.
+What the HUD's shaders sample does not change, only bytes that reach guest memory.
+`vulkan_fractional_raster_readback=false` gives the ordinary copy alone for comparisons. The log
+names the first four such copies (`FH1 fractional raster: 640x360 resolve to 1CA95000 copied back
+from its 960x540 picture (#879)`) and counts them once a minute (`Fractional raster readbacks: N in
+the last minute, M in all`). Direct3D 12 has no scene/HUD split and is not changed.
+
+Run on a made-up scaled resolve buffer with the CPU Vulkan driver (render scale 2, raster 0.75; a
+640x360 and a 416x240 copy as wide as their textures, and a 608x288 copy in a 768x288 texture and a
+640x360 corner of a 1280-pixel pitch through the shader alone, which the header now refuses): no
+pixel outside the copy is written by the new shader, every one of them is the ordinary copy's with
+each of its three ways of sampling, and every pixel inside is within 0.33 of 255 of the area
+average. Car pictures (the 768x288 texture) were not made in the game at these settings.
+
+## ReIGlue 1010: a Big Shot's frames stay in the scene layer (#879)
+
+A frame changes to the HUD layer at its first draw to the front buffer in the HUD's format, also when
+nothing is composited yet (a frame of menus only). In a stage of the Rally expansion every frame
+starts with one draw to the front buffer and draws its scene after it. In photo mode's camera and
+for a Big Shot's first frames that draw is in the scene's format; from the Big Shot's 69th frame on
+it is in the HUD's, and the whole scene is then drawn in the HUD layer (about 3,760 draws; 798 of
+the 864 frames). Photo mode's Big Shot accumulates each of its nine tiles over 96 frames in a render
+target, and the two layers have their own: the first tile came out as a double image, the whole
+view under the tile's picture, and at a 1080p output all nine at three quarters of their size until
+1000.
+
+1010 adds `fh1_hold_scene_layer` (off; it can change while the game runs): while it is set, a draw
+to the front buffer in the HUD's format changes the layer only once the frame has composited its
+scene, as every frame outside a rally stage does anyway. `src/hooks/bigshot_readback.cpp` sets it
+from a Big Shot's start to its end, next to the front buffers' readback range
+(`FORZA_BIGSHOT_LAYER=0` leaves the layers as they come). With the flag off nothing changes.
+[rendering.md](rendering.md#pictures-at-three-quarters-of-their-size-at-a-1080p-output-879) has the
+trace and what was checked.
