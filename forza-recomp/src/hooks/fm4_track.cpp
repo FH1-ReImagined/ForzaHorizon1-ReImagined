@@ -30,6 +30,7 @@
 
 #include "fm4_file_error.h"
 #include "fm4_stream_textures.h"
+#include "../platform/fixed_gpu_heap.h"
 
 #include "../platform/guest_addr.h"
 #include "../platform/guest_memory.h"
@@ -2032,6 +2033,8 @@ void StreamTextureDataHeld(uint32_t& count, uint64_t& bytes) {
 
 extern "C" REX_FUNC(__imp__sub_82423000);
 extern "C" REX_FUNC(sub_82423000) {
+  // A resource that the game's fixedGPU heap has no room for (#857, fixed_gpu_heap.cpp).
+  if (forza::fixed_gpu_heap::Allocate(ctx, base, __imp__sub_82423000)) return;
   namespace st = forza::fm4_stream_textures;
   const uint32_t size = ctx.r5.u32, lr = uint32_t(ctx.lr);
   __imp__sub_82423000(ctx, base);
@@ -2070,6 +2073,10 @@ extern "C" REX_FUNC(sub_82423000) {
 
 extern "C" REX_FUNC(__imp__sub_82423490);
 extern "C" REX_FUNC(sub_82423490) {
+  if (forza::fixed_gpu_heap::Free(ctx.r4.u32)) {
+    ctx.r3.u64 = 1;
+    return;
+  }
   if (stream_tex_used.load(std::memory_order_relaxed)) {
     std::lock_guard<std::mutex> lock(stream_tex_mu);
     if (stream_tex.Give(ctx.r4.u32, StreamTexNowMs())) {
