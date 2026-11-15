@@ -262,6 +262,19 @@ if(FORZA_D3D_TRACE)
     message(STATUS "D3D trace: on (src/debug/d3d_trace_hooks.inc)")
 endif()
 
+# The list trace (FORZA_LIST_TRACE, src/debug/list_trace.cpp, docs/native-renderer.md "M4"): counts
+# what the game's RunCommandBuffer calls run and registers their buffers for the GPU plugin's list
+# trace (ReIGlue built with REXGLUE_FH1_LIST_TRACE). A measurement build only: it costs every
+# RunCommandBuffer call.
+option(FORZA_LIST_TRACE "Count the game's RunCommandBuffer calls and their lists (native renderer M4)" OFF)
+if(FORZA_LIST_TRACE)
+    if(NOT FORZA_TITLE_UPDATE STREQUAL "4" OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        message(FATAL_ERROR "FORZA_LIST_TRACE needs the TU4 build (FORZA_TITLE_UPDATE=4) on Linux")
+    endif()
+    list(APPEND FORZA_SOURCES src/debug/list_trace.cpp)
+    message(STATUS "List trace: on")
+endif()
+
 # fiber_trace.cpp interposes the SDK's rexcrt_SwitchToFiber with dlsym(RTLD_NEXT): Linux only.
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     list(REMOVE_ITEM FORZA_SOURCES src/debug/fiber_trace.cpp)
@@ -320,6 +333,9 @@ add_custom_command(TARGET forza POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_d
 target_compile_definitions(forza PRIVATE FORZA_TITLE_UPDATE=${FORZA_TITLE_UPDATE})
 if(FORZA_D3D_TRACE)
     target_compile_definitions(forza PRIVATE FORZA_D3D_TRACE=1)
+endif()
+if(FORZA_LIST_TRACE)
+    target_compile_definitions(forza PRIVATE FORZA_LIST_TRACE=1)
 endif()
 
 # The build the game names to the Forza Live server on its title service calls (X-Forza-Build,

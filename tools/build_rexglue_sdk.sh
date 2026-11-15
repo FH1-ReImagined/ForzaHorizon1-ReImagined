@@ -85,10 +85,12 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # saved photo and its thumbnail) is copied back to guest memory at its full size (#879).
 # and 1010: fh1_hold_scene_layer, which the Big Shot's hook sets: its frames stay in the scene layer,
 # also in a rally stage, whose frames start with a draw to the front buffer (#879).
+# and 0640: the list trace, a study build option (REXGLUE_FH1_LIST_TRACE, off: the plugin is
+# unchanged) that times the command lists the game runs (native renderer M4).
 # A reviewed full commit can be pinned before a maintainer publishes a tag.
 # When a tag is supplied, its target must still match this immutable commit.
 REIGLUE_TAG=
-REIGLUE_COMMIT=3584130686e6ed7254b559255800a0fa18caa8b2  # ReIGlue main: 0530, 0570-0630, 0700, 0900, 1000, 1010 (#63)
+REIGLUE_COMMIT=ea74caec904d78fecfa0246e5790ca44b620825f  # ReIGlue feat/fh1-m4-list-measurement: main (#63) + 0640
 REIGLUE_URL="${REIGLUE_URL:-https://github.com/FH1-ReImagined/ReIGlue}"
 NIGHTLY="${REXSDK_NIGHTLY:-$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64}"
 SRC="${REXSDK_SRC:-$HOME/rexglue-sdk-src-forza/sdk}"

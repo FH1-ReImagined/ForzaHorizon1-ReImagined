@@ -31,6 +31,7 @@
 //   TileBoundPackets). Pass 4, the game's 4x scenario, is unchanged.
 // tu_address_map: TU4 addresses
 
+#include "../debug/list_trace.h"
 #include "../platform/guest_addr.h"
 #include "../platform/guest_memory.h"
 #include "../platform/scene_resolution.h"
@@ -275,6 +276,7 @@ extern "C" REX_FUNC(HasRecordedList) {
 // layer, item, r9) over the direct path. For passes 3 and 5 the function does the pass's own
 // work and finds no list; pass 4's are drawn after it.
 extern "C" REX_FUNC(TrackDrawPass) {
+  FORZA_LIST_TRACE_CONTEXT(kTrack, ctx.r4.u32, ctx.r6.u32);
   const uint32_t pass = ctx.r4.u32;
   const uint32_t list_pass = tiling::RecordedListPass(pass);
   if (list_pass == pass || !(ctx.r10.u32 & 0xFF)) {
@@ -308,6 +310,7 @@ extern "C" REX_FUNC(TrackDrawPass) {
 extern "C" REX_FUNC(ProceduralDrawPass) {
   const uint32_t at = ctx.r1.u32 + 84;
   const uint32_t pass = Load32(base, at);
+  FORZA_LIST_TRACE_CONTEXT(kProcedural, pass, ctx.r9.u32);
   const uint32_t list_pass = tiling::RecordedListPass(pass);
   if (list_pass == pass) {
     OriginalProceduralDrawPass(ctx, base);
@@ -339,6 +342,7 @@ extern "C" REX_FUNC(ResetPassFixups) {
 // Runs D3D command buffer r4 (a recorded list) on the device, or queues it for a deferred
 // context.
 extern "C" REX_FUNC(RunRecordedList) {
+  FORZA_LIST_TRACE_RECORDED_LIST();
   if (t_lists_for_fewer_tiles) {
     UntileList(base, ctx.r4.u32);
   } else {

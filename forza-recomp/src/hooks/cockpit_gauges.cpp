@@ -27,6 +27,7 @@
 // tu_address_map: TU4 addresses
 
 #include "../debug/d3d_trace.h"
+#include "../debug/list_trace.h"
 #include "native_device.h"
 #include "../platform/cockpit_gauges.h"
 #include "../platform/guest_addr.h"
@@ -134,6 +135,7 @@ extern "C" REX_FUNC(SetHeadLightAmount) {
 
 // Render thread: r3 = the car's presentation, r6 = the model group.
 extern "C" REX_FUNC(DrawCarModel) {
+  FORZA_LIST_TRACE_CONTEXT(kCar, ctx.r5.u32, ctx.r6.u32);
   const uint32_t presentation = ctx.r3.u32;
   if (!gauges::IsCockpitGroup(ctx.r6.u32) || !REXCVAR_GET(cockpit_gauges_lit) || !presentation ||
       presentation != local_presentation.load(std::memory_order_relaxed)) {
@@ -148,6 +150,7 @@ extern "C" REX_FUNC(DrawCarModel) {
 // r3 = the shader constant shadow the model is drawn with, r4 = the model.
 extern "C" REX_FUNC(DrawModelNow) {
   FORZA_D3D_TRACE_SCOPE(DrawModelNow);  // RunCommandBuffer in the D3D trace
+  FORZA_LIST_TRACE_RUN();               // and in the list trace
 #if FORZA_TU4
   // A D3D flush point of the native renderer's host device layer (native_device.cpp).
   forza::native_device::FlushScope native_flush(forza::native_device::kPointRunCommandBuffer,

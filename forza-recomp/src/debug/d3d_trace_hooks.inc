@@ -216,4 +216,8 @@ D3D_TRACE_HOOK(203, sub_82AB22D8, kPlain, "")
 D3D_TRACE_HOOK(204, sub_82AB3A88, kPlain, "")
 D3D_TRACE_HOOK(205, sub_824AAA28, kPlain, "fixup into model lists (patch list)")
 D3D_TRACE_HOOK(206, sub_824AAAC0, kPlain, "fixup into model lists")
+#if FORZA_LIST_TRACE
+D3D_TRACE_HOOK(207, sub_82D19210, kChained, "fixup dispatch (fetch constants into model lists) [wrapped in debug/list_trace.cpp]")
+#else
 D3D_TRACE_HOOK(207, sub_82D19210, kPlain, "fixup dispatch (fetch constants into model lists)")
+#endif

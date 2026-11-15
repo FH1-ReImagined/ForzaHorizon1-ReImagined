@@ -18,7 +18,7 @@
 namespace fh1pm4 {
 
 constexpr uint32_t kMagic = 0x46503401;  // written by the game once its wrappers run
-constexpr uint32_t kVersion = 2;
+constexpr uint32_t kVersion = 3;
 constexpr int kIds = 256;  // 1-247 wrapped functions; 248-255 the plugin's classes
 constexpr int kMaxId = 247;
 constexpr int kLr = 1 << 15;
@@ -44,6 +44,7 @@ struct Shm {
   uint64_t disc[kIds];         // the cursor moved back or by > 4 MB (a segment switch)
   uint64_t mask_pop[kIds][6];  // popcount of the device's +0..+40 dirty masks at entry (outermost)
   uint64_t mask_calls[kIds];
+  uint64_t dev_calls[kDevices][kIds];  // calls by the device they wrote through (patch 0640)
   uint64_t cursor_logged;
   uint64_t cursor_log[64][2];  // first cursor values seen: virtual, physical
   LrEntry lr[kLr];             // outermost calls by return address
