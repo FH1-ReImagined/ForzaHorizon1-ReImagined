@@ -173,6 +173,35 @@ machine from their own copy:
    verify the contents or authenticity of a recognized package. Installation also emits the
    warning through its log callback. `launcher/test_dlc_warnings.py` covers recognition,
    synthetic STFS/extracted-folder installs, and the offscreen Setup UI on Windows and Linux.
+   A package with offer 1975 (`Media/1975.puboffer`, in an STFS file's file list or an extracted
+   folder) is the fan-made "Forza Horizon - Unicorn cars unlock (by Madmatoster)" pack: the
+   warning names it first and says that with it the first Single Player load never finishes
+   (#66, #76, #115, #771; [dlc.md](dlc.md)), that it is not one of the game's DLC, and where the
+   save editor adds the unicorn cars without it. The install is not refused.
+   The DLC that is already installed (the data folder's `0000000000000000/4D5309C9/00000002`,
+   where the game finds it) is read too, with the same name table
+   (`launcher/forza_launcher/fan_dlc.py`); the packages the launcher makes itself (Import FM4
+   cars, offer 64800) are left out. Setup's DLC card lists installed packages that are not the
+   game's in amber. When the offer 1975 pack is installed, an amber notice on the DLC card and on
+   Play says the same plain sentence, with **Move the pack out**: it renames the package folder
+   and its header into `DLC moved out/00000002` and `DLC moved out/Headers/00000002` next to the
+   installed DLC (`DLC moved out (2)`, `(3)`... when a package of that name is there already;
+   nothing is overwritten or deleted), and says where it went. Moving the folder back restores it;
+   so does picking that folder in Setup's DLC field and pressing **Install DLC** when the package
+   folder has a hex name (the installer names a folder after the file it came from, and Install
+   DLC skips other names, so the message only offers it then). When a Xenia save's
+   `xenia-<XUID>/0000000000000000` is a copy of the installed DLC (it could not be linked), the
+   package is moved out of that copy first, the same way; and `datafolder.carry_dlc` (the Xenia
+   copy and, on Windows, `Documents\forza` copied into the launcher's folder) leaves out a
+   package that sits in a `DLC moved out` folder, so the next Play does not bring it back. If a
+   rename fails, what moved is put back, the folders made for it are removed when empty, and a
+   dialog says nothing was moved (for an installed DLC folder that is a link to another drive it
+   says to move it by hand). Not while the game runs or while a Setup task (Install DLC, a build,
+   a data folder move) is changing the data folder. Play's DLC status row turns amber too.
+   `launcher/test_fan_dlc.py` covers detection (official only, the pack, the launcher's own
+   package, an empty or missing folder, an unreadable header, offer names read as the game's log
+   reads them), the move (moved out and installed back, a name clash, failed renames, another
+   drive, a header in another case, a Xenia copy), `carry_dlc` leaving it out, and both notices.
    With a TU4 package the build runs `tools/apply_title_update.py BASE_XEX TU_PACKAGE
    <data>/build/tu/default.xex` (patched `default.xex`, both facade DLLs and `media.zip`, about
    2 s), copies `forza_manifest_tu4.toml` with its three `file_path`s and `game_root` pointed at

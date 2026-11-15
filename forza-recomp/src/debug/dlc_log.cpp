@@ -10,7 +10,8 @@
 // offers (Media/<offer>.puboffer: 1600 the Rally Expansion Pack, 2700 the 1000 Club), then one
 // line per package with its folder, offers and the display name of its header, so a log names
 // a package that is not one of the game's DLC (a fan-made pack hung loads in #66, #76, #115;
-// #771), and warns when a Title Update 4 build has no Rally Expansion Pack: Horizon Rally then
+// #771), warns about the fan-made pack with offer 1975 (it hangs the first Single Player load),
+// and warns when a Title Update 4 build has no Rally Expansion Pack: Horizon Rally then
 // says "Xbox LIVE Marketplace error: Failed to download required Xbox LIVE Marketplace data" (#79).
 
 #include "../kernel/live.h"
@@ -81,6 +82,10 @@ namespace forza {
 
 namespace {
 
+// The offer of the fan-made "Forza Horizon - Unicorn cars unlock (by Madmatoster)" pack, which no
+// official package has; with it the first Single Player load never finishes (#115, docs/dlc.md).
+constexpr int kFanPackOffer = 1975;
+
 // The display name in a package's header file (Headers/00000002/<name>.header, written by the
 // launcher, tools/install_dlc.py header_bytes: UTF-16BE at +8, 128 characters). Characters
 // outside ASCII are written as '?', and '"' as '\'' so the quoted field ends where it seems
@@ -114,6 +119,7 @@ void LogDlcPackages(const std::filesystem::path& user_data_root) {
   std::set<int> offers;
   std::vector<std::string> bare;
   std::vector<std::string> lines;  // one per package: offers, folder, display name
+  std::vector<std::string> fan_packs;  // packages with offer 1975: folder and display name
   int packages = 0;
   for (const auto& pkg : fs::directory_iterator(dir, ec)) {
     std::error_code e2;
@@ -125,19 +131,24 @@ void LogDlcPackages(const std::filesystem::path& user_data_root) {
     const bool has_header = fs::is_regular_file(header, e2);
     if (!has_header) bare.push_back(name);
     std::string own;  // this package's offers
+    bool fan_pack = false;
     for (const auto& sub : fs::directory_iterator(pkg.path(), e2)) {
       if (lower(sub.path().filename().string()) != "media") continue;
       std::error_code e3;
       for (const auto& f : fs::directory_iterator(sub.path(), e3)) {
         const std::string fname = lower(f.path().filename().string());
         if (fname.size() > 9 && fname.compare(fname.size() - 9, 9, ".puboffer") == 0) {
-          offers.insert(std::atoi(fname.c_str()));
-          own += (own.empty() ? "" : ",") + std::to_string(std::atoi(fname.c_str()));
+          const int offer = std::atoi(fname.c_str());
+          offers.insert(offer);
+          own += (own.empty() ? "" : ",") + std::to_string(offer);
+          fan_pack = fan_pack || offer == kFanPackOffer;
         }
       }
     }
+    const std::string display = has_header ? HeaderDisplayName(header) : std::string();
     lines.push_back("offer " + (own.empty() ? std::string("none") : own) + " " + name + " \"" +
-                    (has_header ? HeaderDisplayName(header) : std::string()) + "\"");
+                    display + "\"");
+    if (fan_pack) fan_packs.push_back(name + (display.empty() ? "" : " \"" + display + "\""));
   }
   std::sort(lines.begin(), lines.end());
   {
@@ -154,6 +165,15 @@ void LogDlcPackages(const std::filesystem::path& user_data_root) {
     for (int o : offers) list += (list.empty() ? "" : " ") + std::to_string(o);
     REXLOG_INFO("DLC: {} packages in {}, offers {}", packages, rex::path_to_utf8(dir), list);
     for (const std::string& line : lines) REXLOG_INFO("DLC:   {}", line);
+    for (const std::string& pack : fan_packs) {
+      REXLOG_WARN(
+          "DLC: {} is the fan-made unicorn cars pack (offer 1975), not one of the game's DLC: with "
+          "it the first Single Player load never finishes (the loading screen runs for ever). Move "
+          "it out of the installed DLC (launcher: Setup or Play, \"Move the pack out\"); for the "
+          "unicorn cars without it: Library > Saves > Edit profile... > Unicorn cars > Add missing "
+          "unicorns",
+          pack);
+    }
     if (!bare.empty()) {
       REXLOG_WARN("DLC: {} package(s) without a header in Headers\\00000002 (first {})", bare.size(),
                   bare.front());
