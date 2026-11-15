@@ -1009,6 +1009,12 @@ Leaderboard screens, Windows and Steam Deck are not scripted: a hand run in the 
 - A game that hangs: close its window; the log ends with `FORZA: guest threads at close`, one
   line per guest thread (handle, `[tN]` on Windows, start address, the return address of its
   last call and its call chain). A thread waiting in the kernel shows the call site of the wait.
+  Then one `fiber ... (not running)` line per fiber no thread runs, with the call chain of its
+  saved stack (#771): the game loads in a fiber, and a load that waits switches back to the
+  main loop, so the thread lines show the loading screen running, not what the load waits for.
+  The fibers are found by the shape of their context pages, so a page left by a deleted fiber
+  or an exited thread can still be listed while its stack memory holds a call chain: a fiber
+  line that matches no wait may be stale.
 - A fault no handler takes aborts with a host stack in the log (`src/debug/fault_guard.cpp`):
   `addr2line -f -e forza-recomp/out/build/linux/forza 0xOFFSET` names the `sub_XXXXXXXX`
   frames. `FORZA_FAULT=wait` parks the thread instead, for `gdb -p`. On Windows the
