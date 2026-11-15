@@ -79,6 +79,8 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # translations on several threads, and the shader pack Prebuild shaders writes (native renderer M0, M1).
 # and 0700: the upload rings in host-visible video memory with Resizable BAR (vulkan_rebar_uploads,
 # off by default) and their bytes by kind in the log (#858).
+# and 0800: without stencil export (NVIDIA), the stencil bit draws of transfers to 2x and 4x targets once
+# per pixel through the sample mask (vulkan_transfer_stencil_bit_per_pixel, #640).
 # and 0900: a marked FM4 shadow fetch reads the shadow mask at the pixel's place in the frame, so
 # the car's shadow on a converted circuit is no longer drawn again up the road (#827).
 # and 1000: a picture drawn on the HUD target's fractional 1080p raster (a replay movie's frame, a
@@ -88,7 +90,7 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # A reviewed full commit can be pinned before a maintainer publishes a tag.
 # When a tag is supplied, its target must still match this immutable commit.
 REIGLUE_TAG=
-REIGLUE_COMMIT=3584130686e6ed7254b559255800a0fa18caa8b2  # ReIGlue main: 0530, 0570-0630, 0700, 0900, 1000, 1010 (#63)
+REIGLUE_COMMIT=63a5b6b5fe48ef231dba162bccc32d5e8afa822c  # ReIGlue main: 0530, 0570-0630, 0700, 0800, 0900, 1000, 1010 (#59)
 REIGLUE_URL="${REIGLUE_URL:-https://github.com/FH1-ReImagined/ReIGlue}"
 NIGHTLY="${REXSDK_NIGHTLY:-$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64}"
 SRC="${REXSDK_SRC:-$HOME/rexglue-sdk-src-forza/sdk}"
