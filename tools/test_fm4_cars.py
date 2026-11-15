@@ -519,17 +519,18 @@ class TrafficTwinTests(unittest.TestCase):
         fh1 = sqlite3.connect(":memory:")
         self.addCleanup(fm4.close)
         self.addCleanup(fh1.close)
-        fm4.execute("create table Data_Car (Id INTEGER, MediaName TEXT, StockWheelID INT, Thumbnail TEXT, MakeID INT)")
+        fm4.execute("create table Data_Car (Id INTEGER, MediaName TEXT, StockWheelID INT, Thumbnail TEXT, MakeID INT, "
+                    "ModelId INT)")
         fh1.execute("create table Data_Car (Id INTEGER, MediaName TEXT, StockWheelID INT, Thumbnail TEXT, MakeID INT, "
-                    "IsSelectable INT)")
+                    "IsSelectable INT, ModelId INT)")
         thumb = "game:\\Media\\UI\\Textures\\Thumbnails\\Thumbnail_%d.xds"
         for cid, name, wid in ((282, "VW_Beetle_04", 30), (1215, "NUL_Car_00", 1), (1530, "FOR_Coupe_40", 40),
                                (414, "CHR_PTCruiser_04", 60), (100, "AUD_A1_10", 50)):
-            fm4.execute("insert into Data_Car values (?,?,?,?,52)", (cid, name, wid, thumb % cid))
+            fm4.execute("insert into Data_Car values (?,?,?,?,52,?)", (cid, name, wid, thumb % cid, cid))
         for cid, name, wid, sel in ((282, "VW_Beetle_04", 30, 0), (1215, "NUL_Car_00", 1, 0),
                                     (1530, "TOY_RAV4Sport_04", 41, 0), (414, "CHR_PTCruiser_04", 60, 1),
                                     (283, "VW_BoraVR6_03", 61, 1)):
-            fh1.execute("insert into Data_Car values (?,?,?,?,52,?)", (cid, name, wid, thumb % cid, sel))
+            fh1.execute("insert into Data_Car values (?,?,?,?,52,?,?)", (cid, name, wid, thumb % cid, sel, cid))
         for db in (fm4, fh1):
             db.execute("create table List_Wheels (ID INTEGER, MediaName TEXT)")
             db.executemany("insert into List_Wheels values (?,?)", [(30, "VW_Beetle_04"), (530, "ALF_Spider_95"),
@@ -591,7 +592,9 @@ class TrafficTwinTests(unittest.TestCase):
         def table(name):
             return sorted(tuple(r.values()) for r in rows[name])
         car = rows["Data_Car"][0]
-        self.assertEqual((car["Id"], car["MediaName"], car["StockWheelID"]), (55282, "VW_5_Beetle_04", 55030))
+        # its ModelId too: the game's car view finds a car's parts by it, and 282 is the traffic car's
+        self.assertEqual((car["Id"], car["MediaName"], car["StockWheelID"], car["ModelId"]),
+                         (55282, "VW_5_Beetle_04", 55030, 55282))
         self.assertTrue(car["Thumbnail"].endswith("\\Thumbnail_55282.xds"))
         self.assertEqual(table("List_UpgradeAntiSwayFront"), [(55282000, 55282, 1, 55282001)])
         self.assertEqual(table("List_AntiSwayPhysics"), [(55282001, 55282, 5.97)])

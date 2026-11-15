@@ -1511,6 +1511,10 @@ class Database:
                         row["Thumbnail"] = re.sub(r"(?i)(thumbnail_)%d(\.xds)$" % c, r"\g<1>%d\2" % n, row["Thumbnail"])
                     if wheel:
                         row["StockWheelID"] = wheel[0]
+                    # every car's ModelId is its id; the game's car view (Restrictions_Data_Car) finds
+                    # a car's parts and whether it is installed by it, and 282 is the traffic car's
+                    if row.get("ModelId") == c:
+                        row["ModelId"] = n
                 if table in car_col and row.get(pk) == key and pk != car_col[table]:
                     row[pk] = self._fresh_key(table)  # a key not made from the car id: a new one
                 rekeyed[row.get(pk)] = row
