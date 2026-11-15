@@ -1,12 +1,36 @@
-# The game's emergency zone loads write past their 7-entry list (#902, src/hooks/emergency_zones.cpp).
-# CTrackPresentation::ManageEmergencyPVSZLoading (sub_82E27480) appends every wanted zone that is
-# not streamed yet to m_EmergencyPVSZList[7] with no check against its size. Before it asks for a
-# zone (0x82E27590, reached only for a zone not in the streamed list), the hook looks at the
-# count (r23 holds its address; the hook takes the context through r3): with the list full, the
-# zone is left out and the loop goes on with the next one (0x82E27614, past the code that would
-# mark the emergency unfinished).
+# The game's emergency zone loads keep their zones in a list of 7 and wrote past it (#902,
+# src/hooks/emergency_zones.cpp). CTrackPresentation::ManageEmergencyPVSZLoading (sub_82E27480)
+# appends every wanted zone without a streamed-zone slot to m_EmergencyPVSZList[7] (this + 0xD994)
+# with no check against its size. The entries live in the hook's own list of 64 instead; these
+# are the function's four places that read or write them. r3 gives the hooks the context; r23
+# holds the count's address, r29 the release loop's index, r30 the zone's m_ZonesToLoad entry,
+# r31 the track presentation.
+
+# The release loop reads entry r29 (`lwz r4, 0(r30)`).
+[[midasm_hook]]
+address = 0x82E274BC
+name = "ForzaEmergencyZoneRead"
+registers = ["r3"]
+jump_address = 0x82E274C0
+
+# A released entry: the last one moves into its place (`lwzx r11, r11, r31`, `stw r11, 0(r30)`).
+[[midasm_hook]]
+address = 0x82E27520
+name = "ForzaEmergencyZoneRemove"
+registers = ["r3"]
+jump_address = 0x82E27528
+
+# Before a zone is asked for: with the list full, the emergency stays unfinished (`li r28, 1`).
 [[midasm_hook]]
 address = 0x82E27590
 name = "ForzaEmergencyZoneListFull"
 registers = ["r3"]
-jump_address_on_true = 0x82E27614
+jump_address_on_true = 0x82E27610
+
+# The zone just asked for is appended (`lwz r10, 0(r30)` ... `stwx r10, r11, r31`); the game then
+# counts it.
+[[midasm_hook]]
+address = 0x82E275F0
+name = "ForzaEmergencyZoneAppend"
+registers = ["r3"]
+jump_address = 0x82E27604
