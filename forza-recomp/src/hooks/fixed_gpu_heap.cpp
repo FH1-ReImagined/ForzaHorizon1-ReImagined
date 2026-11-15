@@ -6,15 +6,16 @@
 // 54 MB of it. The garage's menus run in arena 4, the "compressed" heap the game turns on for
 // its menus (heap 0x24, 28 MB). My Cars opened from the Native pause menu runs in free roam's
 // arena, so its car pictures (864 KB each, about eight at a time) went to heap 0x21 next to
-// the world and to the menu's own scenes: 59 to 61.5 MB in use, the largest free block 0.5 to
-// 0.9 MB. Then a picture or a menu texture (1,146,880 bytes, the menu's scenes loaded again
-// when My Cars closes) found no block, and the memory manager's allocation loop (sub_82423000)
-// stopped the game on purpose: a store to guest address 4 or 5, on the resource loader's
-// thread, call chain 82D83798 82CF6430 82CF8604 82CE2A60 (#857, and the same chain in #779).
+// the world and to the menu's own scenes: 59 to 61.8 MB in use, the largest free block 0.5 to
+// 0.9 MB. Then whichever block came next found no room, and the memory manager's allocation
+// loop (sub_82423000) stopped the game on purpose: a store to guest address 4 or 5. Seen: a
+// picture or a menu texture (1,146,880 bytes, the menu's scenes loaded again when My Cars
+// closes) on the resource loader's thread, chain 82D83798 82CF6430 82CF8604 82CE2A60 (the
+// players' logs), and a menu scene's 119,756 bytes on the UI's loader, chain 82D83798 82F222C8.
 //
-// Now such a block (a resource's data in heap 0x21, fixed_gpu_heap.h Eligible) that the heap
-// has no room for is taken from memory kept for it instead: the heap's stop byte is cleared
-// for the one call, so the loop returns nothing instead of stopping, and the block comes from
+// Now a block that heap 0x21 has no room for (fixed_gpu_heap.h Eligible) is taken from memory
+// kept for it instead: every allocation in the heap runs with its stop byte cleared, one at a
+// time, so the loop returns nothing instead of stopping, and the block comes from
 // an arena of 8 MB chunks of the guest's 4 KB-page physical memory, taken as they are needed
 // and kept for the session (64 MB at most), as for a converted FM4 circuit's streamed textures
 // (fm4_stream_textures.h has why the memory is kept and why a block given back is not handed
@@ -50,8 +51,6 @@ namespace {
 namespace st = forza::fm4_stream_textures;
 namespace gh = forza::game_heap;
 
-constexpr uint32_t kArenas = 0x8339664C;  // the memory manager's arena table (TU4)
-
 enum class Mode { kOff, kOnFailure, kAlways };
 Mode GetMode() {
   static const Mode mode = [] {
@@ -82,9 +81,9 @@ uint64_t taken = 0;                            // blocks given so far
 // dropped once (fm4_track.cpp's streamed textures do the same, see there).
 bool AddChunk() {
   auto* memory = REX_KERNEL_MEMORY();
-  auto* heap = memory->LookupHeapByType(true, st::kPage);
+  auto* heap = memory->LookupHeapByType(true, kPage);
   uint32_t chunk = 0;
-  if (!heap || !heap->Alloc(st::kChunkBytes, st::kPage,
+  if (!heap || !heap->Alloc(st::kChunkBytes, kPage,
                             rex::memory::kMemoryAllocationReserve | rex::memory::kMemoryAllocationCommit,
                             rex::memory::kMemoryProtectRead | rex::memory::kMemoryProtectWrite, true, &chunk) ||
       !chunk)
@@ -99,16 +98,16 @@ bool AddChunk() {
 
 bool Allocate(PPCContext& ctx, uint8_t* base, Original original) {
   const Mode mode = GetMode();
-  const uint32_t category = ctx.r4.u32, return_address = uint32_t(ctx.lr);
-  if (mode == Mode::kOff || category != kCategory || return_address != kFromXMemAlloc) return false;
-  // XMemAlloc's own return address: its frame's back chain, then the link register saved below it.
-  const uint32_t frame = Load32(base, ctx.r1.u32);
-  const uint32_t caller = frame > 8 ? Load32(base, frame - 8) : 0;
+  if (mode == Mode::kOff) return false;
+  // r3 the memory manager, r4 the category, r5 the size, r6 the alignment. Category 0x29 (the
+  // calling thread's arena) is 0x21 in free roam, and a heap that is off passes its requests on.
   const uint32_t size = ctx.r5.u32, alignment = ctx.r6.u32;
-  if (!Eligible(category, return_address, caller) || !size || size > st::kChunkBytes ||
-      alignment > st::kPage)
-    return false;
-  const uint32_t heap = gh::HeapOfCategory(kArenas, kCategory);
+  const uint32_t last = LastHeap(
+      ctx.r4.u32, Load32(base, Load32(base, ctx.r13.u32) + 12380), Load32(base, ctx.r3.u32 + 12),
+      [base](uint32_t a) { return Load32(base, a); },
+      [base](uint32_t a) { return uint32_t(*forza::GuestPtr(base, a)); });
+  if (!Eligible(last, size, alignment, st::kChunkBytes)) return false;
+  const uint32_t heap = last;
   const PPCContext call = ctx;
   std::lock_guard<std::mutex> lock(mutex);
   if (mode != Mode::kAlways) {
@@ -139,11 +138,16 @@ bool Allocate(PPCContext& ctx, uint8_t* base, Original original) {
   sizes[block] = size;
   any.store(true, std::memory_order_release);
   ++taken;
-  if (added || (taken & (taken - 1)) == 0)
-    REXLOG_INFO("FORZA: the fixedGPU heap (0x21) has no room for a resource's {} KB ({} of {} KB in use): "
-                "taken from memory kept for it, {} blocks so far ({} MB taken, {} KB in use) (#857)",
-                (size + 1023) / 1024, Load32(base, heap + gh::kUsed) / 1024, Load32(base, heap + gh::kSize) / 1024,
-                taken, arena.capacity() >> 20, arena.held() / 1024);
+  if (added || (taken & (taken - 1)) == 0) {
+    // Who asked: the return address, and when that is XMemAlloc, XMemAlloc's own (its frame's
+    // back chain, then the link register saved below it).
+    const uint32_t frame = Load32(base, call.r1.u32);
+    const uint32_t caller = frame > 8 ? Load32(base, frame - 8) : 0;
+    REXLOG_INFO("FORZA: the fixedGPU heap (0x21) has no room for {} bytes ({} of {} KB in use; from {:08X} "
+                "{:08X}): taken from memory kept for it, {} blocks so far ({} MB taken, {} KB in use) (#857)",
+                size, Load32(base, heap + gh::kUsed) / 1024, Load32(base, heap + gh::kSize) / 1024,
+                uint32_t(call.lr), caller, taken, arena.capacity() >> 20, arena.held() / 1024);
+  }
   ctx.r3.u64 = block;
   return true;
 }
