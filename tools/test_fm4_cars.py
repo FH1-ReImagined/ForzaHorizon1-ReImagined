@@ -1,4 +1,5 @@
 """Synthetic tests of the FM4 car converter (#648): no game file is read or included."""
+import math
 import os
 import sqlite3
 import struct
@@ -19,6 +20,16 @@ def _string(s):
     return struct.pack(">I", len(s)) + s.encode()
 
 
+def scaled_position(p, c, h):
+    """A vertex's first 4 x s16 for the point p in a section centred at c with half extents h, as
+    the games store it: the unit direction from c, then the distance as a share of |h|."""
+    v = [p[k] - c[k] for k in range(3)]
+    d = math.sqrt(sum(x * x for x in v))
+    if not d:
+        return struct.pack(">4h", 32767, 0, 0, 0)
+    return struct.pack(">4h", *[round(x / d * 32767) for x in v], round(d / math.sqrt(sum(x * x for x in h)) * 32767))
+
+
 def fm4_carbin_file(vertices, sections=None, morphs=None):
     """An FM4 car model (root 2, base 16, buffers v2/v3, 32-byte vertices): one "body" section
     with one mesh of the given vertices, or sections [(name, [(material, [(x, y, z)...])...])]
@@ -32,8 +43,7 @@ def fm4_carbin_file(vertices, sections=None, morphs=None):
             pts = [p for _, ps in meshes for p in ps]
             c = [(min(p[k] for p in pts) + max(p[k] for p in pts)) / 2 for k in range(3)]
             h = [max(abs(p[k] - c[k]) for p in pts) or 1.0 for k in range(3)]
-            enc = [(m, [struct.pack(">4h", *[round((p[k] - c[k]) / h[k] * 32767) for k in range(3)], 0) +
-                        bytes(16) + bytes(8) for p in ps]) for m, ps in meshes]
+            enc = [(m, [scaled_position(p, c, h) + bytes(16) + bytes(8) for p in ps]) for m, ps in meshes]
             out.append((name, enc, c, h))
         sections = out
     out = struct.pack(">I", 2) + bytes(0x150)
@@ -168,6 +178,45 @@ class CarbinTests(unittest.TestCase):
         src = fm4_carbin_file([vertex((0, 0, 0, 0))] * 3)
         with self.assertRaises(fm4_carbin.CarbinError):
             fm4_carbin.convert(src[:-40], "x")
+
+
+class PositionTests(unittest.TestCase):
+    """A vertex is a unit direction from its section's centre and the distance along it (#931);
+    read per axis, a vertex lands on an ellipsoid around the centre instead."""
+
+    def box(self):
+        return [(x, y, z) for x in (-0.9, 0.9) for y in (0.0, 1.2) for z in (-2.1, 2.2)]
+
+    def test_vertex_position_round_trip(self):
+        import random
+        rnd = random.Random(931)
+        pts = self.box() + [(rnd.uniform(-0.9, 0.9), rnd.uniform(0, 1.2), rnd.uniform(-2.1, 2.2)) for _ in range(60)]
+        data = fm4_carbin.convert(fm4_carbin_file(None, [("body", [("body", pts)])]), "pos/rt")
+        s = carbin_dump.parse(data)["sections"][0]
+        for i, p in enumerate(pts):
+            self.assertLess(math.dist(carbin_dump.vertex_position(data, s, i), p), 1e-4)
+
+    def test_hull_points_are_the_vertices_forward_z(self):
+        pts = self.box() + [(0.05, 0.6, 0.05), (0.3, 0.2, -1.0), (-0.5, 1.0, 1.5)]  # and inside the box
+        data = fm4_carbin.convert(fm4_carbin_file(None, [("body", [("body", pts)])]), "pos/hull")
+        got = fm4_cars.model_points(data)
+        self.assertEqual(len(got), len(pts))
+        for x, y, z in pts:  # physicsdefinition.bin's forward is +z, the model's front -z
+            self.assertLess(min(math.dist((x, y, -z), q) for q in got), 1e-3)
+
+    def test_lamp_inside_a_large_section(self):
+        bumper = [(x, y, z) for x in (-0.9, 0.9) for y in (0.0, 0.6) for z in (-2.2, -1.6)]
+        data = fm4_carbin.convert(fm4_carbin_file(None, [
+            ("body", [("body", self.box())]),
+            ("bumperFa", [("body", bumper), ("head_light", lamp(-0.45, 0.35, -2.1))]),
+        ]), "pos/lamp")
+        recs = LightTests.records(None, fm4_carbin.set_lights(data, fm4_cars.car_lights(data, 2012)))
+        head = [r for r in recs if r[21] == 1 and r[19] == 2]
+        self.assertEqual(len(head), 1)
+        x, y, z = struct.unpack_from(">3f", head[0])
+        self.assertAlmostEqual(x, -0.45, places=3)
+        self.assertAlmostEqual(y, 0.35, places=3)
+        self.assertAlmostEqual(z, 2.11 - fm4_cars.LIGHT_INSET, places=3)  # the list's z is forward
 
 
 class LightTests(unittest.TestCase):

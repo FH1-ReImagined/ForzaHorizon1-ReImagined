@@ -258,8 +258,10 @@ most of FH1's cars. Indicators are left out: only 18 of FH1's cars have indicato
 every one is a traffic car (`IsSelectable` 0).
 
 Checked on the 77 cars both games ship (FM4's model through the converter against FH1's own
-list): an FH1 headlight sprite is a median 4 cm (sideways), 1 cm (height) and 6 cm (depth)
-from the nearest generated one of its side, a brake sprite 5, 1 and 3 cm.
+list): an FH1 headlight sprite is a median 3.6 cm (sideways), 1.1 cm (height) and 4.1 cm (depth)
+from the nearest generated one of its side, a brake sprite 3.6, 0.3 and 2.4 cm. Before #931 the
+converter read the model's vertex positions per axis, which only approximates them ([the
+vertex](carbin-format.md#buffers)): 4, 1 and 6 cm, and 5, 1 and 3 cm.
 Of the 381 cars the import adds, 374 get headlight sprites and 375 brake sprites (4-24 records
 a car); the others have no lamp meshes the converter knows (the two NASCAR cars' lamps are
 decals, for example) and get fewer or none.
@@ -323,11 +325,14 @@ u32 NumCollisionShapes, each: u32 ShapeType and
   `24 + 16 × (F / 2)` zero bytes (filled at load), `V × f32[4]` vertices, per vertex
   `(u32, u32, u8 2k, u8 k, u16 0)` pointing at its `k` edge pairs and its `k` faces, the edges
   as vertex pairs, and the faces as vertex lists wound clockwise from outside (`V − E + F = 2`
-  in every file). The converter builds one of the same kind: the planes of 26 fixed directions
+  in every file). Forward is +z in the hull, as in `MAXData.xml`, while a car model's front is
+  at −z. The converter builds one of the same kind: the planes of 26 fixed directions
   (the box, the side profile every 22.5°, 45° corners) through the extreme points of the
-  body's vertices (glass, lights, mirrors, wheels and the optional race parts left out), a
-  little inside them as the game's hulls are (for the 8C the generated hull is 1-5% larger
-  than FH1's own in each direction).
+  body's vertices (glass, lights, mirrors, wheels and the optional race parts left out), their
+  z negated, a little inside them as the game's hulls are. Built from FH1's own 176 car models,
+  a hull's planes are a median 4.2 cm from the game's own hull's (the mean over the 26
+  directions; 72% of the directions within 5 cm). Before #931 the hull was mirrored front to
+  back and made from vertex positions read per axis: 9.9 cm, 39%.
 - **The rigid-body fields** (inertia, half extents, radius, offsets) are not the hull's mass
   properties and do not follow from the hull or the model in the game's files (a fit over the
   176 cars leaves most of their spread). A converted car gets the values of the FH1 car whose

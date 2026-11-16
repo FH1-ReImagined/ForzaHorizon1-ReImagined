@@ -24,6 +24,7 @@ Nothing is written anywhere; vertex data is not printed.
 """
 import argparse
 import json
+import math
 import os
 import re
 import struct
@@ -152,6 +153,18 @@ def section(r):
         s["has_morphs"] = bool(r.u8())
         s["morph"], s["morph_lod0"] = vertex_buffer(r), vertex_buffer(r)
     return s
+
+
+def vertex_position(data, section, i, buffer="vertex_buffer"):
+    """Vertex i of a section's buffer in the car's space. Its first four s16 (signed normalized)
+    are a unit direction from the section's centre (x, y, z) and the distance along it (w), as a
+    share of the length of the section's half extents (see the Vertex table in
+    docs/modding/carbin-format.md)."""
+    vb = section[buffer]
+    x, y, z, w = struct.unpack_from(">4h", data, vb["data_at"] + vb["stride"] * i)
+    c, h = section["center"], section["bounds_max"]
+    s = w * math.sqrt(h[0] * h[0] + h[1] * h[1] + h[2] * h[2]) / (32767.0 * 32767.0)
+    return (c[0] + x * s, c[1] + y * s, c[2] + z * s)
 
 
 def base_model(r):
