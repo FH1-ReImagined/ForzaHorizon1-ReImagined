@@ -53,6 +53,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <utility>
@@ -150,6 +151,7 @@ struct State {
   nl::Converter converter;
   std::vector<nl::Bound> drops;  // unloaded, to go out at the next call
   uint32_t ring_base = 0, ack = 0, states = 0;
+  uint32_t* define_ack_word = nullptr;
   uint32_t device = 0;  // the device of the first model list call
   bool memory_failed = false;
   std::vector<uint32_t> tmpl;
@@ -182,7 +184,7 @@ bool AllocateMemory(State& s) {
   if (s.memory_failed) return false;
   auto* memory = REX_KERNEL_MEMORY();
   s.ring_base = memory->SystemHeapAlloc(kRingBytes, 0x1000);
-  s.ack = memory->SystemHeapAlloc(64, 64);
+  s.ack = memory->SystemHeapAlloc(nl::kDefineAckAlignment, nl::kDefineAckAlignment);
   s.states = memory->SystemHeapAlloc(kStateWords * 4, 0x1000);
   if (!s.ring_base || !s.ack || !s.states) {
     s.memory_failed = true;
@@ -190,6 +192,7 @@ bool AllocateMemory(State& s) {
     REXLOG_WARN("native_lists: no guest memory for the template ring and the state words");
     return false;
   }
+  s.define_ack_word = std::construct_at(memory->TranslateVirtual<uint32_t*>(s.ack), 0u);
   return true;
 }
 
@@ -304,7 +307,7 @@ void Register(PPCContext& ctx, uint8_t* base, uint32_t dev, uint32_t cb, uint32_
   if (!refused && !s.templates.Sent(key)) {
     const uint32_t bytes = uint32_t(s.tmpl.size() * 4);
     uint32_t offset = 0, sequence = 0;
-    if (!s.ring.Reserve(bytes, Load32(base, s.ack), &offset, &sequence)) {
+    if (!s.ring.Reserve(bytes, nl::LoadDefineAck(*s.define_ack_word), &offset, &sequence)) {
       ++s.n.ring_full;
       return;  // the next call tries again
     }
@@ -314,6 +317,7 @@ void Register(PPCContext& ctx, uint8_t* base, uint32_t dev, uint32_t cb, uint32_
         nl::kMagicHost, nl::kOpListDefine, id, s.ring_base + offset, uint32_t(s.tmpl.size()),
         sequence, nl::TemplateHash(s.tmpl.data(), s.tmpl.size()), s.ack};
     if (!Emit(ctx, base, dev, define, nl::kListDefineWords)) {
+      s.ring.CancelUnpublished(sequence);
       ++s.n.no_room;
       return;
     }
