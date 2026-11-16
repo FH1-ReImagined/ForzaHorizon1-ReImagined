@@ -39,6 +39,24 @@ game behave exactly as before.
 The list on the Mods page shows the imported circuits with their size, the date and your best
 lap.
 
+### Forza Motorsport (2005) circuits
+
+**Import FM1 tracks…**, next to **Import FM4 tracks…**, draws three circuits with the scenery of
+the original Xbox Forza Motorsport (#930): **Tsukuba**, **Road America** and **Silverstone**. FM1
+built them in the coordinates FM4 kept, so the import uses FM4's collision, AI line, grid and lap
+timing for each and only the scenery is FM1's. It needs:
+
+- **your own Forza Motorsport (2005) disc's files in a folder** (the folder with `media/Tracks`;
+  a disc image is not read yet);
+- **your FM4 Disc 1**, which must have the circuit and also Tsukuba and Suzuka (their FM4 models
+  lend the drawing data the FM1 scenery is drawn with).
+
+Choose the FM1 folder, then Disc 1, then the circuits. An FM1 circuit replaces an FM4 import of
+the same circuit (they share its name in the game): import it again from **Import FM4 tracks…**
+to go back. It shows as **Tsukuba (FM1)** and so on. Not there yet: FM1's sky, power lines, light
+that varies across a single tree (each tree has one shade), and Tsukuba's pond has not been
+checked in game. [modding/fm1-tracks.md](modding/fm1-tracks.md) describes the conversion.
+
 ## Driving a circuit
 
 Once a circuit is imported, the **Play** page shows **Drive in**: **FH1's Colorado (default)**,

@@ -296,6 +296,72 @@ class Import(Base):
         self.assertIn("no PVS", str(e.exception))
 
 
+class Fm1(Base):
+    """Import FM1 tracks (#930): Forza Motorsport's (2005) circuits laid out as FM4 ones by
+    tools/fm1_tracks.py, then converted as FM4's are."""
+
+    def setUp(self):
+        super().setUp()
+        for name in ("Tsukuba",):
+            (self.disc / "Media" / "tracks" / name / "Ribbon_00").mkdir(parents=True)
+            (self.disc / "Media" / "tracks" / name / "bin.zip").write_bytes(b"x" * 1000)
+        geo(self.disc / "Media" / "AI" / "Tracks" / "tsukuba_00.geo", [(0, 0, 10), (0, 100, 10)] + [(0, 200, 10)] * 6)
+        self.fm1 = self.t / "Forza Motorsport"
+        (self.fm1 / "media" / "Tracks" / "tsukuba").mkdir(parents=True)
+        (self.fm1 / "media" / "Tracks" / "tsukuba" / "QuickPreview1.xb2").write_bytes(b"xb2")
+        (self.fm1 / "media" / "Tracks" / "Rio").mkdir()
+
+    def stand_in(self, calls):
+        convert = fake_converter(calls)
+
+        def run(cmd, env, on_line, cancelled, cwd=None):
+            if Path(cmd[1]).name != "fm1_tracks.py":
+                return convert(cmd, env, on_line, cancelled, cwd)
+            calls.append((cmd, env))
+            _, fm1, disc, folder, out = cmd[2:7]
+            out = Path(out)
+            (out / "Media" / "tracks" / folder / "Ribbon_00").mkdir(parents=True)
+            (out / "Media" / "tracks" / folder / "bin.zip").write_bytes(b"FM1")
+            shutil.copytree(Path(disc) / "Media" / "db", out / "Media" / "db")
+            shutil.copytree(Path(disc) / "Media" / "AI", out / "Media" / "AI")
+        return run
+
+    def test_lists_the_fm1_circuits(self):
+        self.assertEqual(fm4tracks.fm1_circuits(self.fm1), ["Tsukuba"])
+        with self.assertRaises(fm4tracks.Fm4TrackError) as e:
+            fm4tracks.fm1_circuits(self.disc)       # FM4's disc: tracks, but none of FM1's
+        self.assertIn("none of the circuits", str(e.exception))
+        with self.assertRaises(fm4tracks.Fm4TrackError) as e:
+            fm4tracks.fm1_circuits(self.t / "game" / "media" / "cars")
+        self.assertIn("media/Tracks", str(e.exception))
+
+    def test_stages_then_converts_as_an_fm4_circuit(self):
+        calls = []
+        disc = fm4tracks.open_disc(str(self.disc), self.t / "work")
+        with mock.patch.object(fm4tracks, "tool_command", lambda s, *a: ["python", s] + [str(x) for x in a]):
+            msg = fm4tracks.build(self.cfg, disc, ["Tsukuba"], runner=self.stand_in(calls), fm1_dir=self.fm1)
+        self.assertIn("Tsukuba (FM1)", msg)
+        self.assertEqual([Path(c[0][1]).name for c in calls], ["fm1_tracks.py", "fm4_track_mod.py", "fm4_pvs.py"])
+        stage = calls[0][0]
+        self.assertEqual(stage[2:6], ["stage", str(self.fm1), str(self.disc), "Tsukuba"])
+        # FM4's converter reads the laid-out circuit, not the disc
+        mod_cmd, env = calls[1]
+        self.assertEqual(Path(mod_cmd[2]), Path(stage[6]) / "Media" / "tracks" / "Tsukuba")
+        self.assertEqual(env["FM4_DISC"], stage[6])
+        info = fm4tracks.find(self.cfg, "tsukuba")
+        self.assertEqual((info["name"], info["source"]), ("Tsukuba (FM1)", "FM1"))
+        self.assertEqual(info["spawn"], "0.0,11.0,-15.0,0.000,1.000")
+        self.assertIn(("tsukuba", "Tsukuba (FM1) (experimental)"), fm4tracks.choices(self.cfg))
+        self.assertFalse(list(fm4tracks.store(self.cfg).glob(".work-*")))
+
+    def test_needs_the_template_circuits(self):
+        shutil.rmtree(self.disc / "Media" / "tracks" / "Suzuka")
+        disc = fm4tracks.open_disc(str(self.disc), self.t / "work")
+        with self.assertRaises(fm4tracks.Fm4TrackError) as e:
+            fm4tracks.build(self.cfg, disc, ["Tsukuba"], runner=self.stand_in([]), fm1_dir=self.fm1)
+        self.assertIn("Suzuka", str(e.exception))
+
+
 class Start(Base):
     def test_colorado_changes_nothing(self):
         before = self.plan()
