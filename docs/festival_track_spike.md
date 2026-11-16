@@ -474,6 +474,11 @@ Fujimi Kaido's other ribbons are left alone, as before).
   and the game's free and size calls for it (sub_825CB040, sub_825CB048) go there too. Sunset
   spot 2: 405 textures applied instead of 278 (a few hundred allocations, 9 MB, from the
   fallback), no failures left; the road has its asphalt, skid marks and kerbs.
+  Since #824's follow-up the buffers come from an arena that keeps its memory (8 MB chunks,
+  64 MB at most, as the streamed textures' data does, #895): a buffer released to the heap
+  and read once more by a queued frame can come back with no write watch on its pages, and
+  a model would then draw another's vertices. A buffer the arena has no room for is
+  allocated and released on its own as before.
 - The rest at Sunset's spot 2 (about 112 streamed textures, the flat red-green grass, black
   billboards, part of the road) was the zones' texture flags: each zone lists its textures
   with a flag byte (Colorado's: 0 for 88%, 1 for the rest) and the converter wrote 0 for

@@ -89,6 +89,13 @@ int main() {
   Check(asking.ChunkRefused(20000), "after a chunk did come, a refusal is news again");
   for (uint32_t i = 1; i < st::kMaxChunks; ++i) asking.AddChunk(kBase + i * 0x100000, 8192);
   Check(asking.chunks() == st::kMaxChunks && !asking.MayAddChunk(1000000), "never more than kMaxChunks");
+  // An arena with a cap of its own (the track models' buffers): the cap is its own.
+  st::Arena capped(2);
+  Check(capped.MayAddChunk(0), "an arena of two chunks: ask");
+  capped.AddChunk(kBase, 8192);
+  Check(capped.MayAddChunk(0), "one chunk of two: ask again");
+  capped.AddChunk(kBase + 0x100000, 8192);
+  Check(capped.chunks() == 2 && !capped.MayAddChunk(1000000), "never more than its two");
 
   // A full arena gives nothing, and the allocation fails as it did; another chunk helps.
   st::Arena small;

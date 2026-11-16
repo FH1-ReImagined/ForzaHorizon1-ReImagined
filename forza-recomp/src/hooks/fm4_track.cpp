@@ -1904,10 +1904,58 @@ extern "C" REX_FUNC(sub_82499690) {
 // guest's 4 KB-page physical heap instead, and the game's free and size calls for it
 // (sub_825CB040, sub_825CB048) go there too. FORZA_FM4_TEX_FALLBACK=0 turns it off;
 // FORZA_FM4_ALLOCDIAG=1 logs failures and totals per caller.
+//
+// The buffers come from an arena that keeps its memory (fm4_stream_textures.h, an Arena of
+// kModelMaxChunks 8 MB chunks), for the reason the streamed textures' data does (below, #895):
+// memory released to the guest's heap and read once more by a queued frame is held up to date
+// on the GPU side with no watch on it, and what is written there after the next allocation is
+// never seen, so a model would draw another one's vertices or indices. The game's destroy of a
+// buffer waits for the GPU when a fence is pending, which covers the plain case; the arena
+// closes the rest. Each chunk's GPU copy is dropped as it is taken, as the textures' are. When
+// the arena is full or the guest's heap has no 8 MB left in one piece, or a buffer is larger
+// than a chunk, the buffer is allocated and released on its own as it was before this arena.
 namespace {
+struct ModelBuffer {
+  uint32_t size;  // as asked for: the game's size call returns it
+  bool arena;     // a block of model_arena, else its own allocation, released on free
+};
 std::mutex tex_fallback_mu;
-std::unordered_map<uint32_t, uint32_t> tex_fallback;  // guest address -> size
+std::unordered_map<uint32_t, ModelBuffer> tex_fallback;  // guest address -> buffer
 uint64_t tex_fallback_bytes = 0;
+forza::fm4_stream_textures::Arena model_arena(forza::fm4_stream_textures::kModelMaxChunks);
+uint64_t ModelNowMs() {
+  return uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(
+                      std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+// A block for a model buffer from the arena, adding a chunk when there is no room; 0 when the
+// arena can't give one. tex_fallback_mu held.
+uint32_t ModelArenaTake(uint32_t size) {
+  namespace st = forza::fm4_stream_textures;
+  if (size > st::kChunkBytes) return 0;
+  const uint64_t now = ModelNowMs();
+  uint32_t addr = model_arena.Take(size, now);
+  if (addr || !model_arena.MayAddChunk(now)) return addr;
+  auto* memory = REX_KERNEL_MEMORY();
+  auto* heap = memory->LookupHeapByType(true, 4096);
+  uint32_t chunk = 0;
+  if (heap && heap->Alloc(st::kChunkBytes, 4096, rex::memory::kMemoryAllocationReserve | rex::memory::kMemoryAllocationCommit,
+                          rex::memory::kMemoryProtectRead | rex::memory::kMemoryProtectWrite, true, &chunk) && chunk) {
+    model_arena.AddChunk(chunk, st::kChunkBytes);
+    // As for the textures' chunks (sub_82423000 below): drop the GPU side's copy of these pages,
+    // which may hold reads made after an earlier release, so what is written here is uploaded.
+    memory->EnablePhysicalMemoryAccessCallbacks(memory->GetPhysicalAddress(chunk), st::kChunkBytes, true, false);
+    memory->TriggerPhysicalMemoryCallbacks(rex::thread::global_critical_region::AcquireDirect(), chunk,
+                                           st::kChunkBytes, true, true, true);
+    REXLOG_INFO("FM4TRACK: streamed track models' buffers beyond the game's heap: {} MB taken ({} MB in use)",
+                model_arena.capacity() >> 20, model_arena.held() >> 20);
+    return model_arena.Take(size, now);
+  }
+  if (model_arena.ChunkRefused(now))
+    REXLOG_WARN("FM4TRACK: no {} MB left in one piece in the guest's memory for streamed track models' buffers "
+                "({} MB taken, {} MB in use): further buffers are allocated one by one; asked again once a second",
+                st::kChunkBytes >> 20, model_arena.capacity() >> 20, model_arena.held() >> 20);
+  return 0;
+}
 bool TexFallbackOn() {
   static const bool on = [] {
     const char* v = std::getenv("FORZA_FM4_TEX_FALLBACK");
@@ -1922,20 +1970,25 @@ extern "C" REX_FUNC(sub_825CB038) {
   static const bool diag = std::getenv("FORZA_FM4_ALLOCDIAG") != nullptr;
   const uint32_t size = ctx.r3.u32, flags = ctx.r4.u32, lr = uint32_t(ctx.lr);
   __imp__sub_825CB038(ctx, base);
-  if (!ctx.r3.u32 && (lr == 0x82AA5034 || lr == 0x82AA5100) && size && TexFallbackOn()) {
-    auto* heap = REX_KERNEL_MEMORY()->LookupHeapByType(true, 4096);
-    uint32_t addr = 0;
+  if (!ctx.r3.u32 && (lr == 0x82AA5034 || lr == 0x82AA5100) && size && size <= 0xFFFFF000u && TexFallbackOn()) {
     const uint32_t rounded = (size + 4095) & ~4095u;
-    if (heap && heap->Alloc(rounded, 4096, rex::memory::kMemoryAllocationReserve | rex::memory::kMemoryAllocationCommit,
-                            rex::memory::kMemoryProtectRead | rex::memory::kMemoryProtectWrite, true, &addr) && addr) {
+    std::lock_guard<std::mutex> lock(tex_fallback_mu);
+    uint32_t addr = ModelArenaTake(size);
+    const bool from_arena = addr != 0;
+    if (!addr) {  // no room in the arena: a buffer of its own, released on free, as before it
+      auto* heap = REX_KERNEL_MEMORY()->LookupHeapByType(true, 4096);
+      if (!heap || !heap->Alloc(rounded, 4096, rex::memory::kMemoryAllocationReserve | rex::memory::kMemoryAllocationCommit,
+                                rex::memory::kMemoryProtectRead | rex::memory::kMemoryProtectWrite, true, &addr))
+        addr = 0;
+    }
+    if (addr) {
       std::memset(forza::GuestPtr(base, addr), 0, rounded);
-      std::lock_guard<std::mutex> lock(tex_fallback_mu);
-      tex_fallback[addr] = size;
+      tex_fallback[addr] = {size, from_arena};
       tex_fallback_bytes += rounded;
       const size_t n = tex_fallback.size();
       if ((n & (n - 1)) == 0)
-        REXLOG_INFO("FM4TRACK: {} streamed track textures' memory from the physical heap ({} KB in use)", n,
-                    tex_fallback_bytes / 1024);
+        REXLOG_INFO("FM4TRACK: {} streamed track models' buffers beyond the game's heap ({} KB in use, {} KB of it "
+                    "in the arena)", n, tex_fallback_bytes / 1024, model_arena.held() / 1024);
       ctx.r3.u64 = addr;
     }
   }
@@ -1962,10 +2015,14 @@ extern "C" REX_FUNC(sub_825CB040) {
     std::lock_guard<std::mutex> lock(tex_fallback_mu);
     auto it = tex_fallback.find(ctx.r3.u32);
     if (it != tex_fallback.end()) {
-      const uint32_t addr = it->first, rounded = (it->second + 4095) & ~4095u;
+      const uint32_t addr = it->first, rounded = (it->second.size + 4095) & ~4095u;
+      const bool from_arena = it->second.arena;
       tex_fallback.erase(it);
       tex_fallback_bytes -= rounded;
-      if (auto* heap = REX_KERNEL_MEMORY()->LookupHeap(addr)) heap->Release(addr);
+      if (from_arena)
+        model_arena.Give(addr, ModelNowMs());  // used again after kReuseDelayMs, never released
+      else if (auto* heap = REX_KERNEL_MEMORY()->LookupHeap(addr))
+        heap->Release(addr);
       return;
     }
   }
@@ -1977,7 +2034,7 @@ extern "C" REX_FUNC(sub_825CB048) {
     std::lock_guard<std::mutex> lock(tex_fallback_mu);
     auto it = tex_fallback.find(ctx.r3.u32);
     if (it != tex_fallback.end()) {
-      ctx.r3.u64 = it->second;
+      ctx.r3.u64 = it->second.size;
       return;
     }
   }
@@ -2014,8 +2071,9 @@ extern "C" REX_FUNC(sub_825CB048) {
 // already queued, which still draw the texture that was let go.
 //
 // One way in is left and closed here: a new chunk can cover pages the model buffers' fallback
-// above released (it still releases each block, to this same heap) and that were read once
-// more since. So the GPU side is made to drop its copy of every chunk as it is taken.
+// above released (it releases a buffer that did not fit its own arena, to this same heap) and
+// that were read once more since. So the GPU side is made to drop its copy of every chunk as it
+// is taken.
 namespace {
 std::mutex stream_tex_mu;
 forza::fm4_stream_textures::Arena stream_tex;
@@ -2053,7 +2111,7 @@ extern "C" REX_FUNC(sub_82423000) {
       // The GPU side may hold some of these pages as up to date from a read after an earlier
       // release (see above): watch the chunk and report it written once, so its copy is
       // dropped and what is loaded here is uploaded. Both calls take the SDK's global lock
-      // under this hook's own, as the model buffers' release above does under its lock; the
+      // under this hook's own, as the model buffers' chunks and release above do under theirs; the
       // game never calls this allocator or its free with the global lock held (TU4 has one
       // interrupts-off section that takes it, with no call inside).
       memory->EnablePhysicalMemoryAccessCallbacks(memory->GetPhysicalAddress(chunk), st::kChunkBytes, true, false);

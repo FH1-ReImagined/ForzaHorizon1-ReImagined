@@ -24,6 +24,10 @@ constexpr uint32_t kPage = 4096;
 // Mans held 28 MB at most, of Suzuka 16 MB.
 constexpr uint32_t kChunkBytes = 8u << 20;
 constexpr uint32_t kMaxChunks = 8;
+// The track models' vertex and index buffers (fm4_track.cpp, sub_825CB038) have an arena of their
+// own, as large: a buffer it has no room for, or one larger than a chunk, is allocated and
+// released per buffer as before.
+constexpr uint32_t kModelMaxChunks = 8;
 // A block given back is not handed out again for this long: the emulated GPU's thread draws
 // the frames already queued after the game's thread has let their textures go, and for those
 // frames the texels must still be there (as they are in the game's own heap until the block is
@@ -44,6 +48,7 @@ constexpr uint32_t Rounded(uint32_t size) { return (size + kPage - 1) & ~(kPage 
 // never seen. Not thread safe (the hook locks).
 class Arena {
  public:
+  explicit Arena(uint32_t max_chunks = kMaxChunks) : max_chunks_(max_chunks) {}
   // A chunk of guest memory to cut blocks from (the hook allocates it).
   void AddChunk(uint32_t address, uint32_t bytes) {
     ++chunks_;
@@ -51,9 +56,9 @@ class Arena {
     refused_ = false;
     Free(address, bytes);
   }
-  // Whether the hook may ask the guest's heap for another chunk now: fewer than kMaxChunks,
-  // and no request was refused in the last kChunkRetryMs.
-  bool MayAddChunk(uint64_t now_ms) const { return chunks_ < kMaxChunks && now_ms >= ask_again_ms_; }
+  // Whether the hook may ask the guest's heap for another chunk now: fewer than the arena's
+  // max_chunks, and no request was refused in the last kChunkRetryMs.
+  bool MayAddChunk(uint64_t now_ms) const { return chunks_ < max_chunks_ && now_ms >= ask_again_ms_; }
   // The guest's heap had no chunk to give. True the first time since a chunk was last added:
   // the hook logs it once.
   bool ChunkRefused(uint64_t now_ms) {
@@ -131,6 +136,7 @@ class Arena {
   uint64_t capacity_ = 0, held_ = 0, peak_ = 0;
   uint64_t ask_again_ms_ = 0;  // no chunk request before this
   uint32_t chunks_ = 0;
+  uint32_t max_chunks_;
   bool refused_ = false;  // the last chunk request was refused
 };
 
