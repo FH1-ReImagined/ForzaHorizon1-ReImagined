@@ -19,8 +19,9 @@ files and how far the import has come. Nothing of either game is in this reposit
   donor).
 - `tools/fm1_import.py` makes the FM1 car a car of its own: a mod with its files, its database
   rows (the donor's, under a new id), its names with "(FM1)", FM1's chassis physics and FM1's
-  wheels, and an engine and drivetrain of its own with FM1's engine and gearbox in them. It
-  sounds like an FH1 car with a similar engine (`ENGINE_SPECS`). Its car list picture is FM1's
+  wheels, and an engine and drivetrain of its own with FM1's engine and gearbox in them. With
+  `--package` it has FM1's own engine recordings (`tools/fm1_sound.py`), else it sounds like an
+  FH1 car with a similar engine (`ENGINE_SPECS`). Its car list picture is FM1's
   model drawn by `tools/fm1_thumbnail.py`, its steering wheel turns about FM1's wheel.
 - Next:
   - its place in the shared car id table (`tools/car_ids.json`, #924);
@@ -31,7 +32,13 @@ files and how far the import has come. Nothing of either game is in this reposit
 ```
 python tools/fm1_cars.py parts FM1_DISC bordermr2
 python tools/fm1_import.py FM1_DISC FH1_GAME bordermr2 MAZ_RX7_97 OUT [--update TU] [--base-mod FM4_MOD]
+    [--package DLC/4D5309C9/00000002/464D3143415253000000000000000000000000004D]
+python tools/fm1_sound.py FM1_DISC bordermr2 [--wav FOLDER]
 ```
+
+`--package` gives the car FM1's own engine sound: its banks go into that DLC package folder, in
+the user data folder the game reads DLC from (`fm1_sound.py` lists a car's loops per level and
+can write them as `.wav` files).
 
 `FM1_DISC` is a folder with FM1's files (its `media\cabs`), `FH1_GAME` the FH1 game folder, `TU`
 the title update's folder. Copy `OUT` into the mods folder: the game then has the car
@@ -330,8 +337,7 @@ the car's own rows:
 - `nonupgradedata.xml` → `Data_Car.SteerMaxAngle`.
 - Still the donor's:
   - ride heights, wheelbase and tracks: the model sits on the donor's wheel positions and tire sizes;
-  - the steering's rates and FH1's `FixListing` handling corrections;
-  - the `Sim*` driving figures (0-60, top speed, braking, grip; see **Ratings**).
+  - the steering's rates and FH1's `FixListing` handling corrections.
 
 **Ratings.** The car list's PI and bars are `Data_Car.PerformanceIndex`, `ClassID` and the five
 `*Rating` columns, shown as they are. The game also works them out itself, live, for the car as
@@ -348,10 +354,23 @@ figures give it a top speed of 116.6 against 148 for its RX-7 and S15 (its drag 
 `PerformanceIndex` is the shown PI through `CarClasses`: a class's `MaxDisplayPerformanceIndex`
 (B 500) is its `MaxPerformanceIndex` (B 0.6505), linear in between (the RX-7's 0.6213 shows
 445). The exact value for 317 showed 318, so the game rounds up: the import aims a quarter
-below. FM1's `gamecars.dat` (176-byte rows starting with the car's ordinal twice) gives the
-engine's figures FH1 keeps in `Data_Car` (from 12: `SimPeakPower`, `SimPeakAngVel`,
-`SimPeakTorque`, `SimPeakTorqueAngVel`, `SimRedlineAngVel`; for the RX-7 and the S15, FH1's are
-FM1's or within 3 %).
+below. FM1's `gamecars.dat` (176-byte rows starting with the car's ordinal twice) gives all 14
+`Sim*` figures FH1 keeps in `Data_Car`, in the same units (`GAMECARS_FIGURES`):
+
+| offset | column | the RX-7: FM1 / FH1 | the F50: FM1 / FH1 |
+|---|---|---|---|
+| 12-28 | `SimPeakPower`, `SimPeakAngVel`, `SimPeakTorque`, `SimPeakTorqueAngVel`, `SimRedlineAngVel` | FH1's are FM1's or within 3 % (also the S15) | |
+| 48 | `SimTimeTo60MPH` (s) | 5.50 / 5.67 | 3.72 / 3.80 |
+| 52 | `SimTimeTo100MPH` (s) | 13.07 / 13.22 | 7.45 / 8.35 |
+| 56 | `SimTimeQuarterMile` (s) | 13.95 / 14.12 | 11.53 / 11.97 |
+| 60 | `SimSpeedQuarterMile` (m/s) | 46.2 / 46.3 | 57.9 / 54.8 |
+| 64 | `SimTopSpeed` (m/s) | 70.4 / 80.2 | 89.0 / 88.2 |
+| 68 | `SimBrakeDistance100MPH` (m) | 101.7 / 112.6 | 85.8 / 94.5 |
+| 72 | `SimBrakeDistance60MPH` (m) | 36.4 / 45.6 | 31.4 / 39.4 |
+| 76 | `SimLatGees60MPH` (g) | 0.90 / 0.89 | 0.98 / 1.01 |
+| 80 | `SimLatGees120MPH` (g) | 0.92 / 0.93 | 1.08 / 1.15 |
+
+They are FM1's own measurements of its stock car, which is what the import builds.
 
 **Engine** (`Cars.ca2 engines\<engine>\physics\*.xml`, the engine named by the car's
 `tooldata.xml` `<Engines><E0 File=>`, and `cars\<car>\physics\transmission`). FH1 keys every
@@ -408,22 +427,94 @@ values were compared with FM1's for two cars both games have, FM1's `nissansilvi
   harmonic tunings: the log names each one it reads. With the MR2 sharing the RX-7's engine the
   game read the RX-7's rotary tunings (`2rt2_rx7_*`); with its own engine only the MR2's and an
   SR20's (`4t3_mr2_*`, `4n0_mr2_*`, `4t2_sr20_*`).
-- Still the donor's: the differentials, clutch and driveline (FH1's are generic: the S15's
-  and the RX-7's differentials are the same rows), and the bolt-on parts' gains, prices and
-  masses (relative to stock).
+- **FM1's own engine sound** (`--package`, `tools/fm1_sound.py`). FM1 keeps a car's engine
+  recordings in its cab (`engines\<car>\audio\lod1\<car>.xwb`, an XACT wave bank of Xbox ADPCM
+  loops) with one settings file per upgrade level and part (`l00`-`l03`, `enginea.ini`,
+  `exhaust.ini`: each loop's rpm range, the rpm it was recorded at, its pitch and volume). FH1
+  works the same way: the engine's `_ET.xml` names a harmonic tuning per part and level, and that
+  names its bank and lists the same loop fields. The import keeps the matched FH1 sound's tuning
+  (effects, burbles, the engine ambience, turbo and transmission, which FM1 shares between cars)
+  and puts FM1's loops in its intake (FM1's engine) and exhaust parts, at all four levels (the
+  Border MR2's exhaust changes above 4,500 rpm at levels 2-3, as in FM1); the audio rpm range is
+  FM1's (`engineaudio.ini` `RPMMin`/`RPMMax`). The loops are decoded to 16-bit PCM in FMOD FSB4
+  banks (FH1's own are XMA). The game opens a bank only as a file
+  (`game:\Media\audio\cars\Engines\Soundbanks\LOD1\<bank>`, [#776](fm4-cars.md#engine-sound-banks-776)):
+  a bank in the mod, or next to a zip that does not hold the car, is not found and the game stops
+  at load. FH1's own DLC packs bring theirs as a folder their `Media/DLCZips/zipmount.xml` mounts
+  there, and so does the import: `--package` writes a package of its own
+  (`464D3143415253000000000000000000000000004D`, "FM1CARS", offer 64801) with the banks in
+  `Media/DLCZips/FM1Banks_pri_60/`, its `zipmount.xml` and its header; the car stays in the mod.
+  Without `--package` the car keeps the matched FH1 sound.
+- **The bolt-on parts' gains** (`PART_TABLES`, `apply_part_gains`). FM1's engine has three
+  (`intakeexhaust`, `fuelignition`, `intercooler`, levels 0-3, torque or boost multipliers, per
+  car as FH1's are: its intake gains at level 3 take 78 values over 176 cars). FM1's intake and
+  exhaust is one part, FH1's two (FH1's S15 at level 3: 1.085 x 1.137 = 1.234, FM1's 1.126), and
+  so are fuel and ignition (1.125 x 1.103 = 1.240, FM1's 1.260): each FH1 level of the pair gets
+  FM1's gain, shared between the two parts in the donor's proportion. FM1's gain at its stock
+  level is in the torque curve already, so the rows hold FM1's gains relative to it, FH1's levels
+  above stock spread evenly up to FM1's top (geometric in between): the MR2's intake and exhaust
+  (stock at FM1's level 1) reach 1.091 at FH1's level 3, its fuel and ignition (two FH1 levels
+  for FM1's three) 1.259, its intercooler 1.13. FH1's valves, pistons, displacement, oil cooling
+  and flywheel have no FM1 counterpart.
+- Still the donor's:
+  - the bolt-on parts' prices and masses (relative to stock);
+  - the clutch, differentials and driveline: FH1 retuned FM1's (the S15's clutch 830 Nm and
+    0.15 s in, FM1's 1000 Nm and 0.09 s; its diffs other torques), and they are generic (the
+    S15's and the RX-7's differentials are the same rows);
+  - the brakes: FM1's levels are the generic `GameFrictionScaleBraking` 1.00, 1.01, 1.03, 1.05
+    (and bias 0.5 / 0.5, handbrake 1.5) of every car checked in both games (RX-7, S15, S2000,
+    Corrado; the F50 and the Ford GT start at 1.03, where FH1 has fewer levels), as FH1's;
+  - the aero kits (`List_AeroPhysics` has FM1's `SpoilerAero` fields, but FH1 retuned them: its
+    S15 race wing gives 34 / 91 kg of downforce, FM1's 25 / 75, and on other levels).
+
+### Engine sound (2026-11-16)
+
+The Border MR2 imported with `--package` (Windows, the v0.3.7 runtime, a copied save with the MR2
+in every garage slot, FM1's Tsukuba imported, `FORZA_AUDIOLOG` every 0.5 s; 12 s of full throttle
+from the start line, then 7 s at the limiter with the brake held). The game opened both banks and
+the car drove (41 mph at 5 s of the lap). The car's channels of the mix the game submits (center
+and surrounds; the radio is in front):
+
+| | full throttle | limiter |
+|---|---|---|
+| FH1's matched sound (`TOY_MR2GT_95`) | -39 to -40 dB | -49 to -53 dB |
+| FM1's own loops | -37 to -39 dB | -50 to -52 dB |
+| the same banks with every sample zeroed | -43 to -44 dB | -56 to -58 dB |
+| engine volume 0 (`car_engine_volume`) | -50 dB | -59 dB |
+
+So FM1's loops play, about 6 dB above what is left without them (FH1's ambience, transmission and
+turbo layers), and the car is as loud as with FH1's sound. The 21-car batch with `--package` gives
+every car its own banks (42, 67 MB): the Lancia Delta Integrale, whose FH1 intake is FH1's
+`NA.xml` placeholder (the import starts from `FALLBACK`'s tuning then), loads and drives the same
+way, -29 dB at full throttle and -49 to -51 dB at the limiter, against -33 and -47 to -50 dB on
+FH1's sound for it. The F50 and the S7 have only FM1's far sound (`lod2`) on this disc copy and
+get that. Before that, without the package (the
+bank next to a zip of the FM4 cars package, then also with the car in that zip), the game looked
+for the bank in `Game:\` only and stopped at load. At the festival hub the crowd and the radio
+cover the engine: the same check there showed no difference even with the engine at 0 or 200 %.
+
+### Driving figures and part gains (2026-11-16)
+
+The Border MR2 imported with FM1's 14 `Sim*` figures (0-60 mph 6.45 s, top speed 64.6 m/s) and
+its part gains (intake and exhaust up to 1.091, fuel and ignition 1.259, intercooler 1.13) loads
+and drives on FM1's Tsukuba as before (41 mph 4 s into the lap; the same engine level). The
+upgrade screens with these parts fitted were not looked at.
 
 ## Not done yet
 
-- The ratings are read from the game by hand (`RATINGS`); the `Sim*` driving figures are the
-  donor's.
+- The ratings are read from the game by hand (`RATINGS`).
 - FM1's geometry. Its `maxdata.xml` has FH1's layout, with its height 0 at the ground, about
   12 cm below the model's.
 - The wheels' upgrade rims (`List_UpgradeRimSize*`, the donor's), the exhaust emitters (the donor's),
   the pop-up lamps' movement. The picture could come from the game itself: it draws a garage
   picture when a part is upgraded.
 - The livery masks (`LiveryMasks/*.tga`, the donor's, made for its UVs).
-- FM1's upgrade parts (the lettered and race parts).
+- FM1's visual upgrade parts (the lettered and race body parts of the model).
+- FM1's own clutch, differential and aero kit figures (FH1 retuned them; see the engine section).
 - FM1's makes FH1 lacks, the shared car id table (#924), the launcher.
+- The engine sound: by ear (the check above is levels only), FM1's own turbo, supercharger,
+  transmission and backfire sounds (FM1 shares them between cars; the FH1 ones are kept), the
+  far-away LOD2 banks.
 
 ## Credits
 

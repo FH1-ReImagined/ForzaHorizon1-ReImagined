@@ -851,6 +851,64 @@ class RatingTests(unittest.TestCase):
         self.assertTrue(fm1_import.apply_ratings(db, car, figures, fm1_import.RATINGS["bordermr2"]))
         self.assertEqual((car["SpeedRating"], car["LaunchRating"], car["ClassID"]), (3.8, 6.7, 3))
 
+    def test_every_sim_figure_from_fm1(self):
+        cols = set(fm1_import.GAMECARS_FIGURES.values())
+        self.assertEqual(len(cols), 14)
+        self.assertTrue(all(c.startswith("Sim") for c in cols))
+        self.assertTrue(all(o % 4 == 0 and 8 <= o < fm1_import.GAMECARS_ROW for o in fm1_import.GAMECARS_FIGURES))
+
+
+class PartGainTests(unittest.TestCase):
+    MR2 = {"intakeexhaust": {0: 1.0, 1: 1.0313, 2: 1.0625, 3: 1.1251},
+           "fuelignition": {0: 1.0, 1: 1.0648, 2: 1.1295, 3: 1.2591},
+           "intercooler": {0: 1.0, 1: 1.04, 2: 1.08, 3: 1.13}}
+
+    @staticmethod
+    def rows(table, levels, stock, scales, col="TorqueScale"):
+        return [{"Level": lv, "IsStock": int(lv == stock), col: s} for lv, s in zip(levels, scales)]
+
+    def erows(self):
+        return {"List_UpgradeEngineIntake": self.rows("i", [0, 1, 2, 3], 0, [1.0, 1.027, 1.056, 1.085]),
+                "List_UpgradeEngineExhaust": self.rows("e", [0, 1, 2, 3], 0, [1.0, 1.040, 1.085, 1.137]),
+                "List_UpgradeEngineFuelSystem": self.rows("f", [1, 2, 3], 1, [1.0, 1.08, 1.125]),
+                "List_UpgradeEngineIgnition": self.rows("g", [1, 2, 3], 1, [1.0, 1.065, 1.103]),
+                "List_UpgradeEngineIntercooler": self.rows("c", [1, 2, 3], 1, [1.0, 1.025, 1.06], "MaxScaleScale")}
+
+    def test_gain_at(self):
+        g = self.MR2["intercooler"]
+        self.assertAlmostEqual(fm1_import._gain_at(g, 2), 1.08)
+        self.assertAlmostEqual(fm1_import._gain_at(g, 2.5), (1.08 * 1.13) ** 0.5)
+        self.assertAlmostEqual(fm1_import._gain_at({1: 1.1}, 0), 1.0)
+
+    def test_pairs_reach_fm1s_gains(self):
+        er = self.erows()
+        eng = {"parts": self.MR2, "stock": {"intakeexhaust": 1, "fuelignition": 0, "intercooler": 0}}
+        fm1_import.apply_part_gains(er, eng)
+        level = lambda t, lv, c="TorqueScale": next(r[c] for r in er[t] if r["Level"] == lv)  # noqa: E731
+        both = lambda lv: level("List_UpgradeEngineIntake", lv) * level("List_UpgradeEngineExhaust", lv)  # noqa: E731
+        self.assertAlmostEqual(both(0), 1.0)
+        self.assertAlmostEqual(both(3), 1.1251 / 1.0313)          # FM1's top over its stock level 1
+        self.assertLess(both(1), both(2))
+        self.assertLess(both(2), both(3))
+        # the donor's proportion kept: the exhaust gains more than the intake
+        self.assertGreater(level("List_UpgradeEngineExhaust", 3), level("List_UpgradeEngineIntake", 3))
+        fuel = level("List_UpgradeEngineFuelSystem", 3) * level("List_UpgradeEngineIgnition", 3)
+        self.assertAlmostEqual(fuel, 1.2591)                       # two FH1 levels reach FM1's level 3
+        self.assertAlmostEqual(level("List_UpgradeEngineIntercooler", 3, "MaxScaleScale"), 1.13)
+        self.assertAlmostEqual(level("List_UpgradeEngineIntercooler", 1, "MaxScaleScale"), 1.0)
+
+    def test_no_donor_gain_split_evenly(self):
+        er = {"List_UpgradeEngineIntake": self.rows("i", [0, 1], 0, [1.0, 1.0]),
+              "List_UpgradeEngineExhaust": self.rows("e", [0, 1], 0, [1.0, 1.0])}
+        fm1_import.apply_part_gains(er, {"parts": {"intakeexhaust": {0: 1.0, 1: 1.21}}, "stock": {}})
+        self.assertAlmostEqual(er["List_UpgradeEngineIntake"][1]["TorqueScale"], 1.1)
+        self.assertAlmostEqual(er["List_UpgradeEngineExhaust"][1]["TorqueScale"], 1.1)
+
+    def test_no_fm1_part_keeps_donor(self):
+        er = self.erows()
+        fm1_import.apply_part_gains(er, {"parts": {}, "stock": {}})
+        self.assertEqual(er["List_UpgradeEngineIntake"][3]["TorqueScale"], 1.085)
+
 
 class ImportTests(unittest.TestCase):
     INFO = {"name": "BorderMR2", "display": "Border MR2 Turbo T-bar (Wiedebody)", "ordinal": 239,

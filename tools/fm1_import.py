@@ -39,6 +39,10 @@ import fh1_carbin as fc
 import fm1_cars
 
 GAMEDB = "media/db/gamedb.slt"
+BANKS = "@banks/"  # files keys of sound banks: they go into a package (write_package), not the mod
+PACKAGE_NAME = "464D3143415253000000000000000000000000004D"  # the banks' package folder ("FM1CARS")
+PACKAGE_OFFER = 64801  # a .puboffer no FH1 offer uses (the FM4 cars import's is 64800)
+BANKS_FOLDER = "FM1Banks_pri_60"
 NEW_ID = 55000  # #924: a car new to FH1 gets 55000 + its id in its own game
 # Rows of a car that are not the car itself: events it is driven in, its car challenge (the title
 # update's), AI drivers, rewards, DLC offers (fh1_port.clone_db leaves the events, the driver
@@ -406,8 +410,12 @@ def apply_physics(rows, p):
 # most of FH1's: no conversions). FM1 has one turbo part: a twin turbo is ENGINE_SPECS'
 # ("aspiration": "twin"), as a centrifugal supercharger ("csc"; positive displacement, FH1's DSC,
 # otherwise).
-# The diffs, clutch, driveline and the bolt-on parts' gains, prices and masses stay the donor's:
-# FH1's are generic (the S15's and the RX-7's diffs are the same rows) and relative to stock.
+#   intakeexhaust, fuelignition, intercooler l0-l3: the bolt-on parts' gains (PART_TABLES)
+# The diffs, clutch, driveline and the bolt-on parts' prices and masses stay the donor's: FH1
+# retuned FM1's clutches and diffs (the S15's clutch 830 Nm, 0.15 s in, against FM1's 1000 Nm,
+# 0.09 s), and its prices and masses are relative to stock. FM1's brake levels are the generic
+# GameFrictionScaleBraking 1.00, 1.01, 1.03, 1.05 FH1's cars have too, and FH1 retuned FM1's
+# aero kits (its S15 race wing 34 / 91 kg of downforce, FM1's 25 / 75): the donor's.
 # What FM1 does not hold (the layout, cylinders, displacement, compression, boost, a name) and the
 # FH1 sound that suits the engine (a car's _CMT and _ET tuning) come from ENGINE_SPECS.
 FM1_DRIVE = {1: 3, 2: 1, 3: 2}  # FM1's AWD, FWD, RWD -> FH1's DriveTypeID
@@ -449,11 +457,15 @@ RATINGS = {
                    "LaunchRating": 5.9, "BrakingRating": 8.2},
 }
 # FM1's forzadb/cardb/gamecars.dat: 176-byte rows starting with the car's ordinal twice; these
-# fields are the engine's figures FH1 keeps in Data_Car (for the RX-7 and the S15 FH1's are
-# FM1's, or within 3 %): offset -> column
+# fields are the figures FH1 keeps in Data_Car's Sim* columns, in the same units: the engine's
+# (for the RX-7 and the S15 FH1's are FM1's, or within 3 %) and the car's measured performance
+# (seconds, m/s, metres, g; the RX-7's 0-60 mph 5.5 s in FM1 and 5.67 s in FH1, the F50's lateral
+# grip at 120 mph 1.08 and 1.15 g, its top speed 89.0 and 88.2 m/s): offset -> column
 GAMECARS_ROW = 176
-GAMECARS_ENGINE = {12: "SimPeakPower", 16: "SimPeakAngVel", 20: "SimPeakTorque", 24: "SimPeakTorqueAngVel",
-                   28: "SimRedlineAngVel"}
+GAMECARS_FIGURES = {12: "SimPeakPower", 16: "SimPeakAngVel", 20: "SimPeakTorque", 24: "SimPeakTorqueAngVel",
+                    28: "SimRedlineAngVel", 48: "SimTimeTo60MPH", 52: "SimTimeTo100MPH", 56: "SimTimeQuarterMile",
+                    60: "SimSpeedQuarterMile", 64: "SimTopSpeed", 68: "SimBrakeDistance100MPH",
+                    72: "SimBrakeDistance60MPH", 76: "SimLatGees60MPH", 80: "SimLatGees120MPH"}
 
 
 def display_pi(db, shown):
@@ -469,13 +481,13 @@ def display_pi(db, shown):
     raise Fm1ImportError("PI %d is above FH1's classes" % shown)
 
 
-def fm1_engine_figures(fm1_dir, ordinal):
-    """{Data_Car column: value} of FM1's gamecars.dat row for the car (GAMECARS_ENGINE)."""
+def fm1_figures(fm1_dir, ordinal):
+    """{Data_Car column: value} of FM1's gamecars.dat row for the car (GAMECARS_FIGURES)."""
     mega = fm1_cars.Cab(os.path.join(fm1_dir, "media", "cabs", "Mega.ca2"))
     g = mega.read("forzadb/cardb/gamecars.dat")
     for at in range(len(g) % GAMECARS_ROW, len(g) - GAMECARS_ROW + 1, GAMECARS_ROW):
         if struct.unpack_from("<2I", g, at) == (ordinal, ordinal):
-            return {col: struct.unpack_from("<f", g, at + off)[0] for off, col in GAMECARS_ENGINE.items()}
+            return {col: struct.unpack_from("<f", g, at + off)[0] for off, col in GAMECARS_FIGURES.items()}
     return {}
 
 
@@ -585,6 +597,59 @@ def fm1_engine(fm1_dir, car):
         out["stock"][part.lower()] = int(level)
     out["aspiration"] = fm1_aspiration(out)
     return out
+
+
+# FM1's bolt-on engine parts against FH1's (both are torque multipliers per level, FH1's per car):
+# FM1's intake-and-exhaust part is FH1's intake and exhaust, its fuel-and-ignition part FH1's fuel
+# system and ignition, its intercooler FH1's (the turbo's MaxScale). FM1's gain at its stock level
+# is in the torque curve already (the fold above), so FH1's rows get FM1's gains relative to it,
+# FH1's levels above stock spread evenly up to FM1's top level (geometric in between: the MR2's
+# intake and exhaust, stock at FM1's level 1, have two FM1 levels above for FH1's three). A pair's gain at
+# a level is shared between the two parts in the donor's proportion (the product of the two is
+# FM1's; FH1's S15 at level 3 has 1.085 x 1.137 for intake and exhaust where FM1's is 1.126).
+# FH1's other parts (valves, pistons, displacement, oil cooling, flywheel) have no FM1 counterpart.
+PART_TABLES = {"intakeexhaust": (("List_UpgradeEngineIntake", "List_UpgradeEngineExhaust"), "TorqueScale"),
+               "fuelignition": (("List_UpgradeEngineFuelSystem", "List_UpgradeEngineIgnition"), "TorqueScale"),
+               "intercooler": (("List_UpgradeEngineIntercooler",), "MaxScaleScale")}
+
+
+def _gain_at(gains, x):
+    """FM1's part gain at a fractional level x: geometric between its levels either side."""
+    lo, hi = int(math.floor(x)), int(math.ceil(x))
+    below = [k for k in gains if k <= lo]
+    a = (gains[max(below)] if below else 1.0) or 1.0
+    b = gains.get(hi) or a
+    return a * (b / a) ** (x - lo)
+
+
+def apply_part_gains(erows, eng):
+    """FM1's bolt-on part gains (PART_TABLES) into the engine's cloned part rows."""
+    for part, (tables, col) in PART_TABLES.items():
+        gains = eng["parts"].get(part)
+        if not gains:
+            continue
+        stock = eng["stock"].get(part, 0)
+        base, top = gains.get(stock, 1.0) or 1.0, max(gains)
+        by_level = {}
+        for t in tables:
+            rs = sorted(erows.get(t, []), key=lambda r: r["Level"])
+            s = next((i for i, r in enumerate(rs) if r["IsStock"]), 0)
+            for r in rs[:s + 1]:
+                r[col] = 1.0
+            for r in rs[s + 1:]:
+                by_level.setdefault(r["Level"], []).append(r)
+        steps = len(by_level)
+        for step, level in enumerate(sorted(by_level), 1):
+            target = _gain_at(gains, stock + step * (top - stock) / float(steps)) / base
+            rs = by_level[level]
+            have = 1.0
+            for r in rs:
+                have *= r[col] or 1.0
+            for r in rs:
+                if have > 1.0001 and target > 0:
+                    r[col] = (r[col] or 1.0) ** (math.log(target) / math.log(have))
+                else:
+                    r[col] = target ** (1.0 / len(rs))
 
 
 def _on(attrs):
@@ -708,6 +773,7 @@ def engine_rows(db, rows, eng, spec, new, media):
             curve[c] = values[i] if i < n else 0.0
         curves.append(curve)
     erows["List_TorqueCurve"] = curves
+    apply_part_gains(erows, eng)
 
     # forced induction: FM1's turbo or supercharger in its own table; the donor's other kinds left
     # out; a naturally aspirated engine has none (and no intercooler)
@@ -979,6 +1045,71 @@ def audio_files(fh1, donor, media):
     return out
 
 
+def harmonic_text(fh1, name):
+    """An FH1 HarmonicTuning file's text (the title update's first), or None."""
+    import fm4_cars
+    data = fm4_cars.zip_member(fh1.update, "audio/cars/engines/harmonictuning/" + name.lower()) if fh1.update else None
+    if data is None:
+        path = fm4_cars.find_ci(fh1.media, "audio", "cars", "Engines", "HarmonicTuning.zip")
+        data = fm4_cars.zip_member(path, name) if path else None
+    return data.decode("utf-8", "replace") if data is not None else None
+
+
+def fm1_sound_files(fh1, cab, media, files):
+    """FM1's own engine sound in place of the FH1 one files holds for media (its EngineTuning,
+    replaced): ({mod path: bytes} and {BANKS + bank name: bytes}, None), or ({}, why not)."""
+    import fm1_sound
+    et_path = AUDIO[1][1] + media + AUDIO[1][2]
+    if et_path not in files:
+        return {}, "no EngineTuning to start from"
+    try:
+        sound = fm1_sound.car_sound(cab)
+        if sound is None:
+            return {}, "FM1's cab has no engine sound"
+        et, tunings, banks = fm1_sound.fh1_files(sound, media, files[et_path].decode("utf-8", "replace"),
+                                                 lambda n: harmonic_text(fh1, n))
+    except fm1_sound.Fm1SoundError as e:
+        return {}, str(e)
+    out = {et_path: et.encode("utf-8")}
+    for name, text in tunings.items():
+        out["media/audio/cars/engines/harmonictuning/" + name.lower()] = text.encode("utf-8")
+    for name, data in banks.items():
+        out[BANKS + name] = data
+    return out, None
+
+
+def write_package(package, files):
+    """FM1's sound banks (files' BANKS entries) as a DLC package of their own. The game opens a
+    bank as a file at game:\\Media\\audio\\cars\\Engines\\Soundbanks\\LOD1\\<bank>, never from a
+    zip or the mod (#776); FH1's own DLC packs bring theirs as a folder their Media/DLCZips/
+    zipmount.xml mounts there (LOD1_pri_1650), and so does this one (FM1Banks_pri_60). package:
+    the package folder, .../4D5309C9/00000002/<PACKAGE_NAME> (its header goes into
+    .../4D5309C9/Headers/00000002). The cars and their tuning stay in the mod.
+    -> the bank names written."""
+    import install_dlc
+    banks = {p[len(BANKS):]: d for p, d in files.items() if p.startswith(BANKS)}
+    if not banks:
+        return []
+    media = os.path.join(package, "Media")
+    folder = os.path.join(media, "DLCZips", BANKS_FOLDER)
+    os.makedirs(folder, exist_ok=True)
+    for name, data in banks.items():
+        with open(os.path.join(folder, name), "wb") as f:
+            f.write(data)
+    with open(os.path.join(media, "DLCZips", "zipmount.xml"), "w", encoding="ascii", newline="\r\n") as f:
+        f.write('<?xml version="1.0" ?>\n<zipmount>\n   <zip Name="%s" Mount="game:\\Media\\audio\\cars\\Engines\\'
+                'Soundbanks\\LOD1\\" AltRootPath="game:\\Media\\audio\\cars\\Engines\\Soundbanks\\LOD1\\" '
+                'ShouldCache="0" />\n</zipmount>\n' % BANKS_FOLDER)
+    with open(os.path.join(media, "%d.puboffer" % PACKAGE_OFFER), "wb") as f:
+        f.write(b" \r\n")
+    name = os.path.basename(os.path.normpath(package))
+    headers = os.path.join(os.path.dirname(os.path.dirname(os.path.normpath(package))), "Headers", "00000002")
+    os.makedirs(headers, exist_ok=True)
+    with open(os.path.join(headers, name + ".header"), "wb") as f:
+        f.write(install_dlc.header_bytes(name, "Forza Motorsport (2005) car sounds", install_dlc.TITLE_ID))
+    return sorted(banks)
+
+
 def thumbnail(fh1, donor_id, new, draw=None):
     """The car list's picture: FM1's model drawn (draw: a function returning fm1_thumbnail's RGBA
     bytes) into the donor's thumbnail as the template; the donor's picture if it can't be."""
@@ -996,12 +1127,14 @@ def thumbnail(fh1, donor_id, new, draw=None):
     return {"media/ui/textures/thumbnails/thumbnail_%d.xds" % new: data}
 
 
-def build(fm1_dir, fh1_dir, car_name, donor, update=None, base_mod=None, year=None):
+def build(fm1_dir, fh1_dir, car_name, donor, update=None, base_mod=None, year=None, sound=False):
     """({mod path: bytes}, report) for an FM1 car as a car of its own, on donor's files and rows.
     base_mod: a mod folder (an FM4 cars mod) whose gamedb.slt and data_car.str tables to add the
-    car to, instead of the game's (only one mod's database is used: this one then goes after it)."""
+    car to, instead of the game's (only one mod's database is used: this one then goes after it).
+    sound: FM1's own engine sound (fm1_sound) on the matched FH1 sound's tuning; its banks come
+    back as BANKS entries, for write_banks."""
     import fm4_cars
-    cab, car = fm1_cars.load_car(fm1_dir, car_name)
+    cab, car =fm1_cars.load_car(fm1_dir, car_name)
     info = fm1_info(fm1_dir, cab, car_name)
     fh1 = fm4_cars.FH1(fh1_dir, update)
     game_db = fh1.db()
@@ -1053,7 +1186,7 @@ def build(fm1_dir, fh1_dir, car_name, donor, update=None, base_mod=None, year=No
             spec = dict(spec, sound=pick_sound(db, spec["config"], spec["cylinders"], ASPIRATIONS[kind][0],
                                                fh1_make(db, info["make"])[0], info["year"], have) or donor_media)
         engine_id, drivetrain_id = engine_rows(db, rows, eng, spec, new, media)
-        measured = apply_ratings(db, rows["Data_Car"][0], fm1_engine_figures(fm1_dir, info["ordinal"]),
+        measured = apply_ratings(db, rows["Data_Car"][0], fm1_figures(fm1_dir, info["ordinal"]),
                                  RATINGS.get(car_name.lower()))
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             path = os.path.join(td, "gamedb.slt")
@@ -1068,6 +1201,8 @@ def build(fm1_dir, fh1_dir, car_name, donor, update=None, base_mod=None, year=No
                            fm1_cars.textures(cab, fm1_cars.cab_name(car, cab), xds)))
     files.update(wheel_files(fh1, fm1_dir, car_name, donor_wheel, media))
     files.update(audio_files(fh1, spec.get("sound") or donor_media, media))
+    own_sound, no_sound = fm1_sound_files(fh1, cab, media, files) if sound else ({}, "not asked for")
+    files.update(own_sound)
     import fm1_thumbnail
     paint = info["colours"][0][:3] if info["colours"] else (128, 128, 128)
     files.update(thumbnail(fh1, donor_id, new, lambda: fm1_thumbnail.car_thumbnail(fm1_dir, car_name, paint)))
@@ -1075,7 +1210,9 @@ def build(fm1_dir, fh1_dir, car_name, donor, update=None, base_mod=None, year=No
         files["media/stringtables/%s/data_car.str" % lang] = data
     report = {"id": new, "media": media, "names": (display, short), "make": info["make"], "year": info["year"],
               "donor": donor_media, "wheel": (wheel_id, donor_wheel), "engine": (engine_id, drivetrain_id),
-              "sound": spec.get("sound") or donor_media,
+              "sound": ("FM1's own (%d banks), on %s's tuning" % (len([p for p in own_sound if p.startswith(BANKS)]),
+                                                                   spec.get("sound") or donor_media) if own_sound
+                        else "%s (FM1's: %s)" % (spec.get("sound") or donor_media, no_sound)),
               "engine spec": "the donor's engine (ENGINE_SPECS has no %s)" % car_name.lower() if spec.get("from_donor")
                              else "ENGINE_SPECS",
               "ratings": "read from the game" if measured else "the donor's: RATINGS has no %s (read them in the "
@@ -1087,7 +1224,10 @@ def build(fm1_dir, fh1_dir, car_name, donor, update=None, base_mod=None, year=No
 
 
 def write_mod(out, files, report):
+    """The mod's files (not the banks: write_package)."""
     for path, data in files.items():
+        if path.startswith(BANKS):
+            continue
         full = os.path.join(out, *path.split("/"))
         os.makedirs(os.path.dirname(full), exist_ok=True)
         with open(full, "wb") as f:
@@ -1097,7 +1237,7 @@ def write_mod(out, files, report):
                             "Forza Motorsport's %s as a car of its own, id %d (#930)" % (report["names"][0], report["id"])))
 
 
-def build_many(fm1_dir, fh1_dir, pairs, update=None, base_mod=None, log=print):
+def build_many(fm1_dir, fh1_dir, pairs, update=None, base_mod=None, log=print, sound=False):
     """({mod path: bytes}, [reports], [(car, error)]): several FM1 cars in one mod, each car's
     rows added to the database (and names to the string tables) the previous car's import
     wrote; a car that fails is left out and the next goes on. pairs: [(FM1 car, FH1 donor)]."""
@@ -1106,7 +1246,7 @@ def build_many(fm1_dir, fh1_dir, pairs, update=None, base_mod=None, log=print):
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         for k, (car, donor) in enumerate(pairs):
             try:
-                f, report = build(fm1_dir, fh1_dir, car, donor, update, base)
+                f, report = build(fm1_dir, fh1_dir, car, donor, update, base, sound=sound)
             except (Fm1ImportError, fm1_cars.Fm1Error, ValueError, KeyError, sqlite3.Error) as e:
                 failed.append((car, "%s: %s" % (type(e).__name__, e)))
                 log("%s: failed (%s)" % (car, e))
@@ -1132,14 +1272,20 @@ def main(argv=None):
     ap.add_argument("--update", help="FH1's title update folder (with media.zip)")
     ap.add_argument("--base-mod", help="a mod folder (an FM4 cars mod) whose gamedb.slt and data_car.str "
                     "tables to add the car to, instead of the game's; load this mod after it")
+    ap.add_argument("--package", help="the DLC package folder to write for FM1's own engine sound banks "
+                    "(.../4D5309C9/00000002/%s; the game reads banks only from the disc or a package); "
+                    "without it the cars sound like the FH1 engine matched to theirs" % PACKAGE_NAME)
     a = ap.parse_args(argv)
+    sound = bool(a.package)
     if "=" in a.car:
         pairs = [tuple(p.split("=", 1)) for p in a.car.split(",") if p]
-        files, reports, failed = build_many(a.fm1, a.fh1, pairs, a.update, a.base_mod)
+        files, reports, failed = build_many(a.fm1, a.fh1, pairs, a.update, a.base_mod, sound=sound)
         if not reports:
             print("error: no car imported", file=sys.stderr)
             return 1
         write_mod(a.out, files, reports[-1])
+        if a.package:
+            print("banks:", ", ".join(write_package(a.package, files)) or "none")
         with open(os.path.join(a.out, "mod.toml"), "w", encoding="utf-8") as f:
             f.write(MOD_TOML % ("FM1 cars", "Forza Motorsport cars as cars of their own (#930): "
                                 + ", ".join(r["names"][1].replace(" (FM1)", "") for r in reports)))
@@ -1149,11 +1295,13 @@ def main(argv=None):
     if not a.donor:
         ap.error("a donor is needed for one car")
     try:
-        files, report = build(a.fm1, a.fh1, a.car, a.donor, a.update, a.base_mod)
+        files, report = build(a.fm1, a.fh1, a.car, a.donor, a.update, a.base_mod, sound=sound)
     except (Fm1ImportError, fm1_cars.Fm1Error) as e:
         print("error:", e, file=sys.stderr)
         return 1
     write_mod(a.out, files, report)
+    if a.package:
+        report["banks"] = write_package(a.package, files)
     for k, v in report.items():
         print("%s: %s" % (k, v))
     return 0

@@ -99,6 +99,8 @@ jobs:
         run: python -m unittest discover -s tools -p 'test_fm4_col.py' -v
       - name: FM1 car import (synthetic models and databases, no game files, #930)
         run: python -m unittest discover -s tools -p 'test_fm1_cars.py' -v
+      - name: FM1 engine sound (synthetic wave banks and tunings, no game files, #930)
+        run: python -m unittest discover -s tools -p 'test_fm1_sound.py' -v
       - name: FM1 circuit import (synthetic archives, textures and models, no game files, #930)
         run: python -m unittest discover -s tools -p 'test_fm1_tracks.py' -v
       - name: Resource hook audit tests (synthetic images)
