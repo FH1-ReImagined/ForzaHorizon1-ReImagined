@@ -858,6 +858,36 @@ class RatingTests(unittest.TestCase):
         self.assertTrue(all(o % 4 == 0 and 8 <= o < fm1_import.GAMECARS_ROW for o in fm1_import.GAMECARS_FIGURES))
 
 
+class ElsewhereTests(unittest.TestCase):
+    def test_table(self):
+        t = fm1_import.FM1_ELSEWHERE
+        self.assertEqual(len(t), 153)
+        for car, (media, games) in t.items():
+            self.assertEqual(car, car.lower())
+            self.assertRegex(media, r"^[A-Za-z0-9]+_\w+_\d\d$")
+            self.assertTrue(set(games.split(", ")) <= {"FH1", "FH1 DLC", "FH2", "FF", "FM4"}, games)
+        self.assertEqual(fm1_import.elsewhere("FerrariF50"), ("FER_F50_95", "FH1"))
+        self.assertIsNone(fm1_import.elsewhere("BorderMR2"))
+
+    def test_build_many_skips(self):
+        built = []
+
+        def fake(fm1_dir, fh1_dir, car, donor, update, base, sound=False):
+            built.append(car)
+            raise fm1_import.Fm1ImportError("stop here")
+        old = fm1_import.build
+        fm1_import.build = fake
+        self.addCleanup(setattr, fm1_import, "build", old)
+        pairs = [("BorderMR2", "MAZ_RX7_97"), ("FerrariF50", "FER_F50_95")]
+        log = []
+        fm1_import.build_many("fm1", "fh1", pairs, log=log.append, skip_elsewhere=True)
+        self.assertEqual(built, ["BorderMR2"])
+        self.assertIn("FerrariF50: skipped, FH1 has it (FER_F50_95)", log)
+        built.clear()
+        fm1_import.build_many("fm1", "fh1", pairs, log=log.append)
+        self.assertEqual(built, ["BorderMR2", "FerrariF50"])
+
+
 class PartGainTests(unittest.TestCase):
     MR2 = {"intakeexhaust": {0: 1.0, 1: 1.0313, 2: 1.0625, 3: 1.1251},
            "fuelignition": {0: 1.0, 1: 1.0648, 2: 1.1295, 3: 1.2591},

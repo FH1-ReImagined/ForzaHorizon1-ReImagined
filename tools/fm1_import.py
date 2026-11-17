@@ -1244,14 +1244,188 @@ def write_mod(out, files, report):
                             "Forza Motorsport's %s as a car of its own, id %d (#930)" % (report["names"][0], report["id"])))
 
 
-def build_many(fm1_dir, fh1_dir, pairs, update=None, base_mod=None, log=print, sound=False):
+# FM1's cars that FH1 (with its official DLC), FH2, Fast & Furious or FM4 (with its DLC) has
+# already: FM1's name -> (that car's MediaName, the games that have it; car_ids.json for FH2, F&F
+# and FM4). Matched by hand on make, model, generation and trim: a race car only to that race car
+# (FM1's #12 Impul Skyline is FM4's NIS_12_Skyline_03, its #16 CTS-V has none), FM1's numbered
+# cars of one race model to it (the Audi R8 #4 and #38), and nothing to a car of another
+# generation (FM1's 2005 CL65 against FM4's 2010) or a tuner's (FM1's AB Flug, Veilside and
+# Mugen NSX have none). 153 of FM1's 231 cars; --skip-elsewhere (build_many's skip_elsewhere)
+# leaves them out.
+FM1_ELSEWHERE = {
+    "accobra": ("SHE_Cobra427_65", "FH1 DLC"),
+    "acura_integrar": ("ACU_IntegraR_01", "FH2, FM4"),
+    "acura_rsx": ("ACU_RSXTypeS_02", "FH2, FM4"),
+    "acuransx": ("ACU_NSX_05", "FM4"),
+    "amdb9": ("AST_DB9_05", "FM4"),
+    "amvanquish": ("AST_Vanquish_01", "FM4"),
+    "audi_s4": ("AUD_S4_04", "FH2, FF, FM4"),
+    "audi_s4t": ("AUD_S4_00", "FM4"),
+    "audi_tt": ("AUD_TT_04", "FM4"),
+    "audir8": ("AUD_2_R8_06", "FM4"),
+    "audir838": ("AUD_2_R8_06", "FM4"),
+    "audir84": ("AUD_2_R8_06", "FM4"),
+    "audirs6": ("AUD_RS6_03", "FM4"),
+    "auditt8": ("AUD_8_TTR_04", "FM4"),
+    "bentleyspeed8": ("BEN_7_Speed8_03", "FM4"),
+    "bmwlmr": ("BMW_15_LMR_99", "FM4"),
+    "bmwm3gtr42": ("BMW_6_M3GTR_01", "FM4"),
+    "bmwm3gtr43": ("BMW_6_M3GTR_01", "FM4"),
+    "boss": ("FOR_MustangBOSS429_70", "FH1"),
+    "buickgnx": ("BUI_RegalGNX_87", "FH2, FM4"),
+    "cadillaccts": ("CAD_CTSV_04", "FM4"),
+    "cadillaclmp": ("CAD_6_LMP_02", "FM4"),
+    "camaroz28": ("CHE_CamaroZ28_69", "FM4"),
+    "chevycamaross": ("CHE_Camaro35thAnniversary_02", "FM4"),
+    "chevycamaross69": ("CHE_CamaroSS_69", "FH1"),
+    "civicsi": ("HON_CivicSi_99", "FM4"),
+    "continental": ("BEN_Continental_04", "FM4"),
+    "corvettezr1": ("CHE_CorvetteZ06_02", "FM4"),
+    "dodgechallenger": ("DOD_ChallengerHemi_70", "FH2, FM4"),
+    "dodgestealth": ("DOD_StealthTurbo_96", "FM4"),
+    "dodgevipercc22": ("DOD_ViperCC_03", "FM4"),
+    "dodgevipercc23": ("DOD_ViperCC_03", "FM4"),
+    "dodgevipercomp": ("DOD_ViperCC_03", "FM4"),
+    "dodgevipersr10": ("DOD_ViperSRT10_03", "FM4"),
+    "eagletalon": ("EAG_Talon_98", "FM4"),
+    "ferrari246": ("FER_Dino246_69", "FH1"),
+    "ferrari250": ("FER_250GTO_64", "FH1"),
+    "ferrari288": ("FER_GTO_84", "FH1"),
+    "ferrari330p4": ("FER_330P4_67", "FM4"),
+    "ferrari333sp12": ("FER_12_333SP_98", "FM4"),
+    "ferrari355challenge": ("FER_355Challenge_95", "FH1"),
+    "ferrari360": ("FER_360_99", "FM4"),
+    "ferrari512tr": ("FER_512TR_91", "FM4"),
+    "ferrari612": ("FER_612_04", "FM4"),
+    "ferrari_575": ("FER_575_02", "FH2, FM4"),
+    "ferrarienzo": ("FER_Enzo_02", "FH1"),
+    "ferrarif40": ("FER_F40_87", "FH1"),
+    "ferrarif50": ("FER_F50_95", "FH1"),
+    "fordgt": ("FOR_GT_05", "FH1"),
+    "fordgt40": ("FOR_GT40_66", "FH1"),
+    "fordmustanggt": ("FOR_MustangGT_05", "FM4"),
+    "gto": ("PON_GTO_06", "FM4"),
+    "honda_civicr": ("HON_CivicR_04", "FH1"),
+    "hondacrx": ("HON_CRXsi_91", "FH1"),
+    "hondadelsol": ("HON_CRXDelSol_95", "FM4"),
+    "hondaintegrar": ("HON_IntegraR_02", "FH1"),
+    "hondaintegrarjspec": ("HON_IntegraR_00", "FM4"),
+    "hondansxr": ("HON_NSXR_05", "FM4"),
+    "hondansxr97": ("HON_NSXR_92", "FH2, FF, FM4"),
+    "hondaprelude": ("HON_PreludeSiR_00", "FM4"),
+    "hondas2000": ("HON_S2000_03", "FH1"),
+    "infinitig35": ("INF_G35Coupe_03", "FM4"),
+    "jaguaretype": ("JAG_Etype_61", "FH1"),
+    "jaguarxj220": ("JAG_XJ220_93", "FH2, FM4"),
+    "koenigsegg": ("KOE_CC8_02", "FM4"),
+    "lancerevo8": ("MIT_LancerEvoVIIIMR_04", "FH1 DLC"),
+    "lanciadelta": ("LAN_Delta_92", "FH1"),
+    "lanciastratos": ("LAN_Stratos_74", "FH1"),
+    "lexus_sc430": ("LEX_SC430_02", "FM4"),
+    "lexusis300": ("LEX_IS300_03", "FM4"),
+    "lotuselan": ("LOT_ElanSprint_72", "FH1"),
+    "lotuselise": ("LOT_Elise_99", "FM4"),
+    "lotusesprit": ("LOT_Esprit_02", "FH2, FM4"),
+    "mazda_rx7": ("MAZ_RX7_97", "FH1"),
+    "mazdarx72": ("MAZ_RX7_90", "FM4"),
+    "mazdarx7spirit": ("MAZ_RX7SpiritR_02", "FM4"),
+    "mazdarx8ms": ("MAZ_RX8Mazdaspeed_04", "FH1"),
+    "mclarenf1slr": ("MCL_F1_93", "FH1 DLC"),
+    "mercedes300sl": ("MER_300SL_54", "FH1"),
+    "mercedesc32amg": ("MER_C32AMG_04", "FH2, FF, FM4"),
+    "mercedesclk55": ("MER_CLK55AMG_03", "FM4"),
+    "mercedesclkgtr": ("MER_CLKGTR_98", "FM4"),
+    "mercedesslr": ("MER_SLR_05", "FH1 DLC"),
+    "minesr34": ("NIS_SkylineMinesR34_02", "FM4"),
+    "minesskyliner32": ("NIS_SkylineMinesR32_93", "FM4"),
+    "minicooper": ("MIN_CooperS_03", "FM4"),
+    "mitsu3000gt": ("MIT_GTO_97", "FM4"),
+    "mitsueclipsegsx": ("MIT_EclipseGSX_95", "FM4"),
+    "mitsueclipsegts": ("MIT_EclipseGTS_03", "FM4"),
+    "mitsufto": ("MIT_FTO_98", "FM4"),
+    "mitsulancer8mr": ("MIT_LancerEvoVIIIMR_04", "FH1 DLC"),
+    "mitsulancervi": ("MIT_LancerEvoVIGSR_99", "FH1"),
+    "mugencivicr": ("HON_CivicMugen_04", "FM4"),
+    "mugenintegrar": ("HON_IntegraMugen_02", "FM4"),
+    "mustangcobrar": ("FOR_MustangCobraR_00", "FH2, FM4"),
+    "nissan240sx": ("NIS_240SX_94", "FH1 DLC"),
+    "nissan300fairlady": ("NIS_FairladyZvSTwinTurbo_94", "FM4"),
+    "nissan300zx": ("NIS_FairladyZvSTwinTurbo_94", "FM4"),
+    "nissan350fairlady": ("NIS_FairladyZ_03", "FM4"),
+    "nissan350z": ("NIS_FairladyZ_03", "FM4"),
+    "nissan350zhasemi": ("NIS_3_FairladyZ_03", "FM4"),
+    "nissanr390": ("NIS_R390_98", "FM4"),
+    "nissansilvia": ("NIS_SilviaSpecR_00", "FH1"),
+    "nissansilvias14": ("NIS_SilviaKs_94", "FM4"),
+    "nissanskyline": ("NIS_SkylineGTRVSpecII_02", "FH1"),
+    "nissanskylineimpul": ("NIS_12_Skyline_03", "FM4"),
+    "nissanskylinenur": ("NIS_SkylineGTRVSpecII_02", "FH1"),
+    "nsx": ("ACU_NSX_97", "FM4"),
+    "opelastra": ("OPE_5_AstraV8_03", "FM4"),
+    "opelastra6": ("OPE_5_AstraV8_03", "FM4"),
+    "opelspeedster": ("OPE_Speedster_04", "FM4"),
+    "pagani17": ("PAG_17_ZondaGR_03", "FM4"),
+    "paganizonda": ("PAG_ZondaC12_99", "FM4"),
+    "panozlmp": ("PAN_11_LMP_03", "FM4"),
+    "peugot206": ("PEU_206RC_04", "FH1 DLC"),
+    "porsche550": ("POR_550ASpyder_56", "FM4"),
+    "porsche911gt2": ("POR_911GT2_95", "FM4"),
+    "porsche944": ("POR_944Turbo_89", "FM4"),
+    "porsche959": ("POR_959_87", "FM4"),
+    "porsche962": ("POR_17_962C_87", "FM4"),
+    "porsche996gt3": ("POR_996GT3_04", "FM4"),
+    "porschecarrera": ("POR_CarreraRS_73", "FM4"),
+    "porschecarreragt": ("POR_CarreraGT_03", "FM4"),
+    "porschegt1": ("POR_26_GT1_98", "FM4"),
+    "porscheturbo": ("POR_911Turbo_82", "FM4"),
+    "ptcruiser": ("CHR_PTCruiser_04", "FH1"),
+    "renaultclio": ("REN_Clio_03", "FH2, FM4"),
+    "s7": ("SAL_S7_04", "FH1"),
+    "saleens281": ("SAL_S281_00", "FM4"),
+    "saleens7r": ("SAL_2_S7_03", "FM4"),
+    "shelbygt500": ("SHE_GT500KR_68", "FM4"),
+    "shelbyseries1": ("SHE_Series1_99", "FM4"),
+    "skylinev35": ("NIS_Skyline350GT_03", "FM4"),
+    "stingray": ("CHE_CorvetteStingray_67", "FH1"),
+    "subaru22b": ("SUB_Impreza22b_98", "FH1"),
+    "supra": ("TOY_SupraRZ_98", "FH1"),
+    "svtfocus": ("FOR_FocusSVT_03", "FH1 DLC"),
+    "toyota2000gt": ("TOY_2000GT_69", "FM4"),
+    "toyotaaltezza": ("TOY_Altezza_04", "FM4"),
+    "toyotamr2": ("TOY_MR2GT_95", "FH2, FM4"),
+    "toyotamr202": ("TOY_MRS_02", "FM4"),
+    "toyotamrs": ("TOY_MRS_02", "FM4"),
+    "toyotasoarer": ("TOY_Soarer430_02", "FM4"),
+    "toyotatrueno": ("TOY_Sprinter_85", "FH1"),
+    "tvr_cerbera": ("TVR_Cerbera_98", "FM4"),
+    "tvr_tuscan": ("TVR_TuscanS_01", "FM4"),
+    "vauxhall_220": ("VAU_VX220_04", "FM4"),
+    "viper_gts_acr": ("DOD_ViperGTSACR_99", "FH2, FF, FM4"),
+    "volkswagenr32": ("VW_GolfR32_03", "FH2, FM4"),
+    "volvos60": ("VOL_S60R_04", "FM4"),
+    "vw_beetle": ("VW_Beetle_04", "FH1"),
+    "vw_corrado": ("VW_Corrado_95", "FH1"),
+    "wrx": ("SUB_WRXSTi_04", "FM4")
+}
+
+
+def elsewhere(car):
+    """(MediaName, games) of the car FH1, FH2, F&F or FM4 already has for this FM1 car, or None."""
+    return FM1_ELSEWHERE.get(car.lower())
+
+
+def build_many(fm1_dir, fh1_dir, pairs, update=None, base_mod=None, log=print, sound=False, skip_elsewhere=False):
     """({mod path: bytes}, [reports], [(car, error)]): several FM1 cars in one mod, each car's
     rows added to the database (and names to the string tables) the previous car's import
-    wrote; a car that fails is left out and the next goes on. pairs: [(FM1 car, FH1 donor)]."""
+    wrote; a car that fails is left out and the next goes on. pairs: [(FM1 car, FH1 donor)].
+    skip_elsewhere: leave out the cars another game has already (FM1_ELSEWHERE)."""
     files, reports, failed = {}, [], []
     base = base_mod
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         for k, (car, donor) in enumerate(pairs):
+            if skip_elsewhere and elsewhere(car):
+                log("%s: skipped, %s has it (%s)" % (car, elsewhere(car)[1], elsewhere(car)[0]))
+                continue
             try:
                 f, report = build(fm1_dir, fh1_dir, car, donor, update, base, sound=sound)
             except (Fm1ImportError, fm1_cars.Fm1Error, ValueError, KeyError, sqlite3.Error) as e:
@@ -1282,11 +1456,14 @@ def main(argv=None):
     ap.add_argument("--package", help="the DLC package folder to write for FM1's own engine sound banks "
                     "(.../4D5309C9/00000002/%s; the game reads banks only from the disc or a package); "
                     "without it the cars sound like the FH1 engine matched to theirs" % PACKAGE_NAME)
+    ap.add_argument("--skip-elsewhere", action="store_true",
+                    help="leave out the FM1 cars FH1, FH2, Fast & Furious or FM4 (or their DLC) has already")
     a = ap.parse_args(argv)
     sound = bool(a.package)
     if "=" in a.car:
         pairs = [tuple(p.split("=", 1)) for p in a.car.split(",") if p]
-        files, reports, failed = build_many(a.fm1, a.fh1, pairs, a.update, a.base_mod, sound=sound)
+        files, reports, failed = build_many(a.fm1, a.fh1, pairs, a.update, a.base_mod, sound=sound,
+                                            skip_elsewhere=a.skip_elsewhere)
         if not reports:
             print("error: no car imported", file=sys.stderr)
             return 1
@@ -1301,6 +1478,9 @@ def main(argv=None):
         return 0 if not failed else 2
     if not a.donor:
         ap.error("a donor is needed for one car")
+    if a.skip_elsewhere and elsewhere(a.car):
+        print("skipped: %s has %s already (%s)" % (elsewhere(a.car)[1], a.car, elsewhere(a.car)[0]))
+        return 0
     try:
         files, report = build(a.fm1, a.fh1, a.car, a.donor, a.update, a.base_mod, sound=sound)
     except (Fm1ImportError, fm1_cars.Fm1Error) as e:

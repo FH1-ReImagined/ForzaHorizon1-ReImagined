@@ -32,7 +32,7 @@ files and how far the import has come. Nothing of either game is in this reposit
 ```
 python tools/fm1_cars.py parts FM1_DISC bordermr2
 python tools/fm1_import.py FM1_DISC FH1_GAME bordermr2 MAZ_RX7_97 OUT [--update TU] [--base-mod FM4_MOD]
-    [--package DLC/4D5309C9/00000002/464D3143415253000000000000000000000000004D]
+    [--package DLC/4D5309C9/00000002/464D3143415253000000000000000000000000004D] [--skip-elsewhere]
 python tools/fm1_sound.py FM1_DISC bordermr2 [--wav FOLDER]
 ```
 
@@ -60,6 +60,18 @@ Each car's rows go into the database the previous car's import wrote; a car that
 out (listed at the end, exit status 2) and the rest go on. The best donor is FH1's own version
 of the car where FH1 has one (27 of FM1's production cars have one); its engine spec, sound
 and ratings then stand in for what FM1 lacks.
+
+`--skip-elsewhere` leaves out the FM1 cars another game has already: FH1 with its official DLC,
+Forza Horizon 2, Fast & Furious, or FM4 with its DLC (`FM1_ELSEWHERE` in `fm1_import.py`, 153
+of FM1's 231 cars, each with that car's MediaName and the games that have it). The list was
+matched by hand from FH1's database with its DLC merged in and `car_ids.json` (#924) on make,
+model, generation and trim:
+
+- A race car matches only that race car. FM1's #12 Impul Skyline is FM4's `NIS_12_Skyline_03`,
+  but its #16 CTS-V race car has no match.
+- FM1's numbered cars of one race model match it: the Audi R8 #4 and #38 are both FM4's R8.
+- A car of another generation doesn't match. FM1's 2005 CL65 is not FM4's 2010 one.
+- Tuner cars don't match: FM1's AB Flug, Veilside, Mugen NSX and Tommy Kaira cars are left in.
 
 ## FM1's car files
 
