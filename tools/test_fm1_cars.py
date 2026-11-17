@@ -912,7 +912,7 @@ class PartGainTests(unittest.TestCase):
 
 class ImportTests(unittest.TestCase):
     INFO = {"name": "BorderMR2", "display": "Border MR2 Turbo T-bar (Wiedebody)", "ordinal": 239,
-            "make": "Toyota", "year": 1995, "colours": [(54, 124, 84, 1), (10, 26, 16, 0)]}
+            "make": "Toyota", "year": 1995, "colours": [(54, 124, 84, 1), (10, 26, 16, 0)], "price": 30000}
 
     def test_names_and_media_name(self):
         self.assertEqual(fm1_import.names(self.INFO),
@@ -1093,7 +1093,7 @@ class ImportTests(unittest.TestCase):
         carlist = ('<carlist>\r\n  <car name="AcuraNSX" displayName="NSX" Ordinal="2" >\r\n  </car>\r\n'
                    '  <car name="BorderMR2" displayName="Border MR2 Turbo T-bar (Wiedebody)" Make="Border" Ordinal="239" >'
                    '\r\n  </car>\r\n</carlist>').encode()
-        model = struct.pack("<5I", 2, 2, 0, 0, 2002).ljust(104, b"\0") + struct.pack("<5I", 239, 57, 16, 0, 1995).ljust(104, b"\0")
+        model = struct.pack("<5I", 2, 2, 0, 0, 2002).ljust(104, b"\0") + struct.pack("<9I", 239, 57, 16, 0, 1995, 30000, 32000, 29000, 27541).ljust(104, b"\0")
         make = struct.pack("<3I", 57, 5, 0) + b"Toyota".ljust(16, b"\0")
         d = self.tmp()
         os.makedirs(os.path.join(d, "media", "cabs"))

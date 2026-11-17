@@ -457,7 +457,12 @@ values were compared with FM1's for two cars both games have, FM1's `nissansilvi
   for FM1's three) 1.259, its intercooler 1.13. FH1's valves, pistons, displacement, oil cooling
   and flywheel have no FM1 counterpart.
 - Still the donor's:
-  - the bolt-on parts' prices and masses (relative to stock);
+  - the upgrade prices and the bolt-on parts' masses (relative to stock): FH1 set its own prices
+    (the RX-7's brakes cost 400 / 700 / 2200 in FM1, 1600 / 3300 / 7400 in FH1; its tires 3600 /
+    7300 / 14500 and 2000 / 5000 / 10000), so FM1 cars' upgrades cost what FH1's do. The car's own
+    price is FM1's North American dealer price (`model.dat` offset 20 → `Data_Car.BaseCost`; 24
+    and 28 are Europe's and Asia's): the F50 267000 (FH1's 400000), the Ford GT 133000 (150000),
+    the RX-7 30000 (18000). `tooldata.xml`'s `<Misc Price=>` (the F50 78114) is not the dealer's;
   - the clutch, differentials and driveline: FH1 retuned FM1's (the S15's clutch 830 Nm and
     0.15 s in, FM1's 1000 Nm and 0.09 s; its diffs other torques), and they are generic (the
     S15's and the RX-7's differentials are the same rows);

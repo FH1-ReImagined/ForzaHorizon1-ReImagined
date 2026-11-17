@@ -70,7 +70,9 @@ class Fm1ImportError(ValueError):
 def fm1_info(fm1_dir, cab, car):
     """FM1's data on a car: {name, display, ordinal, make, year, colours [(r, g, b, metallic)]}.
     cars/carlist.xml (Mega.ca2): <car name= displayName= Ordinal=>; forzadb/cardb/model.dat:
-    104-byte rows, u32 ordinal at 0, make at 4, year at 16; make.dat: 28-byte rows, u32 id,
+    104-byte rows, u32 ordinal at 0, make at 4, year at 16, the dealer price at 20, 24 and 28 for
+    region.dat's North America, Europe and Asia (the F50 267000 in each, the RX-7 30000, 32000,
+    29000; 32 is another figure, near tooldata.xml's <Misc Price=>); make.dat: 28-byte rows, u32 id,
     region and string id, then the name (16 bytes); the car's liveries:
     cars/<car>/liveries/standard/livery<n>.livery (<override red= green= blue=>, the shader
     settings' file name says metallic or nonmetallic)."""
@@ -100,7 +102,8 @@ def fm1_info(fm1_dir, cab, car):
         if rgb:
             colours.append(tuple(int(v) for v in rgb.groups()) + (0 if "nonmetallic" in text.lower() else 1,))
     return {"name": m.group(1), "display": attrs.get("displayName", m.group(1)), "ordinal": ordinal,
-            "make": make, "year": year, "colours": colours}
+            "make": make, "year": year, "colours": colours,
+            "price": struct.unpack_from("<I", row, 20)[0] or None}
 
 
 def names(info):
@@ -1186,6 +1189,10 @@ def build(fm1_dir, fh1_dir, car_name, donor, update=None, base_mod=None, year=No
             spec = dict(spec, sound=pick_sound(db, spec["config"], spec["cylinders"], ASPIRATIONS[kind][0],
                                                fh1_make(db, info["make"])[0], info["year"], have) or donor_media)
         engine_id, drivetrain_id = engine_rows(db, rows, eng, spec, new, media)
+        # FM1's North American dealer price (fm1_info); the upgrade prices stay the donor's, as FH1
+        # set its own (the RX-7's brakes 400-2200 in FM1's tooldata.xml, 1600-7400 in FH1)
+        if info.get("price"):
+            rows["Data_Car"][0]["BaseCost"] = info["price"]
         measured = apply_ratings(db, rows["Data_Car"][0], fm1_figures(fm1_dir, info["ordinal"]),
                                  RATINGS.get(car_name.lower()))
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
