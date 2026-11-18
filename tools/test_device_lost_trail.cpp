@@ -1,4 +1,5 @@
-// Which draw the GPU was on when the device was lost (ReIGlue 0438, #551):
+// Which draw the GPU was on when the device was lost (ReIGlue 0438, #551), and what was
+// recorded for it before the draw command (ReIGlue 1100, #913):
 // src/graphics/vulkan/fh1_device_lost_trail.h of the patched SDK source. Build with the patched
 // SDK source's src/graphics/vulkan on the include path:
 //   c++ -std=c++17 -I ~/rexglue-sdk-src-forza/sdk/src/graphics/vulkan
@@ -72,6 +73,68 @@ int main() {
   CHECK(Has(r, "last finished #3 (no longer in the trail)"));
   const uint32_t last = trail.last_recorded();
   CHECK(trail.Find(last) && trail.Find(last)->submission == 100 + (t::Trail::kEntries - 1) / 1000);
+
+  // ReIGlue 1100 (#913): the unfinished draw's modifications, render pass and the work recorded
+  // before its draw command, and whether the GPU finished that work.
+  {
+    static t::Trail d;
+    t::Details car;
+    car.vertex_shader_modification = 0x000000400000003Full;
+    car.pixel_shader_modification = 0x000400000016003Full;
+    // 1x, depth D24FS8 and color 0 used (0b00011 << 2), depth format bit 7, color 0 format 3.
+    car.render_pass_key = (3u << 2) | (1u << 7) | (3u << 8);
+    car.filled = true;
+    const uint32_t f = d.Record(t::Kind::kDraw, 9, 300, 14, 0x29DFull, 0x147Bull, car);
+    t::Details with_work = car;
+    with_work.work.render_passes = 1;
+    with_work.work.draws = 3;
+    with_work.work.barriers = 2;
+    with_work.setup_marked = true;
+    CHECK(d.next() == f + 1);
+    const uint32_t u = d.Record(t::Kind::kDraw, 9, 300, 5065, 0x8228ull, 0x66A4ull, with_work);
+    r = t::DescribeDetails(d, f, 0);
+    std::printf("%s\n", r.c_str());
+    CHECK(Has(r, "GPU breadcrumbs, unfinished #2 (draw): VS modification 000000400000003F, "
+                 "PS modification 000400000016003F, render pass 0x0000038C (1x, depth D24FS8, "
+                 "color 0 2_10_10_10_FLOAT)"));
+    CHECK(Has(r, "recorded before the draw command: 1 render pass, 3 draws, 2 barriers"));
+    CHECK(Has(r, "did not finish that work"));
+    CHECK(!Has(r, "last finished in"));  // the same render pass
+    r = t::DescribeDetails(d, f, u);
+    CHECK(Has(r, "the GPU finished that work: it hung in the draw itself"));
+    // With gpu_device_lost_setup_breadcrumbs off (the default) there is no marker before the
+    // draw: the line names the work and the setting that tells it from the draw.
+    {
+      static t::Trail o;
+      const uint32_t of = o.Record(t::Kind::kDraw, 9, 300, 14, 0x29DFull, 0x147Bull, car);
+      t::Details unmarked = with_work;
+      unmarked.setup_marked = false;
+      o.Record(t::Kind::kDraw, 9, 300, 5065, 0x8228ull, 0x66A4ull, unmarked);
+      r = t::DescribeDetails(o, of, 0);
+      std::printf("%s\n", r.c_str());
+      CHECK(Has(r, "recorded before the draw command: 1 render pass, 3 draws, 2 barriers; in that "
+                   "work or in the draw: gpu_device_lost_setup_breadcrumbs tells them apart"));
+      CHECK(!Has(r, "finish that work"));
+    }
+    // Nothing recorded between the two: the draw itself.
+    t::Details bare = car;
+    bare.render_pass_key = 2;  // 4x, no attachments
+    const uint32_t v = d.Record(t::Kind::kDraw, 9, 300, 3, 1, 0, bare);
+    r = t::DescribeDetails(d, u, 0);
+    CHECK(Has(r, "render pass 0x00000002 (4x, no attachments)"));
+    CHECK(Has(r, "nothing else was recorded after #2: it hung in the draw itself"));
+    CHECK(Has(r, "last finished in render pass 0x0000038C"));
+    // A resolve names its own work; nothing when every draw finished or for entries without
+    // details (the older tests' entries above).
+    t::Details resolve;
+    resolve.work.dispatches = 1;
+    resolve.filled = true;
+    d.Record(t::Kind::kResolve, 9, 300, 0, 0, 0, resolve);
+    r = t::DescribeDetails(d, v, 0);
+    CHECK(Has(r, "unfinished #4 (resolve): recorded with it: 1 dispatch"));
+    CHECK(t::DescribeDetails(d, d.last_recorded(), 0).empty());
+    CHECK(t::DescribeDetails(trail, 0, 0).empty());
+  }
 
   std::printf("device lost trail: OK\n");
   return 0;
