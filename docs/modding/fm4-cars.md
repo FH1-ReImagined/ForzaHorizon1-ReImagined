@@ -337,7 +337,18 @@ u32 NumCollisionShapes, each: u32 ShapeType and
   properties and do not follow from the hull or the model in the game's files (a fit over the
   176 cars leaves most of their spread). A converted car gets the values of the FH1 car whose
   hull is closest in size, scaled axis by axis to the new hull (the inertia by the product of
-  the two axes' scales).
+  the two axes' scales). Because that donor follows the hull, the hulls of #931 change it for
+  210 of FM4's 381 disc cars (the 2000GT's from FH1 car 46 to 145, the 355's from 55 to 100, as
+  counted in the review of #932): a car imported again after #931 can handle differently
+  (inertia, half extents, offsets), not only collide differently.
+- **A body whose hull does not come out clean** from its vertex positions (more than three
+  planes meeting at a point that a few millimetres' nudge does not separate: the 1970 Camaro Z28
+  and `MAZ_16_B09_10` among the disc cars) gets the hull an import made before #931: from the
+  vertices read per axis, built in the model's own z, then mirrored to face forward. Without it
+  the import left such a car out.
+- An import made before #931 has its hulls mirrored front to back. The launcher's marker records
+  `"hull": 2` for an import with forward hulls; for an older one it says once at Play, and on
+  the Mods page until the next import, to import FM4 cars again.
 
 ## FH1's handling retune
 

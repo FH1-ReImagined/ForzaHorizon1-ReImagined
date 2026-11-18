@@ -203,6 +203,13 @@ class PositionTests(unittest.TestCase):
         self.assertEqual(len(got), len(pts))
         for x, y, z in pts:  # physicsdefinition.bin's forward is +z, the model's front -z
             self.assertLess(min(math.dist((x, y, -z), q) for q in got), 1e-3)
+        # the fallback reading (as before #931): each axis on its own as a share of the half
+        # extents, z negated too: inside the section's box, but not the vertices themselves
+        old = fm4_cars.model_points(data, per_axis=True)
+        self.assertEqual(len(old), len(pts))
+        for x, y, z in old:
+            self.assertTrue(-0.9 - 1e-3 <= x <= 0.9 + 1e-3 and -1e-3 <= y <= 1.2 + 1e-3 and -2.2 - 1e-3 <= z <= 2.1 + 1e-3)
+        self.assertGreater(max(min(math.dist(p, q) for q in got) for p in old), 0.1)
 
     def test_lamp_inside_a_large_section(self):
         bumper = [(x, y, z) for x in (-0.9, 0.9) for y in (0.0, 0.6) for z in (-2.2, -1.6)]
@@ -324,6 +331,28 @@ class PhysdefTests(unittest.TestCase):
         self.assertEqual(r["shapes"][-1]["type"], "hull")
         self.assertEqual((r["ndefs"], r["version"], r["type"], r["children"]), (1, 13, 1, 0))
         self.assertGreater(r["half_extents"][0], 1.3)
+
+
+    def test_a_mirrored_build_is_the_hull_flipped_front_to_back(self):
+        xml = ('<MAXData><Collision><CollSpheres PosOffsetX="0" PosOffsetY="0" PosOffsetZ="0" PosScale="1" '
+               'RadiusScale="1"><Sphere0 Radius="0.5" PosX="0" PosY="0.5" PosZ="1" Flags="2"/></CollSpheres>'
+               '</Collision></MAXData>')
+        donor_hull = fm4_physdef.hull_from_points(self.box())
+        donor = fm4_physdef.parse(fm4_physdef.write(
+            {"mass": 0.01, "inertia": [2, 0, 0, 0, 3, 0, 0, 0, 1], "inverse_inertia": [0.5, 0, 0, 0, 1 / 3, 0, 0, 0, 1],
+             "half_extents": [1.3, 0.7, 3.2], "bounding_radius": 4.5, "graphics_offset": [-0.5, -0.1, 1.4],
+             "aabb_offset": [0.3, 0.6, -0.9]}, [], fm4_physdef.hull_blob(*donor_hull)))
+        body = self.box()[:-1] + [(0, 1.3, 1.5)]                     # a roof peak towards +z
+        plain = fm4_physdef.parse(fm4_physdef.build(xml, body, [donor])[0])["shapes"][-1]["hull"]
+        mirrored = fm4_physdef.parse(fm4_physdef.build(xml, body, [donor], mirror_z=True)[0])["shapes"][-1]["hull"]
+        self.assertEqual(sorted((round(x, 6), round(y, 6), round(-z, 6)) for x, y, z in plain["vertices"]),
+                         sorted((round(x, 6), round(y, 6), round(z, 6)) for x, y, z in mirrored["vertices"]))
+        v = mirrored["vertices"]
+        c = [sum(p[i] for p in v) / len(v) for i in range(3)]
+        for f in mirrored["faces"]:                                  # still clockwise from outside
+            a, b, d = (v[i] for i in f[:3])
+            n = fm4_physdef._cross(fm4_physdef._sub(b, a), fm4_physdef._sub(d, a))
+            self.assertLess(fm4_physdef._dot(n, fm4_physdef._sub(a, c)), 1e-9)
 
 
 class ManifestTests(unittest.TestCase):
