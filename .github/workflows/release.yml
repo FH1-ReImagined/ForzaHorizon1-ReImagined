@@ -95,6 +95,8 @@ jobs:
         run: python -m unittest discover -s tools -p 'test_fm4_stream_lead.py' -v
       - name: FM4 circuit command-buffer fixups (#648)
         run: python -m unittest discover -s tools -p 'test_fm4_pvs.py' -v
+      - name: FM4 circuits' CAFF textures as .bix pairs (made-up textures, no game files)
+        run: python -m unittest discover -s tools -p 'test_fm4_caff.py' -v
       - name: FM4 circuits' collision (made-up cells and surface lists, no game files, #876)
         run: python -m unittest discover -s tools -p 'test_fm4_col.py' -v
       - name: Resource hook audit tests (synthetic images)
