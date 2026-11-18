@@ -5,6 +5,8 @@
 //   FORZA_LIST_TRACE_CONTEXT(kind, pass, layer);  the pass group a draw function is drawing
 //   FORZA_LIST_TRACE_RECORDED_LIST();             in the hook of sub_824467A8 (RunRecordedList)
 //   FORZA_LIST_TRACE_RUN();                       in the hook of sub_824469B0 (RunCommandBuffer)
+//   FORZA_LIST_TRACE_FIXUP();                     in the hook of sub_82D19210 (the fixup
+//                                                 dispatcher, hooks/native_lists.cpp)
 //
 // The two RUN lines read ctx and base of the hook they are in, before the original runs.
 #pragma once
@@ -21,6 +23,7 @@ enum class Context : uint8_t { kNone, kTrack, kProcedural, kCar };
 
 void RecordedList(PPCContext& ctx, uint8_t* base);
 void Run(PPCContext& ctx, uint8_t* base);
+void Fixup(PPCContext& ctx, uint8_t* base);
 
 struct ContextState {
   Context kind = Context::kNone;
@@ -48,11 +51,13 @@ class ContextScope {
       ::forza::list_trace::Context::kind, uint32_t(pass), uint32_t(layer))
 #define FORZA_LIST_TRACE_RECORDED_LIST() ::forza::list_trace::RecordedList(ctx, base)
 #define FORZA_LIST_TRACE_RUN() ::forza::list_trace::Run(ctx, base)
+#define FORZA_LIST_TRACE_FIXUP() ::forza::list_trace::Fixup(ctx, base)
 
 #else
 
 #define FORZA_LIST_TRACE_CONTEXT(kind, pass, layer) static_cast<void>(0)
 #define FORZA_LIST_TRACE_RECORDED_LIST() static_cast<void>(0)
 #define FORZA_LIST_TRACE_RUN() static_cast<void>(0)
+#define FORZA_LIST_TRACE_FIXUP() static_cast<void>(0)
 
 #endif
