@@ -1335,6 +1335,40 @@ blocks are the file's (the largest of all layouts, with the margin):
 | TopGear | 242 | 110 -> 261 | 408 -> 724 | 36390 -> 47226 | neighbours |
 | Tsukuba | 176 | 40 -> 147 | 737 -> 1531 | 44238 -> 49423 | neighbours |
 
+### The next ring within 400 m (#824)
+
+With the zones above and the textures below fixed, what was left of the pop-in was the reach
+itself: a piece is ready long before it is drawn. Over a lap of Le Mans at about 120 km/h
+(`fm4_stream_lead.py`, pieces within 60 m of the path) a live zone held a piece 440 m ahead at
+the median and its model was made 1,025 m ahead, but the camera's zone listed it only 279 m
+ahead (128 m at the least), and FH1 draws that zone alone.
+
+So the reach tried first (`FAR_NEAR`, 400 m; `FM4_PVS_FAR_NEAR=0` for none) adds the instances
+of the twelve hexes round the six whose spot is within 400 m of the zone's centre (their
+extent's reach added). Where that needs more blocks than the game has, the reaches above
+follow in turn. An offline count along Le Mans's line first (the zones of each reach, the
+camera's zone at every point of the lap): 300 m gave a median of 310 m, 400 m 400 m, 500 m
+420 m for 2% more blocks than 400 m.
+
+In the game (launcher import, autopilot; before is main, after this reach):
+
+| | Listed: least | 10th percentile | Median | Blocks asked | Most in use |
+| --- | --- | --- | --- | --- | --- |
+| Le Mans, at 100 km/h or more | 128 -> 284 m | 206 -> 360 m | 279 -> 429 m | 52033 -> 58675 | 39938 -> 46327 |
+| Suzuka, at 80 km/h or more | 129 -> 290 m | 203 -> 373 m | 289 -> 477 m | 60124 -> 64854 | 48477 -> 51785 |
+
+- Frame cost: Le Mans 1,716-1,768 draws a frame -> 1,856-2,010, the command processor 3.0 ->
+  3.4-3.7 ms; Suzuka 1,646 -> 1,864 draws, 3.0 -> 3.4 ms. 30 fps held (the rig's cap).
+- Laguna Seca (its largest zone 1,672 -> 2,720 instances: the instance pools follow it) and
+  Catalunya driven a lap each: no fault, nothing missing.
+- Offline over Disc 1's layouts, the main layout (Ribbon_00) of every circuit takes the new
+  reach except Alps, Hockenheim, Indi, Motegi, Mugello, Sebring, Silverstone and Sunset Infield,
+  which keep the zones they had (their blocks would be over the game's).
+- **Textures with no file**: Le Mans asked 236 times for 171 streamed textures that have no
+  file. They have none on the disc either (FM4's records of road, line and edge textures with
+  the streamed flag 0x4; the number is the circuit's own). FM4 itself can only draw the pack's
+  resident copy of those, and FH1 draws the same: the requests cost nothing in the log.
+
 ### What was still late: the streamed textures (#824)
 
 Reported again on 0.3.6, with circuits imported after the zones above: trees, houses and
