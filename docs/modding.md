@@ -14,6 +14,11 @@ original back.
   ([modding/fm4-cars.md](modding/fm4-cars.md)).
 - Forza Motorsport 4's circuits from your own FM4 Disc 1 (experimental): **Import FM4 tracks…** on the
   Mods page ([fm4-tracks.md](fm4-tracks.md)).
+- Forza Motorsport (2005)'s cars from your own FM1 disc (in progress, a tool for now):
+  [modding/fm1-cars.md](modding/fm1-cars.md).
+- Forza Motorsport (2005)'s circuits (Tsukuba, Road America, Silverstone; experimental): **Import FM1
+  tracks…** on the Mods page ([fm4-tracks.md](fm4-tracks.md#forza-motorsport-2005-circuits),
+  [modding/fm1-tracks.md](modding/fm1-tracks.md)).
 
 ## For players
 
