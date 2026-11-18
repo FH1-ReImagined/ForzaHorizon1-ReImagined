@@ -1192,6 +1192,11 @@ def _build(cfg, tools, target, backup, work, disc1, disc2, progress, cancelled, 
         if not ids:
             raise Fm4Error("Your FM4 files have no car that FH1 lacks.")
         report = conv.run(ids, progress, cancelled)
+        # an FM4 car FH1 has as a traffic car that is left out (the Leaf, #841) is named with the
+        # cars that could not be converted, not passed over in silence
+        twins = conv.twins() if hasattr(conv, "twins") else {}
+        report["skipped"] += [(cid, f"{name}: {reason}") for cid, name, reason in candidates
+                              if reason and cid in twins]
     except tools.Cancelled:
         raise Cancelled() from None
     except tools.ConvertError as e:
