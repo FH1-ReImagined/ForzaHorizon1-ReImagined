@@ -325,7 +325,9 @@ void TestSlots() {
   nl::Slots slots(2);
   uint32_t a = 9, b = 9, c = 9;
   CHECK(slots.Take(&a) && slots.Take(&b) && a != b && !slots.Take(&c));
+  CHECK(slots.Ready(a) && !slots.Ready(nl::kNone));
   CHECK(slots.BeginWrite(a) && !slots.BeginWrite(a));
+  CHECK(!slots.Ready(a));
   CHECK(!slots.EndWork(a) && slots.EndWork(a));
 
   // The native unload returns first. Its slot remains odd and unavailable
@@ -335,7 +337,9 @@ void TestSlots() {
   CHECK(!slots.Take(&c));
   CHECK(!slots.EndWork(a) && !slots.Take(&c));
   CHECK(!slots.EndWork(a));
+  CHECK(!slots.Ready(a));
   CHECK(slots.Take(&c) && c == a && slots.used() == 2);
+  CHECK(slots.Ready(c));
 
   // Conversely, the native fixup can return while the unload is still active.
   CHECK(slots.BeginWrite(b));
@@ -351,6 +355,20 @@ void TestSlots() {
   CHECK(!slots.BeginWrite(a) && !slots.EndWork(a));
   slots.BeginRetire(a);
   CHECK(!slots.EndWork(a) && slots.Take(&b) && b == a);
+}
+
+void TestReplayBindingIdentity() {
+  nl::Bound b{0x17400000, 1917, 10, 4, 198};
+  b.patch = 0x40200000;
+  b.lifetime = 0x100000008ull;
+  constexpr uint32_t state = 0x40100000;
+  uint32_t q[nl::kListBindLifetimeWords] = {
+      nl::kMagicHost, nl::kOpListBind, b.phys, b.words, b.template_id, 0, state + 16,
+      0x40300000, b.patch, b.patch_words, 12, 0, 8, 1};
+  CHECK(nl::MatchesReplayBinding(q, nl::kListBindLifetimeWords, state, b));
+  CHECK(!nl::MatchesReplayBinding(q, nl::kListBindWords, state, b));
+  ++b.lifetime;  // Same address, slot and template after reuse.
+  CHECK(!nl::MatchesReplayBinding(q, nl::kListBindLifetimeWords, state, b));
 }
 
 void TestDefineAck() {
@@ -380,6 +398,7 @@ int main(int argc, char** argv) {
   TestRing();
   TestRingFailedDefine();
   TestSlots();
+  TestReplayBindingIdentity();
   TestDefineAck();
   std::printf("native list registry: all tests passed\n");
   return 0;

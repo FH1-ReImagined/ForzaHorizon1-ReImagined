@@ -33,6 +33,8 @@ namespace forza::native_list {
 constexpr uint32_t kMagicHost = 0x4648314Eu;  // "FH1N", a host packet's first word
 constexpr uint32_t kOpListDefine = 0x20, kOpListBind = 0x21, kOpListDrop = 0x22;
 constexpr uint32_t kListDefineWords = 8, kListBindWords = 12, kListDropWords = 4;
+constexpr uint32_t kListBindLifetimeWords = kListBindWords + 2;
+constexpr uint32_t kListDropLifetimeWords = kListDropWords + 2;
 constexpr uint32_t kListRefused = 0xFFFFFFFFu;
 constexpr uint32_t kListGroupNone = 0xFF;
 constexpr uint32_t kListRetiled = 1;
@@ -59,7 +61,21 @@ inline uint32_t TemplateHash(const uint32_t* words, size_t count) {
 
 struct Bound {
   uint32_t phys = 0, words = 0, patch_words = 0, slot = kNone, template_id = kListRefused;
+  uint32_t patch = 0;
+  uint64_t lifetime = 0;
 };
+
+// The query is the host-order Bind packet, including its title lifetime.
+inline bool MatchesReplayBinding(const uint32_t* query, uint32_t count, uint32_t states,
+                                 const Bound& bound) {
+  return query && count == kListBindLifetimeWords && states && bound.slot != kNone &&
+         bound.template_id != kListRefused && bound.lifetime &&
+         query[0] == kMagicHost && query[1] == kOpListBind &&
+         query[2] == bound.phys && query[3] == bound.words && query[4] == bound.template_id &&
+         !query[5] && query[6] == states + bound.slot * 4 && query[8] == bound.patch &&
+         query[9] == bound.patch_words &&
+         (uint64_t(query[13]) << 32 | query[12]) == bound.lifetime;
+}
 
 class Lists {
  public:
@@ -223,6 +239,7 @@ class Slots {
 
   // True for the first writer, which marks the guest generation busy.
   bool BeginWrite(uint32_t slot) { return activity_[slot]++ == 0; }
+  bool Ready(uint32_t slot) const { return slot < next_ && activity_[slot] == 0; }
 
   void BeginRetire(uint32_t slot) { activity_[slot] = kRetired | (activity_[slot] + 1); }
 

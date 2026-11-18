@@ -146,6 +146,7 @@ struct State {
   nl::Slots slots{kStateWords};
   nl::Converter converter;
   std::vector<nl::Bound> drops;  // unloaded, to go out at the next call
+  uint64_t next_lifetime = 1;
   uint32_t ring_base = 0, ack = 0, states = 0;
   uint32_t* define_ack_word = nullptr;
   uint32_t device = 0;  // the device of the first model list call
@@ -224,6 +225,14 @@ bool Emit(PPCContext& ctx, uint8_t* base, uint32_t dev, const uint32_t* words, u
   return forza::native_device::EmitHostPacket(ctx, base, dev, words, n);
 }
 
+bool EmitDrop(PPCContext& ctx, uint8_t* base, uint32_t dev, const nl::Bound& binding) {
+  const uint32_t drop[nl::kListDropLifetimeWords] = {
+      nl::kMagicHost, nl::kOpListDrop, binding.phys, binding.words,
+      uint32_t(binding.lifetime), uint32_t(binding.lifetime >> 32)};
+  return Emit(ctx, base, dev, drop,
+              binding.lifetime ? nl::kListDropLifetimeWords : nl::kListDropWords);
+}
+
 void Log(State& s, uint64_t now) {
   const Counts& n = s.n;
   std::string refusals;
@@ -250,8 +259,7 @@ void Log(State& s, uint64_t now) {
 bool SendDrops(PPCContext& ctx, uint8_t* base, uint32_t dev, State& s) {
   while (!s.drops.empty()) {
     const nl::Bound& b = s.drops.back();
-    const uint32_t drop[nl::kListDropWords] = {nl::kMagicHost, nl::kOpListDrop, b.phys, b.words};
-    if (!Emit(ctx, base, dev, drop, nl::kListDropWords)) return false;
+    if (!EmitDrop(ctx, base, dev, b)) return false;
     ++s.n.dropped;
     s.drops.pop_back();
   }
@@ -353,6 +361,7 @@ void Register(PPCContext& ctx, uint8_t* base, uint32_t dev, uint32_t cb, uint32_
   b.phys = phys;
   b.words = words;
   b.patch_words = patch_words;
+  b.patch = patch;
   b.template_id = id;
   b.slot = nl::kNone;
   if (!refused && !s.slots.Take(&b.slot)) {
@@ -362,11 +371,15 @@ void Register(PPCContext& ctx, uint8_t* base, uint32_t dev, uint32_t cb, uint32_
     b.slot = nl::kNone;
   }
   const uint32_t state = b.slot != nl::kNone ? s.states + b.slot * 4 : 0;
-  if (state) PublishReadySlot(base, s, b.slot);
-  const uint32_t bind[nl::kListBindWords] = {
+  if (state) {
+    PublishReadySlot(base, s, b.slot);
+    if (s.next_lifetime) b.lifetime = s.next_lifetime++;
+  }
+  const uint32_t bind[nl::kListBindLifetimeWords] = {
       nl::kMagicHost, nl::kOpListBind, phys,        words, b.template_id, refusal, state, cb,
-      patch,          patch_words,     Group(), retiled ? nl::kListRetiled : 0u};
-  if (!Emit(ctx, base, dev, bind, nl::kListBindWords)) {
+      patch, patch_words, Group(), retiled ? nl::kListRetiled : 0u,
+      uint32_t(b.lifetime), uint32_t(b.lifetime >> 32)};
+  if (!Emit(ctx, base, dev, bind, b.lifetime ? nl::kListBindLifetimeWords : nl::kListBindWords)) {
     if (state) {
       StartSlotRetirement(base, s, b.slot);
       s.slots.EndWork(b.slot);
@@ -454,9 +467,7 @@ void OnRun(PPCContext& ctx, uint8_t* base) {
   }
   if (look == nl::Lists::Look::kReused) {
     // The object holds another list now: the old one goes.
-    const uint32_t drop[nl::kListDropWords] = {nl::kMagicHost, nl::kOpListDrop, old.phys,
-                                               old.words};
-    if (!Emit(ctx, base, dev, drop, nl::kListDropWords)) {
+    if (!EmitDrop(ctx, base, dev, old)) {
       ++s.n.no_room;
       return;
     }
@@ -476,6 +487,28 @@ void OnRun(PPCContext& ctx, uint8_t* base) {
 }  // namespace forza::native_lists
 
 namespace nls = forza::native_lists;
+
+#if defined(_WIN32)
+// The callback may inspect this binding's identity and generation while
+// title fixup, unload and rebind entry is closed. A separate range guard is
+// required to read its backing memory.
+extern "C" __declspec(dllexport) bool ForzaM4WithBindingV1(
+    const uint32_t* query, uint32_t count, bool (*visit)(void*, uint32_t) noexcept,
+    void* context) noexcept {
+  namespace nl = forza::native_list;
+  if (!query || count != nl::kListBindLifetimeWords || !visit || !nls::Active()) return false;
+  auto& s = nls::S();
+  std::unique_lock lock(s.mutex, std::try_to_lock);
+  if (!lock || s.unloads_in_flight) return false;
+  const auto* bound = s.lists.Get(query[7]);
+  if (!bound || !nl::MatchesReplayBinding(query, count, s.states, *bound) ||
+      !s.slots.Ready(bound->slot)) return false;
+  auto* word = REX_KERNEL_MEMORY()->TranslateVirtual<uint32_t*>(query[6]);
+  const auto generation = __builtin_bswap32(
+      std::atomic_ref<uint32_t>(*word).load(std::memory_order_acquire));
+  return !(generation & 1) && visit(context, generation);
+}
+#endif
 
 // The fixup dispatcher (r3: a pointer to the command buffer, r4: the record; docs "M4"): a bound
 // list's generation is odd while the fixup writes it, even again after.
