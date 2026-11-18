@@ -178,8 +178,12 @@ def build(cfg, ff_folder, fh2_folder=None, progress=lambda f, text: None, cancel
 def world_room(room: str, key: str) -> str:
     """The server room of a world: the player's own room (Settings > Online, "" the default one)
     with the world's key. Players meet only others in their room, so those in a world meet each
-    other and never the players in Colorado (the game takes 32 characters)."""
-    return (room[:31 - len(key)] + "+" + key)[:32]
+    other and never the players in Colorado. The game keeps the first 32 bytes of the UTF-8
+    string (kernel/identity.cpp), so the player's room is cut by its bytes, never in the middle of
+    a letter: the "+key" ending always reaches the server, which keeps no results from a world."""
+    ending = ("+" + key).encode("utf-8")[:32]
+    kept = room.encode("utf-8")[:32 - len(ending)].decode("utf-8", errors="ignore")
+    return kept + ending.decode("utf-8", errors="ignore")
 
 
 def configure(info, env: dict, notes: list, room=""):

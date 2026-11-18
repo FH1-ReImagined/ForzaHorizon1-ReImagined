@@ -164,6 +164,14 @@ class World(WorldBase):
         self.assertEqual(self.plan().env["FORZA_ROOM"], "club+anthem")
         self.assertEqual(fh2ffworld.world_room("r" * 40, "fh2"), "r" * 28 + "+fh2")     # 32 at most
         self.assertEqual(len(fh2ffworld.world_room("r" * 40, "anthem")), 32)
+        # the game cuts by UTF-8 bytes: a room of two-byte letters keeps its ending whole
+        for room in ("é" * 40, "ü" + "é" * 20, "日本語" * 10):
+            for key in ("fh2", "anthem"):
+                r = fh2ffworld.world_room(room, key)
+                self.assertTrue(r.endswith("+" + key), r)
+                self.assertLessEqual(len(r.encode("utf-8")), 32)
+                self.assertTrue(room.startswith(r[:-len(key) - 1]), r)
+        self.assertEqual(fh2ffworld.world_room("é" * 40, "fh2"), "é" * 14 + "+fh2")
         self.cfg.settings["live_room"] = ""
         self.cfg.advanced["extra_env"] = "FORZA_ROOM=mine"                       # a developer's own wins
         self.assertEqual(self.plan().env["FORZA_ROOM"], "mine")
