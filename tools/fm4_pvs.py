@@ -592,8 +592,8 @@ GROUND_COPIES = {}  # new file in the track's bin folder: (the file it is a copy
 # blocks in use measured on a lap (24454 for 24037 at the 120 m visible set, 34225 for 34518
 # at 25 m).
 STREAM_MARGIN = float(os.environ.get("FM4_PVS_STREAM_MARGIN", "1.25"))
-# The most blocks the game links in (kMaxBlocks in fm4_track.cpp: 64 MB in all).
-MAX_STREAM_BLOCKS = 65536
+# The most blocks the game links in (kMaxBlocks in fm4_track.cpp: 96 MB in all).
+MAX_STREAM_BLOCKS = 98304
 # A test (FM4_PVS_ZONE_TEXTURES=1): a zone's file list holds its textures' own files too, as
 # Colorado's do (a streamed record's object holds the archive index of its _0x<id>.bix as its
 # resource id). It changed nothing at Sunset Infield (FH1 requests a streamed texture itself):

@@ -1369,6 +1369,55 @@ In the game (launcher import, autopilot; before is main, after this reach):
   the streamed flag 0x4; the number is the circuit's own). FM4 itself can only draw the pack's
   resident copy of those, and FH1 draws the same: the requests cost nothing in the log.
 
+### The eight circuits that did not fit: a 96 MB pool (#849)
+
+With the next ring, eight circuits' main layouts asked for more than the 65,536 blocks the
+hook linked in, so they kept a shorter reach: the six within 200 or 150 m (Alps, Hockenheim,
+Indi, Motegi), the six whole (Sebring, Silverstone), or a zone's own alone (Mugello, Sunset
+Infield). On the Alps that showed (#849): scenery listed 152 m ahead at the median, 27 m at
+the least, and an overpass and barriers missing as the car came to them.
+
+The 65,536 was a budget, not a format limit: the blocks are a free list of 1,028-byte
+blocks the hook allocates on the guest's system heap. `kMaxBlocks` (and `MAX_STREAM_BLOCKS`)
+is now 98,304 (96 MB). What each reach asks for, with the margin, on Disc 1's layouts that
+were over the old cap:
+
+| Layout | Next ring | Six whole | Six within 200 m | Within 150 m |
+| --- | --- | --- | --- | --- |
+| Alps 00 / 01 / 02 | 89251 / 90296 / 79881 | 79513 / 79435 / 73109 | 65928 / 64653 / 65966 | 62448 / 60808 / 63654 |
+| Hockenheim 00 / 01 | 77604 / 76093 | 70159 / 68483 | 62800 / 61135 | 55193 / 53855 |
+| Indi 00 / 01 | 74719 / 72074 | 69620 / 67578 | 62434 / 60310 | 59018 / 59264 |
+| Motegi 00 / 02 / 03 | 87039 / 74813 / 74898 | 75271 / 64935 / 64739 | 65139 / 59261 / 58024 | 58803 / 55035 / 55219 |
+| Mugello 00 / 01 | 87308 / 79678 | 83329 / 76635 | 76966 / 72205 | 74828 / 70695 |
+| Sebring 00 | 67496 | 54595 | 44505 | 40120 |
+| Silverstone 00 | 68600 | 63045 | 54564 | 51633 |
+| Sunset Infield 00 / 01 / 04 | 82520 / 82930 / 71798 | 75228 / 77416 / 67218 | 69929 / 73436 / 66411 | 66358 / 70141 / 64171 |
+
+Every layout now takes the next ring; the most asked for is 90,296 (the Alps' 01).
+
+In the game (launcher import, autopilot, a Radeon on Vulkan):
+
+| | Listed: least | 10th percentile | Median | Blocks linked in | Most in use |
+| --- | --- | --- | --- | --- | --- |
+| Alps, at 60 km/h or more, before | 27 m | 98 m | 152 m | 65193 | 49034 |
+| Alps, after | 301 m | 355 m | 422 m | 91370 | 72773 |
+| Mugello, at 60 km/h or more, after (2.1 km) | 294 m | 379 m | 453 m | 88565 | 71587 |
+
+- The Alps: 1,285 of the line's 1,461 points, no fault. The overpass after the first tunnel
+  and the barriers and signs on the way to it are drawn as the car comes up to them; before,
+  they were missing. 1,459 to 1,608 draws a frame (was 1,310 to 1,408), the command
+  processor 2.9 to 3.2 ms (was 2.9), 30 fps held (the rig's cap).
+- Mugello: 2.1 km (the test line then ran into a wall at a run-off), no fault. About 2,030
+  draws a frame, the command processor 3.9 to 4.1 ms, 30 fps held. Its peak, 71,587 blocks in
+  use, is over the old cap.
+- The 96 MB come from the guest's system heap at the first streamed file and stay for the
+  process, as the 64 MB did. Only a converted circuit that asks for them takes them.
+- **The blurred mountain** beside the road after the lake on the Alps is unchanged, and it is
+  not motion blur (the same with `motion_blur = false`). Every placed instance near the path
+  had its textures at full size, and the textures with no file there are flags and a few
+  signs. The mountain looks like one of FM4's always-loaded backdrops, which the trace does
+  not cover.
+
 ### What was still late: the streamed textures (#824)
 
 Reported again on 0.3.6, with circuits imported after the zones above: trees, houses and
@@ -1814,7 +1863,8 @@ were not run.
   media/tracks/<track>/fm4_stream_blocks.txt: the largest union of a zone's and its six
   neighbours' model files in KB (34226 for Suzuka at 25 m), times `FM4_PVS_STREAM_MARGIN` (1.25):
   42783. When the pool is made, the game (hooks/fm4_track.cpp) reads that file of every folder
-  in game:\media\tracks\ and links that many blocks in all, up to 65536 (64 MB); when the
+  in game:\media\tracks\ and links that many blocks in all, up to 98304 (96 MB; 65536 before
+  #849); when the
   pool is made again, the same blocks are linked again (none allocated twice). A track
   without the file (Colorado) keeps the game's pool. Should a converted track still empty
   it, 4096 more are added, up to the cap, with a warning naming the file to raise. The union
