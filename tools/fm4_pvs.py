@@ -470,20 +470,34 @@ def convert(F, files, fits=None):
             P["instances"].append(fh1_instance_of(g))
             everywhere.append(len(insts) - 1)
     # What each zone holds (ZONE_REACH): FH1 draws the camera's zone alone, so a zone holds
-    # what is seen from it, its own instances and its six neighbours'. Where that needs more
-    # streaming blocks than the game has, the neighbours' instances within NEIGHBOUR_NEAR m
-    # of the zone's centre (their extent's reach added, as cells_near), else its own alone.
+    # what is seen from it: its own instances, its six neighbours' and those of the next ring
+    # within FAR_NEAR m of its centre. Where that needs more streaming blocks than the game
+    # has, its own and its six neighbours', then the neighbours' instances within
+    # NEIGHBOUR_NEAR m of the zone's centre (their extent's reach added, as cells_near), else
+    # its own alone.
     def reach_of(i):
         e = F["models"][insts[i]["model"]]["extent"]
         return (e[0] ** 2 + e[2] ** 2) ** 0.5
     zones = None
-    for near in ([None] + list(NEIGHBOUR_NEAR) if ZONE_REACH == "neighbours" else []):
-        zones = zone_records(F, insts, grid, with_neighbours(grid, members, near, spots, reach_of),
-                             everywhere)
+    tries = [("far", FAR_NEAR)] if FAR_NEAR else []
+    tries += [("near", n) for n in [None] + list(NEIGHBOUR_NEAR)]
+    for kind, near in (tries if ZONE_REACH == "neighbours" else []):
+        if kind == "far":
+            held = with_neighbours(grid, members, None, spots, reach_of, far=near)
+        else:
+            held = with_neighbours(grid, members, near, spots, reach_of)
+        zones = zone_records(F, insts, grid, held, everywhere)
         if fits is None or fits(zones, grid):
-            P["zone_reach"] = ("their own and their neighbours' instances" if near is None else
-                               f"their own and their neighbours' instances within {near:.0f} m "
-                               f"(all of them: over the game's {MAX_STREAM_BLOCKS} streaming blocks)")
+            over = f"(all of them: over the game's {MAX_STREAM_BLOCKS} streaming blocks)"
+            if kind == "far":
+                P["zone_reach"] = (f"their own and their neighbours' instances and the next ring's "
+                                   f"within {near:.0f} m")
+            elif near is None:
+                P["zone_reach"] = "their own and their neighbours' instances" + (
+                    f" (the next ring's within {FAR_NEAR:.0f} m too: over the game's "
+                    f"{MAX_STREAM_BLOCKS} streaming blocks)" if FAR_NEAR else "")
+            else:
+                P["zone_reach"] = f"their own and their neighbours' instances within {near:.0f} m {over}"
             break
         zones = None
     if zones is None:
@@ -504,23 +518,32 @@ def convert(F, files, fits=None):
     return P, zones, grid
 
 
-def with_neighbours(grid, members, near=None, spots=None, reach=None):
+def with_neighbours(grid, members, near=None, spots=None, reach=None, far=None):
     """Each cell's members, then those of its six neighbours it does not hold yet: all of them,
-    or (near, m) those whose spot is within near + reach(i) of the cell's centre."""
+    or (near, m) those whose spot is within near + reach(i) of the cell's centre. With far (m),
+    all of the six's, then those of the twelve hexes round them whose spot is within
+    far + reach(i) of the cell's centre."""
     out = {}
     for cell in grid.cells:
         zi, seen = list(members[cell]), set(members[cell])
         cx, cz = grid.centre(*cell)
-        for n in grid.neighbours(*cell):
-            for i in members[n]:
-                if i in seen:
-                    continue
-                if near is not None:
-                    x, z = spots[i]
-                    if (x - cx) ** 2 + (z - cz) ** 2 > (near + reach(i)) ** 2:
+        ring1 = grid.neighbours(*cell)
+        rings = [(ring1, near)]
+        if far is not None:
+            inner = set(ring1) | {cell}
+            ring2 = sorted({m for n in ring1 for m in grid.neighbours(*n)} - inner)
+            rings = [(ring1, None), (ring2, far)]
+        for ring, limit in rings:
+            for n in ring:
+                for i in members[n]:
+                    if i in seen:
                         continue
-                seen.add(i)
-                zi.append(i)
+                    if limit is not None:
+                        x, z = spots[i]
+                        if (x - cx) ** 2 + (z - cz) ** 2 > (limit + reach(i)) ** 2:
+                            continue
+                    seen.add(i)
+                    zi.append(i)
         out[cell] = zi
     return out
 
@@ -569,8 +592,8 @@ GROUND_COPIES = {}  # new file in the track's bin folder: (the file it is a copy
 # blocks in use measured on a lap (24454 for 24037 at the 120 m visible set, 34225 for 34518
 # at 25 m).
 STREAM_MARGIN = float(os.environ.get("FM4_PVS_STREAM_MARGIN", "1.25"))
-# The most blocks the game links in (kMaxBlocks in fm4_track.cpp: 64 MB in all).
-MAX_STREAM_BLOCKS = 65536
+# The most blocks the game links in (kMaxBlocks in fm4_track.cpp: 96 MB in all).
+MAX_STREAM_BLOCKS = 98304
 # A test (FM4_PVS_ZONE_TEXTURES=1): a zone's file list holds its textures' own files too, as
 # Colorado's do (a streamed record's object holds the archive index of its _0x<id>.bix as its
 # resource id). It changed nothing at Sunset Infield (FH1 requests a streamed texture itself):
@@ -1231,16 +1254,23 @@ VISIBLE_SIZE = float(os.environ.get("FM4_PVS_VISIBLE_SIZE", "25"))
 # zone of its own instances (and the large pieces of FM4's visible set) showed small pieces
 # only 120 m ahead at the median, and stretches of Le Mans that filled in at 200 km/h and
 # over as the car got there (#824). "neighbours" (the default): a zone holds its own and its
-# six neighbours' instances, everything within 200 m of its centre and more. Should that need
-# more streaming blocks than the game has (MAX_STREAM_BLOCKS with STREAM_MARGIN), a layout's
-# zones take the neighbours' instances within NEIGHBOUR_NEAR m of their centre, else their own
-# alone. "own": their own alone, as before.
+# six neighbours' instances, everything within 200 m of its centre and more, and those of the
+# next ring within FAR_NEAR m. Should that need more streaming blocks than the game has
+# (MAX_STREAM_BLOCKS with STREAM_MARGIN), a layout's zones take the six's alone, then the
+# neighbours' instances within NEIGHBOUR_NEAR m of their centre, else their own alone. "own":
+# their own alone, as before.
 ZONE_REACH = os.environ.get("FM4_PVS_ZONE_REACH", "neighbours")
 if ZONE_REACH not in ("neighbours", "own"):
     raise SystemExit(f"FM4_PVS_ZONE_REACH={ZONE_REACH}: neighbours or own")
 # The shorter reaches tried in turn when the neighbours' whole hexes need too many blocks (m
 # from the zone's centre: its own hex ends 87 to 100 m from it, the six around 200 to 273 m).
 NEIGHBOUR_NEAR = (200.0, 150.0)
+# FM4_PVS_FAR_NEAR (m, 0 for none): the reach tried first, the six neighbours' instances and
+# those of the twelve hexes round them within this of the zone's centre. The camera's zone
+# lists a piece about 150 m earlier than with the six alone: offline along Le Mans's lap, the
+# pieces within 60 m of the line were listed 400 m ahead at the median (250 m), 330 m at p10
+# (180 m), for 12% more streaming blocks (#824). 500 m added 20 m more for another 2%.
+FAR_NEAR = float(os.environ.get("FM4_PVS_FAR_NEAR", "400"))
 # FM4_PVS_SKY=0 leaves FM4's sky dome out (see convert).
 SKY = os.environ.get("FM4_PVS_SKY", "1") == "1"
 SKY_EXTENT = 4200.0

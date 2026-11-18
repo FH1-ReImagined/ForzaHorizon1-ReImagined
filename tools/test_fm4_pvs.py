@@ -85,6 +85,7 @@ class ZoneReach(unittest.TestCase):
         rnd = random.Random(824)
         self.points = [(rnd.uniform(0, 1200), rnd.uniform(0, 900)) for _ in range(1500)]
         self.patches = [mock.patch.object(fm4_pvs, name, False) for name in ("VISIBLE", "SKY", "GROUND")]
+        self.patches.append(mock.patch.object(fm4_pvs, "FAR_NEAR", 0.0))  # ZoneFarReach has it
         for p in self.patches:
             p.start()
 
@@ -169,6 +170,53 @@ class ZoneReach(unittest.TestCase):
         self.assertIn("FM4_PVS_ZONE_REACH", bad.stderr)
 
 
+class ZoneFarReach(unittest.TestCase):
+    """The reach tried first (FAR_NEAR): the six neighbours' and the next ring's within 400 m."""
+    convert = ZoneReach.convert
+    near = ZoneReach.near
+
+    def setUp(self):
+        ZoneReach.setUp(self)
+        self.far = mock.patch.object(fm4_pvs, "FAR_NEAR", 400.0)
+        self.far.start()
+
+    def tearDown(self):
+        self.far.stop()
+        ZoneReach.tearDown(self)
+
+    def whole_neighbours(self):
+        with mock.patch.object(fm4_pvs, "FAR_NEAR", 0.0):
+            return self.convert("neighbours")
+
+    def test_the_next_ring_within_far(self):
+        whole, grid = self.whole_neighbours()
+        held, grid2 = self.convert("neighbours")
+        self.assertEqual(self.reach, "their own and their neighbours' instances and the next ring's within 400 m")
+        self.assertEqual(grid.cells, grid2.cells)
+        for k, cell in enumerate(grid.cells):
+            self.assertLessEqual(whole[k], held[k])
+            # 1 m pieces (reach 1.41): nothing past 400 m of the centre; the two rings hold
+            # everything within 340 m (a third-ring hex's corner comes within 350 m)
+            self.assertLessEqual(held[k] - whole[k], self.near(grid, cell, 401.5))
+            self.assertLessEqual(self.near(grid, cell, 340.0), held[k])
+        self.assertGreater(sum(map(len, held)), 1.5 * sum(map(len, whole)))
+
+    def test_falls_back_to_the_six_when_the_pool_is_too_small(self):
+        whole, _ = self.whole_neighbours()
+        asked = []
+        held, _ = self.convert("neighbours", lambda zones, grid: asked.append(1) or len(asked) > 1)
+        self.assertEqual(len(asked), 2)
+        self.assertTrue(self.reach.startswith("their own and their neighbours' instances (the next ring's "
+                                              "within 400 m too: over"))
+        self.assertEqual(held, whole)
+
+    def test_every_reach_tried_before_own_alone(self):
+        asked = []
+        self.convert("neighbours", lambda zones, grid: asked.append(1) and False)
+        self.assertEqual(len(asked), 2 + len(fm4_pvs.NEIGHBOUR_NEAR))
+        self.assertTrue(self.reach.startswith("their own instances (with their neighbours'"))
+
+
 class StreamPool(unittest.TestCase):
     def test_blocks_of_a_zone_and_its_neighbours(self):
         grid = HexGrid([(0, 0), (500, 400)], 100)
@@ -184,10 +232,10 @@ class StreamPool(unittest.TestCase):
 
     def test_the_games_cap_with_the_margin(self):
         with mock.patch.object(fm4_pvs, "STREAM_MARGIN", 1.25):
-            self.assertTrue(fm4_pvs.fits_stream_pool(52428))
-            self.assertTrue(fm4_pvs.fits_stream_pool(52429))   # 65536.25 asked: 65536
-            self.assertFalse(fm4_pvs.fits_stream_pool(52430))
-        self.assertEqual(fm4_pvs.MAX_STREAM_BLOCKS, 65536)
+            self.assertTrue(fm4_pvs.fits_stream_pool(78642))
+            self.assertTrue(fm4_pvs.fits_stream_pool(78643))   # 98303.75 asked: 98304
+            self.assertFalse(fm4_pvs.fits_stream_pool(78644))
+        self.assertEqual(fm4_pvs.MAX_STREAM_BLOCKS, 98304)
 
 
 class GroundCopyInTheReach(unittest.TestCase):
@@ -196,7 +244,7 @@ class GroundCopyInTheReach(unittest.TestCase):
 
     def setUp(self):
         for name, value in (("VISIBLE", False), ("SKY", False), ("GROUND", True),
-                            ("GROUND_LAYER", "copy"), ("STREAM_MARGIN", 1.0)):
+                            ("GROUND_LAYER", "copy"), ("STREAM_MARGIN", 1.0), ("FAR_NEAR", 0.0)):
             p = mock.patch.object(fm4_pvs, name, value)
             p.start()
             self.addCleanup(p.stop)

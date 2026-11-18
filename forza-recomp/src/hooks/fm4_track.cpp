@@ -1733,7 +1733,7 @@ extern "C" REX_FUNC(sub_82DD6C08) {
 // 4096 more blocks are added each time, up to the same cap, with a warning.
 namespace {
 using rex::X_STATUS;
-constexpr uint32_t kBlock = 1028, kGameBlocks = 22440, kMaxBlocks = 65536;  // 64 MB in all
+constexpr uint32_t kBlock = 1028, kGameBlocks = 22440, kMaxBlocks = 98304;  // 96 MB in all
 constexpr uint32_t kFreeList = 0x835A0B40, kPoolMade = 0x835A0B44;
 std::atomic<uint32_t> stream_blocks{kGameBlocks};
 bool converted_track = false;

@@ -1335,6 +1335,89 @@ blocks are the file's (the largest of all layouts, with the margin):
 | TopGear | 242 | 110 -> 261 | 408 -> 724 | 36390 -> 47226 | neighbours |
 | Tsukuba | 176 | 40 -> 147 | 737 -> 1531 | 44238 -> 49423 | neighbours |
 
+### The next ring within 400 m (#824)
+
+With the zones above and the textures below fixed, what was left of the pop-in was the reach
+itself: a piece is ready long before it is drawn. Over a lap of Le Mans at about 120 km/h
+(`fm4_stream_lead.py`, pieces within 60 m of the path) a live zone held a piece 440 m ahead at
+the median and its model was made 1,025 m ahead, but the camera's zone listed it only 279 m
+ahead (128 m at the least), and FH1 draws that zone alone.
+
+So the reach tried first (`FAR_NEAR`, 400 m; `FM4_PVS_FAR_NEAR=0` for none) adds the instances
+of the twelve hexes round the six whose spot is within 400 m of the zone's centre (their
+extent's reach added). Where that needs more blocks than the game has, the reaches above
+follow in turn. An offline count along Le Mans's line first (the zones of each reach, the
+camera's zone at every point of the lap): 300 m gave a median of 310 m, 400 m 400 m, 500 m
+420 m for 2% more blocks than 400 m.
+
+In the game (launcher import, autopilot; before is main, after this reach):
+
+| | Listed: least | 10th percentile | Median | Blocks asked | Most in use |
+| --- | --- | --- | --- | --- | --- |
+| Le Mans, at 100 km/h or more | 128 -> 284 m | 206 -> 360 m | 279 -> 429 m | 52033 -> 58675 | 39938 -> 46327 |
+| Suzuka, at 80 km/h or more | 129 -> 290 m | 203 -> 373 m | 289 -> 477 m | 60124 -> 64854 | 48477 -> 51785 |
+
+- Frame cost: Le Mans 1,716-1,768 draws a frame -> 1,856-2,010, the command processor 3.0 ->
+  3.4-3.7 ms; Suzuka 1,646 -> 1,864 draws, 3.0 -> 3.4 ms. 30 fps held (the rig's cap).
+- Laguna Seca (its largest zone 1,672 -> 2,720 instances: the instance pools follow it) and
+  Catalunya driven a lap each: no fault, nothing missing.
+- Offline over Disc 1's layouts, the main layout (Ribbon_00) of every circuit takes the new
+  reach except Alps, Hockenheim, Indi, Motegi, Mugello, Sebring, Silverstone and Sunset Infield,
+  which keep the zones they had (their blocks would be over the game's).
+- **Textures with no file**: Le Mans asked 236 times for 171 streamed textures that have no
+  file. They have none on the disc either (FM4's records of road, line and edge textures with
+  the streamed flag 0x4; the number is the circuit's own). FM4 itself can only draw the pack's
+  resident copy of those, and FH1 draws the same: the requests cost nothing in the log.
+
+### The eight circuits that did not fit: a 96 MB pool (#849)
+
+With the next ring, eight circuits' main layouts asked for more than the 65,536 blocks the
+hook linked in, so they kept a shorter reach: the six within 200 or 150 m (Alps, Hockenheim,
+Indi, Motegi), the six whole (Sebring, Silverstone), or a zone's own alone (Mugello, Sunset
+Infield). On the Alps that showed (#849): scenery listed 152 m ahead at the median, 27 m at
+the least, and an overpass and barriers missing as the car came to them.
+
+The 65,536 was a budget, not a format limit: the blocks are a free list of 1,028-byte
+blocks the hook allocates on the guest's system heap. `kMaxBlocks` (and `MAX_STREAM_BLOCKS`)
+is now 98,304 (96 MB). What each reach asks for, with the margin, on Disc 1's layouts that
+were over the old cap:
+
+| Layout | Next ring | Six whole | Six within 200 m | Within 150 m |
+| --- | --- | --- | --- | --- |
+| Alps 00 / 01 / 02 | 89251 / 90296 / 79881 | 79513 / 79435 / 73109 | 65928 / 64653 / 65966 | 62448 / 60808 / 63654 |
+| Hockenheim 00 / 01 | 77604 / 76093 | 70159 / 68483 | 62800 / 61135 | 55193 / 53855 |
+| Indi 00 / 01 | 74719 / 72074 | 69620 / 67578 | 62434 / 60310 | 59018 / 59264 |
+| Motegi 00 / 02 / 03 | 87039 / 74813 / 74898 | 75271 / 64935 / 64739 | 65139 / 59261 / 58024 | 58803 / 55035 / 55219 |
+| Mugello 00 / 01 | 87308 / 79678 | 83329 / 76635 | 76966 / 72205 | 74828 / 70695 |
+| Sebring 00 | 67496 | 54595 | 44505 | 40120 |
+| Silverstone 00 | 68600 | 63045 | 54564 | 51633 |
+| Sunset Infield 00 / 01 / 04 | 82520 / 82930 / 71798 | 75228 / 77416 / 67218 | 69929 / 73436 / 66411 | 66358 / 70141 / 64171 |
+
+Every layout now takes the next ring; the most asked for is 90,296 (the Alps' 01).
+
+In the game (launcher import, autopilot, a Radeon on Vulkan):
+
+| | Listed: least | 10th percentile | Median | Blocks linked in | Most in use |
+| --- | --- | --- | --- | --- | --- |
+| Alps, at 60 km/h or more, before | 27 m | 98 m | 152 m | 65193 | 49034 |
+| Alps, after | 301 m | 355 m | 422 m | 91370 | 72773 |
+| Mugello, at 60 km/h or more, after (2.1 km) | 294 m | 379 m | 453 m | 88565 | 71587 |
+
+- The Alps: 1,285 of the line's 1,461 points, no fault. The overpass after the first tunnel
+  and the barriers and signs on the way to it are drawn as the car comes up to them; before,
+  they were missing. 1,459 to 1,608 draws a frame (was 1,310 to 1,408), the command
+  processor 2.9 to 3.2 ms (was 2.9), 30 fps held (the rig's cap).
+- Mugello: 2.1 km (the test line then ran into a wall at a run-off), no fault. About 2,030
+  draws a frame, the command processor 3.9 to 4.1 ms, 30 fps held. Its peak, 71,587 blocks in
+  use, is over the old cap.
+- The 96 MB come from the guest's system heap at the first streamed file and stay for the
+  process, as the 64 MB did. Only a converted circuit that asks for them takes them.
+- **The blurred mountain** beside the road after the lake on the Alps is unchanged, and it is
+  not motion blur (the same with `motion_blur = false`). Every placed instance near the path
+  had its textures at full size, and the textures with no file there are flags and a few
+  signs. The mountain looks like one of FM4's always-loaded backdrops, which the trace does
+  not cover.
+
 ### What was still late: the streamed textures (#824)
 
 Reported again on 0.3.6, with circuits imported after the zones above: trees, houses and
@@ -1780,7 +1863,8 @@ were not run.
   media/tracks/<track>/fm4_stream_blocks.txt: the largest union of a zone's and its six
   neighbours' model files in KB (34226 for Suzuka at 25 m), times `FM4_PVS_STREAM_MARGIN` (1.25):
   42783. When the pool is made, the game (hooks/fm4_track.cpp) reads that file of every folder
-  in game:\media\tracks\ and links that many blocks in all, up to 65536 (64 MB); when the
+  in game:\media\tracks\ and links that many blocks in all, up to 98304 (96 MB; 65536 before
+  #849); when the
   pool is made again, the same blocks are linked again (none allocated twice). A track
   without the file (Colorado) keeps the game's pool. Should a converted track still empty
   it, 4096 more are added, up to the cap, with a warning naming the file to raise. The union
