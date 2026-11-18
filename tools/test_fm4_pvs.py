@@ -9,6 +9,7 @@ import unittest
 from unittest import mock
 
 import fm4_pvs
+import test_fm4_caff
 from fm4_pvs import HexGrid, insert_fetch_constant, pass_groups
 
 
@@ -252,6 +253,29 @@ class GroundCopyInTheReach(unittest.TestCase):
                 self.assertNotEqual(reach, "their own and their neighbours' instances")
             reach, need, _ = self.convert(d, "neighbours", full)
             self.assertEqual(reach, "their own and their neighbours' instances")
+
+
+class CaffTextures(unittest.TestCase):
+    def test_records_get_flag_4_and_files_change(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "_0x0000031E.bin"), "wb") as f:
+                f.write(test_fm4_caff.caff(gpu=test_fm4_caff.solid_dxt5(65536)))
+            with open(os.path.join(d, "_0x00000007.bin"), "wb") as f:
+                f.write(test_fm4_caff.caff(kind=2, gpu=b"\0" * 65536))       # a cube map: left
+            with open(os.path.join(d, "_0x00000006.bin"), "wb") as f:
+                f.write(test_fm4_caff.caff(gpu=test_fm4_caff.solid_dxt5(65536)))
+            files = ["_0x0000031E.bin", "_0x00000007.bin", "_0x00000006.bin"]
+            F = {"textures": [(0x31E, 399, 1.0, 1.0, 0.0, 0.0, 0), (0x31E, 399, 1.0, 1.0, 0.0, 0.0, 8),
+                              (0x7, 5, 1.0, 1.0, 0.0, 0.0, 0), (0x6, 6, 1.0, 1.0, 0.0, 0.0, 0)],
+                 # model 1 is the second sky dome (an always-drawn instance after the first):
+                 # not drawn, so its texture is left
+                 "models": [{"textures": [0, 1, 2]}, {"textures": [3]}],
+                 "instances": [{"model": 0}, {"model": 0}, {"model": 1}],
+                 "always": [0xFFFF, 1, 2], "dynamic": []}
+            self.assertEqual(fm4_pvs.caff_textures(d, files, [F]), {0x31E})
+            self.assertEqual(sorted(files), ["_0x00000006.bin", "_0x00000007.bin", "_0x0000031E.bix", "_0x0000031E_B.bix"])
+            self.assertEqual([t[6] for t in F["textures"]], [4, 8, 0, 0])
+            self.assertEqual(sorted(os.listdir(d)), ["_0x00000006.bin", "_0x00000007.bin", "_0x0000031E.bix", "_0x0000031E_B.bix"])
 
 
 if __name__ == "__main__":

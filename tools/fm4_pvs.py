@@ -65,6 +65,7 @@ import struct
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fm4_caff  # noqa: E402
 import fm4_col  # noqa: E402
 import fm4_shaders  # noqa: E402
 
@@ -2025,6 +2026,59 @@ def fix_prepass_scissors(bin_dir):
     return done
 
 
+# FM4's CAFF textures. A texture record with no flag 0x8 (not an atlas tile) whose own file is a
+# CAFF file, _0x<id>.bin (Forza-X360-IO's textures/read_bin.py reads the layout), not an
+# _0x<id>.bix, is streamed by FM4 from that file; the static pack holds only a copy of 32 texels
+# or less (_0x<id>_s.bin). FH1 streams .bix files only, so those textures were drawn from the
+# copy for good: the Alps' sky dome (8192 x 2048) at 32 x 8, its mountain backdrops
+# (1672 x 1024) at 26 x 16. Each such 2D texture that tools/fm4_caff.py can write as a .bix pair
+# (with a mip chain: see there) becomes _0x<id>.bix and _0x<id>_B.bix, and its records get flag
+# 0x4 (a base and mip chain of their own) as FM4's other streamed textures have. Cube maps and
+# the rest are left to the pack's copy. FM4_PVS_CAFF_TEXTURES=0 leaves them all.
+CAFF_TEXTURES = os.environ.get("FM4_PVS_CAFF_TEXTURES", "1") == "1"
+
+
+def caff_textures(bin_dir, files, Fs):
+    """Write the .bix pairs for the CAFF textures above into bin_dir (the .bin files leave the
+    files list) and give their records flag 0x4, in every ribbon's F. The ids done."""
+    if not CAFF_TEXTURES or not Fs:
+        return set()
+    by_name = {p.lower(): p for p in files}
+    # the textures of the models drawn: every instance's but the sky domes after the first
+    # (FM4 has one per time of day; convert keeps the first)
+    wanted = set()
+    for F in Fs:
+        later_domes = {i for i in F["always"] if i not in (0xFFFF, 0xFFFFFFFF)}
+        later_domes -= set(sorted(later_domes, key=F["always"].index)[:1])
+        models = {inst["model"] for k, inst in enumerate(F["instances"]) if k not in later_domes}
+        models |= {inst["model"] for inst in F["dynamic"]}
+        for m in models:
+            for t in F["models"][m]["textures"]:
+                r = F["textures"][t & 0xFFFFFF]
+                if not r[6] & 0x8:
+                    wanted.add(r[0])
+    done = set()
+    for own in sorted(wanted):
+        name = by_name.get(f"_0x{own:08x}.bin")
+        if name is None or f"_0x{own:08x}.bix" in by_name:
+            continue
+        tex = fm4_caff.caff_texture(open(os.path.join(bin_dir, name), "rb").read())
+        pair = fm4_caff.bix_of_caff(tex) if tex else None
+        if pair is None:
+            continue
+        for suffix, blob in zip((".bix", "_B.bix"), pair):
+            with open(os.path.join(bin_dir, f"_0x{own:08X}{suffix}"), "wb") as f:
+                f.write(blob)
+            files.append(f"_0x{own:08X}{suffix}")
+        files.remove(name)
+        os.remove(os.path.join(bin_dir, name))
+        done.add(own)
+    for F in Fs:
+        F["textures"] = [t[:6] + (t[6] | 0x4,) if t[0] in done and not t[6] & 0x8 else t
+                         for t in F["textures"]]
+    return done
+
+
 def convert_mod(mod, fh1_disc, loose):
     tracks = os.path.join(mod, "media", "tracks")
     (track,) = [d for d in os.listdir(tracks) if os.path.isdir(os.path.join(tracks, d))]
@@ -2084,6 +2138,9 @@ def convert_mod(mod, fh1_disc, loose):
                     open(col, "wb").write(fm4_col.convert_col(cdata, surfaces(fh1_disc)))
     converted = []
     Fs = [read_fm4(data) for _, _, data, _ in ribbons]
+    n_caff = caff_textures(bin_dir, files, Fs)
+    if n_caff:
+        print(f"{track}: {len(n_caff)} CAFF textures streamed as .bix files")
     n_models = len(Fs[0]["models"]) if Fs else 0
     n_map = lightmap_sampler_map(Fs[0], files, bin_dir) if Fs else 0
     if n_map:
