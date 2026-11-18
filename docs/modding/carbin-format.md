@@ -194,14 +194,25 @@ binds them; the names come from the shaders' input signature:
 
 | Offset | Format | Input |
 |---|---|---|
-| 0 | 4 × s16, signed normalized | `scaledPosition`: x, y, z; w is not position (not decoded) |
+| 0 | 4 × s16, signed normalized | `scaledPosition`: x, y, z a unit direction from the section's centre, w the distance along it (below) |
 | 8 | 2 × u16, unsigned normalized | `uv` (UV1, then the mesh's UV1 factors) |
 | 12 | 2 × u16, unsigned normalized | UV2 (read by some shaders only) |
 | 16 | 4 × s16, signed normalized | `TanFrameQuat`: the tangent frame as a quaternion (normal, tangent, binormal) |
 | 24 | 4 × s8, signed normalized | `SH0`: baked lighting |
 
-Position in the car's space is `center + xyz × half extents` with the section's CCarPartData
-(checked against the car's size in `physics/MaxData.xml`).
+Position in the car's space is `center + xyz × w × |half extents|`, with the section's
+CCarPartData centre and half extents (`|half extents|` is the length of that vector). xyz is a
+unit vector (its length is 1.000 for every vertex of the models measured) and w is the distance
+from the centre as a share of `|half extents|` (0 to 1). `tools/carbin_dump.py`'s
+`vertex_position` reads it.
+
+Measured on FH1's `MAZ_RX7_97.carbin`: read this way, every section's vertices reach its bounds
+exactly (the wheel's y comes out ±0.316 m, its half extent), and Forza Imported DLC Maker
+encodes positions the same way. The per-axis reading this page gave before (#931),
+`center + xyz × half extents`, puts every vertex on an ellipsoid around the centre whatever its
+distance from it: the windshield's y comes out 0.738 to 0.919 m instead of 0.631 to 0.977. Its
+extremes along the axes are right, which is why it matched the car's size in
+`physics/MaxData.xml`.
 
 ## Materials and textures
 

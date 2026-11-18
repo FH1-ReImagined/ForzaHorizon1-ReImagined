@@ -343,11 +343,16 @@ def _inv3(m):
             (d * h - e * g) / det, (b * g - a * h) / det, (a * e - b * d) / det]
 
 
-def build(maxdata_xml, points, donors):
+def build(maxdata_xml, points, donors, mirror_z=False):
     """physicsdefinition.bin for a car: spheres from its MAXData.xml, a hull around its body's
     vertices, the rigid-body fields from the closest of donors ([(parse() result)] of game
-    cars). Returns (bytes, donor index)."""
+    cars). mirror_z: the hull is made from the points as they are, then mirrored front to back
+    (z negated, each face's order reversed to stay clockwise from outside). Returns (bytes,
+    donor index)."""
     verts, faces = hull_from_points(points)
+    if mirror_z:
+        verts = [(x, y, -z) for x, y, z in verts]
+        faces = [f[::-1] for f in faces]
     lo, hi = extents(verts)
     size = [hi[i] - lo[i] for i in range(3)]
     best, best_d = None, None

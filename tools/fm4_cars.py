@@ -1409,8 +1409,13 @@ def write_full_db(source_path, fh1db, rows, path):
 
 # ============================================================================= car files
 
-def model_points(data):
-    """Body vertex positions of an FH1 .carbin (for the collision hull)."""
+def model_points(data, per_axis=False):
+    """Body vertex positions of an FH1 .carbin for the collision hull, in physicsdefinition.bin's
+    space: the model's x and y, its z negated. Forward is +z there, as in MAXData.xml, while a
+    model's front is at -z (#931: of FH1's 176 cars, 174 have their own hull closer to one built
+    this way than to one built from the model's z). per_axis: each axis read on its own as a
+    share of the half extents, as before #931 (close to the positions, not them): the fallback
+    for a body whose hull will not come out clean (convert_car)."""
     import carbin_dump
     m = carbin_dump.parse(data)
     pts = []
@@ -1423,8 +1428,12 @@ def model_points(data):
         c, h = s["center"], s["bounds_max"]
         step = max(1, vb["count"] // 400)
         for i in range(0, vb["count"], step):
-            x, y, z = struct.unpack_from(">3h", data, vb["data_at"] + vb["stride"] * i)
-            pts.append((c[0] + x / 32767.0 * h[0], c[1] + y / 32767.0 * h[1], c[2] + z / 32767.0 * h[2]))
+            if per_axis:
+                x, y, z = struct.unpack_from(">3h", data, vb["data_at"] + vb["stride"] * i)
+                x, y, z = c[0] + x / 32767.0 * h[0], c[1] + y / 32767.0 * h[1], c[2] + z / 32767.0 * h[2]
+            else:
+                x, y, z = carbin_dump.vertex_position(data, s, i)
+            pts.append((x, y, -z))
     if len(pts) < 8:
         raise ConvertError("no body vertices for the collision hull")
     return pts
@@ -1519,7 +1528,6 @@ def car_lights(data, year):
         name = name.decode("latin-1") if isinstance(name, bytes) else name
         if not vb["count"] or not vb["has_data"] or LIGHT_SKIP_SECTION.search(name):
             continue
-        c, h = s["center"], s["bounds_max"]
         glass = re.match(r"(?i)glass[LR]([HT])L$", name)
         for me in s["meshes"]:
             mat = me["material"]
@@ -1536,8 +1544,7 @@ def car_lights(data, year):
             for i in set(struct.unpack_from(fmt, data, ib["data_at"])):
                 if i >= vb["count"]:
                     continue
-                x, y, z = struct.unpack_from(">3h", data, vb["data_at"] + vb["stride"] * i)
-                p = (c[0] + x / 32767.0 * h[0], c[1] + y / 32767.0 * h[1], c[2] + z / 32767.0 * h[2])
+                p = carbin_dump.vertex_position(data, s, i)
                 if (lamp == "head") == (p[2] < 0) and abs(p[0]) > 0.01:  # the model's front is -z
                     pts.setdefault((lamp, 1 if p[0] < 0 else 2), {}).setdefault(rank, []).append(p)
     kind = 3 if year < 2000 else 1 if year < 2010 else 2
@@ -1918,8 +1925,16 @@ class Converter:
                 self.put(base + rel, carattribs_v21(m.read(), self.donor_attribs))
             else:
                 self.put(base + rel, member=m)
-        pts = model_points(main_fh1)
-        phys, donor = fm4_physdef.build(maxdata[1].read(), pts, self.donors)
+        maxdata_xml = maxdata[1].read()
+        try:
+            phys, donor = fm4_physdef.build(maxdata_xml, model_points(main_fh1), self.donors)
+        except fm4_physdef.PhysdefError:
+            # a body whose hull does not come out clean from its positions (the 1970 Camaro Z28
+            # and MAZ_16_B09_10 in the review of #932): the hull made as before #931, from the
+            # points read per axis in the model's own z (which gave every disc car a clean hull),
+            # then mirrored to face forward.
+            old = [(x, y, -z) for x, y, z in model_points(main_fh1, per_axis=True)]
+            phys, donor = fm4_physdef.build(maxdata_xml, old, self.donors, mirror_z=True)
         self.put(base + "physicsdefinition.bin", phys)
         thumb = self.fm4.thumbnail(cid)
         if thumb:

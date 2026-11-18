@@ -158,6 +158,35 @@ def tuning_notice(cfg, log=print):
     return TUNING_NOTICE
 
 
+# An import made before #931 built each car's collision hull mirrored front to back (from vertex
+# positions read per axis): a car hits walls and other cars as if its nose were its tail. The
+# hull is in the car's own files, so only a new import replaces it.
+HULL_NOTICE = ("Imported FM4 cars from an earlier import have their collision shape mirrored front to "
+               "back. Import FM4 cars again (Mods > Forza Motorsport 4 cars) to fix it.")
+
+
+def mirrored_hull(cfg):
+    """Whether the FM4 cars import is one made before #931: its marker has no "hull"."""
+    info = status(cfg)
+    return bool(info and info.get("cars") and info.get("hull", 1) < 2)
+
+
+def hull_notice(cfg, log=print):
+    """Once for an import made before #931 (mirrored_hull): a notice for the player, else None.
+    The Mods page says it until the next import."""
+    info = status(cfg)
+    if not info or info.get("hull_notice") or not mirrored_hull(cfg):
+        return None
+    try:
+        info["hull_notice"] = True
+        (mods.mods_dir(cfg) / MOD / MARKER).write_text(json.dumps(info, ensure_ascii=False, indent=1),
+                                                     encoding="utf-8")
+    except OSError as e:
+        log(f"FM4 cars: could not note the collision hull notice ({e})")
+        return None
+    return HULL_NOTICE
+
+
 # ---- What the player chose (#681) --------------------------------------------------------------
 # Disc 1 can be a disc image (whole, trimmed or split into parts), a Games on Demand or hard drive
 # install package (its data parts hold the same XDVDFS volume as the disc), a folder with the
@@ -1207,7 +1236,8 @@ def _build(cfg, tools, target, backup, work, disc1, disc2, progress, cancelled, 
             fm4.close()
     # banks: made with the engine sound banks FH1 lacks (#776), nothing for repair_sound to do
     # engine_tuning 2: FM4's own engine tuning where FH1's is a cut traffic car's (#840)
-    info = {"format": 1, "banks": True, "engine_tuning": 2, "cars": [c[1] for c in report["cars"]],
+    # hull 2: the collision hulls face forward, from vertex positions read as stored (#931)
+    info = {"format": 1, "banks": True, "engine_tuning": 2, "hull": 2, "cars": [c[1] for c in report["cars"]],
             "skipped": [s[1] for s in report["skipped"]],
             "dlc": _dlc(cfg), "launcher": version}
     if dlc_packs or dlc:

@@ -370,6 +370,24 @@ class Fm4ImportTests(_Setup, unittest.TestCase):
         self.build()
         self.assertEqual(fm4cars.traffic_tuned(self.cfg), [])
 
+    def test_an_old_import_with_mirrored_hulls_says_so_once(self):
+        import json
+        self.build()
+        self.assertEqual(fm4cars.status(self.cfg)["hull"], 2)  # a new import's hulls face forward
+        self.assertFalse(fm4cars.mirrored_hull(self.cfg))
+        self.assertIsNone(fm4cars.hull_notice(self.cfg, log=lambda m: None))
+        marker = mods.mods_dir(self.cfg) / fm4cars.MOD / fm4cars.MARKER
+        info = json.loads(marker.read_text())
+        del info["hull"]  # an import made before #931
+        marker.write_text(json.dumps(info))
+        self.assertTrue(fm4cars.mirrored_hull(self.cfg))
+        self.assertIn("Import FM4 cars again", fm4cars.hull_notice(self.cfg, log=lambda m: None))
+        self.assertIsNone(fm4cars.hull_notice(self.cfg, log=lambda m: None))  # once
+        self.assertTrue(fm4cars.mirrored_hull(self.cfg))  # the Mods page still says it
+        self.assertEqual(fm4cars.status(self.cfg)["cars"], ["BUG_Veyron_09"])
+        self.build()
+        self.assertFalse(fm4cars.mirrored_hull(self.cfg))
+
     def test_stale_after_dlc_changes(self):
         self.build()
         d = Path(self.cfg.data_home()) / "0000000000000000/4D5309C9/00000002/PACK"
