@@ -400,10 +400,14 @@ class ModsPage(FolderListPage):
 
         lay.addWidget(self._fm4_card())
         # FM4's circuits (#648, experimental): next to the cars, chosen on the Play page
-        from .fm4_tracks import Fm4TracksCard
+        from .fm4_tracks import Fh2WorldsCard, Fm4TracksCard
         self.fm4_tracks = Fm4TracksCard(cfg, self)
         self.fm4_tracks.changed.connect(self._tracks_changed)
         lay.addWidget(self.fm4_tracks)
+        # Forza Horizon 2's worlds (#821, experimental): a card of their own
+        self.fh2_worlds = Fh2WorldsCard(cfg, self)
+        self.fh2_worlds.changed.connect(self._tracks_changed)
+        lay.addWidget(self.fh2_worlds)
 
         c, cl = card(spacing=8)
         cl.addWidget(label("How mods work", "cardTitle"))

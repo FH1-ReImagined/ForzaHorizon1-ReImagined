@@ -57,8 +57,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 UNXMEM = os.path.join(HERE, "unxmem")
 
 
-def member_data(zip_path, zf, info, fh, tmp):
-    """The member's decompressed bytes. FH1's archives have no local headers: the 0x1123 extra
+def data_offset(info, fh):
+    """Where a member's data starts. FH1's archives have no local headers: the 0x1123 extra
     field of the central directory gives the data offset; FM4's are plain zips."""
     off, ex, p = None, info.extra, 0
     while p + 4 <= len(ex):
@@ -71,7 +71,12 @@ def member_data(zip_path, zf, info, fh, tmp):
         h = fh.read(30)
         n, m = struct.unpack("<HH", h[26:30])
         off = info.header_offset + 30 + n + m
-    fh.seek(off)
+    return off
+
+
+def member_data(zip_path, zf, info, fh, tmp):
+    """The member's decompressed bytes (data_offset: FH1's archives or plain zips)."""
+    fh.seek(data_offset(info, fh))
     raw = fh.read(info.compress_size)
     if info.compress_type == 0:
         return raw

@@ -69,6 +69,9 @@ import fm4_col  # noqa: E402
 import fm4_shaders  # noqa: E402
 
 FH1_VERSION = 50
+# Forza Horizon 2's version (its Fast & Furious standalone, tools/fh2ff_world.py): the same
+# layout, but a placement's route numbers are u16 (FH1's are u8). Read, never written.
+FH2_VERSION = 51
 
 
 class Reader:
@@ -152,13 +155,16 @@ def read_fm4(data):
 
 # ---- FH1, version 50 (sub_82CF2968) ----
 
-def read_placement(r):  # sub_82CEDD48
+def read_placement(r, ver=FH1_VERSION):  # sub_82CEDD48
     e = {"lod": (r.u16(), r.u16(), r.u16()), "pos": r.floats(3),
          "rot": [r.u16() for _ in range(9)], "v": r.floats(4), "extra": None}
     if r.u8():
         x = r.u32()
         n = r.u8()
-        e["extra"] = (x, r.take(n), r.take(32))  # sub_82CECFC0
+        # FH1: the route numbers as bytes; version 51: a tuple of u16 (map them to bytes before
+        # writing, write_placement refuses them)
+        routes = r.take(n) if ver < FH2_VERSION else tuple(r.u16() for _ in range(n))
+        e["extra"] = (x, routes, r.take(32))  # sub_82CECFC0
     return e
 
 
@@ -173,6 +179,8 @@ def write_placement(w, e):
         w.u8(0)
     else:
         x, lst, tail = e["extra"]
+        if not isinstance(lst, (bytes, bytearray)):
+            raise ValueError("a placement with 16-bit route numbers (version 51): map them to bytes first")
         w.u8(1)
         w.u32(x)
         w.u8(len(lst))
@@ -184,7 +192,7 @@ def read_rec16(r):  # sub_82CF0F48 with g1: stored as +12, +0, +4, +8
     return r.u32(), r.u32(), r.u32(), r.u32()
 
 
-def read_cell(r, g2):  # sub_82CF2168: a zone (.pvsz) or a cell of the PVS
+def read_cell(r, g2, ver=FH1_VERSION):  # sub_82CF2168: a zone (.pvsz) or a cell of the PVS
     c = {"instances": r.vec(r.u32)}
     if g2:
         c["models2"] = r.vec(r.u16)
@@ -196,7 +204,7 @@ def read_cell(r, g2):  # sub_82CF2168: a zone (.pvsz) or a cell of the PVS
     c["texture_flags"] = r.vec(r.u8)
     c["files"] = r.vec(lambda: read_rec16(r))
     c["drawn"] = r.vec(r.u8)
-    c["placements"] = [read_placement(r) for _ in range(r.u32())]
+    c["placements"] = [read_placement(r, ver) for _ in range(r.u32())]
     return c
 
 
@@ -232,14 +240,14 @@ def read_fh1(data):
     if r.take(4) != b"FPVS":
         raise ValueError("not a PVS file")
     ver = r.u32()
-    if ver != FH1_VERSION:
-        raise ValueError(f"FH1 PVS version {ver}: only 50 is read")
-    P = {"hdr": (r.u32(), r.u32()), "ribbon": r.u16(), "pgeo": r.u32(), "g1": r.u8(),
+    if ver not in (FH1_VERSION, FH2_VERSION):
+        raise ValueError(f"FH1 PVS version {ver}: only 50 (and FH2's 51) are read")
+    P = {"version": ver, "hdr": (r.u32(), r.u32()), "ribbon": r.u16(), "pgeo": r.u32(), "g1": r.u8(),
          "g2": r.u8(), "resources": r.u32(), "rmodels": r.u32(), "list48": r.vec(r.u32),
          "g3": r.u8(), "a2": r.u16()}
     if not P["g1"]:
         raise ValueError("g1 = 0 (the other 16-byte record layout) is not read")
-    P["cells"] = [read_cell(r, P["g2"]) for _ in range(r.u32())]
+    P["cells"] = [read_cell(r, P["g2"], ver) for _ in range(r.u32())]
     P["textures"] = r.vec(lambda: (r.u32(), r.u32(), r.f32(), r.f32(), r.f32(), r.f32(), r.u32()))
     P["shaders"] = r.vec(r.string)
     P["instances"] = r.vec(lambda: read_fh1_instance(r))
@@ -248,9 +256,9 @@ def read_fh1(data):
     P["always"] = r.vec(r.u32)
     P["models_a"] = r.vec(r.u16)
     P["models_b"] = r.vec(r.u16)
-    P["always_placements"] = [read_placement(r) for i in P["always"] if i != 0xFFFFFFFF]
+    P["always_placements"] = [read_placement(r, ver) for i in P["always"] if i != 0xFFFFFFFF]
     P["dynamic"] = r.vec(lambda: read_fh1_instance(r))
-    P["dynamic_placements"] = [read_placement(r) for _ in P["dynamic"]]
+    P["dynamic_placements"] = [read_placement(r, ver) for _ in P["dynamic"]]
     P["prefix"] = r.string()
     P["b184"], P["b216"] = r.u8(), r.u8()
     P["names"] = r.vec(r.string)
