@@ -19,6 +19,10 @@ LOW_FRAME_RATES = (20, 30, 40)
 # The rates the launcher's Frame rate list and the in-game Graphics menu offer (#783; the game's
 # copy is forza-recomp/src/platform/frame_rate_choices.h, test_frame_rate_presets.py keeps them equal).
 FRAME_RATE_PRESETS = (*LOW_FRAME_RATES, 60, 75, 90, 100, 120, 144, 165, 180, 200, 240)
+# Vulkan's current seven-times-per-axis scaled-resolve envelope. The device
+# and the combined scene/HUD backing still decide whether a pair can run.
+NATIVE_SCENE_MAX_WIDTH = 8960
+NATIVE_SCENE_MAX_HEIGHT = 5040
 
 
 @dataclass
@@ -156,6 +160,14 @@ add("scene_resolution", "3D scene resolution", "Display", "choice", "720",
     "MSAA (Scene anti-aliasing Off removes it). Not with AMD FSR 3, NVIDIA DLSS, a separate "
     "anti-aliasing method or Ultrawide gameplay, which keep 720p.", "Picture",
     choices=[("720", "720p (game)"), ("540", "540p")], restart=True)
+add("fh1_native_scene_width", "Custom 3D scene width", "Display", "int", 0,
+    "Scene pixels, independent of the output and HUD. Set both dimensions, or both to 0 for the "
+    "default. Requires a compatible Vulkan renderer; the GPU may impose a lower limit.",
+    "Picture", lo=0, hi=NATIVE_SCENE_MAX_WIDTH, restart=True)
+add("fh1_native_scene_height", "Custom 3D scene height", "Display", "int", 0,
+    "Scene pixels, independent of the output and HUD. Set both dimensions, or both to 0 for the "
+    "default. Requires a compatible Vulkan renderer; the GPU may impose a lower limit.",
+    "Picture", lo=0, hi=NATIVE_SCENE_MAX_HEIGHT, restart=True)
 add("anisotropic_override", "Anisotropic filtering", "Display", "choice", 3,
     "Texture sharpness at oblique angles.", "Picture",
     choices=[(-1, "Game default"), (0, "Off"), (1, "1x"), (2, "2x"), (3, "4x"), (4, "8x"),
