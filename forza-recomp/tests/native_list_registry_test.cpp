@@ -303,12 +303,43 @@ void TestRing() {
   CHECK(!ring.Reserve(0, 6, &at, &seq));
 }
 
+void TestRingFailedDefine() {
+  nl::DefineRing ring(128);
+  uint32_t at = 0, seq = 0;
+  CHECK(ring.Reserve(64, 0, &at, &seq) && at == 0 && seq == 1);
+  CHECK(ring.Reserve(64, 0, &at, &seq) && at == 64 && seq == 2);
+
+  // The first packet was read. The next reservation wraps, but emission fails.
+  CHECK(ring.Reserve(64, 1, &at, &seq) && at == 0 && seq == 3);
+  CHECK(!ring.Reserve(64, 1, &at, &seq));
+  ring.CancelUnpublished(seq);
+  CHECK(ring.outstanding() == 1);
+
+  // Retry without a new acknowledgement. The earlier published block stays protected.
+  CHECK(ring.Reserve(64, 1, &at, &seq) && at == 0 && seq == 3);
+  CHECK(!ring.Reserve(64, 1, &at, &seq));
+  CHECK(ring.Reserve(128, 3, &at, &seq) && at == 0 && seq == 4);
+}
+
 void TestSlots() {
   nl::Slots slots(2);
   uint32_t a = 9, b = 9, c = 9;
   CHECK(slots.Take(&a) && slots.Take(&b) && a != b && !slots.Take(&c));
   slots.Give(a);
   CHECK(slots.Take(&c) && c == a && slots.used() == 2);
+}
+
+void TestDefineAck() {
+  alignas(nl::kDefineAckAlignment) uint32_t ack = 0;
+  nl::DefineRing ring(64);
+  uint32_t offset = 0, sequence = 0;
+  CHECK(nl::LoadDefineAck(ack) == 0);
+  CHECK(ring.Reserve(64, nl::LoadDefineAck(ack), &offset, &sequence) && sequence == 1);
+  CHECK(!ring.Reserve(64, nl::LoadDefineAck(ack), &offset, &sequence));
+
+  std::atomic_ref<uint32_t>(ack).store(__builtin_bswap32(1u), std::memory_order_release);
+  CHECK(ring.Reserve(64, nl::LoadDefineAck(ack), &offset, &sequence) && sequence == 2 && offset == 0);
+  CHECK(!ring.Reserve(64, nl::LoadDefineAck(ack), &offset, &sequence));
 }
 
 }  // namespace
@@ -323,7 +354,9 @@ int main(int argc, char** argv) {
   TestLists();
   TestTemplates();
   TestRing();
+  TestRingFailedDefine();
   TestSlots();
+  TestDefineAck();
   std::printf("native list registry: all tests passed\n");
   return 0;
 }

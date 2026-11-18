@@ -17,6 +17,7 @@
 // - Slots: the state words (one per bound list: its generation, odd while a fixup writes it).
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <deque>
@@ -35,6 +36,14 @@ constexpr uint32_t kListDefineWords = 8, kListBindWords = 12, kListDropWords = 4
 constexpr uint32_t kListRefused = 0xFFFFFFFFu;
 constexpr uint32_t kListGroupNone = 0xFF;
 constexpr uint32_t kListRetiled = 1;
+constexpr uint32_t kDefineAckAlignment = 64;
+static_assert(std::atomic_ref<uint32_t>::is_always_lock_free);
+static_assert(kDefineAckAlignment % std::atomic_ref<uint32_t>::required_alignment == 0);
+
+// The decoder publishes its last read after copying the template. Acquire before reusing it.
+inline uint32_t LoadDefineAck(uint32_t& word) {
+  return __builtin_bswap32(std::atomic_ref<uint32_t>(word).load(std::memory_order_acquire));
+}
 // Refusal codes beyond the converter's (Refuse): the game's own reasons not to convert.
 constexpr uint32_t kRefuseRetile = uint32_t(Refuse::kCount);      // untiled, saved headers wrong
 constexpr uint32_t kRefuseNoSlot = uint32_t(Refuse::kCount) + 1;  // no state word left
@@ -176,6 +185,13 @@ class DefineRing {
     *offset = at;
     *sequence = next_sequence_++;
     return true;
+  }
+  // Roll back the newest reservation if its Define packet was never written.
+  void CancelUnpublished(uint32_t sequence) {
+    if (!live_.empty() && live_.back().sequence == sequence) {
+      live_.pop_back();
+      next_sequence_ = sequence;
+    }
   }
   size_t outstanding() const { return live_.size(); }
 
