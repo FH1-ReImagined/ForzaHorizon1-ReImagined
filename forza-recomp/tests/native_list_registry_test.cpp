@@ -325,8 +325,32 @@ void TestSlots() {
   nl::Slots slots(2);
   uint32_t a = 9, b = 9, c = 9;
   CHECK(slots.Take(&a) && slots.Take(&b) && a != b && !slots.Take(&c));
-  slots.Give(a);
+  CHECK(slots.BeginWrite(a) && !slots.BeginWrite(a));
+  CHECK(!slots.EndWork(a) && slots.EndWork(a));
+
+  // The native unload returns first. Its slot remains odd and unavailable
+  // until the old writer returns.
+  CHECK(slots.BeginWrite(a));
+  slots.BeginRetire(a);
+  CHECK(!slots.Take(&c));
+  CHECK(!slots.EndWork(a) && !slots.Take(&c));
+  CHECK(!slots.EndWork(a));
   CHECK(slots.Take(&c) && c == a && slots.used() == 2);
+
+  // Conversely, the native fixup can return while the unload is still active.
+  CHECK(slots.BeginWrite(b));
+  slots.BeginRetire(b);
+  CHECK(!slots.EndWork(b) && !slots.Take(&a));
+  CHECK(!slots.EndWork(b));
+  CHECK(slots.Take(&a) && a == b);
+  CHECK(slots.BeginWrite(a) && slots.EndWork(a));
+
+  // A failed nested writer leaves readiness closed for this binding.
+  CHECK(slots.BeginWrite(a) && !slots.BeginWrite(a));
+  CHECK(!slots.EndWork(a, false) && !slots.EndWork(a));
+  CHECK(!slots.BeginWrite(a) && !slots.EndWork(a));
+  slots.BeginRetire(a);
+  CHECK(!slots.EndWork(a) && slots.Take(&b) && b == a);
 }
 
 void TestDefineAck() {

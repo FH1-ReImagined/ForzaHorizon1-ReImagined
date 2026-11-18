@@ -204,26 +204,45 @@ class DefineRing {
   uint32_t next_sequence_ = 1;
 };
 
-// State words: `count` of them, handed out and given back.
+// State words are managed under the registry mutex. A retired slot stays
+// reserved until the native free and all writers using the old slot return.
 class Slots {
  public:
-  explicit Slots(uint32_t count) : count_(count) {}
+  explicit Slots(uint32_t count) : activity_(count) { free_.reserve(count); }
   bool Take(uint32_t* slot) {
     if (!free_.empty()) {
       *slot = free_.back();
       free_.pop_back();
-      return true;
+    } else {
+      if (next_ >= activity_.size()) return false;
+      *slot = next_++;
     }
-    if (next_ >= count_) return false;
-    *slot = next_++;
+    activity_[*slot] = 0;
     return true;
   }
-  void Give(uint32_t slot) { free_.push_back(slot); }
+
+  // True for the first writer, which marks the guest generation busy.
+  bool BeginWrite(uint32_t slot) { return activity_[slot]++ == 0; }
+
+  void BeginRetire(uint32_t slot) { activity_[slot] = kRetired | (activity_[slot] + 1); }
+
+  // True only when the last writer of a live list can publish an even
+  // generation. Retired slots become reusable without publishing one.
+  bool EndWork(uint32_t slot, bool completed = true) {
+    if (!completed) activity_[slot] |= kPoisoned;
+    const uint32_t activity = --activity_[slot];
+    if ((activity & ~kPoisoned) == kRetired) free_.push_back(slot);
+    return activity == 0;
+  }
+
   uint32_t used() const { return next_ - uint32_t(free_.size()); }
 
  private:
+  static constexpr uint32_t kRetired = 1u << 31;
+  static constexpr uint32_t kPoisoned = 1u << 30;
+  std::vector<uint32_t> activity_;
   std::vector<uint32_t> free_;
-  uint32_t count_, next_ = 0;
+  uint32_t next_ = 0;
 };
 
 // A list that scene_msaa has untiled (its tile-bound packet headers made NOPs), put back from the
