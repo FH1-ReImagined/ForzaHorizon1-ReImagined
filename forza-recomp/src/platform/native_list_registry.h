@@ -240,6 +240,9 @@ class Slots {
   // True for the first writer, which marks the guest generation busy.
   bool BeginWrite(uint32_t slot) { return activity_[slot]++ == 0; }
   bool Ready(uint32_t slot) const { return slot < next_ && activity_[slot] == 0; }
+  bool Working(uint32_t slot) const {
+    return slot < next_ && (activity_[slot] & ~(kRetired | kPoisoned));
+  }
 
   void BeginRetire(uint32_t slot) { activity_[slot] = kRetired | (activity_[slot] + 1); }
 

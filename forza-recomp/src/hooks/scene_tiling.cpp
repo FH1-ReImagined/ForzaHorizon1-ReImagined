@@ -209,6 +209,7 @@ void UntileList(uint8_t* base, uint32_t cb) {
     }
     return;
   }
+  forza::native_lists::ListMutation mutation(base, cb, forza::native_lists::ListMutation::Kind::kTiling);
   thread_local std::vector<uint32_t> words;
   std::vector<std::pair<uint32_t, uint32_t>> replaced;
   const uint32_t chain = Load32(base, cb + 116);
@@ -242,6 +243,7 @@ void UntileList(uint8_t* base, uint32_t cb) {
 // Puts back the packets of list cb if they are NOPs (it runs for pass 4 or another pass).
 void RetileList(uint8_t* base, uint32_t cb) {
   if (!IsNop(FifthWord(base, cb))) return;
+  forza::native_lists::ListMutation mutation(base, cb, forza::native_lists::ListMutation::Kind::kTiling);
   std::lock_guard<std::mutex> lock(g_untiled_mutex);
   const auto found = g_untiled.find(cb);
   if (found == g_untiled.end()) return;

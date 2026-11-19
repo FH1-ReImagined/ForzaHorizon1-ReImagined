@@ -53,6 +53,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -134,7 +135,7 @@ struct Counts {
   uint64_t calls = 0, lists = 0, current = 0, fresh = 0, reused = 0, converted = 0, retiled = 0,
            refused = 0, defined = 0, define_words = 0, bound = 0, dropped = 0, unloads = 0,
            unload_by_header = 0, unload_by_address = 0, not_device = 0, recording = 0,
-           ring_full = 0, no_room = 0, fixups = 0, convert_ns = 0, run_ns = 0;
+           ring_full = 0, no_room = 0, fixups = 0, tile_mutations = 0, convert_ns = 0, run_ns = 0;
   uint64_t refusals[nl::kRefuseTooLarge + 1] = {};
 };
 
@@ -152,6 +153,7 @@ struct State {
   uint32_t device = 0;  // the device of the first model list call
   bool memory_failed = false;
   size_t unloads_in_flight = 0;
+  size_t active_mutations = 0, unbound_mutations = 0;
   std::vector<uint32_t> tmpl;
   std::vector<uint8_t> header, patch, pm4;
   Counts n;
@@ -245,12 +247,13 @@ void Log(State& s, uint64_t now) {
       "new, {} in a reused command buffer); {} converted ({} from a retiled copy), {} refused "
       "({}); {} templates sent ({} words), {} lists bound now, {} dropped ({} unloads: {} by "
       "header, {} by address); not registered: {} on another device, {} recording, {} ring "
-      "full, {} without room; {} fixups of bound lists; conversion {:.1f} ms in all, the hook "
+      "full, {} without room; {} fixups of bound lists; {} tiling mutations; conversion {:.1f} ms in all, the hook "
       "{:.3f} ms in all ({:.2f} us a call)",
       n.calls, n.lists, n.current, n.fresh, n.reused, n.converted, n.retiled, n.refused,
       refusals.empty() ? " none" : refusals.c_str(), n.defined, n.define_words, s.lists.size(),
       n.dropped, n.unloads, n.unload_by_header, n.unload_by_address, n.not_device, n.recording,
-      n.ring_full, n.no_room, n.fixups, double(n.convert_ns) * 1e-6, double(n.run_ns) * 1e-6,
+      n.ring_full, n.no_room, n.fixups, n.tile_mutations,
+      double(n.convert_ns) * 1e-6, double(n.run_ns) * 1e-6,
       n.calls ? double(n.run_ns) * 1e-3 / double(n.calls) : 0.0);
   s.next_log_ns = now + 30'000'000'000ull;
 }
@@ -419,7 +422,9 @@ void OnRun(PPCContext& ctx, uint8_t* base) {
       if (now >= s.next_log_ns) Log(s, now);
     }
   } timed{s, t0};
-  if (s.unloads_in_flight) return;
+  if (s.unloads_in_flight || s.unbound_mutations) return;
+  if (const auto* existing = s.lists.Get(cb);
+      existing && s.slots.Working(existing->slot)) return;
   if (!Plausible(cb) || (Load32(base, cb) & 15) != 9) return;
   if (!LooksLikeDevice(base, dev) || (s.device && dev != s.device)) {
     ++s.n.not_device;
@@ -484,6 +489,36 @@ void OnRun(PPCContext& ctx, uint8_t* base) {
   Register(ctx, base, dev, cb, phys, words, segments, s);
 }
 
+ListMutation::ListMutation(uint8_t* base, uint32_t cb, Kind kind) {
+  if (!Active()) return;
+  base_ = base;
+  exceptions_ = std::uncaught_exceptions();
+  auto& s = S();
+  std::lock_guard lock(s.mutex);
+  ++s.active_mutations;
+  const auto* b = s.lists.Get(cb);
+  if (!b || b->slot == nl::kNone || !s.states) {
+    ++s.unbound_mutations;
+  } else {
+    slot_ = b->slot;
+    if (s.slots.BeginWrite(slot_)) MarkSlotBusy(base_, s, slot_);
+    if (kind == Kind::kFixup) ++s.n.fixups;
+  }
+  if (kind == Kind::kTiling) ++s.n.tile_mutations;
+}
+
+ListMutation::~ListMutation() {
+  if (!base_) return;
+  auto& s = S();
+  std::lock_guard lock(s.mutex);
+  if (slot_ == nl::kNone) {
+    --s.unbound_mutations;
+  } else if (s.slots.EndWork(slot_, exceptions_ == std::uncaught_exceptions())) {
+    PublishReadySlot(base_, s, slot_);
+  }
+  --s.active_mutations;
+}
+
 }  // namespace forza::native_lists
 
 namespace nls = forza::native_lists;
@@ -499,7 +534,7 @@ extern "C" __declspec(dllexport) bool ForzaM4WithBindingV1(
   if (!query || count != nl::kListBindLifetimeWords || !visit || !nls::Active()) return false;
   auto& s = nls::S();
   std::unique_lock lock(s.mutex, std::try_to_lock);
-  if (!lock || s.unloads_in_flight) return false;
+  if (!lock || s.unloads_in_flight || s.active_mutations) return false;
   const auto* bound = s.lists.Get(query[7]);
   if (!bound || !nl::MatchesReplayBinding(query, count, s.states, *bound) ||
       !s.slots.Ready(bound->slot)) return false;
@@ -521,30 +556,9 @@ extern "C" REX_FUNC(sub_82D19210) {
     return;
   }
   const uint32_t cb = nls::Plausible(ctx.r3.u32) ? nls::Load32(base, ctx.r3.u32) : 0;
-  struct Fixup {
-    uint8_t* base;
-    uint32_t slot = forza::native_list::kNone;
-    bool completed = false;
-    ~Fixup() {
-      if (slot == forza::native_list::kNone) return;
-      nls::State& s = nls::S();
-      std::lock_guard lock(s.mutex);
-      if (s.slots.EndWork(slot, completed)) nls::PublishReadySlot(base, s, slot);
-    }
-  } fixup{base};
-  {
-    nls::State& s = nls::S();
-    std::lock_guard<std::mutex> lock(s.mutex);
-    const forza::native_list::Bound* b = s.lists.Get(cb);
-    if (b && b->slot != forza::native_list::kNone && s.states) {
-      fixup.slot = b->slot;
-      if (s.slots.BeginWrite(fixup.slot)) nls::MarkSlotBusy(base, s, fixup.slot);
-      ++s.n.fixups;
-    }
-  }
+  nls::ListMutation fixup(base, cb, nls::ListMutation::Kind::kFixup);
   // The native call may enter another fixup. Only the last writer publishes readiness.
   __imp__sub_82D19210(ctx, base);
-  fixup.completed = true;
 }
 
 // A model's memory freed (r3: its block: +0 the model it shares its data with, or 0; +4 the

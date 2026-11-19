@@ -327,7 +327,7 @@ void TestSlots() {
   CHECK(slots.Take(&a) && slots.Take(&b) && a != b && !slots.Take(&c));
   CHECK(slots.Ready(a) && !slots.Ready(nl::kNone));
   CHECK(slots.BeginWrite(a) && !slots.BeginWrite(a));
-  CHECK(!slots.Ready(a));
+  CHECK(!slots.Ready(a) && slots.Working(a));
   CHECK(!slots.EndWork(a) && slots.EndWork(a));
 
   // The native unload returns first. Its slot remains odd and unavailable
@@ -352,6 +352,7 @@ void TestSlots() {
   // A failed nested writer leaves readiness closed for this binding.
   CHECK(slots.BeginWrite(a) && !slots.BeginWrite(a));
   CHECK(!slots.EndWork(a, false) && !slots.EndWork(a));
+  CHECK(!slots.Working(a) && !slots.Ready(a));
   CHECK(!slots.BeginWrite(a) && !slots.EndWork(a));
   slots.BeginRetire(a);
   CHECK(!slots.EndWork(a) && slots.Take(&b) && b == a);

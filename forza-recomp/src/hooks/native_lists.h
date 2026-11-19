@@ -26,6 +26,22 @@ inline bool Active() {
 // original: registers the list with the plugin if it is a model list not registered yet.
 void OnRun(PPCContext& ctx, uint8_t* base);
 
+// Covers the native write itself, including nested fixups. The registry
+// mutex is released during the mutation so native callbacks can reenter.
+class ListMutation {
+ public:
+  enum class Kind { kFixup, kTiling };
+  ListMutation(uint8_t* base, uint32_t cb, Kind kind);
+  ~ListMutation();
+  ListMutation(const ListMutation&) = delete;
+  ListMutation& operator=(const ListMutation&) = delete;
+
+ private:
+  uint8_t* base_ = nullptr;
+  uint32_t slot_ = UINT32_MAX;
+  int exceptions_ = 0;
+};
+
 // The pass group being drawn on this thread (pass * 3 + layer; passes 3 and 5 draw pass 4's).
 void SetGroup(uint32_t group);
 uint32_t Group();
