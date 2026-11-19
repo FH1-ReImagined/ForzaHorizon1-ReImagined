@@ -33,6 +33,8 @@ namespace forza::native_list {
 constexpr uint32_t kMagicHost = 0x4648314Eu;  // "FH1N", a host packet's first word
 constexpr uint32_t kOpListDefine = 0x20, kOpListBind = 0x21, kOpListDrop = 0x22;
 constexpr uint32_t kListDefineWords = 8, kListBindWords = 12, kListDropWords = 4;
+constexpr uint32_t kListBindLifetimeWords = kListBindWords + 2;
+constexpr uint32_t kListDropLifetimeWords = kListDropWords + 2;
 constexpr uint32_t kListRefused = 0xFFFFFFFFu;
 constexpr uint32_t kListGroupNone = 0xFF;
 constexpr uint32_t kListRetiled = 1;
@@ -59,7 +61,21 @@ inline uint32_t TemplateHash(const uint32_t* words, size_t count) {
 
 struct Bound {
   uint32_t phys = 0, words = 0, patch_words = 0, slot = kNone, template_id = kListRefused;
+  uint32_t patch = 0;
+  uint64_t lifetime = 0;
 };
+
+// The query is the host-order Bind packet, including its title lifetime.
+inline bool MatchesReplayBinding(const uint32_t* query, uint32_t count, uint32_t states,
+                                 const Bound& bound) {
+  return query && count == kListBindLifetimeWords && states && bound.slot != kNone &&
+         bound.template_id != kListRefused && bound.lifetime &&
+         query[0] == kMagicHost && query[1] == kOpListBind &&
+         query[2] == bound.phys && query[3] == bound.words && query[4] == bound.template_id &&
+         !query[5] && query[6] == states + bound.slot * 4 && query[8] == bound.patch &&
+         query[9] == bound.patch_words &&
+         (uint64_t(query[13]) << 32 | query[12]) == bound.lifetime;
+}
 
 class Lists {
  public:
@@ -204,26 +220,49 @@ class DefineRing {
   uint32_t next_sequence_ = 1;
 };
 
-// State words: `count` of them, handed out and given back.
+// State words are managed under the registry mutex. A retired slot stays
+// reserved until the native free and all writers using the old slot return.
 class Slots {
  public:
-  explicit Slots(uint32_t count) : count_(count) {}
+  explicit Slots(uint32_t count) : activity_(count) { free_.reserve(count); }
   bool Take(uint32_t* slot) {
     if (!free_.empty()) {
       *slot = free_.back();
       free_.pop_back();
-      return true;
+    } else {
+      if (next_ >= activity_.size()) return false;
+      *slot = next_++;
     }
-    if (next_ >= count_) return false;
-    *slot = next_++;
+    activity_[*slot] = 0;
     return true;
   }
-  void Give(uint32_t slot) { free_.push_back(slot); }
+
+  // True for the first writer, which marks the guest generation busy.
+  bool BeginWrite(uint32_t slot) { return activity_[slot]++ == 0; }
+  bool Ready(uint32_t slot) const { return slot < next_ && activity_[slot] == 0; }
+  bool Working(uint32_t slot) const {
+    return slot < next_ && (activity_[slot] & ~(kRetired | kPoisoned));
+  }
+
+  void BeginRetire(uint32_t slot) { activity_[slot] = kRetired | (activity_[slot] + 1); }
+
+  // True only when the last writer of a live list can publish an even
+  // generation. Retired slots become reusable without publishing one.
+  bool EndWork(uint32_t slot, bool completed = true) {
+    if (!completed) activity_[slot] |= kPoisoned;
+    const uint32_t activity = --activity_[slot];
+    if ((activity & ~kPoisoned) == kRetired) free_.push_back(slot);
+    return activity == 0;
+  }
+
   uint32_t used() const { return next_ - uint32_t(free_.size()); }
 
  private:
+  static constexpr uint32_t kRetired = 1u << 31;
+  static constexpr uint32_t kPoisoned = 1u << 30;
+  std::vector<uint32_t> activity_;
   std::vector<uint32_t> free_;
-  uint32_t count_, next_ = 0;
+  uint32_t next_ = 0;
 };
 
 // A list that scene_msaa has untiled (its tile-bound packet headers made NOPs), put back from the

@@ -170,6 +170,12 @@ void Observe(uint8_t *base, uint32_t vehicle) {
 }
 } // namespace
 
+#if defined(_WIN32) && defined(FORZA_TITLE_UPDATE) && FORZA_TITLE_UPDATE == 4
+extern "C" __declspec(dllexport) bool ForzaM4BenchmarkMeasuringV1() noexcept {
+  return recording.load(std::memory_order_acquire);
+}
+#endif
+
 #if defined(FORZA_TITLE_UPDATE) && FORZA_TITLE_UPDATE == 4
 extern "C" REX_FUNC(sub_8250B050);
 extern "C" REX_FUNC(__imp__sub_82A5D3C0);
