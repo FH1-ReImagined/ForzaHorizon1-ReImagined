@@ -377,6 +377,18 @@ class Fm1Tests(unittest.TestCase):
         car.looks = None  # no tooldata: the lettered guess
         self.assertNotIn("Head", [fm1_cars.base_name(p.name) for p in fm1_cars.stock_parts(car)])
 
+    def test_lamp_material_goes_to_its_sides_lamp(self):
+        pos = [(-0.5, 0.5, 1.8), (-0.4, 0.6, 1.8), (-0.45, 0.4, 1.8),
+               (0.5, 0.5, 1.8), (0.4, 0.6, 1.8), (0.45, 0.4, 1.8)]
+        names = ["body", "trunk", "taillightL", "taillightR"]
+        tris = [(0, 1, 2), (3, 4, 5)]
+        # the MR2's lamps in its body: split by side
+        self.assertEqual(fm1_cars.lamp_sections("body", 3, tris, pos, names),
+                         [("taillightL", [(0, 1, 2)]), ("taillightR", [(3, 4, 5)])])
+        self.assertEqual(fm1_cars.lamp_sections("body", 1, tris, pos, names), [("body", tris)])  # paint stays
+        self.assertEqual(fm1_cars.lamp_sections("taillightL", 3, tris, pos, names), [("taillightL", tris)])
+        self.assertEqual(fm1_cars.lamp_sections("hooda", 3, tris, pos, ["hooda", "interior"]), [("hooda", tris)])
+
     def test_section_for(self):
         names = ["body", "bumperFa", "bumperFb", "trunk", "hooda", "glassF", "glassLF", "exhausta", "skirtLb", "interior"]
         want = {"bumperFa_LOD1": "bumperFa", "bumperF_LOD1": "bumperFa", "hood_LOD1": "hooda", "wing_LOD1": "trunk",
@@ -705,6 +717,17 @@ class EngineTests(unittest.TestCase):
                 "Combo_Engines": [{"EngineComboID": 180, "Ordinal": 55239, "EngineID": 178, "Stock": 1}]}
         ids = fm1_import.engine_rows(db, rows, eng or fm1_engine_data(), spec or self.SPEC, 55239, "TOY_BorderMR2_95")
         return db, rows, ids
+
+    def test_powertrains_are_not_a_drivetrains_rows(self):
+        db = sqlite3.connect(":memory:")
+        self.addCleanup(db.close)
+        db.execute("create table Powertrains (Id INTEGER PRIMARY KEY, DrivetrainId INT, EnginePlacementId INT)")
+        db.executemany("insert into Powertrains values (?,?,?)", [(4, 3, 1), (5, 3, 2), (6, 3, 3)])
+        db.execute("create table List_UpgradeDrivetrainClutch (Id INT, DrivetrainID INT)")
+        db.execute("insert into List_UpgradeDrivetrainClutch values (3000, 3)")
+        # a donor drivetrain numbered 3 (the 250 GTO's): its clutch row follows, the AWD powertrains do not
+        out = fm1_import._clone_keyed(db, "DrivetrainID", 3, 55038)
+        self.assertEqual(out, {"List_UpgradeDrivetrainClutch": [{"Id": 55038000, "DrivetrainID": 55038}]})
 
     def test_an_engine_and_drivetrain_of_its_own(self):
         db, rows, ids = self.rows()

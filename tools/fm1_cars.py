@@ -57,8 +57,15 @@ CHUNKS = {"Car", "Attribs", "Driver", "Part", "Verts", "Damage", "Pivots", "Attr
 FM1_MATERIALS = {
     1: ("body",),                                 # paint
     2: ("window", "glass"),                       # windows
-    3: ("taillight2S", "tail_light", "tail_light_lod0"),  # tail and brake lamps
-    4: ("oldhead", "head_light", "hidhead"),      # head lamps (and the bumper's lamps)
+    # tail and brake lamps: FH1's lamp glass, as the donor's lamps have it over their lamp body. The
+    # lamp body (taillight2S, tail_light) shines what its texture shows: with FM1's red lens on it
+    # the MX-5's lamps and third brake light glowed in daylight (the '94 Miata's stayed dark). A
+    # donor without lamp glass (the RX-7, the S2000) gets red detail glass before the lamp body
+    3: ("lights_gls_taillight2S", "lights_gls_tail_light", "detail_glass_red", "glass", "taillight2S", "tail_light"),
+    # head lamps (and the bumpers' lamps): the reflector, as under FH1's lamp glass. On FH1's
+    # lamp materials (oldhead...) FM1's lamp texture shone: the Supra's lamps blew out white
+    # where FH1's own Supra's glowed softly on the same road (its sprites give the lit look)
+    4: ("textured_reflector", "reflector", "chrome", "oldhead", "head_light"),
     5: ("black",),                                # one triangle on the MR2
     6: ("black_glass", "window"),                 # tinted glass (the MR2's T-top)
     7: ("chrome",),                               # exhaust tips, mirror glass
@@ -71,7 +78,15 @@ FM1_MATERIALS = {
     21: ("rubber_trim", "black"),                 # window seals
     25: ("badge", "emblem", "chrome"),            # badges
     27: ("textured_reflector", "reflector", "chrome"),  # lamp reflectors
-    28: ("black",),                               # engine cover vents
+    # lamp glass: 173 of FM1's glassLHL/RHL headlight glass parts, 162 headlights, the tail lamps'
+    # and other lamps' glass (the MR2's engine cover vents too). Black, it covered the MX-5's
+    # headlights over their reflectors (27, the same shape under it)
+    28: ("lights_glass", "detail_glass_clear", "glass", "window"),
+    # By where FM1's 211 cars use them (black before: the MX-5's headlights were black shells):
+    16: ("lights_gls_taillight2S", "lights_gls_tail_light", "detail_glass_red", "black"),  # tail lamp glass (glassLTL/RTL)
+    30: ("lights_gls_reverse_light", "detail_glass_clear", "lights_glass", "black"),  # in the tail lamps: reverse lamps
+    31: ("detail_glass_clear", "lights_glass", "glass", "window"),  # clear lamp covers (headlights, bumpers, tail lamps)
+    35: ("grille1", "grille2", "black"),          # front bumpers' and hoods' grilles (197 uses)
 }
 FALLBACK_MATERIALS = ("black", "plastic")
 
@@ -402,11 +417,16 @@ def lamps(car, parts, dy, dz):
                     p = to_fh1(part.verts[k][0], dy, dz)
                     if p[2] > 0 and abs(p[0]) > 0.01:
                         pts[1 if p[0] < 0 else 2].append(p)
+    # One tail lamp a side, at the middle of all of that side's lamp pieces, as FH1's own cars of
+    # one lens a side have it: FM1's MX-5 lens has a gap, and a light set at each part (a tail
+    # sprite and two brake sprites each) made its brakes glow twice as much as the '94 Miata's.
     for side in (1, 2):
-        for lo, hi in (f4._lamp_clusters(pts[side]) if pts[side] else []):
-            x, y = (lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2
-            if abs(x) >= f4.LIGHT_MIDDLE:
-                out["tail"].append((side, (x, y, hi[2])))
+        found = [(lo, hi) for lo, hi in (f4._lamp_clusters(pts[side]) if pts[side] else [])
+                 if abs((lo[0] + hi[0]) / 2) >= f4.LIGHT_MIDDLE]
+        if found:
+            lo = [min(c[0][k] for c in found) for k in range(3)]
+            hi = [max(c[1][k] for c in found) for k in range(3)]
+            out["tail"].append((side, ((lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, hi[2])))
     return out
 
 
@@ -519,12 +539,15 @@ def to_fh1(p, dy, dz):
     return (p[0], p[1] + dy, -(p[2] + dz))
 
 
-def pieces(car, parts, kind, names, available, dy, dz, report):
-    """FH1 Pieces of the car for one model file. kind: "main" (LOD 1-5) or "lod0"."""
+def pieces(car, parts, kind, names, available, dy, dz, report, popups=False):
+    """FH1 Pieces of the car for one model file. kind: "main" (LOD 1-5) or "lod0". popups: the
+    donor's headlightL/R sections turn (pop-up lamps): FM1's fixed head lamps go into the body,
+    else they stand up with them (FM1's 2000 MX-5 on the '94 Miata)."""
     top = max((s[0] for p in parts for s in p.subparts), default=1)
     out = []
     for part in parts:
-        sec = section_for(part.name, names)
+        fixed_lamp = popups and re.fullmatch(r"headlight[LR]", base_name(part.name))
+        sec = section_for("body" if fixed_lamp else part.name, names)
         if sec is None:
             if kind == "main":
                 sec = section_for("body", names)
@@ -535,6 +558,10 @@ def pieces(car, parts, kind, names, available, dy, dz, report):
         pos = [to_fh1(v[0], dy, dz) for v in part.verts]
         nrm = [(v[1][0], v[1][1], -v[1][2]) for v in part.verts]
         uv = [v[2] for v in part.verts]
+        # FH1's second uv set: one point for most meshes (the '94 Miata's body: scale 0, all at
+        # (0, 0); 639 of the body meshes of six cars). FM1 has none: given FM1's uv again, the
+        # paint drew dark (the MX-5 in the Miata's red: maroon where the Miata was bright)
+        uv1 = [(0.0, 0.0)] * len(uv)
         lods = {s[0] for s in part.subparts}
         if kind == "main":
             want = {k: min(k, top) for k in range(1, 6) if min(k, top) in lods}
@@ -545,9 +572,27 @@ def pieces(car, parts, kind, names, available, dy, dz, report):
                 if lod != fm1_lod:
                     continue
                 tris = [(c, b, a) for a, b, c in strip_triangles(idx)]  # z negated: winding turned
-                if tris:
-                    out.append(cb.Piece(sec, material_for(mat, available), fh1_lod, pos, nrm, uv, uv, tris))
+                if not tris:
+                    continue
+                for s, t in lamp_sections(sec, mat, tris, pos, names):
+                    out.append(cb.Piece(s, material_for(mat, available), fh1_lod, pos, nrm, uv, uv1, t))
     return out
+
+
+def lamp_sections(sec, mat, tris, pos, names):
+    """[(section, triangles)]: FM1's tail lamp material outside its taillightL/R parts (the MR2's
+    lamps are in its body, the MX-5's third brake light in its trunk) goes into the donor's
+    taillightL/R section of its side (x < 0: the left), where the donor has its lamps. Other
+    materials, and files without those sections (the cockpit), keep sec."""
+    low = {n.lower(): n for n in names}
+    if mat not in TAIL_MATERIALS or sec.lower() in ("taillightl", "taillightr") \
+            or "taillightl" not in low or "taillightr" not in low:
+        return [(sec, tris)]
+    sides = {low["taillightl"]: [], low["taillightr"]: []}
+    for t in tris:
+        x = sum(pos[k][0] for k in t) / 3
+        sides[low["taillightl"] if x < 0 else low["taillightr"]].append(t)
+    return [(s, t) for s, t in sides.items() if t]
 
 
 def inside(p, lo, hi):
@@ -651,9 +696,10 @@ def wheel_axis(pieces, towards):
     return tuple(x / length for x in axis)
 
 
-def build_models(car, donor_files, wheels, year=1995, seed=930):
+def build_models(car, donor_files, wheels, year=1995, seed=930, popups=False):
     """{file name: (Carbin, report)} for the donor's main, _lod0 and _cockpit models. The main
-    model gets FM1's lamps as its light list (year: the headlight sprites of a car that old)."""
+    model gets FM1's lamps as its light list (year: the headlight sprites of a car that old).
+    popups: the donor has pop-up head lamps (donor_popups)."""
     import fm4_carbin
     dy, dz = placement(car, wheels)
     parts = stock_parts(car)
@@ -664,13 +710,13 @@ def build_models(car, donor_files, wheels, year=1995, seed=930):
         kind = "lod0" if re.search(r"_(lod0|cockpit)\.carbin$", name, re.I) else "main"
         available = cb.materials(donor)
         report = {"placement": (round(dy, 4), round(dz, 4))}
-        ps = pieces(car, parts, kind, names, available, dy, dz, report)
+        ps = pieces(car, parts, kind, names, available, dy, dz, report, popups)
         if kind == "lod0" and "a_pillar" in names and "body" not in names:
             ap = next(s for s in donor.sections if s.name == "a_pillar")
             pts = fc.world(ap, ap.lod0)
             if pts:
                 bounds = ([min(p[k] for p in pts) for k in range(3)], [max(p[k] for p in pts) for k in range(3)])
-                body = pieces(car, parts, kind, names + ["body"], available, dy, dz, {})
+                body = pieces(car, parts, kind, names + ["body"], available, dy, dz, {}, popups)
                 ps += a_pillar_pieces([p for p in body if p.section == "body"], bounds)
         sw = [p for p in ps if p.section == "steering_wheel"]
         model = fc.clone(donor)
@@ -681,7 +727,7 @@ def build_models(car, donor_files, wheels, year=1995, seed=930):
                 if s.name == "steering_wheel":
                     s.offset = centre
             report["steering_wheel_pivot"] = [round(c, 4) for c in centre]
-        sh = cb.SHModel([donor])
+        sh = cb.SHModel([donor], by_section=True)
         new, rep = cb.build(model, ps, "lod" if kind == "main" else "lod0", sh, seed=seed + len(out),
                             keep=KEEP_SECTIONS, transparent=transparent)
         if sw:
@@ -726,12 +772,30 @@ def _fh1_donor(fh1_dir, update, donor):
     return files, wheels, [i.filename for i in z.infolist() if i.filename.lower().endswith(".xds")]
 
 
+def donor_popups(fh1_dir, update, donor):
+    """True when the donor's head lamps are pop-ups: its caranimationevents.xml animates a
+    "headlight" part (the '94 Miata's lightsdown_to_lightsup), which turns the donor's
+    headlightL/R sections up and down."""
+    import fm4_cars
+    fh1 = fm4_cars.FH1(fh1_dir, update)
+    path = fm4_cars.find_ci(fh1.media, "cars", donor + ".zip")
+    if not path:
+        return False
+    z = fm4_cars.ZIPS.get(path)
+    info = next((i for i in z.infolist() if i.filename.lower() == "caranimationevents.xml"), None)
+    if info is None:
+        return False
+    text = fm4_cars.Member(z, path, info).read().decode("latin-1")
+    return re.search(r'<Part\s+Name="headlight"', text, re.I) is not None
+
+
 def car_files(cab, car, fh1_dir, update, donor, year=1995):
     """({file name: bytes}, {model: report}): the donor's three models and their stripped_
     copies with the FM1 car in them, and its textures made from FM1's."""
     files, wheels, xds = _fh1_donor(fh1_dir, update, donor)
     out, reports = {}, {}
-    for name, (new, report) in build_models(car, files, wheels, year).items():
+    for name, (new, report) in build_models(car, files, wheels, year,
+                                            popups=donor_popups(fh1_dir, update, donor)).items():
         out[name] = fc.build(new)
         out["stripped_" + name.lower()] = fc.build(new, stripped=True)
         reports[name] = report

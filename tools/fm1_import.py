@@ -685,12 +685,15 @@ def _free_id(db, table, key, want):
 
 def _clone_keyed(db, key, donor, new):
     """{table: [rows]}: every row whose key column (EngineID, DrivetrainID) is the donor's, under
-    the new id; an Id or TorqueCurveID column made from it (donor x 1000 + n) follows."""
+    the new id; an Id or TorqueCurveID column made from it (donor x 1000 + n) follows.
+    Powertrains is left out: its DrivetrainId is the drive type (1 FWD, 2 RWD, 3 AWD), so a donor
+    whose drivetrain is 1, 2 or 3 had its rows copied under their own ids (the 250 GTO's, 3:
+    "UNIQUE constraint failed: Powertrains.Id")."""
     out = {}
     for (t,) in db.execute("select name from sqlite_master where type = 'table' order by name").fetchall():
         cols = columns(db, t)
         col = next((c for c in cols if c.lower() == key.lower()), None)
-        if not col or t in ("List_UpgradeEngine", "List_UpgradeDrivetrain", "Combo_Engines"):
+        if not col or t in ("List_UpgradeEngine", "List_UpgradeDrivetrain", "Combo_Engines", "Powertrains"):
             continue
         rows = []
         for row in db.execute("select * from [%s] where [%s] = ?" % (t, col), (donor,)):
@@ -1174,7 +1177,8 @@ def build(fm1_dir, fh1_dir, car_name, donor, update=None, base_mod=None, year=No
         refs, encoded = string_tables(tables, [("IDS_DisplayName_%d" % new, display),
                                                ("IDS_ModelShort_%d" % new, short)], hi)
         files_, wheels, xds = fm1_cars._fh1_donor(fh1_dir, update, donor)
-        models = fm1_cars.build_models(car, files_, wheels, info["year"] if year is None else year)
+        models = fm1_cars.build_models(car, files_, wheels, info["year"] if year is None else year,
+                                       popups=fm1_cars.donor_popups(fh1_dir, update, donor))
         sw = next((r.get("steering_wheel_pivot") for n, (_, r) in models.items() if not re.search(r"(?i)_(lod0|cockpit)", n)), None)
         dy, dz = fm1_cars.placement(car, wheels)
         found = fm1_cars.lamps(car, fm1_cars.stock_parts(car), dy, dz)

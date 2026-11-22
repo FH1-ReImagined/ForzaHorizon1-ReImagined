@@ -194,7 +194,13 @@ give back the same bytes for every model of the cars tried) and `tools/fh1_xds.p
 - **Baked lighting (SH0):** 4 signed bytes per vertex, fitted on the normal from the donor's own
   vertices. On FH1's cars they are a positive constant, then three terms that follow the normal's
   z, x and y. Read as unsigned bytes, as Forza Imported DLC Maker fits them, the fit misses the
-  RX-7's by 75-89 per byte; read signed, by 30-38.
+  RX-7's by 75-89 per byte; read signed, by 30-38. Each section is fitted on the donor's section of
+  that name (`SHModel(..., by_section=True)`, sections of 200 vertices or more): one fit over the
+  whole car mixes the dark interior, glass and underside into the paint's (the '94 Miata: a
+  constant of 75 over the car, 90 over its body), and FM1's cars drew darker than FH1's in the
+  same paint (the MX-5 in the Miata's red: maroon). With both fixes below it is close to it.
+- **The second uv set** is one point, (0, 0), as on most of FH1's meshes (the Miata's body: scale
+  0); FM1's uv given again there darkened the paint too.
 - **Draw lists.** The header's per-LOD lists are rebuilt: a rebuilt section is drawn at the LODs
   the donor drew it at, in the transparent or the opaque list as the donor draws its material.
 - **Textures.** `livery0hi.xpr` becomes the donor's `Nodamage`, `lights`, `damagelights` (and
@@ -204,7 +210,34 @@ give back the same bytes for every model of the cars tried) and `tools/fh1_xds.p
   one 32 × 32-block surface) rebuilds the donor's own textures byte for byte.
 - **Lamps.** The main model's light list gets a headlight and its flare at each of FM1's
   `Flare`s, and a tail light and two brake sprites at each side's tail lamp meshes (FM1 gives
-  those no `Flare`).
+  those no `Flare`). One set a side, at the middle of all of that side's lamp pieces: with a set
+  at each piece of a lens with a gap (the MX-5's), the brakes glowed twice as much as the
+  donor's.
+- **Lamp lenses.** FM1's tail lamp material becomes FH1's lamp glass (`lights_gls_taillight2S`,
+  else `lights_gls_tail_light`), as the donor's lamps have it over their lamp body: the lamp
+  body material (`taillight2S`, `tail_light`) shines what its texture shows, and with FM1's red
+  lens on it the MX-5's lamps and third brake light glowed in daylight where the '94 Miata's,
+  on the same road, stayed dark. On the glass they look like the Miata's (the brake sprites
+  light them). The lenses go into the donor's `taillightL`/`taillightR` of their side wherever
+  FM1 has them (the MR2's are in its body, the MX-5's third brake light in its trunk).
+  When the donor's head lamps are pop-ups (its `caranimationevents.xml` animates `headlight`, as
+  the '94 Miata's), FM1's fixed head lamps go into the body: in `headlightL`/`R` they stood up
+  with the pop-up animation.
+- **Lamp glass and other materials found by where FM1 uses them** (all 211 cars with a model):
+  28 is lamp glass (173 `glassLHL`/`RHL` headlight glass parts, 162 headlights, tail lamp and
+  other lamp glass) and becomes `lights_glass` or `detail_glass_clear`: mapped to black before,
+  it covered the MX-5's headlights with a black shell over their reflectors (27, the same shape
+  under it); with it clear the reflectors and lamps show. 31 clear lamp covers (body, bumpers,
+  lamps), 16 tail lamp glass (`glassLTL`/`RTL`), 30 the reverse lamps in the tail lamps, 35 the
+  front bumpers' and hoods' grilles (197 uses). 29 (trunks, interiors, wings) is not placed and
+  stays black.
+- **Head lamps (4)** go on the reflector material (`textured_reflector`), as under FH1's lamp
+  glass: on FH1's lamp materials (`oldhead`) FM1's lamp texture shone, and the Supra's lamps
+  blew out white where FH1's own Supra's glowed softly on the same road at the same time. A
+  donor without lamp glass (the RX-7, the S2000) gives the tail lamps `detail_glass_red` before
+  its lamp body. Checked against FH1's own F50, RX-7 and Supra on the same road: no glare; the
+  FM1 F50's tail lamps stay a little brighter than FH1's, the FM1 RX-7's a little darker (FH1's
+  are lit softly there, with the lights on).
 
 ## A car of its own
 

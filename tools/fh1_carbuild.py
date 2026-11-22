@@ -147,11 +147,22 @@ class SHModel:
     own vertices (least squares, by the normal equations). The bytes are signed: on the RX-7, a fit
     read as unsigned misses by 75-89 per byte, signed by 30-38."""
 
-    def __init__(self, carbins):
-        ata = [[0.0] * 4 for _ in range(4)]
-        aty = [[0.0] * 4 for _ in range(4)]
+    SECTION_MIN = 200    # vertices a section needs for a fit of its own (by_section)
+
+    def __init__(self, carbins, by_section=False, coef=None):
+        """by_section: each section also gets a fit on the donor's section of that name (section()),
+        for sections with SECTION_MIN vertices: one fit over the whole car mixes the dark interior,
+        glass and underside into the paint's (FM1's MX-5 body averaged 80 where the '94 Miata's own
+        body has 94, and drew darker in the same paint)."""
+        self.sections = {}
+        if coef is not None:
+            self.coef = coef
+            return
+        total = ([[0.0] * 4 for _ in range(4)], [[0.0] * 4 for _ in range(4)], [0])
+        per = {}
         for c in carbins:
             for s in c.sections:
+                acc = per.setdefault(getattr(s, "name", ""), ([[0.0] * 4 for _ in range(4)], [[0.0] * 4 for _ in range(4)], [0]))
                 for pool in (s.lod, s.lod0):
                     if pool.count < 16 or pool.stride != 28:
                         continue
@@ -159,13 +170,27 @@ class SHModel:
                         n = fc.quat_normal((qx, qy, qz, qw))
                         row = (1.0, n[0], n[1], n[2])
                         ys = (b0, b1, b2, b3)
-                        for i in range(4):
-                            ri = row[i]
-                            ai, yi = ata[i], aty[i]
-                            for j in range(4):
-                                ai[j] += ri * row[j]
-                                yi[j] += ri * ys[j]
+                        for ata, aty, cnt in (total, acc):
+                            cnt[0] += 1
+                            for i in range(4):
+                                ri = row[i]
+                                ai, yi = ata[i], aty[i]
+                                for j in range(4):
+                                    ai[j] += ri * row[j]
+                                    yi[j] += ri * ys[j]
+        ata, aty, _ = total
         self.coef = _solve(ata, aty) if ata[0][0] else [[80.0, 0.0, 0.0, 0.0], [0.0] * 4, [0.0] * 4, [0.0] * 4]
+        if by_section:
+            for name, (a, y, cnt) in per.items():
+                if cnt[0] >= self.SECTION_MIN:
+                    try:
+                        self.sections[name] = SHModel(None, coef=_solve(a, y))
+                    except (ZeroDivisionError, ValueError):
+                        pass
+
+    def section(self, name):
+        """The fit for a section of this name (by_section), else the whole car's."""
+        return self.sections.get(name, self)
 
     def __call__(self, n):
         c = self.coef
@@ -355,6 +380,7 @@ def build(donor, pieces, pool_name, sh, seed=1, keep=(), transparent=None):
     _cockpit) or "auto" (a wheel model: each piece in its LOD's pool). Every piece's section must
     be one of the donor's."""
     rng = random.Random(seed)
+    sh_all = sh                     # (a by_section SHModel gives each section its own fit)
     out = copy.deepcopy(donor)
     names = {s.name for s in donor.sections}
     by_sec = {}
@@ -394,6 +420,7 @@ def build(donor, pieces, pool_name, sh, seed=1, keep=(), transparent=None):
         bmax = [max(e, 1e-3) * 1.0005 for e in ext]
         sec.bmin, sec.bmax = [-b for b in bmax], bmax
         radius = math.sqrt(_dot(bmax, bmax))
+        sh = sh_all.section(sec.name) if hasattr(sh_all, "section") else sh_all
         empty = fc.Pool(0, 0, [0], b"")
         if pool_name == "auto":  # a wheel: LOD 0 in its own pool, LOD 1-5 in the other
             hi = [p for p in mine if p.lod > 0]
