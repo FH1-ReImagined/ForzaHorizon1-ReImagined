@@ -1,10 +1,33 @@
 # Drag tires
 
 FH1's own cars have no drag tire. Their tires stop at level 3 (street, sport, race), apart from the
-Rally Expansion's rally tire (level 5, compound 9). The FM4 car import leaves FM4's level-4 drag tire
-out ([why](fm4-cars.md#rally-parts-924)). **Mods → Drag tires** gives every car a drag tire as a
-sixth tire compound in **Custom Upgrade → Tires and Rims → Tire Compound** (#924). It has far more
-grip off the line, and less in corners and on loose ground.
+rally tire (level 5, compound 9). The FM4 car import keeps FM4's level-4 drag tire only on the cars
+its released version had ([why](fm4-cars.md#rally-parts-924)). **Mods → Drag tires** gives every
+car a drag tire as a sixth tire compound in **Custom Upgrade → Tires and Rims → Tire Compound**
+(#924).
+
+Against FH1's Race tires (compound 8, `8_RacingSlick` in the title update's database), from
+`tools/drag_tire.json`:
+
+| | Race (8) | Drag (10) |
+|---|---|---|
+| grip under acceleration (`TorqueFreeLongFrictionScaleAccel0` / `Accel1`) | 1.2 / 1.2 | 1.95 / 1.6 |
+| the speed of the second value (`TorqueFreeLongFrictionScaleAccelSpeed1`) | 15 | 25 |
+| grip under braking (`TorqueFreeLongFrictionScaleBrake`) | 1.7 | 1.39 |
+| lateral grip scale (`TorqueFreeLatFrictionScale`) | 1.65 | 1.65 (the same) |
+| lateral friction curves' scale, light / heavy load (curves 37, 38 against Race's) | 1.29 / 1.03 | 1.21 / 0.97 |
+| where the lateral curves peak (point of 99 over the slip range) | 12 / 8 | 20 / 16 |
+| the lateral curves at the end of the slip range | 0.852 / 0.826 | 0.818 / 0.789 |
+| grip at 60 and at 300 on the temperature curve | 1.0 / 0.99 | 0.9 / 0.9 |
+| the wet values | 0.8, 1.5 | 0.8, 1.5 (the same) |
+
+So it has far more grip under acceleration and less under braking. In corners its lateral scale is
+Race's, but its lateral friction curves peak about 6% lower (1.21 against 1.29, 0.97 against
+1.03), at a larger slip angle, and fall further past the peak; it also loses more grip when cold
+or overheated. That is what the game showed on a BRZ: grip −0.06 against its race tires. Nothing in
+the database sets a compound's grip per surface, so nothing here says how it does on dirt or grass.
+The game's own description of the tire (warshack4874's text, below) says it is not suited to
+corners or loose surfaces.
 
 - [For players](#for-players)
 - [What the mod is made of](#what-the-mod-is-made-of)
@@ -27,7 +50,26 @@ Every car means:
 Untick the box to take the tire away again: the game then starts without the mod. **First fit another
 tire compound to every car that has the drag tire.** Without the mod, a car with the drag tire fitted
 does not load: the game gives you another car instead, as for any missing content. Tick the box
-again and the car is back with its drag tire. The launcher asks before turning the mod off.
+again and the car is back with its drag tire. The launcher asks before turning the mod off. Not
+checked yet: whether such a car is still in the garage after the game saved while the mod was off.
+
+Why the part fallback does not help here: ReImagined loads a car part the game's database doesn't
+have as the car's stock part (#836, #862, `forza-recomp/src/hooks/car_part_fallback.cpp`), and the
+tire compound is one of the parts it covers. But that fallback is in the car physics loader's five
+part creators. Before them, `CCar::CreateCarParams` (TU4 `0x8253F6D0`) reads the car with one query
+that joins `List_UpgradeTireCompound ON List_UpgradeTireCompound.Id = <the fitted tire>` (an inner
+join, whenever the car has a tire part): with no such row the query has no row at all, and the car
+is not made. Covering it needs a hook of its own in that function (the installed parts it is given
+and where the tire id sits in them), checked in the game; that is not part of this mod.
+
+Online, a player without the mod has no `car id × 1000 + 6` row. What their game shows of another
+player's car on drag tires has not been checked. [online_vision.md](../online_vision.md) has a
+remote car whose stock wheel row is missing shown normally, but the tire goes through the query
+above, so that case does not tell.
+
+Leaderboards: a score the game submits names only the car, its class and PI and the assists, so
+Forza Live's boards cannot tell a run on drag tires from one on Race tires (the tire also lowers
+the PI: the BRZ went from 500 to 452). Keeping such runs off the ranked boards is not done yet.
 
 The name and description are in English in every language.
 
@@ -75,7 +117,8 @@ files (FH1, its installed DLC and an FM4 cars import of six cars): drag tires fo
 | An imported FM4 car | the Cayman R, with the drag tire fitted in the save, spawned at the festival and drove off |
 | The mod turned off | the same save, with the drag tire fitted, started without the mod: the Cayman R did not load, and the game spawned another car. With the mod on again it loads |
 
-Not checked: a drag race with it, and how it compares in numbers with the other compounds.
+Not checked: a drag race with it, and runs on it against Race tires on the same car (the numbers
+above are the data, not measured runs).
 
 ## Credits
 

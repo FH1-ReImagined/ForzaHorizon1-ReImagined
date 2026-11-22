@@ -454,8 +454,9 @@ class ModsPage(FolderListPage):
     def _drag_card(self):
         c, cl = card(spacing=10)
         cl.addWidget(label("Drag tires", "cardTitle"))
-        cl.addWidget(label("Give every car a drag tire: a sixth tire compound in Custom Upgrade, with far more "
-                           "grip off the line and less in corners and on loose ground. Every car means FH1's own, "
+        cl.addWidget(label("Give every car a drag tire: a sixth tire compound in Custom Upgrade. Against Race "
+                           "tires it has far more grip under acceleration, less under braking, and about 6% less "
+                           "peak grip in corners, reached at a larger slip angle. Every car means FH1's own, "
                            "your DLC's and your imported FM4 cars. The tire is made from your game's files when "
                            "you press Play, and again when your DLC or FM4 cars change. Before turning it off, "
                            "fit another tire to the cars that have it: a car with the drag tire fitted does not "
