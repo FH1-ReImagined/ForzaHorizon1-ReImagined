@@ -202,7 +202,7 @@ class TwinConverter(FakeConverter):
 
 
 class RallyConverter(FakeConverter):
-    """#924: the tool's report says what rally parts it added, None without the Rally Expansion."""
+    """#924: the tool's report says what rally parts it added (with or without the Rally Expansion)."""
     rally = {"tires": 1, "suspension": 1, "gearbox": 1, "cars": 1}
 
     def run(self, ids, progress=None, cancelled=lambda: False):
@@ -246,14 +246,13 @@ class Fm4ImportTests(_Setup, unittest.TestCase):
         self.assertIn("NIS_Leaf_11: an electric car without an engine row", fm4cars.status(self.cfg)["skipped"])
 
     def test_the_message_names_the_rally_parts(self):
-        """#924: rally parts come with FH1's Rally Expansion, and the player is told either way."""
+        """#924: the player is told how many cars have rally parts; they come with or without FH1's
+        Rally Expansion, so nothing tells the player to import again for them."""
         msg = fm4cars.build(self.cfg, self.disc1, None, converter=RallyConverter)
-        self.assertIn("1 of them have rally parts", msg)
+        self.assertIn("1 of them have rally parts.", msg)
+        self.assertNotIn("Rally Expansion", msg)
         self.assertEqual(fm4cars.status(self.cfg)["rally"]["cars"], 1)
-        with patch.object(RallyConverter, "rally", None):
-            msg = fm4cars.build(self.cfg, self.disc1, None, converter=RallyConverter)
-        self.assertIn("Rally parts need FH1's Rally Expansion", msg)
-        self.assertNotIn("Rally", self.build())  # a report without the key (an older tool): nothing said
+        self.assertNotIn("rally parts", self.build())  # a report without the key (an older tool): nothing said
 
     def test_publishes_the_mod_enabled_last_and_removes_it(self):
         msg = self.build()

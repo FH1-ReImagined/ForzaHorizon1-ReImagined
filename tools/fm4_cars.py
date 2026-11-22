@@ -695,12 +695,6 @@ class FH1:
         self.db_file = path
         return sqlite3.connect("file:%s?mode=ro" % path, uri=True)
 
-    def has_rally_expansion(self):
-        """True when FH1's Rally Expansion is installed (its DLC offer's zip, 1600_pri_65.zip, is
-        among the DLC): the imported cars then get rally parts (#924)."""
-        return any(re.match(r"(?i)%d_pri_\d+\.zip$" % RALLY_OFFER, os.path.basename(path))
-                   for _, path in self.dlc_zips)
-
     def dlc_patches(self):
         """Paths of the installed DLC packs' database patches: those in their zips (FH1's own DLC) and
         those next to them (fan packs such as UDLC)."""
@@ -1124,8 +1118,9 @@ RETUNED = ["PerformanceIndex", "BodyAeroForwardDownforceFront", "BodyAeroForward
 
 # Rally parts (#924), as FH1's own cars have them (190 rows of each in the title update's database)
 # and as Forza Imported DLC Maker gives FM4 cars: measured there on the Rally Expansion's 16 cars
-# (its DLC offer 1600), matching UDLC's. Added only when the Rally Expansion is installed.
-RALLY_OFFER = 1600
+# (its DLC offer 1600), matching UDLC's. Added with or without the Rally Expansion: a car's rows
+# must not go when an import is made again without it (a part fitted in a save whose row is missing
+# stops the car from loading), and FH1's own cars have them in the title update's database.
 RALLY_TIRE = {"Level": 5, "TireCompoundID": 9, "Price": 10000}
 RALLY_GEARBOX = {"FinalDriveRatio": 4.4, "NumGears": 7, "GearRatio1": 3.3, "GearRatio2": 2.05, "GearRatio3": 1.5,
                  "GearRatio4": 1.17, "GearRatio5": 0.97, "GearRatio6": 0.825, "GearRatio7": -1.0, "GearRatio8": -1.0}
@@ -1342,8 +1337,11 @@ class Database:
     merges: {FM4 make id: FH1 make id} (make_merges), the cars of those makes join FH1's;
     moves: {FM4 make id: new id} (make_moves), those makes and their cars take the new id."""
 
-    def __init__(self, fm4db, fh1db, merges=None, moves=None, renumber=None, parts=None):
+    def __init__(self, fm4db, fh1db, merges=None, moves=None, renumber=None, parts=None, released=None):
         self.fm4, self.fh1 = fm4db, fh1db
+        # the cars (their ids in the import) the released import had: they keep FM4's level-4
+        # tire (_drop_drag_tires)
+        self.released = set(released or ())
         self.merges = dict(merges or {})
         self.moves = dict(moves or {})
         # the id table's (#924): {FM4 car id: (its id, its MediaName)} (table_cars) and
@@ -1463,10 +1461,13 @@ class Database:
     def _drop_drag_tires(self):
         """FM4's level-4 tire is its drag tire (compound 9). FH1's own cars have none: their tires
         stop at level 3 but for the rally tire (level 5, compound 9; rally_parts), and Forza Imported
-        DLC Maker leaves it out of every car too. A drag tire for every car may come back later as
-        an option of its own (#924). A stock tire is kept (no FM4 car has one at level 4)."""
+        DLC Maker leaves it out of every car too. It is left out only of the cars the released
+        import never had: a car it had (self.released) keeps it, since a save can have it fitted,
+        and a car whose fitted part's row is missing does not load (#924). A stock tire is kept (no
+        FM4 car has one at level 4)."""
         tires = self.rows.get("List_UpgradeTireCompound", {})
-        for key in [k for k, r in tires.items() if (r.get("Level") or 0) >= 4 and not r.get("IsStock")]:
+        for key in [k for k, r in tires.items() if (r.get("Level") or 0) >= 4 and not r.get("IsStock")
+                    and r.get("Ordinal") not in self.released]:
             del tires[key]
 
     def _drop_unnamed(self):
@@ -1498,8 +1499,8 @@ class Database:
     def rally_parts(self, cars):
         """Rally parts for the import's cars (their ids in the import, after collect; #924), as FH1's
         own cars and the Rally Expansion's have them, and as Forza Imported DLC Maker gives FM4 cars:
-        - rally tires, level 5 and compound 9 (RALLY_TIRE, from the car's highest tire: FM4's
-          level-4 drag tires, compound 9 too, are gone, _drop_drag_tires);
+        - rally tires, level 5 and compound 9 (RALLY_TIRE, from the car's highest tire below
+          level 4: a car the released import had keeps FM4's level-4 drag tire, _drop_drag_tires);
         - a level-4 rally suspension: the level-3 one with RALLY_MASS of its mass, its springs,
           dampers and ride height scaled from the car's own (the level-1 springs, the stock body's
           ride height) the way the Rally Expansion's are;
@@ -1526,9 +1527,11 @@ class Database:
         tires = rows.setdefault("List_UpgradeTireCompound", {})
         for car in mine:
             own = sorted(of("List_UpgradeTireCompound", "Ordinal", car), key=level)
+            rest = [r for r in own if level(r) < 4]
             key = car * 1000 + RALLY_TIRE["Level"]
-            if own and level(own[-1]) < 4 and free("List_UpgradeTireCompound", key):
-                tires[key] = dict(own[-1], Id=key, IsStock=0, **RALLY_TIRE)
+            if rest and level(own[-1]) <= 4 and not any(r.get("IsStock") for r in own if level(r) >= 4) \
+                    and free("List_UpgradeTireCompound", key):
+                tires[key] = dict(rest[-1], Id=key, IsStock=0, **RALLY_TIRE)
                 done["tires"] += 1
                 got.add(car)
         springs = rows.setdefault("List_UpgradeSpringDamper", {})
@@ -2113,6 +2116,25 @@ class Converter:
                 pass
         return False
 
+    def released(self, cid):
+        """True when ReImagined's released FM4 import (before the id table, #924) could have had
+        this car: it took every FM4 car under FM4's id whose id and MediaName FH1's database lacks
+        (so no copy of a traffic car, #841) and whose stock engine's id is not another engine's in
+        FH1 (the id table moves some of those engines now). Such a car keeps FM4's level-4 tire
+        (Database._drop_drag_tires): a save can have it fitted."""
+        if cid in self.twins():
+            return False
+        name = self.fm4db.execute("select MediaName from Data_Car where Id=?", (cid,)).fetchone()
+        if self.fh1db.execute("select 1 from Data_Car where Id=? or lower(MediaName)=?",
+                              (cid, str(name[0] if name else "").lower())).fetchone():
+            return False
+        try:
+            stock = self.fm4db.execute("select EngineID from List_UpgradeEngine where Ordinal=? and IsStock",
+                                       (cid,)).fetchall()
+        except sqlite3.Error:
+            stock = []
+        return not any(engine_clash(self.fm4db, self.fh1db, v) for (v,) in stock)
+
     def needs(self, cid):
         """Why a car can't be converted whole, in words, or None: its rows name something neither
         game's files have (its engine, body or drivetrain rows, its make or its stock wheel: a DLC
@@ -2442,12 +2464,14 @@ class Converter:
         renumber = {c: t for c, t in self.renumbered().items() if c in ids}
         twins = {c for c in self.twins() if c in ids}
         parts = table_parts(self.table())
+        released = {renumber.get(c, (c, n))[0] for c, n in chosen if self.released(c)}
         db = Database(self.fm4db, self.fh1db, merges,
-                      make_moves(self.fm4db, self.fh1db, fm4_names, fh1_names, merges), renumber, parts)
+                      make_moves(self.fm4db, self.fh1db, fm4_names, fh1_names, merges), renumber, parts,
+                      released)
         db.collect([c for c, _ in chosen])
-        # rally parts, with FH1's Rally Expansion only, as Forza Imported DLC Maker adds them (#924)
-        report["rally"] = (db.rally_parts([renumber.get(c, (c, n))[0] for c, n in chosen])
-                           if self.fh1.has_rally_expansion() else None)
+        # rally parts, as Forza Imported DLC Maker adds them (#924), with or without FH1's Rally
+        # Expansion: a part fitted in a save must not lose its row on a later import without it
+        report["rally"] = db.rally_parts([renumber.get(c, (c, n))[0] for c, n in chosen])
         rows = db.finish(report)
         wheel_names = {}  # wheel id in the rows -> (FM4's wheel name, its name in the import)
         for cid, _ in chosen:
@@ -2587,8 +2611,6 @@ def main(argv=None):
         if rep.get("rally"):
             print("rally parts for %(cars)d cars: tires for %(tires)d, suspension for %(suspension)d, gearboxes for "
                   "%(gearbox)d drivetrains" % rep["rally"])
-        elif rep.get("rally") is None:
-            print("no rally parts: FH1's Rally Expansion is not among the DLC")
         if rep.get("louder"):
             print("engine tunings at FH1's level: %d" % rep["louder"])
         for car, files in rep.get("audio", []):

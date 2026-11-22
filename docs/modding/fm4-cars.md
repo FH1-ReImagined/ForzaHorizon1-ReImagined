@@ -34,9 +34,9 @@ player's PC from their discs and stay there.
    and PT Cruiser GT, the 2010 Taurus SHO, the 2011 Prius) come in as cars of their own; FH1's
    traffic cars stay as they are ([how](#fh1s-traffic-cars-841)). Every car takes its id from one
    table, the same for every player, so a car has the same id on every game it is imported into
-   ([the id table](#the-id-table-924)). With FH1's Rally Expansion installed, the cars also get
-   its rally tires, suspension and transmission in **Custom Upgrade** ([rally parts](#rally-parts-924));
-   install it later and import again to add them.
+   ([the id table](#the-id-table-924)). The cars also get FH1's rally tires, suspension and
+   transmission in **Custom Upgrade** ([rally parts](#rally-parts-924)), with or without FH1's
+   Rally Expansion.
 
 ### What the import accepts
 
@@ -302,10 +302,10 @@ out. With the cars in the database the game loads, it answers 1 and they are lis
 ### Rally parts (#924)
 
 FH1's rally parts are a tire compound, a suspension and a transmission. FH1's own cars have them
-(190 of each in the title update's database), and so do the Rally Expansion's 16 cars. With the
-Rally Expansion installed (its DLC offer 1600, `1600_pri_65.zip` among the DLC), the import gives
-its cars the same three (`Database.rally_parts`). It uses the recipe Forza Imported DLC Maker
-gives FM4 cars, measured there on the Rally Expansion's cars:
+(190 of each in the title update's database), and so do the Rally Expansion's 16 cars. The
+import gives its cars the same three (`Database.rally_parts`), with or without the Rally Expansion
+(its DLC offer 1600). It uses the recipe Forza Imported DLC Maker gives FM4 cars, measured there on
+the Rally Expansion's cars:
 
 | Part | Rows | Made from |
 |---|---|---|
@@ -334,8 +334,6 @@ them in 100).
 Some cars get no rally parts:
 - An electric car or a hybrid (one with a motor row) gets none, as in Forza Imported DLC Maker:
   the Tesla Roadster, the CR-Z, the Prius, the CT200h and the Volt.
-- Without the Rally Expansion no car gets them. The import says so: install the expansion and
-  import again.
 
 The game's car view (`Restrictions_Data_Car`, `src/platform/car_view.h`) decides which cars can
 rally. A car counts when it has a level-4 springs row, a level-5 tire row and a level-4
@@ -343,11 +341,24 @@ transmission on one of its drivetrains (`CouldRally`), and it is a rally car whe
 stock (`IsRally`). The view finds the rows by the car's `ModelId`, which is its id. A car the id
 table renumbers takes its new id there too: the Cayman R's FM4 1541 is FH1's Explorer's.
 
+The rally parts come with or without the Rally Expansion. Rows that came and went with it would
+break saves: a player who imports with it, fits the rally tire, then imports again without it (a
+reinstall, another PC) would have a car whose fitted part has no row, and such a car does not load
+(the game gives another car). The rows are made from the car's own rows and fixed values, none of
+them from the expansion, and FH1's own cars have theirs in the title update's database, expansion
+or not.
+
 FM4's level-4 tire is its drag tire (compound 9). FH1's own cars have none: their tires stop at
-level 3, apart from the rally tire at level 5. Forza Imported DLC Maker leaves it out too, and so
-the import leaves it out of every car (`Database._drop_drag_tires`), with or without the Rally
-Expansion. **Mods → Drag tires** gives every car, the imported ones too, a drag tire of its own
-instead ([drag-tires.md](drag-tires.md)).
+level 3, apart from the rally tire at level 5. Forza Imported DLC Maker leaves it out too. The
+import leaves it out only of the cars ReImagined's released import never had
+(`Database._drop_drag_tires`): that import gave every car it took FM4's level-4 tire (key car id ×
+1000 + 4), so a save can have it fitted, and a car whose fitted tire has no row does not load. The
+released import took every FM4 car under FM4's id whose id and MediaName FH1's database lacks and
+whose stock engine's id is not another engine's in FH1 (`Converter.released`); those cars keep the
+tire and get the rally tire at level 5 as well. The cars it never had (the copies of FH1's traffic
+cars, and those whose engine the id table moves) get no level-4 tire.
+**Mods → Drag tires** gives every car, the imported ones too, a drag tire of its own
+([drag-tires.md](drag-tires.md)).
 
 ### Strings
 

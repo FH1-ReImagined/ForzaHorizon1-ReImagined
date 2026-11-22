@@ -1274,9 +1274,8 @@ def _build(cfg, tools, target, backup, work, disc1, disc2, progress, cancelled, 
     more = f" {skipped} could not be converted (see the mod's {MARKER})." if skipped else ""
     rally = report.get("rally")
     if rally:
-        more += f" {rally['cars']} of them have rally parts (FH1's Rally Expansion is installed)."
-    elif "rally" in report and rally is None:
-        more += " Rally parts need FH1's Rally Expansion: install it and import again to add them."
+        # with or without the Rally Expansion: a fitted part keeps its row on the next import (#924)
+        more += f" {rally['cars']} of them have rally parts."
     from_dlc = ""
     if "fm4_dlc" in info:
         from_dlc = f", {len(info['fm4_dlc']['cars'])} of them from your FM4 DLC"
