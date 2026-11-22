@@ -97,7 +97,7 @@ class Fm4TracksCard(QWidget):
         self.task = None
         self.disc = None
         self.work = None
-        self.fm1 = None          # (Forza Motorsport's disc folder, its circuits) for Import FM1 tracks
+        self.fm1 = None          # (Forza Motorsport's disc folder or image, its circuits) for Import FM1 tracks
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         c, cl = card(spacing=10)
@@ -124,8 +124,11 @@ class Fm4TracksCard(QWidget):
         self.import_button.clicked.connect(self._import)
         row.addWidget(self.import_button)
         self.fm1_button = QPushButton("Import FM1 tracks…")
-        self.fm1_button.setToolTip("Tsukuba, Road America and Silverstone with the scenery of the original Xbox "
-                                   "Forza Motorsport (2005): needs its disc's files in a folder and FM4's Disc 1.")
+        self.fm1_button.setToolTip("Tsukuba, Road America, Silverstone, Maple Valley, Laguna Seca, Sunset "
+                                   "Peninsula, Tokyo, New York, Rio, Alpine Ring, Blue Mountains, Pacific "
+                                   "Shipyards, Fujimi Kaido, Road Atlanta and the Test Track from the "
+                                   "original Xbox "
+                                   "Forza Motorsport (2005): needs its disc image or files and FM4's Disc 1.")
         self.fm1_button.clicked.connect(self._import_fm1)
         row.addWidget(self.fm1_button)
         self.remove_button = QPushButton("Remove circuit")
@@ -222,13 +225,27 @@ class Fm4TracksCard(QWidget):
         self.work, self.disc = None, None
 
     def _import_fm1(self):
-        """FM1's circuits: Forza Motorsport's (2005) disc folder, then FM4's Disc 1 (its collision, AI
+        """FM1's circuits: Forza Motorsport's (2005) disc image or folder, then FM4's Disc 1 (its collision, AI
         lines and names for the same circuits)"""
         if self.page._game_running():
             self.message.setText("Close the game before importing circuits.")
             return
-        from PySide6.QtWidgets import QFileDialog
-        fm1_dir = QFileDialog.getExistingDirectory(self, "Forza Motorsport (2005) disc folder", str(Path.home()))
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+        title = "Forza Motorsport (2005) disc"
+        ask = QMessageBox(self)
+        ask.setWindowTitle(title)
+        ask.setText(f"{title}: a disc image (.iso), or a folder with the disc's files?")
+        image = ask.addButton("Disc image…", QMessageBox.AcceptRole)
+        folder = ask.addButton("Folder…", QMessageBox.AcceptRole)
+        ask.addButton("Cancel", QMessageBox.RejectRole)
+        ask.exec()
+        if ask.clickedButton() is image:
+            fm1_dir, _ = QFileDialog.getOpenFileName(self, title, str(Path.home()),
+                                                     "Disc images (*.iso *.xiso *.img *.bin);;All files (*)")
+        elif ask.clickedButton() is folder:
+            fm1_dir = QFileDialog.getExistingDirectory(self, title, str(Path.home()))
+        else:
+            return
         if not fm1_dir:
             return
         try:

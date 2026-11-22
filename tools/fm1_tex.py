@@ -253,6 +253,221 @@ def over_colour(levels, fmt, rgb):
     return out
 
 
+def grey_curve(src, dst):
+    """a monotone grey mapping (a function 0..255 -> 0..255) through (0, 0), the pairs of src / dst quantiles (both
+    sorted) and (255, 255): FM1's lightmap brightness laid onto FM4's for the same circuit"""
+    pts = [(0.0, 0.0)]
+    for a, b in zip(src, dst):
+        if a > pts[-1][0] and b >= pts[-1][1] and a < 255:
+            pts.append((float(a), float(b)))
+    pts.append((255.0, 255.0))
+
+    def f(g):
+        for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+            if g <= x1:
+                return y0 + (y1 - y0) * (g - x0) / (x1 - x0)
+        return 255.0
+    return f
+
+
+def map_grey(levels, fmt, f):
+    """DXT1 / DXT5 levels with each colour endpoint's grey g made f(g), its colour cast (channel minus grey) scaled by
+    g / f(g) when lifted: scaling Sunset's bluish dark lightmaps turned the infield blue, so a lifted texel comes
+    out nearly neutral. Indices and alpha are kept; a block whose endpoints change order gets them swapped and its
+    indices remapped (it keeps its colour mode)"""
+    bb, co = (8, 0) if fmt == DXT1 else (16, 8)
+
+    def unpack(c):
+        r, g, b = c >> 11, (c >> 5) & 63, c & 31
+        return (r << 3 | r >> 2, g << 2 | g >> 4, b << 3 | b >> 2)
+
+    def mapped(c):
+        p = unpack(c)
+        g = grey(p)
+        n = f(g)
+        k = min(1.0, g / n) if n > 0 else 1.0       # a lifted texel's cast shrinks as much as it is lifted
+        q = [max(0, min(255, int(n + (x - g) * k + 0.5))) for x in p]
+        return (q[0] >> 3) << 11 | (q[1] >> 2) << 5 | q[2] >> 3
+    cache = {}
+    out = []
+    for blocks in levels:
+        new = bytearray(blocks)
+        for o in range(co, len(blocks) - bb + co + 1, bb):
+            c0, c1, idx = struct.unpack_from("<HHI", blocks, o)
+            four = c0 > c1 or fmt == DXT5
+            n0 = cache.setdefault(c0, mapped(c0))
+            n1 = cache.setdefault(c1, mapped(c1))
+            if four and fmt == DXT1 and n0 <= n1:
+                if n0 == n1:
+                    idx = 0
+                else:
+                    n0, n1, idx = n1, n0, idx ^ 0x55555555
+            elif not four and n0 > n1:          # DXT1 3-colour (+ clear) block: keep c0 <= c1
+                n0, n1 = n1, n0
+                idx = sum((({0: 1, 1: 0}.get((idx >> (2 * i)) & 3, (idx >> (2 * i)) & 3)) << (2 * i)) for i in range(16))
+            struct.pack_into("<HHI", new, o, n0, n1, idx)
+        out.append(bytes(new))
+    return out
+
+
+class Atlases:
+    """Lightmaps of one size packed side by side into side x side DXT1 pages, their blocks copied as they are (mip
+    levels too, while a lightmap's level is 4 texels or more; the page's smaller levels are made from the last one
+    copied). FM1 gives every mesh a lightmap of its own (Tokyo 1,242, mostly 64 x 64 or less) where FM4 packs them;
+    the game loads a circuit's models and textures through one list of 6,144 (fm1_tracks.MAX_LOAD), and with its
+    lightmaps in atlases a lit mesh can be joined with its neighbours too. add() -> (page, (u0, v0, du, dv)): the
+    lightmap's place in its page, for its uv"""
+
+    def __init__(self, side=512, most=128):
+        self.side, self.most = side, most
+        self.pages = []          # {"size": (w, h), "cells": [levels]}
+
+    def add(self, w, h, levels):
+        s = self.side
+        if max(w, h) > self.most or min(w, h) < 4 or w & (w - 1) or h & (h - 1):
+            return None
+        page = next((p for p in reversed(self.pages) if p["size"] == (w, h)
+                     and len(p["cells"]) < (s // w) * (s // h)), None)
+        if page is None:
+            page = {"size": (w, h), "cells": []}
+            self.pages.append(page)
+        k = len(page["cells"])
+        page["cells"].append(levels)
+        col, row = k % (s // w), k // (s // w)
+        return self.pages.index(page), (col * w / s, row * h / s, w / s, h / s)
+
+    def page_levels(self, i):
+        """the DXT1 levels of page i (side x side, full chain)"""
+        s, page = self.side, self.pages[i]
+        w, h = page["size"]
+        cols = s // w
+        grey = struct.pack("<HHI", 0x8410, 0x8410, 0)
+        last = 0
+        while (min(w, h) >> (last + 1)) >= 4 and all(len(c) > last + 1 for c in page["cells"]):
+            last += 1
+        levels = []
+        for k in range(last + 1):
+            pb = (s >> k) // 4
+            out = bytearray(grey * (pb * pb))
+            cw, ch = (w >> k) // 4, (h >> k) // 4
+            for n, cell in enumerate(page["cells"]):
+                x0, y0 = (n % cols) * cw, (n // cols) * ch
+                src = cell[k]
+                for by in range(ch):
+                    o = ((y0 + by) * pb + x0) * 8
+                    out[o:o + cw * 8] = src[by * cw * 8:(by + 1) * cw * 8]
+            levels.append(bytes(out))
+        ls = s >> last
+        if ls > 1:
+            levels += resize_levels(DXT1, ls, ls, levels[-1], ls // 2, ls // 2)
+        return levels
+
+
+def bix_mean_grey(data):
+    """mean grey of an FM4 .bix's level 1 (the file holds its header and the levels below the top), or None"""
+    if data[:4] != b"BIX1":
+        return None
+    w, h, n, fmt = struct.unpack_from(">4I", data, 4)
+    fmt = {0x52: DXT1, 0x54: DXT5}.get(fmt & 0xFF)
+    if n < 2 or fmt is None:
+        return None
+    bb = 8 if fmt == DXT1 else 16
+    mips = data[28:]
+    po = packed_mip_offset(w, h, 1)
+    bw, bh = level_blocks(w, h, 1)
+    pitch, ox, oy = (32, po[0] // 4, po[1] // 4) if po else (_a32(bw), 0, 0)
+    total = count = 0
+    for by in range(bh):
+        for bx in range(bw):
+            o = tiled_offset(bx + ox, by + oy, pitch, 3 if bb == 8 else 4)
+            blk = _swap16(mips[o:o + bb])
+            if len(blk) < bb:
+                continue
+            for p in _decode_block(fmt, blk):
+                total += grey(p)
+                count += 1
+    return total / count if count else None
+
+
+def _alpha_palette(a0, a1):
+    if a0 > a1:
+        return [a0, a1] + [((7 - i) * a0 + i * a1) // 7 for i in range(1, 7)]
+    return [a0, a1] + [((5 - i) * a0 + i * a1) // 5 for i in range(1, 5)] + [0, 255]
+
+
+def _scaled_alpha_blocks(blocks, s):
+    """DXT5 blocks with both alpha endpoints multiplied by s (clamped to 255), indices kept"""
+    new = bytearray(blocks)
+    for o in range(0, len(blocks) - 15, 16):
+        new[o] = min(255, int(blocks[o] * s + 0.5))
+        new[o + 1] = min(255, int(blocks[o + 1] * s + 0.5))
+    return bytes(new)
+
+
+def alpha_coverage(blocks, ref=128):
+    """share of a DXT5 level's texels with alpha >= ref"""
+    hit = n = 0
+    for o in range(0, len(blocks) - 15, 16):
+        pal = _alpha_palette(blocks[o], blocks[o + 1])
+        bits = int.from_bytes(blocks[o + 2:o + 8], "little")
+        hit += sum(1 for i in range(16) if pal[(bits >> (3 * i)) & 7] >= ref)
+        n += 16
+    return hit / n if n else 0.0
+
+
+def keep_alpha_coverage(levels, fmt, ref=128, most=8.0):
+    """DXT5 levels whose smaller levels keep the top level's share of alpha >= ref: each level's alpha endpoints are
+    scaled up (by at most `most`) until it does. Averaging a cut-out's alpha down the chain thins it (FM1's oak
+    leaves: 14 % solid at the top, 5 % three levels down), so trees faded into pale see-through cards from afar"""
+    if fmt != DXT5 or len(levels) < 2:
+        return levels
+    want = alpha_coverage(levels[0], ref)
+    if want <= 0.0:
+        return levels
+    out = [levels[0]]
+    for blocks in levels[1:]:
+        if alpha_coverage(blocks, ref) >= want:
+            out.append(blocks)
+            continue
+        lo, hi = 1.0, most
+        if alpha_coverage(_scaled_alpha_blocks(blocks, hi), ref) < want:
+            lo = hi
+        else:
+            for _ in range(12):
+                mid = (lo + hi) / 2
+                if alpha_coverage(_scaled_alpha_blocks(blocks, mid), ref) >= want:
+                    hi = mid
+                else:
+                    lo = mid
+            lo = hi
+        out.append(_scaled_alpha_blocks(blocks, lo))
+    return out
+
+
+def hard_alpha(levels, fmt, ref=128):
+    """DXT5 levels with every texel's alpha made 255 (>= ref) or 0: the game draws alpha-tested track models with
+    their alpha as a dither (alpha to coverage), so FM1's soft-edged leaves (a third of their texels in between)
+    drew as a speckled see-through screen with each card's rectangle showing; FM4's own leaves are hard already"""
+    if fmt != DXT5:
+        return levels
+    out = []
+    for blocks in levels:
+        new = bytearray(blocks)
+        for o in range(0, len(blocks) - 15, 16):
+            pal = _alpha_palette(blocks[o], blocks[o + 1])
+            bits = int.from_bytes(blocks[o + 2:o + 8], "little")
+            solid = [pal[(bits >> (3 * i)) & 7] >= ref for i in range(16)]
+            if all(solid):
+                new[o:o + 8] = bytes([255, 255]) + bytes(6)
+            elif not any(solid):
+                new[o:o + 8] = bytes([0, 0]) + bytes(6)
+            else:       # 8-alpha mode: index 0 = 255, index 1 = 0
+                nb = sum(1 << (3 * i) for i in range(16) if not solid[i])
+                new[o:o + 8] = bytes([255, 0]) + nb.to_bytes(6, "little")
+        out.append(bytes(new))
+    return out
+
+
 def scale_colour(levels, fmt, k):
     """DXT1 / DXT5 levels with their colour multiplied by k (<= 1), on the blocks: both endpoints scaled, indices and
     alpha kept. Scaling keeps the endpoints' order (or makes them equal: a DXT1 block that was in 4-colour mode then

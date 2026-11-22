@@ -16,7 +16,9 @@ original back.
   Mods page ([fm4-tracks.md](fm4-tracks.md)).
 - Forza Motorsport (2005)'s cars from your own FM1 disc (in progress, a tool for now):
   [modding/fm1-cars.md](modding/fm1-cars.md).
-- Forza Motorsport (2005)'s circuits (Tsukuba, Road America, Silverstone; experimental): **Import FM1
+- Forza Motorsport (2005)'s circuits (Tsukuba, Road America, Silverstone, Maple Valley, Laguna Seca, Sunset
+  Peninsula, Tokyo, New York, Rio, Alpine Ring, Blue Mountains, Pacific Shipyards, Fujimi Kaido,
+  FM1's Road Atlanta and Test Track; experimental): **Import FM1
   tracks…** on the Mods page ([fm4-tracks.md](fm4-tracks.md#forza-motorsport-2005-circuits),
   [modding/fm1-tracks.md](modding/fm1-tracks.md)).
 
