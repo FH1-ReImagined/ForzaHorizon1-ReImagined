@@ -1,11 +1,13 @@
 """Synthetic tests of the FM1 car import (#930): fh1_carbin, fh1_carbuild, fh1_xds, fm1_cars and
 fm1_import. No game file is read or included."""
+import json
 import math
 import os
 import random
 import sqlite3
 import struct
 import sys
+import tempfile
 import types
 import unittest
 import zlib
@@ -717,6 +719,23 @@ class EngineTests(unittest.TestCase):
                 "Combo_Engines": [{"EngineComboID": 180, "Ordinal": 55239, "EngineID": 178, "Stock": 1}]}
         ids = fm1_import.engine_rows(db, rows, eng or fm1_engine_data(), spec or self.SPEC, 55239, "TOY_BorderMR2_95")
         return db, rows, ids
+
+    def test_ids_of_the_id_table_or_past_65535_are_refused(self):
+        with tempfile.TemporaryDirectory() as t:
+            path = os.path.join(t, "car_ids.json")
+            self.assertEqual(fm1_import.reserved_ids(path), {})          # no table: nothing reserved
+            with open(path, "w", encoding="utf-8-sig") as f:
+                json.dump({"cars": [{"id": 55282, "name": "X"}],
+                           "parts": {"FM4": {"engine": [{"id": 55036, "source_id": 36}],
+                                             "wheel": [{"id": 66165, "source_id": 1}]}},
+                           "renumbered": [{"kind": "drivetrain", "new": 55035, "old": 35}]}, f)
+            reserved = fm1_import.reserved_ids(path)
+        self.assertEqual(reserved, {"car": {55282}, "engine": {55036}, "wheel": {66165}, "drivetrain": {55035}})
+        fm1_import.check_ids({"car": 55239, "engine": 55239, "drivetrain": 55239, "wheel": 55239}, reserved)
+        for ids in ({"engine": 55036}, {"drivetrain": 55035}, {"car": 55282}, {"wheel": 65536}):
+            with self.assertRaises(fm1_import.Fm1ImportError):
+                fm1_import.check_ids(ids, reserved)
+        fm1_import.check_ids({"car": 55036}, reserved)                   # an engine's id, not a car's
 
     def test_powertrains_are_not_a_drivetrains_rows(self):
         db = sqlite3.connect(":memory:")

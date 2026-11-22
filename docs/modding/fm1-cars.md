@@ -45,7 +45,16 @@ the title update's folder. Copy `OUT` into the mods folder: the game then has th
 (id 55239, `TOY_BorderMR2_95`). The mod holds a full copy of the game's database and of its
 `data_car.str` tables, with the car added. With an FM4 cars mod also installed, pass that mod's
 folder as `--base-mod`, so its cars and names stay, and order the FM1 mod after it (the game
-uses one mod's database).
+uses one mod's database). The FM1 mod's database is a copy of the FM4 mod's as it was: after
+every new FM4 import, run `fm1_import.py` again with `--base-mod`, or the FM1 mod, ordered after
+it, keeps the old FM4 rows and hides the new ones.
+
+**Use only a copy of a save** with an FM1 car until FM1's cars are in the one id table
+(`car_ids.json`, #924). Their ids (the car's, and its engine's, drivetrain's and wheel's, which
+take the next free id where the car's is taken) are not yet fixed for every player and may have
+to move. The import refuses an id `car_ids.json` gives another car or part, and any id past
+65535.
+
 `fm1_cars.py car ... --mod` puts the FM1 car into the donor's own files instead (the RX-7 then is
 the FM1 car). Standard library only.
 
@@ -275,7 +284,7 @@ it never ran):
 
 | Field | From |
 |---|---|
-| id | 55000 + FM1's id (#924's rule for a car new to FH1): 55239 |
+| id | 55000 + FM1's id (#924's rule for a car new to FH1): 55239. FM1's ids (`carlist.xml`'s `Ordinal`, the same in `model.dat` and `gamecars.dat`) run 0-243 for its 231 cars, so 55000-55243 |
 | `MediaName` | FH1's code for the make, FM1's name and the year: `TOY_BorderMR2_95` |
 | `MakeID`, `Year` | the FH1 make of FM1's make (by `List_CarMake.IconPathBase`), FM1's year |
 | `DisplayName`, `ModelShort` | FM1's name and "make name", each with " (FM1)": "Border MR2 Turbo T-bar Widebody (FM1)", "Toyota Border MR2 Turbo T-bar (FM1)" (FM1's "(Wiedebody)" spelt and unbracketed) |

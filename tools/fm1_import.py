@@ -28,6 +28,7 @@ The mod (a folder for the mods folder):
   media/ui/textures/thumbnails/thumbnail_<id>.xds
 Standard library only.
 """
+import json
 import math
 import os
 import re
@@ -44,6 +45,11 @@ PACKAGE_NAME = "464D3143415253000000000000000000000000004D"  # the banks' packag
 PACKAGE_OFFER = 64801  # a .puboffer no FH1 offer uses (the FM4 cars import's is 64800)
 BANKS_FOLDER = "FM1Banks_pri_60"
 NEW_ID = 55000  # #924: a car new to FH1 gets 55000 + its id in its own game
+# FM1's ordinals (carlist.xml, model.dat and gamecars.dat agree): 231 cars, 0 to 243, so its cars
+# take 55000-55243. Until FM1's entries are in the one id table (car_ids.json, #924/#925), the
+# import refuses an id that table gives another car or part, and any id past MAX_ID
+ID_TABLE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "car_ids.json")
+MAX_ID = 65535
 # Rows of a car that are not the car itself: events it is driven in, its car challenge (the title
 # update's), AI drivers, rewards, DLC offers (fh1_port.clone_db leaves the events, the driver
 # level rewards and the offers out too).
@@ -957,6 +963,38 @@ def wheel_files(fh1, fm1_dir, car_name, donor_wheel, media):
     return out
 
 
+def reserved_ids(path=ID_TABLE):
+    """{kind: ids} the id table (car_ids.json, #924) gives: "car" its cars (and renumbered cars),
+    "engine", "drivetrain", "wheel" its parts. Empty without the table."""
+    if not os.path.isfile(path):
+        return {}
+    with open(path, encoding="utf-8-sig") as f:
+        table = json.load(f)
+    out = {"car": {c["id"] for c in table.get("cars", []) if isinstance(c.get("id"), int)}}
+    for kinds in table.get("parts", {}).values():
+        for kind, entries in kinds.items():
+            out.setdefault(kind, set()).update(e["id"] for e in entries if isinstance(e.get("id"), int))
+    for r in table.get("renumbered", []):
+        if isinstance(r.get("new"), int):
+            out.setdefault(r.get("kind") or "car", set()).add(r["new"])
+    return out
+
+
+def check_ids(ids, reserved=None):
+    """Raises Fm1ImportError when an id the car would get ({kind: id}) is one the id table gives
+    another car or part, or is past MAX_ID: a save made with it would hold an id that has to move
+    (#924). The ids from FM1 are not in the table yet."""
+    reserved = reserved_ids() if reserved is None else reserved
+    bad = []
+    for kind, i in ids.items():
+        if i > MAX_ID:
+            bad.append("its %s id %d is past %d" % (kind, i, MAX_ID))
+        elif i in reserved.get(kind, ()):
+            bad.append("its %s id %d is another %s's in car_ids.json" % (kind, i, kind))
+    if bad:
+        raise Fm1ImportError("not written: %s (FM1's cars are not in the id table yet, #924)" % "; ".join(bad))
+
+
 def wheel_rows(db, rows, donor_wheel_id, new_id, media):
     """The new wheel's List_Wheels row (the donor's, renamed) and the car's StockWheelID. The
     wheel takes the car's id when List_Wheels has it free, else its next free id."""
@@ -1155,6 +1193,7 @@ def build(fm1_dir, fh1_dir, car_name, donor, update=None, base_mod=None, year=No
             raise Fm1ImportError("no car %s in FH1's database" % donor)
         donor_id = drow[0]
         new = NEW_ID + info["ordinal"]
+        check_ids({"car": new})
         if db.execute("select 1 from Data_Car where Id = ?", (new,)).fetchone():
             raise Fm1ImportError("FH1 already has a car %d" % new)
         _, code = fh1_make(db, info["make"])
@@ -1193,6 +1232,7 @@ def build(fm1_dir, fh1_dir, car_name, donor, update=None, base_mod=None, year=No
             spec = dict(spec, sound=pick_sound(db, spec["config"], spec["cylinders"], ASPIRATIONS[kind][0],
                                                fh1_make(db, info["make"])[0], info["year"], have) or donor_media)
         engine_id, drivetrain_id = engine_rows(db, rows, eng, spec, new, media)
+        check_ids({"car": new, "engine": engine_id, "drivetrain": drivetrain_id, "wheel": wheel_id})
         # FM1's North American dealer price (fm1_info); the upgrade prices stay the donor's, as FH1
         # set its own (the RX-7's brakes 400-2200 in FM1's tooldata.xml, 1600-7400 in FH1)
         if info.get("price"):
