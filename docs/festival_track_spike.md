@@ -1410,8 +1410,18 @@ In the game (launcher import, autopilot, a Radeon on Vulkan):
 - Mugello: 2.1 km (the test line then ran into a wall at a run-off), no fault. About 2,030
   draws a frame, the command processor 3.9 to 4.1 ms, 30 fps held. Its peak, 71,587 blocks in
   use, is over the old cap.
-- The 96 MB come from the guest's system heap at the first streamed file and stay for the
-  process, as the 64 MB did. Only a converted circuit that asks for them takes them.
+- The extra blocks (up to 74 MB over the game's 23 MB) come in one piece from the system part
+  of the guest's 0x00000000 heap and stay for the process, as the 64 MB did. They used to be
+  taken at the game's first streamed file, for the largest ask of every folder in
+  game:\media\tracks, so any world, Colorado's too, carried them once a converted circuit
+  was there (review of #941). Now the hook adds them only when the pool is made for a
+  converted circuit's world (the track whose texture pack, `<track>.stx.bin`, loaded last has
+  an `fm4_stream_blocks.txt`), as many as that circuit asks for; the first pool, made before
+  any world, and Colorado's keep the game's 22,440. Should the pool of the circuit's world be
+  made before its pack loads, the first time it runs dry adds what the circuit asks for (with
+  a warning). A failed allocation is logged with its size, and the system part's free space
+  and largest free run are logged each time the pool is made (with `FORZA_ZONE_TRACE`, also
+  on every zone made live or dropped). Not yet checked in the game.
 - **The blurred mountain** beside the road after the lake on the Alps is unchanged, and it is
   not motion blur (the same with `motion_blur = false`). Every placed instance near the path
   had its textures at full size, and the textures with no file there are flags and a few
@@ -1862,9 +1872,10 @@ were not run.
   0x835A0B40), and made again when a world loads. `fm4_pvs.py` writes
   media/tracks/<track>/fm4_stream_blocks.txt: the largest union of a zone's and its six
   neighbours' model files in KB (34226 for Suzuka at 25 m), times `FM4_PVS_STREAM_MARGIN` (1.25):
-  42783. When the pool is made, the game (hooks/fm4_track.cpp) reads that file of every folder
-  in game:\media\tracks\ and links that many blocks in all, up to 98304 (96 MB; 65536 before
-  #849); when the
+  42783. When the pool is made for a converted circuit's world, the game (hooks/fm4_track.cpp)
+  reads that circuit's file and links that many blocks in all, up to 98304 (96 MB; 65536 before
+  #849; before #941's review it read every folder in game:\media\tracks\ at the first streamed
+  file); when the
   pool is made again, the same blocks are linked again (none allocated twice). A track
   without the file (Colorado) keeps the game's pool. Should a converted track still empty
   it, 4096 more are added, up to the cap, with a warning naming the file to raise. The union
