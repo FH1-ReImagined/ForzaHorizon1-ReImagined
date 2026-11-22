@@ -1929,6 +1929,16 @@ extern "C" REX_FUNC(sub_825CB038) {
     if (heap && heap->Alloc(rounded, 4096, rex::memory::kMemoryAllocationReserve | rex::memory::kMemoryAllocationCommit,
                             rex::memory::kMemoryProtectRead | rex::memory::kMemoryProtectWrite, true, &addr) && addr) {
       std::memset(forza::GuestPtr(base, addr), 0, rounded);
+      // These pages may have been a block released here before (or by the textures' arena's
+      // heap) and read once more by a frame still queued: the GPU side then holds them as up
+      // to date and no watch is left on them, so the buffer written here would never be
+      // uploaded (the textures' arena below has the full story, #824, #895). Watch the block
+      // and report it written once, so the GPU side drops its copy. The game never calls this
+      // allocator with the SDK's global lock held; these calls take it before this hook's own.
+      auto* memory = REX_KERNEL_MEMORY();
+      memory->EnablePhysicalMemoryAccessCallbacks(memory->GetPhysicalAddress(addr), rounded, true, false);
+      memory->TriggerPhysicalMemoryCallbacks(rex::thread::global_critical_region::AcquireDirect(), addr, rounded,
+                                             true, true, true);
       std::lock_guard<std::mutex> lock(tex_fallback_mu);
       tex_fallback[addr] = size;
       tex_fallback_bytes += rounded;
@@ -2015,7 +2025,8 @@ extern "C" REX_FUNC(sub_825CB048) {
 //
 // One way in is left and closed here: a new chunk can cover pages the model buffers' fallback
 // above released (it still releases each block, to this same heap) and that were read once
-// more since. So the GPU side is made to drop its copy of every chunk as it is taken.
+// more since. So the GPU side is made to drop its copy of every chunk as it is taken, and of
+// every model buffer block the fallback above takes.
 namespace {
 std::mutex stream_tex_mu;
 forza::fm4_stream_textures::Arena stream_tex;
