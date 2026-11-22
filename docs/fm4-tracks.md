@@ -101,9 +101,11 @@ Works:
   (walls and the ground). A circuit imported with an earlier launcher loads its scenery only a
   short way ahead of the car, so at speed it appears as you drive: import it again. Trackside
   scenery (trees, fences, signs) is drawn from about 300 to 450 m ahead of the car; on a long
-  straight at high speed you can still see it appear. Circuits imported before this launcher
-  draw it from 150 to 300 m (the Alps, Mugello and Sunset Infield from as little as 30 m):
-  import them again.
+  straight at high speed you can still see it appear. (Checked in the game on the Alps and
+  Mugello; Hockenheim, Indianapolis, Motegi, Sebring, Silverstone and Sunset Infield now get
+  the streaming memory they ask for too, but have not been driven with it yet.) Circuits
+  imported before this launcher draw it from 150 to 300 m (the Alps, Mugello and Sunset
+  Infield from as little as 30 m): import them again.
 - Timed laps with sectors, the best-lap ghost and the laps page.
 - The circuit's road on the minimap and on the map (the Back button), from FM4's AI line,
   drawn in white all the way round from the first metre. (FH1 draws a road you have not
