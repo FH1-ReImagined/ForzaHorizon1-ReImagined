@@ -670,10 +670,10 @@ class TrafficTwinTests(unittest.TestCase):
 
 
 class RallyPartsTests(unittest.TestCase):
-    """#924: with FH1's Rally Expansion the imported cars get rally parts, as FH1's own cars have
-    them and as Forza Imported DLC Maker gives FM4 cars: level-5 rally tires in place of FM4's
-    level-4 drag tires, a level-4 rally suspension scaled from the car's own, a level-4 rally
-    gearbox for each drivetrain FH1 lacks. Electric cars and hybrids get none."""
+    """#924: the imported cars get rally parts, as FH1's own cars have them and as Forza Imported
+    DLC Maker gives FM4 cars: level-5 rally tires from the level-3 tire, a level-4 rally suspension
+    scaled from the car's own, a level-4 rally gearbox for each drivetrain FH1 lacks. Electric cars
+    and hybrids get none. FM4's level-4 drag tire stays on the cars the released import had."""
 
     def dbs(self):
         fm4, fh1 = sqlite3.connect(":memory:"), sqlite3.connect(":memory:")
@@ -726,12 +726,12 @@ class RallyPartsTests(unittest.TestCase):
                                                (901000, 901, 0, 1, 0), (901003, 901, 3, 0, 3500)])
         return fm4, fh1
 
-    def rows(self, change=None):
+    def rows(self, change=None, released=None):
         fm4, fh1 = self.dbs()
         if change:
             change(fm4)
         with mock.patch.object(fm4_cars, "Retune", _NoRetune):
-            db = fm4_cars.Database(fm4, fh1)
+            db = fm4_cars.Database(fm4, fh1, released=released)
         db.collect([300, 301, 302])
         counts = db.rally_parts([300, 301, 302])
         report = {}
@@ -743,12 +743,13 @@ class RallyPartsTests(unittest.TestCase):
         counts, rows = self.rows()
         self.assertEqual(counts, {"tires": 2, "suspension": 2, "gearbox": 1, "cars": 2})
         tires = rows["List_UpgradeTireCompound"]
-        # rally tires in place of the drag tires, from the level-3 tire (its mass)
+        # rally tires from the level-3 tire (its mass); cars the released import never had get no
+        # drag tire
         self.assertEqual(tires[300005], {"Id": 300005, "Ordinal": 300, "Level": 5, "IsStock": 0, "TireCompoundID": 9,
                                          "Price": 10000, "MassDiff": -2.0})
         self.assertNotIn(300004, tires)
         self.assertIn(302005, tires)
-        # the hybrid gets no rally part (and no drag tire either)
+        # the hybrid gets no rally part (and, never released here, no drag tire either)
         self.assertEqual(sorted(k for k in tires if k // 1000 == 301), [301000, 301003])
         self.assertNotIn(301004, rows["List_UpgradeSpringDamper"])
         spring = rows["List_UpgradeSpringDamper"][300004]
@@ -788,8 +789,8 @@ class RallyPartsTests(unittest.TestCase):
         self.assertEqual(phys[302104]["DefRideHeight"], 0.1866)  # the rear's body height is in line
         self.assertEqual((phys[300004]["DefRideHeight"], phys[300004]["MaxRideHeight"]), (0.1, 0.1))  # 0.0933: the lowest
 
-    def test_fm4s_drag_tire_is_left_out(self):
-        """FM4's level-4 drag tire is left out of every car, with or without rally parts: FH1's own
+    def test_fm4s_drag_tire_is_left_out_of_new_cars(self):
+        """FM4's level-4 drag tire is left out of a car the released import never had: FH1's own
         cars have none, nor do Forza Imported DLC Maker's FM4 cars. A stock one would be kept."""
         fm4, fh1 = self.dbs()
         fm4.execute("update List_UpgradeTireCompound set IsStock=1 where Id=302004")
@@ -799,21 +800,43 @@ class RallyPartsTests(unittest.TestCase):
         tires = sorted(r["Id"] for r in db.finish({})["List_UpgradeTireCompound"])
         self.assertEqual(tires, [300000, 300003, 301000, 301003, 302000, 302003, 302004])
 
-    def test_only_with_the_rally_expansion(self):
-        tmp = tempfile.mkdtemp()
-        self.addCleanup(lambda: __import__("shutil").rmtree(tmp, ignore_errors=True))
-        os.makedirs(os.path.join(tmp, "game", "media"))
-        dlc = os.path.join(tmp, "dlc")
+    def test_released_cars_keep_fm4s_drag_tire(self):
+        """A car the released import had keeps FM4's level-4 tire (a save can have it fitted, and a
+        car whose fitted part's row is missing does not load), and gets the rally tire as well,
+        from its level-3 tire; the hybrid keeps it too but gets no rally part. A car it never had
+        (302 here) loses it."""
+        counts, rows = self.rows(released={300, 301})
+        self.assertEqual(counts, {"tires": 2, "suspension": 2, "gearbox": 1, "cars": 2})
+        tires = rows["List_UpgradeTireCompound"]
+        self.assertEqual(tires[300004], {"Id": 300004, "Ordinal": 300, "Level": 4, "IsStock": 0, "TireCompoundID": 9,
+                                         "Price": 3000, "MassDiff": -1.0})
+        self.assertEqual(tires[300005], {"Id": 300005, "Ordinal": 300, "Level": 5, "IsStock": 0, "TireCompoundID": 9,
+                                         "Price": 10000, "MassDiff": -2.0})
+        self.assertEqual(sorted(k for k in tires if k // 1000 == 301), [301000, 301003, 301004])
+        self.assertEqual(sorted(k for k in tires if k // 1000 == 302), [302000, 302003, 302005])
 
-        def pack(name, zip_name):
-            folder = os.path.join(dlc, name, "Media", "DLCZips")
-            os.makedirs(folder, exist_ok=True)
-            zipfile.ZipFile(os.path.join(folder, zip_name), "w").close()
-
-        pack("A" * 40 + "4D", "2100_pri_65.zip")
-        self.assertFalse(fm4_cars.FH1(os.path.join(tmp, "game"), None, dlc).has_rally_expansion())
-        pack("B" * 40 + "4D", "1600_pri_65.zip")
-        self.assertTrue(fm4_cars.FH1(os.path.join(tmp, "game"), None, dlc).has_rally_expansion())
+    def test_released_cars(self):
+        """Converter.released: the cars ReImagined's released import took under FM4's id: not a
+        copy of FH1's traffic car, nor a car whose id or MediaName FH1 has, nor one whose stock
+        engine's id is another engine's in FH1 (the id table moves some of those now)."""
+        fm4, fh1 = sqlite3.connect(":memory:"), sqlite3.connect(":memory:")
+        self.addCleanup(fm4.close)
+        self.addCleanup(fh1.close)
+        for db in (fm4, fh1):
+            db.execute("create table Data_Car (Id INTEGER, MediaName TEXT)")
+            db.execute("create table Data_Engine (EngineID INTEGER, MediaName TEXT)")
+        fm4.execute("create table List_UpgradeEngine (Id INTEGER, Ordinal INT, EngineID INT, IsStock INT)")
+        fm4.executemany("insert into Data_Car values (?,?)", [(300, "CAR_300"), (301, "CAR_301"), (302, "CAR_302"),
+                                                             (303, "FH1_CAR"), (282, "VW_Beetle_04")])
+        fm4.executemany("insert into Data_Engine values (?,?)", [(10, "ENG_A"), (11, "ENG_B")])
+        fm4.executemany("insert into List_UpgradeEngine values (?,?,?,?)",
+                        [(300000, 300, 10, 1), (301000, 301, 11, 1), (302000, 302, 10, 0), (302001, 302, 11, 0)])
+        fh1.executemany("insert into Data_Car values (?,?)", [(1, "fh1_car"), (302, "OTHER")])
+        fh1.execute("insert into Data_Engine values (11, 'FH1_ENGINE')")
+        conv = mock.Mock(fm4db=fm4, fh1db=fh1)
+        conv.twins.return_value = {282: (55282, "VW_5_Beetle_04")}
+        released = [c for c in (300, 301, 302, 303, 282) if fm4_cars.Converter.released(conv, c)]
+        self.assertEqual(released, [300])
 
 
 class LogoTests(unittest.TestCase):
