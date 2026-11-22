@@ -818,7 +818,8 @@ class RallyPartsTests(unittest.TestCase):
     def test_released_cars(self):
         """Converter.released: the cars ReImagined's released import took under FM4's id: not a
         copy of FH1's traffic car, nor a car whose id or MediaName FH1 has, nor one whose stock
-        engine's id is another engine's in FH1 (the id table moves some of those now)."""
+        engine's id is another engine's in FH1 (the id table moves some of those now), nor one
+        whose id or MediaName an installed DLC pack's car has (main left those out)."""
         fm4, fh1 = sqlite3.connect(":memory:"), sqlite3.connect(":memory:")
         self.addCleanup(fm4.close)
         self.addCleanup(fh1.close)
@@ -827,15 +828,18 @@ class RallyPartsTests(unittest.TestCase):
             db.execute("create table Data_Engine (EngineID INTEGER, MediaName TEXT)")
         fm4.execute("create table List_UpgradeEngine (Id INTEGER, Ordinal INT, EngineID INT, IsStock INT)")
         fm4.executemany("insert into Data_Car values (?,?)", [(300, "CAR_300"), (301, "CAR_301"), (302, "CAR_302"),
-                                                             (303, "FH1_CAR"), (282, "VW_Beetle_04")])
+                                                             (303, "FH1_CAR"), (282, "VW_Beetle_04"),
+                                                             (304, "CAR_304"), (305, "DLC_CAR")])
         fm4.executemany("insert into Data_Engine values (?,?)", [(10, "ENG_A"), (11, "ENG_B")])
         fm4.executemany("insert into List_UpgradeEngine values (?,?,?,?)",
-                        [(300000, 300, 10, 1), (301000, 301, 11, 1), (302000, 302, 10, 0), (302001, 302, 11, 0)])
+                        [(300000, 300, 10, 1), (301000, 301, 11, 1), (302000, 302, 10, 0), (302001, 302, 11, 0),
+                         (304000, 304, 10, 1), (305000, 305, 10, 1)])
         fh1.executemany("insert into Data_Car values (?,?)", [(1, "fh1_car"), (302, "OTHER")])
         fh1.execute("insert into Data_Engine values (11, 'FH1_ENGINE')")
         conv = mock.Mock(fm4db=fm4, fh1db=fh1)
         conv.twins.return_value = {282: (55282, "VW_5_Beetle_04")}
-        released = [c for c in (300, 301, 302, 303, 282) if fm4_cars.Converter.released(conv, c)]
+        conv.fh1.dlc_car_names.return_value = ({"dlc_car"}, {304})
+        released = [c for c in (300, 301, 302, 303, 282, 304, 305) if fm4_cars.Converter.released(conv, c)]
         self.assertEqual(released, [300])
 
 
