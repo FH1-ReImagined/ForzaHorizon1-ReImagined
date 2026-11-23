@@ -65,6 +65,7 @@ import struct
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fm4_caff  # noqa: E402
 import fm4_col  # noqa: E402
 import fm4_shaders  # noqa: E402
 
@@ -470,20 +471,34 @@ def convert(F, files, fits=None):
             P["instances"].append(fh1_instance_of(g))
             everywhere.append(len(insts) - 1)
     # What each zone holds (ZONE_REACH): FH1 draws the camera's zone alone, so a zone holds
-    # what is seen from it, its own instances and its six neighbours'. Where that needs more
-    # streaming blocks than the game has, the neighbours' instances within NEIGHBOUR_NEAR m
-    # of the zone's centre (their extent's reach added, as cells_near), else its own alone.
+    # what is seen from it: its own instances, its six neighbours' and those of the next ring
+    # within FAR_NEAR m of its centre. Where that needs more streaming blocks than the game
+    # has, its own and its six neighbours', then the neighbours' instances within
+    # NEIGHBOUR_NEAR m of the zone's centre (their extent's reach added, as cells_near), else
+    # its own alone.
     def reach_of(i):
         e = F["models"][insts[i]["model"]]["extent"]
         return (e[0] ** 2 + e[2] ** 2) ** 0.5
     zones = None
-    for near in ([None] + list(NEIGHBOUR_NEAR) if ZONE_REACH == "neighbours" else []):
-        zones = zone_records(F, insts, grid, with_neighbours(grid, members, near, spots, reach_of),
-                             everywhere)
+    tries = [("far", FAR_NEAR)] if FAR_NEAR else []
+    tries += [("near", n) for n in [None] + list(NEIGHBOUR_NEAR)]
+    for kind, near in (tries if ZONE_REACH == "neighbours" else []):
+        if kind == "far":
+            held = with_neighbours(grid, members, None, spots, reach_of, far=near)
+        else:
+            held = with_neighbours(grid, members, near, spots, reach_of)
+        zones = zone_records(F, insts, grid, held, everywhere)
         if fits is None or fits(zones, grid):
-            P["zone_reach"] = ("their own and their neighbours' instances" if near is None else
-                               f"their own and their neighbours' instances within {near:.0f} m "
-                               f"(all of them: over the game's {MAX_STREAM_BLOCKS} streaming blocks)")
+            over = f"(all of them: over the game's {MAX_STREAM_BLOCKS} streaming blocks)"
+            if kind == "far":
+                P["zone_reach"] = (f"their own and their neighbours' instances and the next ring's "
+                                   f"within {near:.0f} m")
+            elif near is None:
+                P["zone_reach"] = "their own and their neighbours' instances" + (
+                    f" (the next ring's within {FAR_NEAR:.0f} m too: over the game's "
+                    f"{MAX_STREAM_BLOCKS} streaming blocks)" if FAR_NEAR else "")
+            else:
+                P["zone_reach"] = f"their own and their neighbours' instances within {near:.0f} m {over}"
             break
         zones = None
     if zones is None:
@@ -504,23 +519,32 @@ def convert(F, files, fits=None):
     return P, zones, grid
 
 
-def with_neighbours(grid, members, near=None, spots=None, reach=None):
+def with_neighbours(grid, members, near=None, spots=None, reach=None, far=None):
     """Each cell's members, then those of its six neighbours it does not hold yet: all of them,
-    or (near, m) those whose spot is within near + reach(i) of the cell's centre."""
+    or (near, m) those whose spot is within near + reach(i) of the cell's centre. With far (m),
+    all of the six's, then those of the twelve hexes round them whose spot is within
+    far + reach(i) of the cell's centre."""
     out = {}
     for cell in grid.cells:
         zi, seen = list(members[cell]), set(members[cell])
         cx, cz = grid.centre(*cell)
-        for n in grid.neighbours(*cell):
-            for i in members[n]:
-                if i in seen:
-                    continue
-                if near is not None:
-                    x, z = spots[i]
-                    if (x - cx) ** 2 + (z - cz) ** 2 > (near + reach(i)) ** 2:
+        ring1 = grid.neighbours(*cell)
+        rings = [(ring1, near)]
+        if far is not None:
+            inner = set(ring1) | {cell}
+            ring2 = sorted({m for n in ring1 for m in grid.neighbours(*n)} - inner)
+            rings = [(ring1, None), (ring2, far)]
+        for ring, limit in rings:
+            for n in ring:
+                for i in members[n]:
+                    if i in seen:
                         continue
-                seen.add(i)
-                zi.append(i)
+                    if limit is not None:
+                        x, z = spots[i]
+                        if (x - cx) ** 2 + (z - cz) ** 2 > (limit + reach(i)) ** 2:
+                            continue
+                    seen.add(i)
+                    zi.append(i)
         out[cell] = zi
     return out
 
@@ -1231,16 +1255,23 @@ VISIBLE_SIZE = float(os.environ.get("FM4_PVS_VISIBLE_SIZE", "25"))
 # zone of its own instances (and the large pieces of FM4's visible set) showed small pieces
 # only 120 m ahead at the median, and stretches of Le Mans that filled in at 200 km/h and
 # over as the car got there (#824). "neighbours" (the default): a zone holds its own and its
-# six neighbours' instances, everything within 200 m of its centre and more. Should that need
-# more streaming blocks than the game has (MAX_STREAM_BLOCKS with STREAM_MARGIN), a layout's
-# zones take the neighbours' instances within NEIGHBOUR_NEAR m of their centre, else their own
-# alone. "own": their own alone, as before.
+# six neighbours' instances, everything within 200 m of its centre and more, and those of the
+# next ring within FAR_NEAR m. Should that need more streaming blocks than the game has
+# (MAX_STREAM_BLOCKS with STREAM_MARGIN), a layout's zones take the six's alone, then the
+# neighbours' instances within NEIGHBOUR_NEAR m of their centre, else their own alone. "own":
+# their own alone, as before.
 ZONE_REACH = os.environ.get("FM4_PVS_ZONE_REACH", "neighbours")
 if ZONE_REACH not in ("neighbours", "own"):
     raise SystemExit(f"FM4_PVS_ZONE_REACH={ZONE_REACH}: neighbours or own")
 # The shorter reaches tried in turn when the neighbours' whole hexes need too many blocks (m
 # from the zone's centre: its own hex ends 87 to 100 m from it, the six around 200 to 273 m).
 NEIGHBOUR_NEAR = (200.0, 150.0)
+# FM4_PVS_FAR_NEAR (m, 0 for none): the reach tried first, the six neighbours' instances and
+# those of the twelve hexes round them within this of the zone's centre. The camera's zone
+# lists a piece about 150 m earlier than with the six alone: offline along Le Mans's lap, the
+# pieces within 60 m of the line were listed 400 m ahead at the median (250 m), 330 m at p10
+# (180 m), for 12% more streaming blocks (#824). 500 m added 20 m more for another 2%.
+FAR_NEAR = float(os.environ.get("FM4_PVS_FAR_NEAR", "400"))
 # FM4_PVS_SKY=0 leaves FM4's sky dome out (see convert).
 SKY = os.environ.get("FM4_PVS_SKY", "1") == "1"
 SKY_EXTENT = 4200.0
@@ -2025,6 +2056,59 @@ def fix_prepass_scissors(bin_dir):
     return done
 
 
+# FM4's CAFF textures. A texture record with no flag 0x8 (not an atlas tile) whose own file is a
+# CAFF file, _0x<id>.bin (Forza-X360-IO's textures/read_bin.py reads the layout), not an
+# _0x<id>.bix, is streamed by FM4 from that file; the static pack holds only a copy of 32 texels
+# or less (_0x<id>_s.bin). FH1 streams .bix files only, so those textures were drawn from the
+# copy for good: the Alps' sky dome (8192 x 2048) at 32 x 8, its mountain backdrops
+# (1672 x 1024) at 26 x 16. Each such 2D texture that tools/fm4_caff.py can write as a .bix pair
+# (with a mip chain: see there) becomes _0x<id>.bix and _0x<id>_B.bix, and its records get flag
+# 0x4 (a base and mip chain of their own) as FM4's other streamed textures have. Cube maps and
+# the rest are left to the pack's copy. FM4_PVS_CAFF_TEXTURES=0 leaves them all.
+CAFF_TEXTURES = os.environ.get("FM4_PVS_CAFF_TEXTURES", "1") == "1"
+
+
+def caff_textures(bin_dir, files, Fs):
+    """Write the .bix pairs for the CAFF textures above into bin_dir (the .bin files leave the
+    files list) and give their records flag 0x4, in every ribbon's F. The ids done."""
+    if not CAFF_TEXTURES or not Fs:
+        return set()
+    by_name = {p.lower(): p for p in files}
+    # the textures of the models drawn: every instance's but the sky domes after the first
+    # (FM4 has one per time of day; convert keeps the first)
+    wanted = set()
+    for F in Fs:
+        later_domes = {i for i in F["always"] if i not in (0xFFFF, 0xFFFFFFFF)}
+        later_domes -= set(sorted(later_domes, key=F["always"].index)[:1])
+        models = {inst["model"] for k, inst in enumerate(F["instances"]) if k not in later_domes}
+        models |= {inst["model"] for inst in F["dynamic"]}
+        for m in models:
+            for t in F["models"][m]["textures"]:
+                r = F["textures"][t & 0xFFFFFF]
+                if not r[6] & 0x8:
+                    wanted.add(r[0])
+    done = set()
+    for own in sorted(wanted):
+        name = by_name.get(f"_0x{own:08x}.bin")
+        if name is None or f"_0x{own:08x}.bix" in by_name:
+            continue
+        tex = fm4_caff.caff_texture(open(os.path.join(bin_dir, name), "rb").read())
+        pair = fm4_caff.bix_of_caff(tex) if tex else None
+        if pair is None:
+            continue
+        for suffix, blob in zip((".bix", "_B.bix"), pair):
+            with open(os.path.join(bin_dir, f"_0x{own:08X}{suffix}"), "wb") as f:
+                f.write(blob)
+            files.append(f"_0x{own:08X}{suffix}")
+        files.remove(name)
+        os.remove(os.path.join(bin_dir, name))
+        done.add(own)
+    for F in Fs:
+        F["textures"] = [t[:6] + (t[6] | 0x4,) if t[0] in done and not t[6] & 0x8 else t
+                         for t in F["textures"]]
+    return done
+
+
 def convert_mod(mod, fh1_disc, loose):
     tracks = os.path.join(mod, "media", "tracks")
     (track,) = [d for d in os.listdir(tracks) if os.path.isdir(os.path.join(tracks, d))]
@@ -2084,6 +2168,9 @@ def convert_mod(mod, fh1_disc, loose):
                     open(col, "wb").write(fm4_col.convert_col(cdata, surfaces(fh1_disc)))
     converted = []
     Fs = [read_fm4(data) for _, _, data, _ in ribbons]
+    n_caff = caff_textures(bin_dir, files, Fs)
+    if n_caff:
+        print(f"{track}: {len(n_caff)} CAFF textures streamed as .bix files")
     n_models = len(Fs[0]["models"]) if Fs else 0
     n_map = lightmap_sampler_map(Fs[0], files, bin_dir) if Fs else 0
     if n_map:

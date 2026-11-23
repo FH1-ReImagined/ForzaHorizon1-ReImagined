@@ -1335,6 +1335,40 @@ blocks are the file's (the largest of all layouts, with the margin):
 | TopGear | 242 | 110 -> 261 | 408 -> 724 | 36390 -> 47226 | neighbours |
 | Tsukuba | 176 | 40 -> 147 | 737 -> 1531 | 44238 -> 49423 | neighbours |
 
+### The next ring within 400 m (#824)
+
+With the zones above and the textures below fixed, what was left of the pop-in was the reach
+itself: a piece is ready long before it is drawn. Over a lap of Le Mans at about 120 km/h
+(`fm4_stream_lead.py`, pieces within 60 m of the path) a live zone held a piece 440 m ahead at
+the median and its model was made 1,025 m ahead, but the camera's zone listed it only 279 m
+ahead (128 m at the least), and FH1 draws that zone alone.
+
+So the reach tried first (`FAR_NEAR`, 400 m; `FM4_PVS_FAR_NEAR=0` for none) adds the instances
+of the twelve hexes round the six whose spot is within 400 m of the zone's centre (their
+extent's reach added). Where that needs more blocks than the game has, the reaches above
+follow in turn. An offline count along Le Mans's line first (the zones of each reach, the
+camera's zone at every point of the lap): 300 m gave a median of 310 m, 400 m 400 m, 500 m
+420 m for 2% more blocks than 400 m.
+
+In the game (launcher import, autopilot; before is main, after this reach):
+
+| | Listed: least | 10th percentile | Median | Blocks asked | Most in use |
+| --- | --- | --- | --- | --- | --- |
+| Le Mans, at 100 km/h or more | 128 -> 284 m | 206 -> 360 m | 279 -> 429 m | 52033 -> 58675 | 39938 -> 46327 |
+| Suzuka, at 80 km/h or more | 129 -> 290 m | 203 -> 373 m | 289 -> 477 m | 60124 -> 64854 | 48477 -> 51785 |
+
+- Frame cost: Le Mans 1,716-1,768 draws a frame -> 1,856-2,010, the command processor 3.0 ->
+  3.4-3.7 ms; Suzuka 1,646 -> 1,864 draws, 3.0 -> 3.4 ms. 30 fps held (the rig's cap).
+- Laguna Seca (its largest zone 1,672 -> 2,720 instances: the instance pools follow it) and
+  Catalunya driven a lap each: no fault, nothing missing.
+- Offline over Disc 1's layouts, the main layout (Ribbon_00) of every circuit takes the new
+  reach except Alps, Hockenheim, Indi, Motegi, Mugello, Sebring, Silverstone and Sunset Infield,
+  which keep the zones they had (their blocks would be over the game's).
+- **Textures with no file**: Le Mans asked 236 times for 171 streamed textures that have no
+  file. They have none on the disc either (FM4's records of road, line and edge textures with
+  the streamed flag 0x4; the number is the circuit's own). FM4 itself can only draw the pack's
+  resident copy of those, and FH1 draws the same: the requests cost nothing in the log.
+
 ### What was still late: the streamed textures (#824)
 
 Reported again on 0.3.6, with circuits imported after the zones above: trees, houses and
@@ -1686,6 +1720,52 @@ Colorado (the festival's free roam, standing, 170 s) loads and runs with the fix
 line, no fault. The built-in benchmark's race does not start in this test setup, with 0.3.7
 either, so there is no benchmark number. The other converted circuits, NVIDIA, Linux and D3D12
 were not run.
+
+## Textures FM4 streams from CAFF files (tools/fm4_caff.py)
+
+Some of a circuit's textures have their own file as a CAFF file (`_0x<id>.bin`, the layout
+Forza-X360-IO's `textures/read_bin.py` reads) instead of `_0x<id>.bix`. FM4 streams them from
+there; the static pack holds only a copy of 32 texels or less (`_0x<id>_s.bin`). FH1 streams
+`.bix` files only, so these stayed on the pack's copy: the Alps' mountain backdrops (model 545:
+1528 x 1024 and 1672 x 1024) drew as a smear at 23 x 16, its sky dome's panorama (8192 x 2048)
+at 32 x 8. Over the 21 circuits there are 53 such 2D textures larger than 128 texels, 717 of
+64 texels or less (the pack's copy is near their size) and 375 cube maps.
+
+The converter writes each one it can as `_0x<id>.bix` (a 28-byte header: `BIX1`, width,
+height, levels, format, total size, base size; then the mip chain) and `_0x<id>_B.bix` (the
+base level), from the CAFF's own tiled GPU data, and gives its records flag 0x4 (a base and mip
+chain of their own), as FM4's other streamed textures have. Only the textures of models that
+are drawn are converted (FM4's second sky dome, for another time of day, is not).
+
+A streamed texture needs two levels or more. TU4 `Bix::InitD3DTextureFromParts` draws it from
+its mip chain alone (half size, one level fewer) whenever the base is not in memory; with one
+level that is a texture of 0 levels, which the SDK reads as every level, and the GPU reads
+memory that holds no mips. Shown on the Alps: its own road texture cut to one level drew the
+whole road as scrambled blocks, and the first converted backdrops (one level, as most of FM4's
+CAFF textures are) the same; re-tiled to a power-of-two width they did not change. None of
+FH1's own `.bix` files has one level (600 of Colorado's sampled; all are powers of two).
+
+So `tools/fm4_caff.py` makes the mips: a one-level DXT1 or DXT5 texture is decoded, sized to
+powers of two (1672 x 1024 to 2048 x 1024, bilinear), halved down to 128 texels (box filter),
+encoded again (endpoints along the colours' widest range; DXT1 keeps its cut-out texels) and
+tiled. Levels of 128 texels and more each way are whole 32 x 32 block tiles one after another,
+each tiled on its own: a real FM4 `.bix`'s base, mip 1 and mip 2 decode cleanly that way. The
+smaller levels share a packed tail whose size a simple model gets right for only 23 of the 43
+shapes in the Alps' files, so the chain stops at 128. Textures with mips of their own are split
+as they are. Cube maps, other formats and textures with no mip of 128 texels keep the pack's
+copy. A power-of-two texture keeps its base as it is and is decoded straight to its first mip.
+A base over 4 MB is halved first (`MAX_BASE_BYTES`): the streamed texture data on a converted
+track comes from 8 MB chunks, 64 MB in all (`fm4_stream_textures.h`), and a DXT5 sky dome of
+8192 x 2048 is 16 MB; skies come out at 4096 x 1024. Time, plain Python: about 7 s for a
+2048 x 1024 backdrop, 16 s for a sky. Over the circuits: every one converts its sky dome's
+panorama (Road America's and Silverstone's in five pieces); the Alps three mountain backdrops,
+Crown Jewel two (2663 x 872, 3508 x 872) and Infineon a sign besides; 2.6 to 11 MB of files and
+10 to 93 s of import time per circuit.
+
+In game (the Alps, the route's 90-115 s, the same build with and without): the mountain
+backdrop that was a smear draws as a sharp, rocky peak; no faults. Black hillsides on the left
+at 108-113 s appear in some runs both with and without the conversion (two runs without: one
+had them), so they are not from it: open.
 
 ## Open
 
