@@ -55,6 +55,13 @@ constexpr uint32_t kHeaderSegments = 0xB8;  // next, count, then (words, address
 constexpr uint32_t kFlagsKnown = 0x886;     // 0x800: recorded with the tile rectangles
 constexpr uint32_t kFlagTiles = 0x800;
 constexpr uint32_t kFlagFixedUp = 0x2000;  // set by the texture and surface fixups at run time
+// The game's loader sets flags 0x101 and clears 0x6 of the files' 0x86 / 0x886 (docs "M4,
+// second step"): a live list is converted, and its key computed, with its flags in the files'
+// form.
+constexpr uint32_t kLoaderFlags = 0x101, kFileOnlyFlags = 0x6;
+constexpr uint32_t FilesFormFlags(uint32_t flags) {
+  return (flags & ~(kLoaderFlags | kFlagFixedUp)) | kFileOnlyFlags;
+}
 // A place addresses its dword with 20 bits.
 constexpr uint32_t kMaxListWords = 1u << 20;
 

@@ -1721,6 +1721,52 @@ line, no fault. The built-in benchmark's race does not start in this test setup,
 either, so there is no benchmark number. The other converted circuits, NVIDIA, Linux and D3D12
 were not run.
 
+## Textures FM4 streams from CAFF files (tools/fm4_caff.py)
+
+Some of a circuit's textures have their own file as a CAFF file (`_0x<id>.bin`, the layout
+Forza-X360-IO's `textures/read_bin.py` reads) instead of `_0x<id>.bix`. FM4 streams them from
+there; the static pack holds only a copy of 32 texels or less (`_0x<id>_s.bin`). FH1 streams
+`.bix` files only, so these stayed on the pack's copy: the Alps' mountain backdrops (model 545:
+1528 x 1024 and 1672 x 1024) drew as a smear at 23 x 16, its sky dome's panorama (8192 x 2048)
+at 32 x 8. Over the 21 circuits there are 53 such 2D textures larger than 128 texels, 717 of
+64 texels or less (the pack's copy is near their size) and 375 cube maps.
+
+The converter writes each one it can as `_0x<id>.bix` (a 28-byte header: `BIX1`, width,
+height, levels, format, total size, base size; then the mip chain) and `_0x<id>_B.bix` (the
+base level), from the CAFF's own tiled GPU data, and gives its records flag 0x4 (a base and mip
+chain of their own), as FM4's other streamed textures have. Only the textures of models that
+are drawn are converted (FM4's second sky dome, for another time of day, is not).
+
+A streamed texture needs two levels or more. TU4 `Bix::InitD3DTextureFromParts` draws it from
+its mip chain alone (half size, one level fewer) whenever the base is not in memory; with one
+level that is a texture of 0 levels, which the SDK reads as every level, and the GPU reads
+memory that holds no mips. Shown on the Alps: its own road texture cut to one level drew the
+whole road as scrambled blocks, and the first converted backdrops (one level, as most of FM4's
+CAFF textures are) the same; re-tiled to a power-of-two width they did not change. None of
+FH1's own `.bix` files has one level (600 of Colorado's sampled; all are powers of two).
+
+So `tools/fm4_caff.py` makes the mips: a one-level DXT1 or DXT5 texture is decoded, sized to
+powers of two (1672 x 1024 to 2048 x 1024, bilinear), halved down to 128 texels (box filter),
+encoded again (endpoints along the colours' widest range; DXT1 keeps its cut-out texels) and
+tiled. Levels of 128 texels and more each way are whole 32 x 32 block tiles one after another,
+each tiled on its own: a real FM4 `.bix`'s base, mip 1 and mip 2 decode cleanly that way. The
+smaller levels share a packed tail whose size a simple model gets right for only 23 of the 43
+shapes in the Alps' files, so the chain stops at 128. Textures with mips of their own are split
+as they are. Cube maps, other formats and textures with no mip of 128 texels keep the pack's
+copy. A power-of-two texture keeps its base as it is and is decoded straight to its first mip.
+A base over 4 MB is halved first (`MAX_BASE_BYTES`): the streamed texture data on a converted
+track comes from 8 MB chunks, 64 MB in all (`fm4_stream_textures.h`), and a DXT5 sky dome of
+8192 x 2048 is 16 MB; skies come out at 4096 x 1024. Time, plain Python: about 7 s for a
+2048 x 1024 backdrop, 16 s for a sky. Over the circuits: every one converts its sky dome's
+panorama (Road America's and Silverstone's in five pieces); the Alps three mountain backdrops,
+Crown Jewel two (2663 x 872, 3508 x 872) and Infineon a sign besides; 2.6 to 11 MB of files and
+10 to 93 s of import time per circuit.
+
+In game (the Alps, the route's 90-115 s, the same build with and without): the mountain
+backdrop that was a smear draws as a sharp, rocky peak; no faults. Black hillsides on the left
+at 108-113 s appear in some runs both with and without the conversion (two runs without: one
+had them), so they are not from it: open.
+
 ## Open
 
 - (c) The road, terrain and buildings draw with FM4's own shaders, at 13:00, over a ground.

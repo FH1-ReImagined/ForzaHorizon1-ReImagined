@@ -182,6 +182,7 @@ set(FORZA_SOURCES
     src/hooks/livery_bake.cpp
     src/hooks/shadow_filter.cpp
     src/hooks/native_device.cpp
+    src/hooks/native_lists.cpp
     src/hooks/ai_catchup.cpp
     src/hooks/physics_loader_check.cpp
     src/hooks/emergency_zones.cpp
