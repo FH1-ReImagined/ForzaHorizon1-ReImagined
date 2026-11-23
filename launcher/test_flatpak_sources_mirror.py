@@ -117,6 +117,40 @@ class ParseTests(unittest.TestCase):
                 with self.assertRaises(SystemExit):
                     mirror.parse_sources(text)
 
+    def test_a_flow_style_sources_list_stops_the_run(self):
+        # Valid YAML for flatpak-builder, but the check reads block lists only: a source written
+        # this way must stop the run rather than pass without its mirror.
+        flow = (f"    sources: [{{type: file, url: https://example.org/x.whl, sha256: {A}}}]\n",
+                "    sources: [\n"
+                f"      {{type: file, url: https://example.org/x.whl, sha256: {A}}}\n"
+                "    ]\n",
+                "    sources:\n"
+                f"      [{{type: file, url: https://example.org/x.whl, sha256: {A}}}]\n",
+                "    sources: [{\n"
+                "        type: file,\n"
+                "        url: https://example.org/x.whl,\n"
+                f"        sha256: {A}\n"
+                "      }]\n",
+                f"    sources: [{{sha256: {A}, type: file,\n"
+                "               url: https://example.org/x.whl}]\n")
+        for sources in flow:
+            text = MANIFEST + "  - name: three\n    buildsystem: simple\n" + sources
+            with self.subTest(sources=sources):
+                try:
+                    import yaml
+                    module = yaml.safe_load(text)["modules"][-1]
+                    self.assertEqual(module["sources"][0]["url"], "https://example.org/x.whl")
+                except ImportError:
+                    pass
+                with self.assertRaises(SystemExit) as raised:
+                    mirror.parse_sources(text)
+                self.assertIn("line ", str(raised.exception))
+
+    def test_an_empty_flow_list_and_flow_lists_inside_a_source_are_fine(self):
+        text = MANIFEST + "  - name: three\n    buildsystem: simple\n    sources: []\n"
+        self.assertEqual(len(mirror.parse_sources(text)), 2)
+        self.assert_reads_like_yaml(text)
+
     @staticmethod
     def reordered(first):
         """MANIFEST with each downloaded source's `first` key moved to the start of its item."""
