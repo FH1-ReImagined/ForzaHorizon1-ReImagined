@@ -89,13 +89,15 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # also in a rally stage, whose frames start with a draw to the front buffer (#879).
 # and 0640: the list trace, a study build option (REXGLUE_FH1_LIST_TRACE, off: the plugin is
 # unchanged) that times the command lists the game runs (native renderer M4).
+# and 0650: the model list registry and its shadow compare (native_lists=shadow; without the
+# game's switch no registry packet arrives and the plugin decodes as before; native renderer M4).
 # and 1100: with gpu_device_lost_setup_breadcrumbs (off: nothing is recorded), a device loss also
 # says what was recorded since the draw before the unfinished one and whether the GPU finished
 # that work or hung in the draw itself (#913).
 # A reviewed full commit can be pinned before a maintainer publishes a tag.
 # When a tag is supplied, its target must still match this immutable commit.
 REIGLUE_TAG=
-REIGLUE_COMMIT=a191b64d927b6e4bc8051b7839cc1508dee36b51  # ReIGlue main (#66) and 1100 (#913, ReIGlue #67)
+REIGLUE_COMMIT=a191b64d927b6e4bc8051b7839cc1508dee36b51  # ReIGlue main: 0650 (#66), and 1100 (#913, ReIGlue #67)
 REIGLUE_URL="${REIGLUE_URL:-https://github.com/FH1-ReImagined/ReIGlue}"
 NIGHTLY="${REXSDK_NIGHTLY:-$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64}"
 SRC="${REXSDK_SRC:-$HOME/rexglue-sdk-src-forza/sdk}"
