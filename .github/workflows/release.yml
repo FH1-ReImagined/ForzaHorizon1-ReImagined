@@ -132,6 +132,9 @@ jobs:
           python -m pip install Pillow
           python -m unittest discover -s tools -p 'test_render*.py' -v
       - if: runner.os == 'Linux'
+        name: Release checks' games never read the build folder's forza.toml (#846, no game)
+        run: python -m unittest discover -s tools -p 'test_prerelease_game.py' -v
+      - if: runner.os == 'Linux'
         name: FFCB slot wait regression (synthetic events, base and TU4)
         run: python tools/test_ffcb_wake.py --compiler g++ --output "$RUNNER_TEMP/ffcb-wake"
       - if: runner.os == 'Linux'
@@ -210,6 +213,11 @@ jobs:
         run: |
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/car_part_fallback_test.cpp -o "$RUNNER_TEMP/car-part-fallback-test"
           "$RUNNER_TEMP/car-part-fallback-test"
+      - if: runner.os == 'Linux'
+        name: Garage cars whose paint job file can't be loaded get their factory paint
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/car_livery_fallback_test.cpp -o "$RUNNER_TEMP/car-livery-fallback-test"
+          "$RUNNER_TEMP/car-livery-fallback-test"
       - if: runner.os == 'Linux'
         name: Title service request header and its nonblocking stream
         run: |

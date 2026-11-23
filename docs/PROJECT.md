@@ -111,6 +111,12 @@ run here and says why), the last 30 lines of a failing check's log, full logs in
 | launcher | the launcher as a frozen build runs it (foreign `LD_LIBRARY_PATH`, #53): AES helper, default.xex and facades out of the disc image (`--iso`, default `HorizonISO/*.iso`) |
 | ci | `--ci`: `gh workflow run release.yml` (artifacts only) and wait for it; prints the run id |
 
+The boot, server and render games run from a copy of the build folder (hard links) with
+`tools/prerelease_forza.toml` as their `forza.toml`, scratch XDG folders and offline unless the
+check runs its own server (#846, `tools/prerelease_game.sh`): the build folder's `forza.toml`
+(the player's settings when they play from that build) is never read, moved or changed, so a
+release run on a PC that also plays from that build needs nothing set aside.
+
 Leaderboard screens, Windows and Steam Deck are not scripted: a hand run in the VM / on the device.
 
 ## Hard rules
@@ -123,6 +129,43 @@ Leaderboard screens, Windows and Steam Deck are not scripted: a hand run in the 
   (the run scripts refuse with less than 10 GB available); kill by PID.
 
 ## Status log
+
+- 2026-11-23: **A garage car whose paint job can't be loaded gets its factory paint when it
+  becomes the current car instead of closing the game (#922).** A player's Mazda MX-5 Superlight
+  (added with the save editor) closed the game at Get In Car, from Car Select and from View Car,
+  with "read of guest 0x98", lr `82D57C0C` (TU4). Making a garage car the current car (TU4
+  `sub_825E7720`, disc `sub_825718D8`; also the current car when free roam loads) turns the paint
+  job handle the car's description keeps (a `CCarLiveryResource`) into its driving variant (TU4
+  `sub_82D5D538`, type 6, flags 0x80000, call at `825E77D8`); TU4 `sub_825E78A0` (disc
+  `sub_82571A58`, call at `825E7960`) does the same from a career object. That needs the paint
+  job loaded; `sub_82D0CAD0` returns nothing when its load failed (state byte +40 == 6) and the
+  caller reads field +0x90 of nothing. A paint job is the factory colour (`LiveryFileName` '') or a
+  file of the profile (`Liveries\<garage id>.liv`, the key's name at +0x44 is
+  `<profile xuid>:\Liveries\<id>.liv`). The game's fresh path (TU4 `sub_825B7FA0`) only falls back
+  to the factory colour (`825B8134`, `sub_82D55428`) for a paint job already failed in the cache; a
+  new load of the file is queued and fails later. Reproduced with copies of golden-save-tu4 (TU4,
+  Linux, offline): a copy of the editor's MX-5 row with `LiveryFileName` naming a file that isn't
+  there closed the game at Get In Car with the player's fault and the player's chain from Car
+  Select (`82789160 827BCDDC 827C0C4C ...`) and from View Car (`82715968 82720604 ...`); a 0-byte
+  file did the same, and so did the current car's row naming a missing file as free roam loaded.
+  The save editor writes `LiveryFileName` ''; painting its MX-5 in the paint shop writes
+  `Liveries\51.liv` and the row names it, and that car gets in with its paint. How the player's
+  row came to name a file that fails is not known. `src/hooks/car_livery_fallback.cpp` looks at
+  those two calls only when the handle's paint job failed (the game's WaitForLoad, disc
+  `sub_82412688`): it makes the factory colour itself (disc `sub_82C94398` with the row's CarId and
+  DefaultManufacturerColorIndex) and releases the handle. It clears the row's `LiveryFileName`
+  (the game's own `UPDATE %s SET LiveryFileName='' WHERE Id=%u`, confirmed by a second query) only
+  when the file is not in the profile or is empty; a file that is there but fails (a bad header)
+  stays named, and for the rest of the session the fresh path (disc `sub_82547EB8`) gives that row
+  the factory colour instead of queueing the file again (without that, Get In on such a row led
+  to a loading screen that never ended). Every other case runs the game's code unchanged
+  (`tests/car_livery_fallback_test.cpp`). Checked (TU4): missing and 0-byte rows get in with the
+  factory paint and the saved row stops naming the file; a row naming a 600-byte bad file gets the
+  factory paint, the session goes on and the saved row still names it; a row naming another car's
+  file loads with that paint; the current car naming a missing or a bad file loads into free roam
+  with its factory colour; the seven unicorns get in from Car Select (the MX-5 also from View Car)
+  with no warning; a factory-colour paint job forced to fail (a local test switch) gets in with the
+  factory paint and drives.
 
 - 2026-11-15: **Changing cars from the Native pause menu no longer stops the game (#857).**
   Both player logs stop on purpose in the memory manager's allocation loop (TU4 `sub_82423000`):
