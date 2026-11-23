@@ -987,3 +987,23 @@ from a Big Shot's start to its end, next to the front buffers' readback range
 (`FORZA_BIGSHOT_LAYER=0` leaves the layers as they come). With the flag off nothing changes.
 [rendering.md](rendering.md#pictures-at-three-quarters-of-their-size-at-a-1080p-output-879) has the
 trace and what was checked.
+
+## ReIGlue 1110: memory read once more after a release is seen again when allocated (ReIGlue #64)
+
+The GPU's copy of guest memory holds a page as up to date once it uploads it, and a write watch on
+the page tells it when the CPU changes it. A watch can only be armed on a page a heap holds and
+the guest may write. A block released while a frame still queued reads it was uploaded again and
+held as up to date with no watch; once the block was allocated again, nothing reported the writes
+to it and the GPU drew the old bytes for whatever the game put there (#895: other textures' texels
+on an FM4 circuit). The same for a page the game held read-only and later made writable.
+
+With 1110 an allocation of physical memory drops the GPU's copy of the pages it gives new contents
+(pages committed again keep theirs, and what the GPU wrote there), whether or not a page of them
+was watched, and a protection change that makes pages writable arms their watch (the first write
+drops the copy). Requests, uploads and allocations cost the same; a writable protection change
+about 0.6 us more (4.7 us for 4 MB). In five minutes of free roam the game made fewer than 256
+committing allocations and writable protection changes. ReIGlue's
+`tests/shared_memory_watch_test.cpp` plays the release, late read, allocation and write against
+the real guest memory. The calls #895 added after its chunk allocations (`fm4_track.cpp`,
+`fixed_gpu_heap.cpp`: `EnablePhysicalMemoryAccessCallbacks`, then `TriggerPhysicalMemoryCallbacks`)
+now repeat what the allocation does and can go.
