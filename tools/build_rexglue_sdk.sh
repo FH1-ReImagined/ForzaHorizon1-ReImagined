@@ -93,10 +93,13 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # game's switch no registry packet arrives and the plugin decodes as before; native renderer M4).
 # and 1110: an allocation of physical memory, and a protection change that makes pages writable,
 # drop the GPU's copy of the range also where no page was watched (ReIGlue #64, the cause of #895).
+# and 1120: the copy to guest memory at a render scale takes each guest pixel's own host pixels, and an
+# unsigned 8:8:8:8 or 2:10:10:10 color copy their average, so pictures at render scale 2 or a 1440p
+# output have no comb edges (#905).
 # A reviewed full commit can be pinned before a maintainer publishes a tag.
 # When a tag is supplied, its target must still match this immutable commit.
 REIGLUE_TAG=
-REIGLUE_COMMIT=1c8b4cf502d0c5e9e1b3baa6d811f1868f64999e  # ReIGlue main: 0650 and 1110 (ReIGlue #64, merged as #73)
+REIGLUE_COMMIT=2378ea3082124b69c71ba0e00ad126099b920677  # ReIGlue 1120 (FH1-ReImagined/ReIGlue#74 head, on main with 0650 and 1110)
 REIGLUE_URL="${REIGLUE_URL:-https://github.com/FH1-ReImagined/ReIGlue}"
 NIGHTLY="${REXSDK_NIGHTLY:-$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64}"
 SRC="${REXSDK_SRC:-$HOME/rexglue-sdk-src-forza/sdk}"
