@@ -1286,15 +1286,29 @@ its clock, the game's hook from its own, both over each whole run):
   `scene_msaa=2x` run at 30 fps, whose 0.123 here is the only one above the limit): the hook's
   clock is wall-clock time on a loaded PC. Whether the hook stays within 0.1 ms with the PC to
   itself was not measured here; the worst single frame of a load was not measured either.
-- **The benchmark's frame rate with the compare against without it** needs runs alone on a quiet PC,
-  which this step could not get (other games were running): not measured here. The numbers above
-  are the compare's own time and say what it adds; how much of it shows in the frame rate depends
-  on how much spare time the decoder thread has. The off path of the write paths' seams (a null
-  test before each register write range) was not timed either.
+- **The frame rate, timed [M]:** the built-in benchmark, each run alone on the PC (no other game,
+  the benchmark lock held), uncapped, `gpu_split_command_processor` on (this PC's default), three
+  rounds in a rotated order, frame times and the decoder thread's CPU time over the same window
+  of each run (game at this branch, `923db1b5`, plugin ReIGlue `c34ef49`; main: the game at main
+  `1e651936` and ReIGlue main `18fa1cc`, built the same way):
 
-**Off is unchanged [M].** With `native_lists=off` the game sends no registry packet, and the plugin's
-registry is never made: each seam in the command processor is a test of a null pointer (the write
-paths' seams too: `fh1_list_reader_` is null outside a compared run). Shown by
+  | Binaries | Benchmark fps (three rounds) | Mean | Decoder thread, ms a frame | Recorder thread, ms a frame |
+  | --- | --- | ---: | ---: | ---: |
+  | main | 173.2, 143.5, 163.1 | 159.9 | 2.62 | 4.83 |
+  | this branch, `native_lists=off` | 176.0, 153.7, 156.0 | 161.9 | 2.63 | 4.84 |
+  | this branch, `native_lists=shadow` | 102.4, 93.3, 86.6 | 94.1 | 8.27 | 8.00 |
+
+  **Off is within the noise of main:** +1.2% fps and +0.3% decoder time, where the rounds of the
+  same binaries spread by about 4% around their mean either side (143.5-173.2 fps for main
+  alone). **Shadow is a test mode, and it costs:** -41% fps in the benchmark and 3.2 times the
+  decoder's time a frame (the compare beside every list run, above), so it is for these
+  measurements and the replay's checks, never for play.
+
+**Off costs nothing measurable [M]** (the timing above), and the instructions it adds are these.
+With `native_lists=off` the game sends no registry packet, and the plugin's registry is never
+made: each seam in the command processor is a test of a null pointer (the write paths' seams too:
+`fh1_list_reader_` is null outside a compared run), plus what the compiler lays out around it
+(below: `ExecuteIndirectBuffer` runs about 8 instructions more per indirect buffer). Shown by
 comparing the binaries, function by function, with main (the game at main's tree, ReIGlue main
 `18fa1cc`) built the same way (instructions compared with addresses, call targets and padding
 taken out, `objdump -d`):
@@ -1304,11 +1318,37 @@ taken out, `objdump -d`):
 | Game | 85,620 / 85,678 | 85,611 | the hooks of RunCommandBuffer (`sub_824469B0`) and of the track's and the procedural models' scene pass (`sub_82466418`, `sub_82447B70`): each gains a load of the switch's state and two compares before its old body (6 instructions); one more instance of each of the three functions a string switch's definition makes (the new switch's) | 58: `native_lists.cpp`, the converter, `EmitHostPacket`, and the hooks of `sub_82D19210` and `sub_82D19668` |
 | GPU plugin | 4,426 / 4,468 | 4,410 | the seams: `ExecuteIndirectBuffer`, `ExecutePacketType3` (two draw lines), `_NOP`, `_IM_LOAD`, `_XE_SWAP`, `Shutdown`, the constructor (the two new members); the write paths' seams (below): `PacketWriteRegister`, `PacketWriteRegistersFromMem`, `WriteRegisterRangeFromRing`, `_COND_WRITE`, and the three packet handlers `Fh1WritePlainRangeFromRing` is inlined into (`ExecutePacketType0`, `_SET_CONSTANT`, `_SET_CONSTANT2`); and two that only moved: `std::vector<uint32_t>::operator=`, which the plugin imported and now has a copy of, and a table address in the Vulkan swap's lambda added with `or` instead of `add` | 42: `fh1_native_list.cpp` and what it instantiates |
 
-The game row is the first round's (game `7e9f53bc` against main's tree). The fixes after the
+The game row is the first round's (game `7e9f53bc` against main's tree; its 6 instructions for
+the scene pass hooks and its plain view of the two new hooks were too low, see the check at the
+merged heads below). The fixes after the
 reviews changed, in the game, only `native_lists.cpp`'s own functions (`OnRun`, `Register`) and
 the fixup dispatcher's hook (`sub_82D19210`), whose path with the switch off is the same
 instructions as before (the load of the switch's state, two compares, the call of the original);
 the other differences between those two builds are main's (merged).
+
+**Again at the merged heads, an independent check [M]** (game `923db1b5` against main
+`1e651936`, plugin `c34ef49` against `18fa1cc`), the path with the switch off, instruction by
+instruction:
+
+- **Game:** the RunCommandBuffer hook (`sub_824469B0`) runs 6 instructions more (the switch's
+  state loaded, two compares, two branches). The scene pass hooks run more than that: the track's
+  (`TrackDrawPass`, `sub_82466418`) 26 and the procedural models' (`ProceduralDrawPass`,
+  `sub_82447B70`) 18, as the compiler reads guest words there with four byte loads instead of a
+  load and a `bswap` and the hooks lost their tail calls. `sub_82D19210` (the fixup dispatcher)
+  and `sub_82D19668` (the unload) are plain functions on main; here each is a hook that tests the
+  switch and calls the original, about 20-23 instructions more per call (a frame of five saved
+  registers and the call). All are a few instructions per call of functions called at most a
+  few thousand times a frame; the timing shows none of it.
+- **GPU plugin:** `ExecuteIndirectBuffer` about 8 instructions more per indirect buffer (one more
+  saved register, its two arguments kept for the lookup, the registry's null test before the loop
+  and the result's test after it); the write paths, the NOP, IM_LOAD and swap handlers main's plus
+  the test and a branch never taken.
+- **aarch64** (the plugin's `command_processor.cpp` compiled for `aarch64-linux-gnu` with the
+  same flags, main and this branch; CI also builds the whole SDK on aarch64 at the pin): it
+  compiles, and there the off path is not only a test: `ExecuteIndirectBuffer` saves one register
+  pair more (4 to 5 `stp`/`ldp`), `_SET_CONSTANT` one more (2 to 3) and `_SET_CONSTANT2` two more
+  (2 to 4), since clang has no `preserve_most` there; the other functions keep main's frame and add
+  the test (9-26 instructions more by count, mostly the cold blocks). Not timed on an aarch64 host.
 
 **The write paths' seams, instruction by instruction [M].** These are the decoder's hottest
 functions: every register write and range of the PM4 stream goes through them, and with
@@ -1398,8 +1438,9 @@ above).
 
 **Still open:** the static-word change of the second step was not met, so the fallback for it is
 shown by the unit test only; a real 16-car race; the GTX 1650 Ti (not run in this step); the
-frame rate with the compare against without it, and the render thread's hook, on a
-quiet PC. Next: replay (the plan's step 4), which reuses this registry and the generations, and
+render thread's hook in shadow mode on a quiet PC; the off path timed on an aarch64 host. For the
+fourth step, in the game's scene pass hooks: the guest word loads (four byte loads where a load
+and a `bswap` would do) and the lost tail calls. Next: replay (the plan's step 4), which reuses this registry and the generations, and
 whose double-run check can reuse this compare.
 
 ## Tools
