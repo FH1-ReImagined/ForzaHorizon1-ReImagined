@@ -8,10 +8,18 @@
 
 #define sub_823F37D0 sub_82423808  // check
 #define __imp__sub_823F37D0 __imp__sub_82423808
+#define sub_82412688 sub_82442638
+#define __imp__sub_82412688 __imp__sub_82442638
 #define sub_82447400 sub_82476AC0
 #define __imp__sub_82447400 __imp__sub_82476AC0
 #define sub_82447CA8 sub_82477368
 #define __imp__sub_82447CA8 __imp__sub_82477368
+#define sub_82547EB8 sub_825B7FA0
+#define __imp__sub_82547EB8 __imp__sub_825B7FA0
+#define sub_82C94398 sub_82D55428
+#define __imp__sub_82C94398 __imp__sub_82D55428
+#define sub_82C9C440 sub_82D5D538
+#define __imp__sub_82C9C440 __imp__sub_82D5D538
 #define sub_82D4DE30 sub_82E100B0
 #define __imp__sub_82D4DE30 __imp__sub_82E100B0
 #define sub_823E40D8 sub_82414068
@@ -214,6 +222,8 @@ constexpr uint32_t Tu4Address(uint32_t a) {
     case 0x82075FD4: return 0x820862FC;  // data
     case 0x823E9288: return 0x82419338;  // code
     case 0x823EDB08: return 0x8241DBC8;  // code  // check
+    case 0x82571990: return 0x825E77D8;  // code
+    case 0x82571B18: return 0x825E7960;  // code
     case 0x82586D80: return 0x825FCDF8;  // code
     case 0x8259FB5C: return 0x82616C44;  // code
     case 0x8259FBEC: return 0x82616CD4;  // code
@@ -243,6 +253,7 @@ constexpr uint32_t Tu4Address(uint32_t a) {
     case 0x832E29A0: return 0x833D02E0;  // data
     case 0x832E4A70: return 0x833D23D0;  // data
     case 0x832E4A84: return 0x833D23E4;  // data
+    case 0x832E5510: return 0x833D2FFC;  // data
     case 0x832FF054: return 0x833EDC08;  // data
     case 0x832FF090: return 0x833EDC44;  // data
     case 0x83305CC4: return 0x833F4A80;  // data
