@@ -984,7 +984,14 @@ the plugin do what they did (below).
 - The template goes into a 4 MB ring of guest memory, once per key (lists with the same static
   words share it), with **`kOpListDefine`** (ReIGlue 0650): its id, address, words, a sequence
   number, a hash, and the address of an acknowledgement word, where the plugin stores the
-  sequence number once it has read the template. The ring reuses only memory the plugin has
+  sequence number once it has read the template. The word is 64-byte aligned; the plugin stores
+  it with release order after its last read of the template and the game loads it with acquire
+  before it reuses the memory, so the pair orders the reads and the reuse on any CPU, not only on
+  x86. A define whose sequence number is not newer than the last one acknowledged (a tiled replay
+  decodes the same packet again) is dropped before the plugin reads anything, so a replay of a
+  define that failed (hash, cap) cannot read ring memory the game has reused since; a define
+  whose packet could not be written gives its ring memory and its sequence number back at once
+  (PRs #934 and ReIGlue #68). The ring reuses only memory the plugin has
   acknowledged (a define the ring has no room for waits for the next call; a template larger than
   the whole ring is refused, `too-large`, rather than converted again at every call). This is
   not the plan's `kOpRef` ring of 0610: a `kOpRef` message holds at most 16,384 words and nobody
@@ -1024,7 +1031,11 @@ up; for a registered list:
   changed since the last run, as a replay would; read on every run too, and a pool that differs
   while the generation did not is counted (`stale`: a slot written without a fixup). The read is
   a seqlock's: the generation, the slots, the generation again (acquire fences between); an odd
-  generation, or one that changed between the two reads, is counted as a run during a fixup;
+  generation, or one that changed between the two reads, is a run during a fixup and is not
+  compared (`fixup-in-progress`: a torn snapshot could disagree falsely, or in principle agree).
+  The generation is read once more after the list's last packet, and a run a fixup started or
+  ended in gets no verdict either (`fixup-during-run`, its draws left out of the counts): the
+  fixup may have rewritten words the packets read;
 - **every draw**, also one its predicate skips: the template's view of the state the draw starts
   with (the register file at the buffer's start, the list's writes up to the draw overlaid, the
   tile block applied for the **live** bin select and mask, the draws' own three registers) against
@@ -1123,6 +1134,28 @@ same PC, two games at a time):
 No define went past the cap (1.59 M template words at most), no list was refused, none ran on
 another device.
 
+**At the merged heads [M]** (the acknowledgement's release and acquire, a failed define's
+reservation given back, replays dropped by sequence, a run during a fixup not compared, the
+generation read again at the list's end; game `923db1b5`, plugin ReIGlue `c34ef49`; one game at a
+time):
+
+| Run | Scene | Frames | Runs compared (untiled) | Agree | Draws compared | Agree | Not compared | Fixup in progress / during the run | Fixups of bound lists |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: |
+| i-bench | the built-in benchmark race, uncapped | 15,000 | 12,371,399 (0) | **100%** | 23,664,824 | **100%** | none | 0 / 0 | 7,837 |
+| i-race2x | the benchmark race with `scene_msaa=2x`, uncapped | 18,000 | 12,631,368 (8,651,795) | **100%** | 25,365,571 | **100%** | none | 0 / 0 | 7,665 |
+
+No stale pool, no miss at a dropped list's address, no ring full; 1,354 and 677 defines were
+replays (the same packet decoded again for another tile) and were dropped by their sequence
+number, none failed its hash check. No run met a fixup at either read of the generation, so the
+new skips are shown by the unit test only.
+
+**On Windows [M]** (Vulkan, an RTX 5060 Ti, the benchmark race at 60 fps, plugin ReIGlue
+`832648f`: the acknowledgement and the first read's skip, without the list end's read): with
+`native_lists=off` and `shadow` the runs completed; in shadow mode, with the game's MSAA 5,032,933
+runs and 9,564,595 draws compared, with `scene_msaa=2x` 4,170,565 runs (2,945,249 untiled) and
+8,215,139 draws, every one agreeing; 12,142 fixups and 673 unloads in the two runs, no stale
+pool, no ring full, no run during a fixup.
+
 - **Every run compared agrees, and every draw**: 60.6 million runs (14.0 million of them untiled)
   and 129.2 million draws in the eight scene runs, on what the shaders read, the shaders, the bin
   mask, whether the draw runs, the registers written before each draw and after the last, and the
@@ -1141,7 +1174,8 @@ another device.
   The other lists of those runs (passes 0, 1 and 6) run as they were recorded.
 - **Question 9 of the plan (a fixup against run order) [M]:** no pool was ever stale (a slot whose
   word changed while the generation did not: 0 in every run), and no run met a fixup under way (an
-  odd generation: 0). The generation changed 143-1,626 times a run, each time the slots were read
+  odd generation, or one that moved during the slots' read or the run: 0). The generation changed
+  143-1,626 times a run, each time the slots were read
   again: every slot write the game made went through the fixup dispatcher, as the plan read from
   the code.
 - **The live bin values:** the compare starts from the bin select and mask the command processor
@@ -1357,12 +1391,14 @@ above).
   of the same address and length run before the drop would read it. Before `native_lists` runs
   on such a host: check the binding's pages before reading, or hold the free until the drop is
   decoded.
-- **The seqlock's fences** (release around the fixup in the game, acquire around the slots in the
-  plugin) have only run on x86, where they only hold the compiler back.
+- **The seqlock's fences** (release around the fixup in the game, acquire around the slots and
+  before the list end's read in the plugin) and the acknowledgement's release and acquire have
+  only run on x86, where they only hold the compiler back; on aarch64 they are what orders the
+  reads (CI builds them there; not run).
 
 **Still open:** the static-word change of the second step was not met, so the fallback for it is
-shown by the unit test only; a real 16-car race; the GTX 1650 Ti and Windows (not run in this
-step); the frame rate with the compare against without it, and the render thread's hook, on a
+shown by the unit test only; a real 16-car race; the GTX 1650 Ti (not run in this step); the
+frame rate with the compare against without it, and the render thread's hook, on a
 quiet PC. Next: replay (the plan's step 4), which reuses this registry and the generations, and
 whose double-run check can reuse this compare.
 
