@@ -96,13 +96,9 @@ enum : uint64_t {
   kTCloneOf = 30,        // first look of a recorded buffer: made by the clone function, source class
 
 };
-// The loader sets flags 0x101 and clears 0x6 of the files' 0x86 / 0x886 (seen in the first runs):
-// the list is converted and checked with its flags in the files' form, so its key can be compared
-// with the keys of the files' lists (FH1_LIST_KEYS).
-constexpr uint32_t kLoaderFlags = 0x101, kFileOnlyFlags = 0x6;
-uint32_t FileFormFlags(uint32_t flags) {
-  return (flags & ~(kLoaderFlags | nl::kFlagFixedUp)) | kFileOnlyFlags;
-}
+// The loader's flags (nl::FilesFormFlags): the list is converted and checked with its flags in the
+// files' form, so its key can be compared with the keys of the files' lists (FH1_LIST_KEYS).
+uint32_t FileFormFlags(uint32_t flags) { return nl::FilesFormFlags(flags); }
 inline uint64_t T(uint64_t table) { return table << 56; }
 
 enum : uint8_t { kModel = fh1list::kClassModel, kRecorded = fh1list::kClassRecorded };
@@ -695,14 +691,10 @@ void Run(PPCContext& ctx, uint8_t* base) {
   if (c.calls % CheckEvery() == 0) CheckKey(s, base, cb, b, c);
 }
 
-}  // namespace forza::list_trace
-
 // The fixup dispatcher (r3: a pointer to the command buffer, r4: the record, its type in the low
-// 4 bits; docs/native-renderer.md "M4"). With the D3D trace too, this hook opens its scope.
-extern "C" REX_FUNC(__imp__sub_82D19210);
-extern "C" REX_FUNC(sub_82D19210) {
-  FORZA_D3D_TRACE_SCOPE(sub_82D19210);
-  using namespace forza::list_trace;
+// 4 bits; docs/native-renderer.md "M4"), from its hook in hooks/native_lists.cpp, before the
+// original runs.
+void Fixup(PPCContext& ctx, uint8_t* base) {
   if (fh1list::Shm* s = Get()) {
     const uint32_t cb = Plausible(ctx.r3.u32) ? Load32(base, ctx.r3.u32) : 0;
     const uint32_t type = Plausible(ctx.r4.u32) ? Load32(base, ctx.r4.u32) & 15 : 0;
@@ -718,8 +710,9 @@ extern "C" REX_FUNC(sub_82D19210) {
     }
     Count(s, T(kTFixup) | uint64_t(type) << 48 | uint64_t(cls) << 40 | uint64_t(group) << 32);
   }
-  __imp__sub_82D19210(ctx, base);
 }
+
+}  // namespace forza::list_trace
 
 // RunCommandBuffer's third direct caller (called indirectly).
 extern "C" REX_FUNC(__imp__sub_82D10908);

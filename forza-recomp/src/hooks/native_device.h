@@ -65,6 +65,11 @@ class FlushScope {
   uint64_t entry_ns_ = 0;
 };
 
+// A host packet (ReIGlue 0610: a type-3 NOP whose first word is "FH1N"; `n` words in host order,
+// at most 16) at the device's cursor, making space first as D3D's own writers do. False if there
+// is no room. M4's model list registry (native_lists.cpp) sends its packets with it.
+bool EmitHostPacket(PPCContext& ctx, uint8_t* base, uint32_t dev, const uint32_t* host, uint32_t n);
+
 // The shadow mask function starts (TU4 sub_824829D8): the shadow mask group of passes begins.
 void ShadowMaskBegin(PPCContext& ctx, uint8_t* base);
 

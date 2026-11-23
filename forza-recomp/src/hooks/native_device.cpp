@@ -349,6 +349,11 @@ void LogFrames() {
 
 }  // namespace
 
+bool EmitHostPacket(PPCContext& ctx, uint8_t* base, uint32_t dev, const uint32_t* host,
+                    uint32_t n) {
+  return n && n <= 16 && EmitHost(ctx, base, dev, host, n);
+}
+
 void ShadowMaskBegin(PPCContext& ctx, uint8_t* base) {
   static std::once_flag once;
   std::call_once(once, [] {

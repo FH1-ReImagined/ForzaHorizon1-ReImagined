@@ -32,6 +32,7 @@
 // tu_address_map: TU4 addresses
 
 #include "../debug/list_trace.h"
+#include "native_lists.h"
 #include "../platform/guest_addr.h"
 #include "../platform/guest_memory.h"
 #include "../platform/scene_resolution.h"
@@ -257,6 +258,16 @@ void RetileList(uint8_t* base, uint32_t cb) {
 
 }  // namespace
 
+// The headers list cb's untiling replaced (guest address, header), for native_lists.cpp: a list
+// first seen untiled is converted from a copy with them put back.
+namespace forza::scene_tiling_hooks {
+std::vector<std::pair<uint32_t, uint32_t>> SavedHeaders(uint32_t cb) {
+  std::lock_guard<std::mutex> lock(g_untiled_mutex);
+  const auto found = g_untiled.find(cb);
+  return found == g_untiled.end() ? std::vector<std::pair<uint32_t, uint32_t>>{} : found->second;
+}
+}  // namespace forza::scene_tiling_hooks
+
 // Whether lists r3 hold a recorded list for pass r4 and layer r5 (r3); the track presentation
 // skips items without one. Passes 3 and 5 have pass 4's.
 extern "C" REX_FUNC(HasRecordedList) {
@@ -277,6 +288,7 @@ extern "C" REX_FUNC(HasRecordedList) {
 // work and finds no list; pass 4's are drawn after it.
 extern "C" REX_FUNC(TrackDrawPass) {
   FORZA_LIST_TRACE_CONTEXT(kTrack, ctx.r4.u32, ctx.r6.u32);
+  const forza::native_lists::GroupScope native_lists_group(ctx.r4.u32, ctx.r6.u32);
   const uint32_t pass = ctx.r4.u32;
   const uint32_t list_pass = tiling::RecordedListPass(pass);
   if (list_pass == pass || !(ctx.r10.u32 & 0xFF)) {
@@ -311,6 +323,7 @@ extern "C" REX_FUNC(ProceduralDrawPass) {
   const uint32_t at = ctx.r1.u32 + 84;
   const uint32_t pass = Load32(base, at);
   FORZA_LIST_TRACE_CONTEXT(kProcedural, pass, ctx.r9.u32);
+  const forza::native_lists::GroupScope native_lists_group(pass, ctx.r9.u32);
   const uint32_t list_pass = tiling::RecordedListPass(pass);
   if (list_pass == pass) {
     OriginalProceduralDrawPass(ctx, base);
