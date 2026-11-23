@@ -91,12 +91,12 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # unchanged) that times the command lists the game runs (native renderer M4).
 # and 0650: the model list registry and its shadow compare (native_lists=shadow; without the
 # game's switch no registry packet arrives and the plugin decodes as before; native renderer M4).
-# and 1110: an allocation of physical memory drops the GPU's copy of the pages it gives new contents,
-# and a protection change that makes pages writable watches them (ReIGlue #64, the cause of #895).
+# and 1110: an allocation of physical memory, and a protection change that makes pages writable,
+# drop the GPU's copy of the range also where no page was watched (ReIGlue #64, the cause of #895).
 # A reviewed full commit can be pinned before a maintainer publishes a tag.
 # When a tag is supplied, its target must still match this immutable commit.
 REIGLUE_TAG=
-REIGLUE_COMMIT=fddfc2b291e6edbb5d2239503562cc0f1d492b94  # ReIGlue PR #73 head: 0650 and 1110 (ReIGlue #64)
+REIGLUE_COMMIT=ae3152e4b96bec051513a39533963f4baf97abbb  # ReIGlue PR #73 head: 0650 and 1110 (ReIGlue #64)
 REIGLUE_URL="${REIGLUE_URL:-https://github.com/FH1-ReImagined/ReIGlue}"
 NIGHTLY="${REXSDK_NIGHTLY:-$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64}"
 SRC="${REXSDK_SRC:-$HOME/rexglue-sdk-src-forza/sdk}"
