@@ -26,8 +26,10 @@
 // LiveryFileName (the game's own "UPDATE %s SET LiveryFileName='' WHERE Id=%u", sub_82534848 /
 // TU4 sub_825A32C8, does the same when a paint job is removed). A file that is there but fails
 // (a bad header, a read error) stays named in the save, so it is never detached from the car;
-// for the rest of the session the fresh path gives that row its factory colour instead of
-// queueing the same file again (a load that would fail later, after that path's own check).
+// while the row holds the same car and the file the same size, the fresh path gives that row
+// its factory colour instead of queueing the same file again (a load that would fail later,
+// after that path's own check). When the factory colour can't be made either, the driving paint
+// job is left empty: the callers take their fresh path next time.
 
 #pragma once
 
@@ -101,19 +103,45 @@ inline std::string ColumnSql(std::string_view table, std::string_view column, ui
          " WHERE Id=" + std::to_string(garage_id);
 }
 
-// The profile root of a key's file name ('E030000004B490FA:\Liveries\60.liv' ->
-// 'E030000004B490FA'): letters and digits before the first ':', or empty. A name without one,
-// or with "..", is not a profile file.
+// The profile root of a key's paint job file name ('E030000004B490FA:\Liveries\60.liv' ->
+// 'E030000004B490FA'): letters and digits before the first ':', followed by ":\Liveries\" and a
+// file name, or empty. Anything else (another root's file, a name with "..") is not a profile
+// paint job, so it is never detached.
 inline std::string ProfileRoot(std::string_view path) {
   const size_t colon = path.find(':');
   if (colon == std::string_view::npos || colon == 0 || colon > 32) return {};
-  if (path.size() < colon + 3 || path[colon + 1] != '\\') return {};
   if (path.find("..") != std::string_view::npos) return {};
   for (size_t i = 0; i < colon; ++i) {
     const char c = path[i];
     if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))) return {};
   }
+  constexpr std::string_view kDir = ":\\liveries\\";
+  if (path.size() <= colon + kDir.size()) return {};
+  for (size_t i = 0; i < kDir.size(); ++i) {
+    char c = path[colon + i];
+    if (c >= 'A' && c <= 'Z') c = char(c - 'A' + 'a');
+    if (c != kDir[i]) return {};
+  }
+  if (path.find('\\', colon + kDir.size()) != std::string_view::npos) return {};
   return std::string(path.substr(0, colon));
+}
+
+// A row remembered after its paint job file failed (it stays named in the save): the file and
+// what the file system said about it then, and the car in the row.
+struct Remembered {
+  std::string path;   // the key's file name
+  FileState file = FileState::kUnknown;
+  uint64_t size = 0;  // the file's size then (when kPresent or kEmpty)
+  int32_t car = 0;    // the row's CarId then
+};
+
+// Whether a remembered row still gets the factory colour: the same car and the same file, the
+// same size. A repaint (a new file, another size), a deleted file or another car in a reused
+// garage id ends it, and the game's own path runs again.
+inline bool StillRemembered(const Remembered& then, std::string_view path, FileState file,
+                            uint64_t size, int32_t car) {
+  if (path != then.path || car != then.car || file != then.file) return false;
+  return file != FileState::kPresent || size == then.size;
 }
 
 }  // namespace forza::car_livery_fallback

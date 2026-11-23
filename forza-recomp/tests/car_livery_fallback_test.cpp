@@ -68,11 +68,31 @@ int main() {
 
   // The profile root of the key's file name.
   Check(clf::ProfileRoot("E030000004B490FA:\\Liveries\\60.liv") == "E030000004B490FA", "the root");
+  Check(clf::ProfileRoot("E030000004B490FA:\\liveries\\60.liv") == "E030000004B490FA",
+        "any case of Liveries");
+  Check(clf::ProfileRoot("game:\\media\\x.liv").empty(), "not a Liveries file");
+  Check(clf::ProfileRoot("E03:\\Liveries\\").empty(), "no file name");
+  Check(clf::ProfileRoot("E03:\\Liveries\\a\\b.liv").empty(), "no subfolder");
+  Check(clf::ProfileRoot("E03:\\Liveries60.liv").empty(), "no Liveries folder");
   Check(clf::ProfileRoot("Liveries\\60.liv").empty(), "no root");
   Check(clf::ProfileRoot(":\\Liveries\\60.liv").empty(), "an empty root");
   Check(clf::ProfileRoot("E03:Liveries").empty(), "no backslash after the root");
   Check(clf::ProfileRoot("E03:\\..\\x.liv").empty(), "no ..");
   Check(clf::ProfileRoot("a b:\\x.liv").empty(), "no space in the root");
+
+  // A remembered row: the same car, file and size keep the factory colour; a repaint, a deleted
+  // file or another car in a reused garage id end it.
+  const clf::Remembered bad{"E03:\\Liveries\\64.liv", FileState::kPresent, 600, 1233};
+  Check(clf::StillRemembered(bad, bad.path, FileState::kPresent, 600, 1233), "unchanged");
+  Check(!clf::StillRemembered(bad, bad.path, FileState::kPresent, 516, 1233), "repainted");
+  Check(!clf::StillRemembered(bad, bad.path, FileState::kMissing, 0, 1233), "file deleted");
+  Check(!clf::StillRemembered(bad, bad.path, FileState::kPresent, 600, 320), "another car");
+  Check(!clf::StillRemembered(bad, "E03:\\Liveries\\65.liv", FileState::kPresent, 600, 1233),
+        "another file");
+  const clf::Remembered unknown{"x", FileState::kUnknown, 0, 1233};
+  Check(clf::StillRemembered(unknown, "x", FileState::kUnknown, 0, 1233),
+        "an unmounted profile, the same car");
+  Check(!clf::StillRemembered(unknown, "x", FileState::kPresent, 600, 1233), "mounted since");
 
   Check(clf::kStateFailed == 6, "the failed state");
   Check(clf::kDrivingFlags == 0x80000, "the driving variant's flags");

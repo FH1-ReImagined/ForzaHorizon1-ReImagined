@@ -13,10 +13,12 @@
 // and releases the handle as the game's call does at its end. Only when the paint job is a file
 // that the profile doesn't have, or that is empty, does it clear the row's LiveryFileName too,
 // and it says so only when a second query shows the column clear. A file that is there but
-// failed stays named in the save; for the rest of the session the game's fresh path
-// (sub_82547EB8 / TU4 sub_825B7FA0, which both callers also take, and which would queue the same
-// file again) gives that row its factory colour instead. A warning names the garage id and the
-// car once.
+// failed stays named in the save; the game's fresh path (sub_82547EB8 / TU4 sub_825B7FA0, which
+// both callers also take, and which would queue the same file again) gives that row its factory
+// colour instead, as long as the row holds the same car and the file the same size (a repaint
+// or a reused garage id ends it). When the factory colour can't be made (the row can't be read,
+// or the factory colour is what failed), the driving paint job is left empty rather than given a
+// failed one. A warning names the garage id and the car once.
 
 #include "../platform/car_livery_fallback.h"
 #include "../platform/guest_addr.h"
@@ -34,7 +36,9 @@
 #include <cstdint>
 #include <cstring>
 #include <initializer_list>
+#include <map>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -146,16 +150,18 @@ std::string KeyName(uint8_t* base, uint32_t livery) {
   return name;
 }
 
-// What the profile holds for that name; kUnknown when its profile isn't mounted.
-clf::FileState HostFile(const std::string& name) {
+// What the profile holds for that name (and its size); kUnknown when it isn't a profile paint
+// job or the profile isn't mounted.
+clf::FileState HostFile(const std::string& name, uint64_t* size) {
+  *size = 0;
   const std::string root = clf::ProfileRoot(name);
   auto* vfs = rex::system::kernel_state()->file_system();
   if (root.empty() || !vfs) return clf::FileState::kUnknown;
-  std::string target;
-  if (!vfs->FindSymbolicLink(root + ":", target)) return clf::FileState::kUnknown;
+  if (!vfs->ResolvePath(root + ":\\")) return clf::FileState::kUnknown;
   rex::filesystem::Entry* entry = vfs->ResolvePath(name);
   if (!entry) return clf::FileState::kMissing;
-  return entry->size() == 0 ? clf::FileState::kEmpty : clf::FileState::kPresent;
+  *size = entry->size();
+  return *size == 0 ? clf::FileState::kEmpty : clf::FileState::kPresent;
 }
 
 const char* Describe(clf::FileState file) {
@@ -167,18 +173,32 @@ const char* Describe(clf::FileState file) {
   }
 }
 
-// The rows (table, garage id) whose paint job file failed but stays named in the save.
+// The rows (table, garage id) whose paint job file failed but stays named in the save, with the
+// file and the car seen then.
 std::mutex g_kept_lock;
-std::set<std::pair<std::string, uint32_t>> g_kept;
+std::map<std::pair<std::string, uint32_t>, clf::Remembered> g_kept;
 
-void Keep(const std::string& table, uint32_t garage_id) {
+void Keep(const std::string& table, uint32_t garage_id, clf::Remembered row) {
   std::lock_guard<std::mutex> hold(g_kept_lock);
-  if (g_kept.size() < 256) g_kept.emplace(table, garage_id);
+  const auto key = std::make_pair(table, garage_id);
+  if (g_kept.size() < 256 || g_kept.count(key)) g_kept[key] = std::move(row);
 }
 
-bool Kept(const std::string& table, uint32_t garage_id) {
+bool AnyKept() {
   std::lock_guard<std::mutex> hold(g_kept_lock);
-  return g_kept.count({table, garage_id}) != 0;
+  return !g_kept.empty();
+}
+
+std::optional<clf::Remembered> Kept(const std::string& table, uint32_t garage_id) {
+  std::lock_guard<std::mutex> hold(g_kept_lock);
+  const auto it = g_kept.find({table, garage_id});
+  if (it == g_kept.end()) return std::nullopt;
+  return it->second;
+}
+
+void Forget(const std::string& table, uint32_t garage_id) {
+  std::lock_guard<std::mutex> hold(g_kept_lock);
+  g_kept.erase({table, garage_id});
 }
 
 // The row's CarId and DefaultManufacturerColorIndex.
@@ -230,7 +250,8 @@ extern "C" REX_FUNC(sub_82C9C440) {
   }
   const uint32_t key_type = Read(base, livery + kKeyType);
   const std::string name = key_type == clf::kKeyFile ? KeyName(base, livery) : std::string();
-  const clf::FileState file = name.empty() ? clf::FileState::kUnknown : HostFile(name);
+  uint64_t size = 0;
+  const clf::FileState file = name.empty() ? clf::FileState::kUnknown : HostFile(name, &size);
   const clf::Action action = clf::Decide(failed, key_type, file);
 
   const bool get_in = lr == GET_IN_CALL;
@@ -245,28 +266,28 @@ extern "C" REX_FUNC(sub_82C9C440) {
     cleared = Run(ctx, base, clf::ClearLiverySql(table, garage_id), nullptr) &&
               Run(ctx, base, clf::ClearedSql(table, garage_id), &clear) && clear == 1;
   }
-  if (key_type == clf::kKeyFile && !cleared && clf::ValidTable(table)) Keep(table, garage_id);
-
-  // The factory colour, as the game's fresh path falls back to it; without the row, that path.
-  const uint32_t local = ctx.r1.u32 + kFreshLocal;
-  if (row) {
-    MakeFactory(ctx, base, local, car, colour);
-  } else {
-    Write(base, local, 0);
-    PPCContext make = ctx;
-    make.r3.u64 = local;
-    make.r4.u64 = career_car;
-    make.r5.u64 = garage_id;
-    make.r6.u64 = clf::kDrivingFlags;
-    __imp__sub_82547EB8(make, base);
+  if (key_type == clf::kKeyFile && !cleared && row) {
+    Keep(table, garage_id, clf::Remembered{name, file, size, car});
   }
-  const uint32_t made = Read(base, local);
-  bool made_failed = !made;
+
+  // The factory colour, as the game's fresh path falls back to it. Without the row there is
+  // nothing to make it from (and the fresh path would queue the file that failed again): the
+  // driving paint job stays empty, as it does when the factory colour itself is what failed (the
+  // cache hands back the same failed resource). The callers take their fresh path next time.
+  const uint32_t local = ctx.r1.u32 + kFreshLocal;
+  Write(base, local, 0);
+  if (row) MakeFactory(ctx, base, local, car, colour);
+  uint32_t made = Read(base, local);
+  bool made_failed = !made || made == livery;
   if (!made_failed) {
     PPCContext wait = ctx;
     wait.r3.u64 = made;
     sub_82412688(wait, base);
     made_failed = (wait.r3.u32 & 0xFF) == 0;
+  }
+  if (made_failed && made) {
+    Virtual(ctx, base, made, kReleaseSlot, {made});
+    made = 0;
   }
 
   if (FirstReport(garage_id)) {
@@ -278,7 +299,7 @@ extern "C" REX_FUNC(sub_82C9C440) {
                                                             : "";
     if (made_failed) {
       REXLOG_ERROR("Cars: garage car {} (car {}): {} {}, and its factory paint could not be made "
-                   "either{} (#922)",
+                   "either; it drives without a paint job for now{} (#922)",
                    garage_id, car, what, why, save);
     } else {
       REXLOG_WARN("Cars: garage car {} (car {}): {} {}; it gets its factory paint{} (#922)",
@@ -299,15 +320,19 @@ extern "C" REX_FUNC(sub_82C9C440) {
 // that failed again.
 extern "C" REX_FUNC(sub_82547EB8) {
   const uint32_t out = ctx.r3.u32, career_car = ctx.r4.u32, garage_id = ctx.r5.u32;
-  bool kept = false;
-  {
-    std::lock_guard<std::mutex> hold(g_kept_lock);
-    kept = !g_kept.empty();
-  }
-  const std::string table = kept && out ? TableName(base, career_car) : std::string();
+  const std::string table = out && AnyKept() ? TableName(base, career_car) : std::string();
+  const std::optional<clf::Remembered> then =
+      table.empty() ? std::nullopt : Kept(table, garage_id);
   int32_t car = 0, colour = 0;
-  if (table.empty() || !Kept(table, garage_id) ||
-      !FactoryColour(ctx, base, table, garage_id, &car, &colour)) {
+  if (!then || !FactoryColour(ctx, base, table, garage_id, &car, &colour)) {
+    __imp__sub_82547EB8(ctx, base);
+    return;
+  }
+  uint64_t size = 0;
+  const clf::FileState file = HostFile(then->path, &size);
+  if (!clf::StillRemembered(*then, then->path, file, size, car)) {
+    // Repainted, the file gone, or another car in that garage id: the game's own path again.
+    Forget(table, garage_id);
     __imp__sub_82547EB8(ctx, base);
     return;
   }
