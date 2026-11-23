@@ -1387,42 +1387,56 @@ Other settings turns it off):
   The unfinished draw is the oldest the GPU still had: the one it hung on, or one stuck behind
   it. Its VS/PS are the hashes the `Creating graphics pipeline state with VS ..., PS ...` lines
   use. The marker after a draw is written once the draw and everything recorded before it has
-  finished, so "unfinished" also covers the work the emulator recorded for that draw first (a
-  new render pass, render target transfers, texture loads, barriers). Since ReIGlue 1100 (#913)
-  a second line says what that work was, with the draw's shader modifications and render pass.
-  With `gpu_device_lost_setup_breadcrumbs` on (Advanced > Log > Detailed GPU reset report in the
-  launcher; off by default, for a player whose GPU resets) a draw with work of its own also gets
-  a second marker right before its draw command, and the line says whether the GPU finished that
-  work:
+  finished, so "unfinished" also covers the work the emulator recorded since the draw before (a
+  new render pass, render target transfers, texture loads, barriers). ReIGlue 1100 (#913) can
+  tell the two apart, with `gpu_device_lost_setup_breadcrumbs` on (Advanced > Log > Detailed GPU
+  reset report in the launcher; off by default, for a player whose GPU resets). It then counts
+  the commands recorded between two guest draws, keeps them with the draw's shader modifications
+  and render pass, and gives a draw that had such work a second marker right before its draw
+  command. A loss then logs a second line:
 
   ```
   GPU breadcrumbs, unfinished #40970478 (draw): VS modification 000000400000003F, PS modification
   000400000016003F, render pass 0x0000038C (1x, depth D24FS8, color 0 2_10_10_10_FLOAT); recorded
-  before the draw command: 1 render pass, 3 draws, 2 barriers; the GPU finished that work: it hung
-  in the draw itself
+  since #40970477, before the draw command: 1 render pass, 1 render pass end, 3 draws, 2
+  barriers; the GPU finished that work: it hung in the draw itself
   ```
 
-  (or `the GPU did not finish that work: it hung in it, not in the draw`; with the setting off,
-  `in that work or in the draw: gpu_device_lost_setup_breadcrumbs tells them apart`). A draw
-  with nothing recorded between it and the draw before needs no marker: the one after the draw
-  before says that everything before it finished, and the line ends `nothing else was recorded
-  after #N: it hung in the draw itself`, with the setting on or off. The counts are of the main
-  command stream, without the draw command itself; the hoisted uploads run before the render
-  pass, before the draws already finished, and are not counted.
+  or `the GPU did not finish that work: it hung in it (or in the draw, if the draw ran alongside
+  it)`. A draw with nothing recorded between it and the draw before needs no marker: the one
+  after the draw before already says that everything before it finished, and the line ends
+  `nothing else was recorded since #N: it hung in the draw itself`. When the draw before is in
+  another submission, the presenter's work on the queue between the two is not counted: the line
+  names both submissions and only says "it hung in the draw itself" when the marker proves it.
+  NVIDIA's checkpoints get no verdict (they say where they got, not what finished). What counts
+  as work: render pass begins and ends, draws,
+  dispatches, barriers, copies, attachment clears, query commands, conditional rendering, hoist
+  points (where the uploads moved before the render pass run) and upscaling passes. The draw
+  command itself does not count. With the setting off nothing of this is recorded, and the second
+  line only names the setting.
 
-  Checked on an RX 9060 XT (RADV, free roam at 720p, 2026-11-15) with a stream dump of one
-  frame (a local debug build, not in the SDK): 125 of its 3851 guest draws had work of their own
-  and got the marker, each right before its draw command and after that work (mostly a new
-  render pass after a resolve: `R b c r x`); the other 3726 followed another draw with nothing
-  in between. `FORZA_TEST_GPU_LOSS_AT_FRAME` logged the line (`render pass 0x0000038E (4x, depth
-  D24FS8, color 0 2_10_10_10_FLOAT); recorded before the draw command: nothing; nothing else was
-  recorded after #43510445: it hung in the draw itself`; the loss is simulated, so the GPU was
-  only behind, not hung); with the setting off the line ended `recorded before the draw command: 1
-  render pass, 1 dispatch, 3 barriers, 1 copy; in that work or in the draw:
-  gpu_device_lost_setup_breadcrumbs tells them apart`. GPU time a frame over the same free roam
-  minute (`fh1_gpu_profile`, three runs each, up to 240 fps): 3.770 ms off, 3.815 ms on, a
-  difference within the runs' noise (+0.044 ms, standard error 0.065 ms): 125 markers a frame next
-  to the 3950 the draws and resolves already have.
+  Checked on an RX 9060 XT (RADV, 2026-11-23) with local debug builds that are not in the SDK:
+  in a stream dump of one free roam frame, 121 of its 2,778 guest draws had work of their own and
+  got the marker, each right before its draw command, with no mismatches. 77,538 reads of the two
+  markers while the game ran never found the marker before a draw ahead of the unfinished one, nor
+  at a draw without work. Two real stalls of the GPU, released from the host after about 50 ms
+  (no reset), checked the verdicts: with the GPU stopped in the work before a draw, the marker
+  before the draw still held an older number ("did not finish that work"); stopped right after a
+  marked draw's draw command, it held the draw's own number ("it hung in the draw itself").
+  `FORZA_TEST_GPU_LOSS_AT_FRAME` logged the line with the setting on (the GPU was only between
+  two submissions, so no verdict) and the short line with it off.
+
+  Cost. Off, the hot paths keep main's shape (checked in the disassembly): the command buffer
+  tests its two flags with one 16-bit compare and a branch (2 instructions, where main's own test
+  took 7), `Trail::Record` is the same, and each draw tests the setting twice. In the benchmark
+  race (1280x720, three rounds in turn, each run alone) the frame rate followed the other load on
+  the PC (ReIGlue main alone ranged from 116 to 182 fps), so it cannot tell the three apart. The
+  CPU time per frame can: the command processor's thread took 2.48 ms with ReIGlue main, 2.54 ms
+  with the setting off and 2.57 ms with it on (run-to-run spread 0.11-0.21 ms), its recorder
+  thread 4.83, 4.56 and 4.77 ms, the whole game 17.9, 17.4 and 17.9 ms: no difference beyond the
+  spread. On, the extra GPU work is one marker per draw that had work of its own (about 4% of the
+  draws); an earlier version that marked the same draws measured +0.04 ms of GPU time per frame
+  (standard error 0.07 ms).
 - **Direct3D 12**: DRED (auto-breadcrumbs, page faults) is on without the debug layer. The log
   names the operation each unfinished command list was on (`DrawIndexedInstanced (draw 412 of
   the list's 980)`), the four before it, and the allocations at a page fault's address.
