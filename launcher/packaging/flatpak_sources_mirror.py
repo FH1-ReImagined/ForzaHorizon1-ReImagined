@@ -56,14 +56,16 @@ public domain (CC0); pysdl2-dll carries SDL2 under the zlib license; certifi is 
 Public License 2.0.
 """
 
+BLOCK_LIST_ONLY = 'write sources as a block list, one "- " item a source, one key a line'
 
 def parse_sources(text):
     """[{"type", "url", "sha256", "mirror-urls", "line"}] for each source of the manifest that has
     a url. Reads the manifest's own style of YAML (block lists, "key: value", flow lists in []).
 
     Every item of every "sources:" list is a source, whatever key it starts with. A "url:" line
-    anywhere in the file that isn't a source's own url stops the run, so a source the parser
-    can't read is never skipped without a word."""
+    anywhere in the file that isn't a source's own url stops the run, and so does a "sources:"
+    list in flow style ([{...}], on one line or several), so a source the parser can't read is
+    never skipped without a word."""
     sources, current, list_key = [], None, None
     sources_indent = item_indent = key_indent = None
     own_url_lines, nested_lines = set(), set()
@@ -77,9 +79,14 @@ def parse_sources(text):
                 indent < sources_indent or (indent == sources_indent and not stripped.startswith("- "))):
             sources_indent = item_indent = key_indent = current = list_key = None
         if sources_indent is None:
-            if re.fullmatch(r"(- +)?sources:", stripped):
+            match = re.fullmatch(r"(- +)?sources:(.*)", stripped)
+            if match and match.group(2).strip() not in ("", "[]"):
+                raise SystemExit(f"line {number}: {BLOCK_LIST_ONLY}")
+            if match and not match.group(2).strip():
                 sources_indent = indent + (len(stripped) - len(stripped.lstrip("- ")))
             continue
+        if item_indent is None and not stripped.startswith("- "):
+            raise SystemExit(f"line {number}: {BLOCK_LIST_ONLY}")
         if stripped.startswith("- ") and (item_indent is None or indent == item_indent):
             item_indent, list_key = indent, None
             body = stripped[2:].strip()
