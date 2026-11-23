@@ -46,6 +46,16 @@ which is advanced with the insertions. Stock tuning uses the native -1 sentinel;
 stock part IDs are resolved through the upgrade tables, rather than borrowed
 from an existing car. Existing liveries and thumbnails are not copied to new cars.
 
+## A car whose paint job file is missing (#922)
+
+The editor's cars have no paint job file (`LiveryFileName` ''), only their factory colour. A
+garage row that names a paint job file the profile doesn't have (or an empty one) used to close
+the game at Get In Car (and as free roam loaded, when it was the current car): "read of guest
+0x98". The game now gives such a car its factory paint, clears that row's `LiveryFileName` (the
+`.liv` file, if any, is left alone) and logs `Cars: garage car <id> (car <car id>): its paint job
+file could not be loaded; it gets its factory paint ... (#922)`. The save keeps the cleared column
+the next time the game saves. Details: [PROJECT.md](PROJECT.md) (status log, #922).
+
 ## PlayerDatabase format
 
 The outer file is `cmss`, a big-endian used-size word, a 32-byte HMAC-SHA256,

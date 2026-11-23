@@ -124,6 +124,38 @@ Leaderboard screens, Windows and Steam Deck are not scripted: a hand run in the 
 
 ## Status log
 
+- 2026-11-23: **A garage car whose paint job file can't be loaded gets its factory paint at Get
+  In Car instead of closing the game (#922).** A player's Mazda MX-5 Superlight (added with the
+  save editor) closed the game at Get In Car, from Car Select and from View Car, with "read of
+  guest 0x98", lr `82D57C0C` (TU4). Making a garage car the current car (TU4 `sub_825E7720`,
+  disc `sub_825718D8`; also the current car when free roam loads) turns the paint job handle the
+  car's description keeps (a `CCarLiveryResource`) into its driving variant (TU4 `sub_82D5D538`,
+  type 6, flags 0x80000, call at `825E77D8`). That needs the paint job loaded; `sub_82D0CAD0`
+  returns nothing when its load failed (state byte +40 == 6) and the caller reads field +0x90 of
+  nothing. A paint job is the factory colour (`LiveryFileName` '') or a file of the profile
+  (`Liveries\<garage id>.liv`); the file's load fails when the profile has no such file or it
+  is empty. Reproduced with copies of golden-save-tu4 (TU4, Linux, offline): a copy of the
+  editor's MX-5 row with `LiveryFileName` naming a file that isn't there closed the game at Get
+  In Car with the player's fault and the player's chain from Car Select (`82789160 827BCDDC
+  827C0C4C ...`) and from View Car (`82715968 82720604 ...`); View Car itself works. A 0-byte
+  file did the same; a file of another car loads (that car's paint); an existing file with
+  `LiveryFileName` '' is not used. With the current car's row naming a missing file, main
+  closed the game as free roam loaded (same fault). The save editor writes `LiveryFileName` ''
+  and its seven cars got in from Car Select (and the MX-5 from View Car) without a fallback on
+  main and on the fix; how the player's row came to name a file is not known.
+  `src/hooks/car_livery_fallback.cpp` looks at that one call (disc `82571990`, TU4 `825E77D8`):
+  when the handle's paint job failed (the game's WaitForLoad, disc `sub_82412688`), it clears a
+  failed file's `LiveryFileName` (the game's own `UPDATE %s SET LiveryFileName='' WHERE Id=%u`
+  on the profile database, disc `*0x832E5510`), makes the driving paint job the way the caller's
+  own fresh branch does (disc `sub_82547EB8` with the career car table, the garage id and
+  0x80000) and releases the handle, with a warning naming the garage id and the car
+  (`tests/car_livery_fallback_test.cpp`). Every other case runs the game's call unchanged. Checked
+  (TU4): the missing-file and 0-byte rows get in with the factory paint (white MX-5, driven in
+  free roam), a second Get In logs nothing (the column is clear), and after QUIT the saved
+  PlayerDatabase has `LiveryFileName` '' for that row; the save whose current car names a missing
+  file loads into free roam with the factory-orange Aventador; the seven unicorns and the cars
+  around them get in as before with no warning.
+
 - 2026-11-15: **Changing cars from the Native pause menu no longer stops the game (#857).**
   Both player logs stop on purpose in the memory manager's allocation loop (TU4 `sub_82423000`):
   a store to guest 5 (no block big enough) on the resource loader's thread, heap `r30=0x83396AF0`

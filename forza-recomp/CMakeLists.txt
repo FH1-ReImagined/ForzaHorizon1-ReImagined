@@ -169,6 +169,7 @@ set(FORZA_SOURCES
     src/hooks/festival_travel.cpp
     src/hooks/car_recovery.cpp
     src/hooks/car_part_fallback.cpp
+    src/hooks/car_livery_fallback.cpp
     src/hooks/native_car_tuning.cpp
     src/hooks/native_car_tuning_menu.cpp
     src/hooks/gpu_wait.cpp
