@@ -95,6 +95,8 @@ jobs:
         run: python -m unittest discover -s tools -p 'test_fm4_stream_lead.py' -v
       - name: FM4 circuit command-buffer fixups (#648)
         run: python -m unittest discover -s tools -p 'test_fm4_pvs.py' -v
+      - name: FM4 circuits' CAFF textures as .bix pairs (made-up textures, no game files)
+        run: python -m unittest discover -s tools -p 'test_fm4_caff.py' -v
       - name: FM4 circuits' collision (made-up cells and surface lists, no game files, #876)
         run: python -m unittest discover -s tools -p 'test_fm4_col.py' -v
       - name: Resource hook audit tests (synthetic images)
@@ -910,6 +912,9 @@ jobs:
   # The Linux Flatpak: the launcher run by the freedesktop SDK 26.08 (which also builds the game on
   # the player's machine, with the SDK's LLVM extension), the project sources and the patched SDK
   # pieces of sdk-linux. Also holds no game code. Built with flatpak-builder in the flathub image.
+  # Every source the manifest downloads has a copy in the pre-release ci-flatpak-sources
+  # (flatpak-sources-mirror.yml), its mirror-urls entry: flatpak-builder takes it when the source's
+  # own host fails, with the same sha256 check.
   flatpak:
     needs: sdk-linux
     runs-on: ubuntu-24.04
@@ -937,7 +942,7 @@ jobs:
         run: |
           v="${GITHUB_REF_NAME#v}"; [ "$GITHUB_REF_TYPE" = tag ] || v="0.0.0-dev.$(echo "$GITHUB_SHA" | cut -c1-7)"
           # the SDK's license (BSD-3-Clause), reproduced with its patched pieces; the pinned commit of pins.SDK_TAG
-          curl -fsSL -o rexglue-sdk-LICENSE https://raw.githubusercontent.com/rexglue/rexglue-sdk/bd833a2ab69d305f99ddf57418fc38ffec8af93d/LICENSE
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 -o rexglue-sdk-LICENSE https://raw.githubusercontent.com/rexglue/rexglue-sdk/bd833a2ab69d305f99ddf57418fc38ffec8af93d/LICENSE
           python3 flatpak/stage.py --overlay overlay/rexglue-overlay-linux-amd64.tar.gz \
             --sdk-license rexglue-sdk-LICENSE --version "$v"
       - uses: flatpak/flatpak-github-actions/flatpak-builder@aa777012a985fe1b1fd3e66ea2173609cf0c9a70 # v6.8

@@ -9,6 +9,7 @@ import unittest
 from unittest import mock
 
 import fm4_pvs
+import test_fm4_caff
 from fm4_pvs import HexGrid, insert_fetch_constant, pass_groups
 
 
@@ -85,6 +86,7 @@ class ZoneReach(unittest.TestCase):
         rnd = random.Random(824)
         self.points = [(rnd.uniform(0, 1200), rnd.uniform(0, 900)) for _ in range(1500)]
         self.patches = [mock.patch.object(fm4_pvs, name, False) for name in ("VISIBLE", "SKY", "GROUND")]
+        self.patches.append(mock.patch.object(fm4_pvs, "FAR_NEAR", 0.0))  # ZoneFarReach has it
         for p in self.patches:
             p.start()
 
@@ -169,6 +171,53 @@ class ZoneReach(unittest.TestCase):
         self.assertIn("FM4_PVS_ZONE_REACH", bad.stderr)
 
 
+class ZoneFarReach(unittest.TestCase):
+    """The reach tried first (FAR_NEAR): the six neighbours' and the next ring's within 400 m."""
+    convert = ZoneReach.convert
+    near = ZoneReach.near
+
+    def setUp(self):
+        ZoneReach.setUp(self)
+        self.far = mock.patch.object(fm4_pvs, "FAR_NEAR", 400.0)
+        self.far.start()
+
+    def tearDown(self):
+        self.far.stop()
+        ZoneReach.tearDown(self)
+
+    def whole_neighbours(self):
+        with mock.patch.object(fm4_pvs, "FAR_NEAR", 0.0):
+            return self.convert("neighbours")
+
+    def test_the_next_ring_within_far(self):
+        whole, grid = self.whole_neighbours()
+        held, grid2 = self.convert("neighbours")
+        self.assertEqual(self.reach, "their own and their neighbours' instances and the next ring's within 400 m")
+        self.assertEqual(grid.cells, grid2.cells)
+        for k, cell in enumerate(grid.cells):
+            self.assertLessEqual(whole[k], held[k])
+            # 1 m pieces (reach 1.41): nothing past 400 m of the centre; the two rings hold
+            # everything within 340 m (a third-ring hex's corner comes within 350 m)
+            self.assertLessEqual(held[k] - whole[k], self.near(grid, cell, 401.5))
+            self.assertLessEqual(self.near(grid, cell, 340.0), held[k])
+        self.assertGreater(sum(map(len, held)), 1.5 * sum(map(len, whole)))
+
+    def test_falls_back_to_the_six_when_the_pool_is_too_small(self):
+        whole, _ = self.whole_neighbours()
+        asked = []
+        held, _ = self.convert("neighbours", lambda zones, grid: asked.append(1) or len(asked) > 1)
+        self.assertEqual(len(asked), 2)
+        self.assertTrue(self.reach.startswith("their own and their neighbours' instances (the next ring's "
+                                              "within 400 m too: over"))
+        self.assertEqual(held, whole)
+
+    def test_every_reach_tried_before_own_alone(self):
+        asked = []
+        self.convert("neighbours", lambda zones, grid: asked.append(1) and False)
+        self.assertEqual(len(asked), 2 + len(fm4_pvs.NEIGHBOUR_NEAR))
+        self.assertTrue(self.reach.startswith("their own instances (with their neighbours'"))
+
+
 class StreamPool(unittest.TestCase):
     def test_blocks_of_a_zone_and_its_neighbours(self):
         grid = HexGrid([(0, 0), (500, 400)], 100)
@@ -196,7 +245,7 @@ class GroundCopyInTheReach(unittest.TestCase):
 
     def setUp(self):
         for name, value in (("VISIBLE", False), ("SKY", False), ("GROUND", True),
-                            ("GROUND_LAYER", "copy"), ("STREAM_MARGIN", 1.0)):
+                            ("GROUND_LAYER", "copy"), ("STREAM_MARGIN", 1.0), ("FAR_NEAR", 0.0)):
             p = mock.patch.object(fm4_pvs, name, value)
             p.start()
             self.addCleanup(p.stop)
@@ -252,6 +301,29 @@ class GroundCopyInTheReach(unittest.TestCase):
                 self.assertNotEqual(reach, "their own and their neighbours' instances")
             reach, need, _ = self.convert(d, "neighbours", full)
             self.assertEqual(reach, "their own and their neighbours' instances")
+
+
+class CaffTextures(unittest.TestCase):
+    def test_records_get_flag_4_and_files_change(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "_0x0000031E.bin"), "wb") as f:
+                f.write(test_fm4_caff.caff(gpu=test_fm4_caff.solid_dxt5(65536)))
+            with open(os.path.join(d, "_0x00000007.bin"), "wb") as f:
+                f.write(test_fm4_caff.caff(kind=2, gpu=b"\0" * 65536))       # a cube map: left
+            with open(os.path.join(d, "_0x00000006.bin"), "wb") as f:
+                f.write(test_fm4_caff.caff(gpu=test_fm4_caff.solid_dxt5(65536)))
+            files = ["_0x0000031E.bin", "_0x00000007.bin", "_0x00000006.bin"]
+            F = {"textures": [(0x31E, 399, 1.0, 1.0, 0.0, 0.0, 0), (0x31E, 399, 1.0, 1.0, 0.0, 0.0, 8),
+                              (0x7, 5, 1.0, 1.0, 0.0, 0.0, 0), (0x6, 6, 1.0, 1.0, 0.0, 0.0, 0)],
+                 # model 1 is the second sky dome (an always-drawn instance after the first):
+                 # not drawn, so its texture is left
+                 "models": [{"textures": [0, 1, 2]}, {"textures": [3]}],
+                 "instances": [{"model": 0}, {"model": 0}, {"model": 1}],
+                 "always": [0xFFFF, 1, 2], "dynamic": []}
+            self.assertEqual(fm4_pvs.caff_textures(d, files, [F]), {0x31E})
+            self.assertEqual(sorted(files), ["_0x00000006.bin", "_0x00000007.bin", "_0x0000031E.bix", "_0x0000031E_B.bix"])
+            self.assertEqual([t[6] for t in F["textures"]], [4, 8, 0, 0])
+            self.assertEqual(sorted(os.listdir(d)), ["_0x00000006.bin", "_0x00000007.bin", "_0x0000031E.bix", "_0x0000031E_B.bix"])
 
 
 if __name__ == "__main__":
