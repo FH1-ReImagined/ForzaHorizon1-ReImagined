@@ -39,7 +39,11 @@
 # Environment: FORZA_XENIA_CONTENT (default ~/xenia_canary_windows/content), FORZA_XUID (the Xenia
 # profile; default the only one with a Forza Horizon save), PRERELEASE_JOBS (ninja jobs, default 4),
 # FORZA_RENDER_BASELINES (default ~/.local/share/forza-render-baselines), PRERELEASE_RENDER_FLAGS.
-# Only starts processes it stops again; one game at a time.
+# Only starts processes it stops again; one game at a time. The games (boot, server, render) run
+# from a copy of the build folder with the settings of tools/prerelease_forza.toml, never with the
+# build folder's forza.toml (the player's settings when they play from that build), and offline
+# unless a check runs its own server (#846, tools/prerelease_game.sh): nothing in the build folder
+# is set aside or changed.
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -53,6 +57,9 @@ BUILD_ROOT="$ROOT/forza-recomp/out/build"
 JOBS="${PRERELEASE_JOBS:-4}"
 CONTENT="${FORZA_XENIA_CONTENT:-$HOME/xenia_canary_windows/content}"
 TITLE=4D5309C9
+. "$ROOT/tools/prerelease_game.sh"
+# The driver's shader cache of the games, kept between runs (never the player's ~/.cache).
+PRERELEASE_XDG_CACHE="$STATE/xdg-cache"
 SERVER_PORT=21310
 SERVER_HTTP=21311
 
@@ -153,7 +160,7 @@ xuid_of_save() {
 
 cleanup_game() {
     local g
-    [ -n "$GAME_PID" ] || return 0
+    [ -n "$GAME_PID" ] || { prerelease_drop_game "$GAME_DIR"; return 0; }
     g=$(pgrep -P "$GAME_PID" | head -1)
     kill -INT "$GAME_PID" 2>/dev/null
     for _ in $(seq 1 20); do kill -0 "$GAME_PID" 2>/dev/null || break; sleep 0.5; done
@@ -161,6 +168,7 @@ cleanup_game() {
     kill -0 "$GAME_PID" 2>/dev/null && kill -9 "$GAME_PID" 2>/dev/null
     for _ in $(seq 1 20); do { [ -n "$g" ] && kill -0 "$g" 2>/dev/null; } || break; sleep 0.5; done
     GAME_PID=""
+    prerelease_drop_game "$GAME_DIR"   # the run's copy of the build (its logs stay)
     for shm in /dev/shm/xenia_memory_*; do   # only our own orphans (no process maps them)
         [ -O "$shm" ] || continue
         grep -qs "$(basename "$shm")" /proc/[0-9]*/maps || rm -f -- "$shm"
@@ -187,8 +195,9 @@ game_run() {
         --fh1_native_scene_scale=2 --resolution_scale=2 --fh1_output_width=2560 --fh1_output_height=1440)
     [[ "$build" == *tu4* ]] && args+=(--update_data_root="${FORZA_UPDATE:-$ROOT/extracted/tu4}")
     GAME_DIR="$d"
-    env "$@" FORZA_BUILD="$build" FORZA_XUID="$xuid" FORZA_FPSLOG=1 FORZA_LOG_LEVEL=info \
-        tools/live_session.sh "$d" 200 "${args[@]}" || return 1
+    # A copy of the build with the checks' own forza.toml, offline unless FORZA_SERVER is given
+    prerelease_start_game "$d" "$BUILD_ROOT/$build" 200 "$@" FORZA_BUILD="$build" FORZA_XUID="$xuid" \
+        FORZA_FPSLOG=1 FORZA_LOG_LEVEL=info -- "${args[@]}" || return 1
     GAME_PID="$(cat "$d/pid")"
     # wait for the first frames of the title screen (the log says when the game presents)
     local i
@@ -302,7 +311,11 @@ check_render() {
     flags=(${PRERELEASE_RENDER_FLAGS:-})
     # The tool refuses a path that goes through a symlink (/home is one on this machine): resolved here.
     rep="$(realpath -m "$LOG")/render-report"
+    # The game data as the boot check's (tools/live_session.sh), resolved too: a worktree's
+    # extracted/ is often a link to the main checkout's.
     python3 tools/render_test.py check --baselines "$base" --build "$build" --report "$rep" --retries 2 \
+        --game-data "$(realpath -m "${FORZA_DATA:-$ROOT/extracted/game}")" \
+        --update-data "$(realpath -m "${FORZA_UPDATE:-$ROOT/extracted/tu4}")" \
         ${flags[@]:+-- "${flags[@]}"}
     rc=$?
     if [ -f "$rep/report.json" ]; then

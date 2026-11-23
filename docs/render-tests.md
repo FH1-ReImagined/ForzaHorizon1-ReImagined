@@ -93,7 +93,9 @@ copy of the stored save as its only `--user_data_root`, so the player's settings
 Mesa shader cache are never read or written. The SDK reads its settings from `forza.toml`
 next to the executable, and the launcher writes the player's there when they play from that
 build folder (world detail, ambient occlusion, the Forza Live server): so the game runs from
-`game/` in its run folder, hard links of the build folder's files without `forza.toml`. Before
+`game/` in its run folder, hard links of the build folder's files with a copy of
+`tools/prerelease_forza.toml` (offline, no Discord activity, everything else the defaults) as
+its `forza.toml`; the prerelease boot and server checks run the same way (#846). Before
 that, such a file changed every free roam scene and brought Forza Live's messages and photo
 mode's Big Shot line into them. The game's shader cache and Mesa's are kept
 between runs in `~/.cache/forza-render-tests` (`--work DIR` or `FORZA_RENDER_WORK`), and the

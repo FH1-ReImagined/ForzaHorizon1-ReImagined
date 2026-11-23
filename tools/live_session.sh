@@ -8,6 +8,9 @@
 #   DIR/dump.trigger dumps the next front buffer from guest memory instead.
 #
 # Environment: REXSDK, FORZA_BUILD, FORZA_DATA, FORZA_LOG_LEVEL as in tools/run_forza.sh.
+# FORZA_GAME_DIR: the folder to run ./forza from instead of the FORZA_BUILD build folder (the
+# SDK reads forza.toml next to the executable; tools/prerelease_game.sh passes a copy of the
+# build with its own settings).
 # Refuses to start with less than 10 GB of available memory (FORZA_IGNORE_MEM=1 skips).
 # The game runs in the background; stop it with kill -INT on the PID in DIR/pid (the
 # `timeout` wrapper; the game is its child). Never use pkill -f.
@@ -39,7 +42,7 @@ mkfifo "$DIR/in.fifo"
 DEFAULT_SDK="$HOME/rexglue-sdk-patched-forza/0.10.0.24/linux-amd64"
 [ -d "$DEFAULT_SDK/lib" ] || DEFAULT_SDK="$HOME/rexglue-sdk-patched/0.10.0.24/linux-amd64"
 [ -d "$DEFAULT_SDK/lib" ] || DEFAULT_SDK="$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64"
-cd "$ROOT/forza-recomp/out/build/${FORZA_BUILD:-linux}"
+cd "${FORZA_GAME_DIR:-$ROOT/forza-recomp/out/build/${FORZA_BUILD:-linux}}" || exit 1
 SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT=0x0000/0x0000 SDL_JOYSTICK_IGNORE_DEVICES_EXCEPT=0x0000/0x0000 \
 FORZA_AUTOPRESS="${FORZA_AUTOPRESS-}" FORZA_AUTOPRESS_FIFO="$DIR/in.fifo" \
 FORZA_FRAMEDUMP_TRIGGER="$DIR/dump.trigger" FORZA_FRAMEDUMP_DIR="$DIR" \

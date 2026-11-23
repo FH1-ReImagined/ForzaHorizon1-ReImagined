@@ -126,8 +126,13 @@ class HelperTests(unittest.TestCase):
             if os.name != "nt":
                 (build / "update").symlink_to(build / "texcompress")
             game = rt.stage_build(build, Path(t) / "game")
-            self.assertEqual(sorted(p.name for p in game.iterdir()), ["forza", "librexgpu-xenos.so"])
+            self.assertEqual(sorted(p.name for p in game.iterdir()),
+                             ["forza", "forza.toml", "librexgpu-xenos.so"])
             self.assertEqual((game / "forza").read_text(), "forza")
+            # The release checks' own settings in its place, a file of its own (#846)
+            self.assertEqual((game / "forza.toml").read_bytes(), rt.CHECK_TOML.read_bytes())
+            self.assertEqual((build / "forza.toml").read_text(), "forza.toml")
+            self.assertEqual((build / "forza.toml").stat().st_nlink, 1)
             (build / "forza").unlink()
             with self.assertRaises(ValueError):
                 rt.stage_build(build, Path(t) / "game2")

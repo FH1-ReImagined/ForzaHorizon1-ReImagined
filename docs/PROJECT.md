@@ -111,6 +111,12 @@ run here and says why), the last 30 lines of a failing check's log, full logs in
 | launcher | the launcher as a frozen build runs it (foreign `LD_LIBRARY_PATH`, #53): AES helper, default.xex and facades out of the disc image (`--iso`, default `HorizonISO/*.iso`) |
 | ci | `--ci`: `gh workflow run release.yml` (artifacts only) and wait for it; prints the run id |
 
+The boot, server and render games run from a copy of the build folder (hard links) with
+`tools/prerelease_forza.toml` as their `forza.toml`, scratch XDG folders and offline unless the
+check runs its own server (#846, `tools/prerelease_game.sh`): the build folder's `forza.toml`
+(the player's settings when they play from that build) is never read, moved or changed, so a
+release run on a PC that also plays from that build needs nothing set aside.
+
 Leaderboard screens, Windows and Steam Deck are not scripted: a hand run in the VM / on the device.
 
 ## Hard rules
