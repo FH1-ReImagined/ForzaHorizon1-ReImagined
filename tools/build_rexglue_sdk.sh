@@ -101,6 +101,8 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # output have no comb edges (#905).
 # and 1130: with Gears need the clutch and the clutch up, a lever that reads another gear or no gear for
 # under 50 ms keeps the gear instead of dropping the car to neutral; the lever's reads are logged (#952).
+# and 1140: the same on Direct3D 12 (its HLSL copy of the shader and the DXBC), so pictures there have
+# no comb edges either (#962).
 # A reviewed full commit can be pinned before a maintainer publishes a tag.
 # When a tag is supplied, its target must still match this immutable commit.
 REIGLUE_TAG=

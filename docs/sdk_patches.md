@@ -1060,7 +1060,7 @@ pixels, as 1000 does on the fractional raster for both formats. The photo and it
 is for comparisons; car thumbnails keep the average either way. Signed or integer values, an 8in64
 or 8in128 swap, other formats and depth keep point sampling. At render scale 1 no
 downscale runs (the copy is a plain buffer copy), so nothing changes there. Direct3D 12's copy of
-the shader has the same addressing and is not changed (#962).
+the shader had the same addressing; 1140 (below) fixes it (#962).
 
 `tools/test_vulkan_thumbnail_readback.py` now checks the point and centre samples too: 81 of 81
 cases with 1120, 45 of 81 with the shader before (27 of 27 box filter cases with both).
@@ -1102,3 +1102,24 @@ without the clutch, then the clutch; 3 > 4 with it; neutral at once with the clu
 at 0; and a lever in neutral that reads 4th once every 100 ms, which is neutral after the hold and
 engages nothing when the clutch then goes down. ReIGlue's `tests/wheel_gear_transit_test.cpp` has
 the same cases.
+
+## ReIGlue 1140: the same on Direct3D 12 (#962)
+
+With `gpu_backend = "d3d12"` (ReIGlue's Direct3D 12 backend, not ReGPU), the copy to guest memory
+at a render scale downscales with its own copy of the shader, `resolve_downscale.cs.hlsl`, compiled
+to DXBC (`bytecode/d3d12_5_1/resolve_downscale_cs.h`). It had the same contiguous-block addressing,
+so the same pictures had the same comb edges. 1140 ports 1120 to it: the point and centre samples
+address the host quads at every pixel size, and unsigned 8:8:8:8 and 2:10:10:10 color copies take
+the box filter under the same condition and constant bits as on Vulkan.
+`d3d12_readback_box_filter=false` (default on) takes one host pixel instead, for comparisons. The
+copy also reads the scaled resolve from the written extent's first tile, as Vulkan does, instead of
+from the base of the resolve's range. The two differ for an 8- or 16-bit copy whose first tile is
+off the base's coarser granularity and for a copy to a slice other than 0. FH1's 32-bit pictures
+have the two equal. Render scale 1 runs no downscale and is unchanged.
+
+The DXBC comes from FXC 10.0.26100 (`/T cs_5_1 /E main /O3 /all_resources_bound /Qstrip_reflect
+/Qstrip_debug /Qstrip_priv`), formatted with the repository's clang-format. The same command
+rebuilds the old header byte for byte. The HLSL, and the DXBC itself run on Direct3D 12 through
+vkd3d-proton, pass all of 1120's layout cases (scales 1 to 4 and 7 for 32-bit pixels). The
+pictures in the game on Direct3D 12 are in
+[rendering.md](rendering.md#direct3d-12-962).
