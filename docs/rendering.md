@@ -1066,6 +1066,84 @@ stage, and the benchmark without a frame cap. ReIGlue's Direct3D 12 backend has 
 split (no fractional raster in its code), so it has no such copy; it was not run, and neither
 was ReGPU (its own renderer, which offers FSR 1 only).
 
+## Comb edges at render scale 2 (#905)
+
+A picture the game reads on the CPU at render scale 2 or a 1440p output had comb edges: fine
+vertical detail and the logo's edges jagged in pairs of columns. That covers a saved photo and its
+thumbnail, a Big Shot's tiles and a replay movie's frames. At a 1080p output with SMAA or FSR 3, the
+pictures drawn in the scene layer had it too (a Big Shot); the ones 1000 copies from the HUD layer's
+fractional raster did not (#879). The copy to guest memory downscales the scaled resolve with
+`resolve_downscale.cs.glsl`, whose point sample took guest pixel i's host pixels as one contiguous
+block. The scaled resolve stores each 16-byte guest quad as scale_x * scale_y host quads, a column
+of scale_y after the other ([Scaled storage layout correction](#scaled-storage-layout-correction-336)),
+so at render scale 2 guest columns 4k and 4k+1 got host column 8k (rows 2y and 2y+1), and 4k+2 and
+4k+3 host column 8k+4. ReIGlue 1120 ([sdk_patches.md](sdk_patches.md#reiglue-1120-pictures-at-render-scale-2-without-comb-edges-905))
+addresses the quads at every pixel size, and gives unsigned 8:8:8:8 and 2:10:10:10 color copies
+the box filter (the average of each guest pixel's host pixels, as 1000 does). The photo and its
+thumbnail are 8:8:8:8; a Big Shot's front buffers and the movie's frames are 2:10:10:10.
+
+The measure is the mean step between pixel columns x and x+1 at odd x divided by the step at even
+x (RGB, over the whole picture). A clean picture is about 1.00; a copy that takes one host column
+for two guest columns is about 2. For the movies it is taken on luma only, leaving out the steps
+across VC-1's 8-pixel block edges (4:2:0 chroma changes every second column), as the median of
+every 15th frame. TU4, Linux, RX 9060 XT (RADV), the same game build with ReIGlue main's plugin
+(44c896c, before 1110) and with 1120 on it (since rebased onto 1110, which changes none of its
+lines), free roam on a copied save, the photo saved and uploaded to a local server:
+
+| Picture | Settings | ReIGlue main | With 1120 |
+|---|---|---|---|
+| Photo (1280x720 JPEG) | render scale 2, 1080p output | 1.94 | 1.04 |
+| Thumbnail (416x240) | render scale 2, 1080p output | 1.81 | 1.00 |
+| Big Shot (3840x2160) | render scale 2, 1080p output | 1.86 | 1.00 |
+| Photo | FSR 3 Quality, 1440p output | 2.20 | 1.05 |
+| Thumbnail | FSR 3 Quality, 1440p output | 1.85 | 1.00 |
+| Big Shot | FSR 3 Quality, 1440p output | 2.07 | 1.00 |
+| Big Shot | SMAA, 1080p output | 1.87 | 1.00 |
+| Photo and thumbnail | SMAA, 1080p output (copied by 1000) | 1.16, 1.15 | 1.16, 1.14 |
+| Replay movie, LARGE 15 s (1280x720) | render scale 2, 1080p output | 1.63 (1.38 to 2.17) | 1.03 (1.01 to 1.16) |
+| Replay movie, LARGE 15 s | FSR 3 Quality, 1440p output | 1.58 (1.38 to 2.32) | 1.03 (1.01 to 1.08) |
+| Replay movie, LARGE 15 s | default settings | 1.03 (1.00 to 1.11) | 1.03 (1.01 to 1.06) |
+| Photo, thumbnail, Big Shot | default settings (720p); 1080p output, render scale 1 | 1.03, 0.99, 1.00; 1.03, 1.00, 1.00 | 1.03, 1.00, 1.00; 1.03, 1.00, 1.00 |
+
+With `vulkan_readback_box_filter=false` at render scale 2 the comb is gone as well (photo 1.03,
+thumbnail 0.99, Big Shot 1.00), and the pictures are sharper than with the average: the mean step
+between columns is 5.00 against 4.53 in the photo, 8.28 against 6.83 in the thumbnail and 3.50
+against 3.00 in the Big Shot.
+
+At render scale 1 the copy never reaches the downscale: it is a buffer copy from shared memory, the
+same commands as before, so its pictures and its cost cannot change. The pictures of two runs
+differ anyway, as the time of day and the traffic move on: two runs of main at default settings
+differ by 2.18 of 255 on average in the photo, main and 1120 by 1.91.
+
+The shader alone, on a scaled resolve buffer packed in that layout with the CPU Vulkan driver and
+on the RX 9060 XT (scales 1 to 3 on each axis, source offsets 0, 16 and 256 bytes, one and two
+tiles): 32-bit point, centre and box sampling (8:8:8:8, and 2:10:10:10 at each endianness up to
+16in32) 189 of 189 cases right, 8-, 16- and 64-bit point and centre 162 of 162. The old shader got
+45 of its 81 32-bit cases and 66 of the 162 others right, and every copy at scale 1 is byte for
+byte the old shader's (27 cases). Against 1000's copy run at an integer raster with real tiling,
+the centre sample and both box filters match it, but for at most 1 in the last bit at 6 host
+pixels a guest pixel (1000 rounds in floats). `tools/test_vulkan_thumbnail_readback.py`, which
+packs its data on its own, gives 81 of 81 and 45 of 81 (27 of 27 box filter cases with both).
+
+Cost, measured with the PC to itself (benchmark lock, no other game), standing 100 s in free roam
+at a 60 fps cap with `fh1_gpu_profile` and the frame cost CSV. At render scale 1 the readbacks'
+GPU time rounds to 0.00 ms a frame in every 20 s report with both plugins (all of the command
+processor's GPU work 5.57 to 5.72 ms a frame on main, 5.58 to 5.82 with 1120). The readback
+path's CPU time is 0.0058 against 0.0041 ms a frame over the session (7.6 KB a frame copied back),
+which is noise: the scale 1 copy runs the same commands. At render scale 2 it is 0.0085 against
+0.0073 ms, and the GPU work 13.8 to 14.7 against 13.7 to 14.0 ms. The shader alone, a 1280x720
+copy between host-visible buffers on the RX 9060 XT (200 dispatches, three rounds), takes 210 to
+212 us at scale 1 and 593 to 594 us at scale 2 for each of main's point sample, the new one, the
+RGBA8 box filter and the 2:10:10:10 one: the copy is bound by memory, not by the four reads.
+
+`tools/render_test.py check` (render scale 1, the same game build): 6 of 6 scenes with 1120, and
+4 of 6 with main's plugin right before it (free roam at dawn and photo mode's camera failed, two of
+the scenes #960 has failing at random on main).
+
+Not run: NVIDIA, Windows, DLSS and DLAA, render scale 3, a WEB (640x360) movie at these settings, car
+pictures. Direct3D 12 (ReIGlue's backend) has the same addressing in its own copy of the shader
+and is not changed (#962).
+
 ## Festival video flashes purple (#91, open)
 
 Report: RX 9070 XT, Windows 11, Vulkan, v0.1.12, `frame_rate` 240, render scale 2, AF 16x,

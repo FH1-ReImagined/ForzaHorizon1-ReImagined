@@ -1006,3 +1006,35 @@ ReIGlue's `tests/shared_memory_watch_test.cpp` plays the release, late read, all
 against the real guest memory. The calls #895 added after its chunk allocations (`fm4_track.cpp`,
 `fixed_gpu_heap.cpp`: `EnablePhysicalMemoryAccessCallbacks`, then `TriggerPhysicalMemoryCallbacks`)
 now repeat what the allocation does and can go.
+
+## ReIGlue 1120: pictures at render scale 2 without comb edges (#905)
+
+With a draw resolution scale, the copy of a resolve to guest memory (`readback_resolve`,
+`IssueCopy_ReadbackResolvePath`) first downscales the scaled resolve to the guest's size
+(`resolve_downscale.cs.glsl`). The scaled resolve stores each 16-byte guest quad (four 32-bit
+pixels of a row) as scale_x * scale_y 16-byte host quads, a column of scale_y of them after the
+other, which is how the scaled texture loads, the car thumbnails' box filter (0149) and 1000 read
+it. The downscale's point sample read guest pixel i's host pixels as one contiguous block from
+i * scale_x * scale_y instead, which is another pixel whenever scale_y is above 1. At render scale
+2, guest columns 4k and 4k+1 took host column 8k (rows 2y and 2y+1), and 4k+2 and 4k+3 host column
+8k+4. So every picture the game reads on the CPU at render scale 2 or a 1440p output had comb
+edges: a saved photo and its thumbnail, a Big Shot's tiles, a replay movie's frames. At a 1080p
+output with SMAA or FSR 3, the pictures in the scene layer had them too, such as a Big Shot. The
+pictures 1000 copies from the fractional raster did not.
+
+1120 addresses the host quads in the point sample (and in its centre variant,
+`readback_resolve_half_pixel_offset`) at every pixel size. Unsigned 8:8:8:8 and 2:10:10:10 color
+copies also take the box filter the car thumbnails have: each guest pixel is the average of its host
+pixels, as 1000 does on the fractional raster for both formats. The photo and its thumbnail are
+8:8:8:8; the front buffers a Big Shot reads its tiles from and the replay movie's frames are
+2:10:10:10. So a picture at a 1440p output is made the same way as one at a 1080p output. With
+`vulkan_readback_box_filter=false` (default on) the copy takes one host pixel instead. That setting
+is for comparisons; car thumbnails keep the average either way. Signed or integer values, an 8in64
+or 8in128 swap, other formats and depth keep point sampling. At render scale 1 no
+downscale runs (the copy is a plain buffer copy), so nothing changes there. Direct3D 12's copy of
+the shader has the same addressing and is not changed (#962).
+
+`tools/test_vulkan_thumbnail_readback.py` now checks the point and centre samples too: 81 of 81
+cases with 1120, 45 of 81 with the shader before (27 of 27 box filter cases with both).
+[rendering.md](rendering.md#comb-edges-at-render-scale-2-905) has the pictures measured in the
+game.
