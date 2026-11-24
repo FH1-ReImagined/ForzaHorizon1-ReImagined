@@ -26,10 +26,34 @@
 // LiveryFileName (the game's own "UPDATE %s SET LiveryFileName='' WHERE Id=%u", sub_82534848 /
 // TU4 sub_825A32C8, does the same when a paint job is removed). A file that is there but fails
 // (a bad header, a read error) stays named in the save, so it is never detached from the car;
-// while the row holds the same car and the file the same size, the fresh path gives that row
+// while the row holds the same car and the file the same contents, the fresh path gives that row
 // its factory colour instead of queueing the same file again (a load that would fail later,
-// after that path's own check). When the factory colour can't be made either, the driving paint
-// job is left empty: the callers take their fresh path next time.
+// after that path's own check).
+//
+// The game's paint job cache (TU4 0x8357C0B8: a lock, then a vector of resources at +28/+32,
+// searched by key in sub_82D4C2C0) is weak: a resource leaves it when its last reference goes
+// (sub_825AC6A8, only while flag 0x40 of byte +42 says it is listed). A failed one stays listed
+// while anything holds it (a car shown in the garage), and every request for the same key gets
+// it back: the factory colour asked for again is the same failed resource, and a repainted or
+// replaced file isn't read again. So the failed resource is taken out of the cache first (erased
+// as sub_825AC6A8 erases one, and its listed flag cleared so that its last Release destroys it
+// directly; its holders keep it), and the next request for that key loads it afresh.
+//
+// A remembered row's file is compared by its size and contents, read again from the disk (the
+// size only when the file is over 1 MB or can't be read): the file system keeps each file's size
+// from when it was first looked up, so a file replaced outside the game, or rewritten no longer
+// than before, kept the size of the bad one and the row kept its factory colour (#959). At the
+// Get In call, a file that is there is loaded once more (through the game's fresh path, waited
+// for) on its first failure in the session and whenever it changed since it failed, and used
+// when it loads. The file compared is the one that failed: a row that comes to name another file
+// (an editor row naming another garage id's file, repainted) keeps the factory colour until the
+// game restarts.
+//
+// The driving paint job is never left empty while the factory colour can be made: a factory
+// colour that fails is taken out of the cache and made once more. It stays empty only when that
+// fails too (only when the 256-byte block of a type-0 paint job can't be allocated, and
+// sub_82D5ABD8 goes on with that null block itself) or when the row can't be read; the game's own
+// fresh path (sub_825B7FA0) also leaves it empty when the row can't be read.
 
 #pragma once
 
@@ -126,22 +150,40 @@ inline std::string ProfileRoot(std::string_view path) {
   return std::string(path.substr(0, colon));
 }
 
+// A file's contents, as remembered (FNV-1a, 64 bits).
+inline uint64_t Fingerprint(const uint8_t* data, size_t size) {
+  uint64_t hash = 0xCBF29CE484222325ull;
+  for (size_t i = 0; i < size; ++i) hash = (hash ^ data[i]) * 0x100000001B3ull;
+  return hash;
+}
+
 // A row remembered after its paint job file failed (it stays named in the save): the file and
 // what the file system said about it then, and the car in the row.
 struct Remembered {
   std::string path;   // the key's file name
   FileState file = FileState::kUnknown;
   uint64_t size = 0;  // the file's size then (when kPresent or kEmpty)
+  uint64_t hash = 0;  // its contents then (when kPresent; 0 when they couldn't be read)
   int32_t car = 0;    // the row's CarId then
 };
 
-// Whether a remembered row still gets the factory colour: the same car and the same file, the
-// same size. A repaint (a new file, another size), a deleted file or another car in a reused
-// garage id ends it, and the game's own path runs again.
-inline bool StillRemembered(const Remembered& then, std::string_view path, FileState file,
-                            uint64_t size, int32_t car) {
-  if (path != then.path || car != then.car || file != then.file) return false;
-  return file != FileState::kPresent || size == then.size;
+// Whether a remembered row still gets the factory colour: the same car, and its file in the
+// same state with the same size and contents. A repaint (whatever its size), a replaced or a
+// deleted file, or another car in a reused garage id ends it, and the game's own path runs again.
+inline bool StillRemembered(const Remembered& then, FileState file, uint64_t size, uint64_t hash,
+                            int32_t car) {
+  if (car != then.car || file != then.file) return false;
+  return file != FileState::kPresent || (size == then.size && hash == then.hash);
+}
+
+// Whether a resource of the paint job cache is taken out of it: the one that failed, and any
+// other failed load of the same file (`path`, when given) that something still holds. One with
+// no reference left is the game's own to drop.
+inline bool Evicts(bool the_failed_one, uint8_t state, uint32_t key_type, std::string_view name,
+                   std::string_view path, uint32_t references) {
+  if (the_failed_one) return true;
+  return !path.empty() && references > 0 && state == kStateFailed && key_type == kKeyFile &&
+         name == path;
 }
 
 }  // namespace forza::car_livery_fallback
