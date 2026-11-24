@@ -105,10 +105,11 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # no comb edges either (#962).
 # and 1150: the stick deadzones apply to gamepads only, so a right stick deadzone no longer turns a wheel's
 # H-pattern gear into neutral whenever the clutch is fully up (#952).
+# and 1160: the stick deadzones zero a stick drifting left or down too (they only worked on positive values).
 # A reviewed full commit can be pinned before a maintainer publishes a tag.
 # When a tag is supplied, its target must still match this immutable commit.
 REIGLUE_TAG=
-REIGLUE_COMMIT=8b25c14eecd8aae4ec2d0a4acc2d662d07f0027b  # ReIGlue main: 0650, 1100, 1110, 1120, 1130, 1140, 1150
+REIGLUE_COMMIT=9d0aeecc39fe989430e00d8276d97d6d3c0ab409  # ReIGlue #81 head: main (0650, 1100-1150) + 1160
 REIGLUE_URL="${REIGLUE_URL:-https://github.com/FH1-ReImagined/ReIGlue}"
 NIGHTLY="${REXSDK_NIGHTLY:-$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64}"
 SRC="${REXSDK_SRC:-$HOME/rexglue-sdk-src-forza/sdk}"

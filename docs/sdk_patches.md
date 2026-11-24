@@ -1154,3 +1154,37 @@ user is already connected still keeps the ranges read when the user connected, a
 gears 1, 3, 6 and reverse with the clutch up, and 3rd with the clutch just touched, reach the game
 as they are, and so does the no-request value; next to it a pad's drifting right stick inside its
 own 10 percent is still zeroed. The forward gears and the steering fail without 1150.
+
+## ReIGlue 1160: the stick deadzones zero a stick drifting left or down too
+
+*Left stick deadzone* and *Right stick deadzone* (`left_stick_deadzone_percentage`,
+`right_stick_deadzone_percentage`, Controls > Controller) only worked on positive values. The
+deadzone is radial: it takes the stick's angle and gives each axis a cutoff of the angle's cosine
+(X) or sine (Y) times the radius, and an axis inside its cutoff is sent as 0. The cutoffs were
+signed, so for a stick left or down the cutoff was negative and no value fell inside it. A pad
+drifting left or down reached the game as it was, while the same drift right or up was zeroed, and
+a drift off both axes kept its negative one: with a deadzone of 0.1, (300, -300) became (0, -300)
+and (-300, -300) passed unchanged. Drift is why a player sets a deadzone.
+
+1160 takes the cutoffs unsigned. Inside the radius both axes are zeroed in every direction; outside
+it the stick passes through unchanged, as before (no rescaling, so the stick still steps from 0 to
+the radius at the edge). The radius is the same as before: the stick's range as the pad's
+capabilities report it, edge to edge (0xFFFF from the SDL driver, 0xFFC0 from XInput for a 360
+pad), times the setting, so 0.1 covers about the first 20 percent of the travel from the centre,
+and from about 0.5 up even a full push straight along an axis is zeroed. The default 0 changes
+nothing, and a racing wheel is still left alone (1150). The launcher's tooltips for the two
+settings now say what the fraction is of.
+
+The game has deadzones of its own, kept in the player's profile (`ControllerAdvancedOptions`, with
+the defaults in `media/profileschema/ForzaProfile.sch`): steering 0.24 inside and 0.95 outside,
+throttle 0.15 and 0.90, brake 0.15 and 0.95, clutch and handbrake 0.10 and 1.00 (the wheel has its
+own set, `WheelAdvancedOptions`, steering 0.01 inside). They apply on top of these settings, to
+what the game makes of the sticks and triggers: with the defaults a small drift of the steering is
+already lost in the game's 24 percent, so the stick deadzones here matter most for what that set
+does not name, such as the right stick's camera, and for the menus (not checked in the game's code
+input by input).
+
+Test: `tests/unit/input/input_assignment_test.cpp` in ReIGlue, with both deadzones at 0.1 and the
+ranges 0x7FFF, 0xFFC0 and 0xFFFF: every 45 degrees at 0.6 and 1.5 times the radius, small drifts
+off both axes with a negative one, and the ends of the range (-32768 among them), on both sticks.
+Without 1160, 72 of its 435 checks fail, every one inside the radius with a negative axis.
