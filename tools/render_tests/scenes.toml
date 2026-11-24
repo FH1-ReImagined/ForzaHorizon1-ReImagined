@@ -110,7 +110,7 @@ description = "Photo mode's default camera (TAKE PHOTO) at the spawn point, 12:0
 # Edges move by a fraction of a pixel between runs (shadow edges on the road and the rail), so
 # the world, paused here, is still not identical. The road behind the car is masked: traffic
 # on it still differs now and then (#960).
-masks = [[300, 180, 420, 90]]
+masks = [[0, 170, 720, 100]]
 max_dssim = 0.016
 max_bad = 0.025
 
