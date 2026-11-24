@@ -758,7 +758,7 @@ class HeaderName(unittest.TestCase):
         self.hdr(UNKNOWN).write_bytes(bytes(data))
         text = fan_dlc.mismatch_text(fan_dlc.header_mismatches(self.home), self.home)
         self.assertIn("installed twice", text)
-        self.assertIn(f"The game uses {RECARO} and never this copy: remove the folder {RECARO_SHORT} and the file "
+        self.assertIn(f"The game uses {RECARO}: remove the folder {RECARO_SHORT} and the file "
                       f"{RECARO_SHORT}.header", text)
         self.assertNotIn("remove one of them", text)
         self.assertNotIn(f"remove the folder {RECARO} ", text)
@@ -795,6 +795,19 @@ class HeaderName(unittest.TestCase):
         self.assertNotIn("installed twice", text)
         self.assertIn("point at one another", text)
         self.assertIn("install the pack again", text)
+
+    def test_a_non_ascii_stored_name_is_damaged_and_makes_no_remove_line(self):
+        add_package(self.home, RECARO_SHORT, "Recaro", 3000)
+        add_package(self.home, RECARO, "Recaro", 3000)
+        data = bytearray(self.hdr(RECARO).read_bytes())
+        data[264:306] = "\u00e9".encode("latin-1") + b"\xff".ljust(41, b"\0")
+        self.hdr(RECARO).write_bytes(bytes(data))
+        self.set_stored(RECARO_SHORT, RECARO)
+        pairs = fan_dlc.header_mismatches(self.home)
+        self.assertEqual(sorted(n for n, _s in pairs), sorted([RECARO, RECARO_SHORT]))
+        text = fan_dlc.mismatch_text(pairs, self.home)
+        self.assertNotIn("remove the folder", text)
+        self.assertIn("not a package name", text)
 
     def test_a_chain_removes_only_what_ends_in_a_working_copy(self):
         a, c = RECARO_SHORT, RECARO
@@ -847,7 +860,7 @@ class HeaderName(unittest.TestCase):
         add_package(self.home, RECARO_SHORT, "Recaro", 3000)
         h = self.hdr(RECARO_SHORT)
         good = h.read_bytes()
-        for data in (b"", good[:100], good[:0x147], good[:264] + b"\xff" * 42 + good[306:]):
+        for data in (b"", good[:100], good[:0x147]):
             h.write_bytes(data)
             self.assertEqual(fan_dlc.header_mismatches(self.home), [], len(data))
         h.write_bytes(b"\0" * 0x148)   # an empty name: the game opens the DLC folder itself, not the pack

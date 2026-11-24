@@ -198,7 +198,8 @@ HEADER_NAME = slice(264, 306)   # file_name of XCONTENT_AGGREGATE_DATA: the fold
 
 def stored_name(path):
     """The package name stored inside a .header file (bytes 264-305), or None when the file cannot be read, is
-    shorter than the 0x148 bytes the game needs (it then ignores the header) or not ASCII; "" for an empty name."""
+    shorter than the 0x148 bytes the game needs (it then ignores the header);
+    "" for an empty name; a non-ASCII name comes back with replacement characters (it is no package name)."""
     try:
         with open(path, "rb") as f:
             data = f.read(install_dlc.HEADER_SIZE)
@@ -207,10 +208,7 @@ def stored_name(path):
     if len(data) < install_dlc.HEADER_SIZE:
         return None
     raw = data[HEADER_NAME].split(b"\0")[0]
-    try:
-        return raw.decode("ascii")
-    except UnicodeDecodeError:
-        return None
+    return raw.decode("ascii", "replace")   # a non-ASCII name is no package name: shown as damaged
 
 
 CASE_BLIND = os.name == "nt"   # Windows does not tell two cases of a name apart
@@ -247,8 +245,8 @@ def mismatch_text(pairs, home) -> str:
                         "headers point at one another and none of these folders is safe to remove: install the "
                         "pack again")
         elif key(stored) in have:
-            twice.append(f"- {name}: its .header names {stored}, which is installed too. The game uses {stored} "
-                         f"and never this copy: remove the folder {name} and the file {name}.header")
+            twice.append(f"- {name}: its .header names {stored}, which is installed too. The game uses {stored}: "
+                         f"remove the folder {name} and the file {name}.header")
         elif install_dlc.NAME_RE.fullmatch(stored):
             lost.append(f"- {name}: the game looks for the folder {stored}")
             fixable = True
