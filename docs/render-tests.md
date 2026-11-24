@@ -206,7 +206,8 @@ timing differences between runs.
   1/8 size, where a frame or two of difference in the boot does not matter.
 - **Masks** leave out what still differs between runs: traffic on the far road and the right
   lane (now and then it still differs, #960) and the minimap's traffic dots in free roam, the
-  road ahead and the mirror in the cockpit, and in the race the race clock, the standings, the crowds and the inflatable. Photo mode pauses the
+  road ahead and the mirror in the cockpit, the road behind the car in photo mode (traffic),
+  and in the race the race clock, the standings, the crowds and the inflatable. Photo mode pauses the
   world, but edges (the shadows on the road and the rail) still move by a fraction of a pixel
   between runs, so its tolerance is wider.
 - `--sync_pipeline_creation=true`: draws wait for their pipelines instead of being skipped
