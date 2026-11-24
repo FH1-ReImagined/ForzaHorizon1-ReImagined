@@ -15,6 +15,7 @@ from .. import (GITHUB_URL, PRIVACY_URL, PUBLIC_SERVER, __version__, browser, bu
 from ..config import Config
 from . import theme, workers
 from .challenges_card import ChallengesCard
+from .dlc_rename import DlcRename
 from .fan_dlc_notice import FanDlcNotice
 from .widgets import Disclosure, Hero, SpinBox, StatusRow, card, label
 
@@ -592,6 +593,8 @@ class SetupPage(QWidget):
         self.dlcinstalled.setStyleSheet(f"color: {theme.ORANGE};")
         self.dlcinstalled.hide()
         self.c2.lay.addWidget(self.dlcinstalled)
+        self.dlcrename = DlcRename(cfg, window, self._dlc_renamed)
+        self.c2.lay.addWidget(self.dlcrename)
         self.go2 = QPushButton("Install DLC")
         self.go2.clicked.connect(self._install_dlc)
         brow = QHBoxLayout()
@@ -796,6 +799,7 @@ class SetupPage(QWidget):
         other = fan_dlc.unknown_text([p for p in odd if not p.fan])
         self.dlcinstalled.setText(other)
         self.dlcinstalled.setVisible(bool(other))
+        self.dlcrename.refresh([p.name for p in odd if not p.fan])
         self.c2.set_badge(f"{n} installed" if n else "Optional", True if n and not odd else None)
         state, detail = builder.build_status(cfg.data_home(), cfg["tu_package"])
         label_for = {"built": ("Built", True), "stale": ("Rebuild needed", None), "partial": ("Unfinished", None),
@@ -818,6 +822,13 @@ class SetupPage(QWidget):
         self.go3.setEnabled(not busy and have)
         self._refresh_prebuild(busy)
         self._pkg_kind()
+
+    def _dlc_renamed(self, text):
+        self.msg2.setText(text)
+        self.refresh()
+        play = getattr(self.window, "play", None)
+        if play is not None:
+            play.refresh()
 
     def _refresh_prebuild(self, busy):
         g, _looked = game.find_game(self.cfg)
