@@ -988,6 +988,34 @@ from a Big Shot's start to its end, next to the front buffers' readback range
 [rendering.md](rendering.md#pictures-at-three-quarters-of-their-size-at-a-1080p-output-879) has the
 trace and what was checked.
 
+## ReIGlue 1100: a device loss tells the draw from the work recorded before it (#913)
+
+The breadcrumb after a guest draw (0438) is written once the draw and everything recorded before
+it has finished. The "unfinished" draw of a report therefore stands for the draw and for the work
+the emulator recorded since the draw before: a new render pass, render target transfers, texture
+loads, barriers. Both draws named on the Vega APU of #551 and #913 were car paint draws, and the
+log could not say which of the two the GPU hung on.
+
+With `gpu_device_lost_setup_breadcrumbs` on (off by default, read at start; Advanced > Log >
+Detailed GPU reset report in the launcher), 1100 counts the commands written to the deferred
+command buffer's main stream between two guest draws by kind: render pass begins and ends, draws,
+dispatches, barriers, copies, attachment clears, query commands, conditional rendering, hoist
+points (the hoisted uploads run there) and upscaling passes. The draw command itself is not
+counted. The trail keeps the counts with the draw's shader modifications and render pass key, in
+an array of its own. A draw with such work also gets a second `VK_AMD_buffer_marker` right before
+its draw command (offset 8, bottom of the pipe), written once that work has finished. A loss logs a
+second line (see
+[rendering.md](rendering.md#device-lost-which-draw-the-gpu-was-on-551)) that says whether the GPU
+finished that work. It gives no verdict where the markers cannot prove one: when the last finished
+draw is in another submission (the presenter's work on the queue in between is not counted), and
+on NVIDIA's checkpoints.
+
+With the setting off nothing of this is recorded. The command buffer tests its two flags with one
+16-bit compare where main tested one flag and the stream (2 instructions instead of 7 on x86-64),
+`Trail::Record` is main's, and IssueDraw tests the setting twice a draw; a loss then logs a line
+that names the setting. The checks on RADV and the cost are in rendering.md;
+`tools/test_device_lost_trail.cpp` covers the trail and the line.
+
 ## ReIGlue 1110: memory read once more after a release is dropped when allocated again (ReIGlue #64)
 
 The GPU's copy of guest memory holds a page as up to date once it uploads it, and a write watch on
