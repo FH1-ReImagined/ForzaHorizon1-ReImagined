@@ -173,11 +173,14 @@ def canonical(name):
 
 
 def short_names(home) -> list:
-    """[(folder, known name)] of the installed packages whose folder name is a known name with its end cut off."""
+    """[(folder, known name)] of the installed packages whose folder name is a known name with its end cut off,
+    that work as they are: not the fan pack, and not one whose header names another folder."""
+    _pkg_dir, hdr_dir = dlc_dirs(home)
+    bad = {n for n, _s in header_mismatches(home)}
     out = []
     for name in sorted(datafolder.dlc_packages(home)):
         known = suggestion(name)
-        if known is not None:
+        if known is not None and name not in bad and not is_fan_folder(dlc_dirs(home)[0] / name):
             out.append((name, known))
     return out
 
@@ -195,7 +198,7 @@ HEADER_NAME = slice(264, 306)   # file_name of XCONTENT_AGGREGATE_DATA: the fold
 
 def stored_name(path):
     """The package name stored inside a .header file (bytes 264-305), or None when the file cannot be read, is
-    shorter than the 0x148 bytes the game needs (it then ignores the header) or holds no name."""
+    shorter than the 0x148 bytes the game needs (it then ignores the header) or not ASCII; "" for an empty name."""
     try:
         with open(path, "rb") as f:
             data = f.read(install_dlc.HEADER_SIZE)
@@ -205,34 +208,50 @@ def stored_name(path):
         return None
     raw = data[HEADER_NAME].split(b"\0")[0]
     try:
-        text = raw.decode("ascii")
+        return raw.decode("ascii")
     except UnicodeDecodeError:
         return None
-    return text.strip() or None
+
+
+CASE_BLIND = os.name == "nt"   # Windows does not tell two cases of a name apart
 
 
 def header_mismatches(home) -> list:
-    """[(folder, stored name)] of the installed packages whose .header holds another name than the folder's
-    (case aside): the game opens the folder by the stored name, so it cannot find the pack. Reads only."""
+    """[(folder, stored name)] of the installed packages whose .header holds another name than the folder's:
+    the game opens the folder by the stored name, so it cannot find the pack. Reads only. On Windows the case
+    of a name does not count; elsewhere the game looks for the exact name in the exact <folder>.header."""
     _pkg_dir, hdr_dir = dlc_dirs(home)
+    windows = CASE_BLIND
     out = []
     for name in sorted(datafolder.dlc_packages(home)):
-        hdr = header_file(hdr_dir, name)
+        hdr = header_file(hdr_dir, name) if windows else hdr_dir / (name + ".header")
         stored = stored_name(hdr) if hdr is not None else None
-        if stored is not None and stored.lower() != name.lower():
+        if stored is not None and (stored.lower() != name.lower() if windows else stored != name):
             out.append((name, stored))
     return out
 
 
-def mismatch_text(pairs) -> str:
+def mismatch_text(pairs, home) -> str:
     """What the mismatch means and what to do by hand (the launcher changes no files)."""
     if not pairs:
         return ""
-    lines = "\n".join(f"- {name}: the game looks for the folder {stored}" for name, stored in pairs)
-    return ("The game cannot find these installed DLC packages, because the name stored in the package's .header "
-            "file is not the folder's name:\n" + lines +
-            f"\nWith the game closed, rename the folder (and its .header file) in {datafolder.DLC_DIR}{os.sep}"
-            "00000002 in the data folder to the name it looks for. The launcher does not change your files.")
+    have = {n.lower() for n in datafolder.dlc_packages(home)}
+    pkg_dir, hdr_dir = dlc_dirs(home)
+    lines, fixable = [], False
+    for name, stored in pairs:
+        if stored.lower() in have:
+            lines.append(f"- {name}: its .header names {stored}, which is installed too (the pack is installed "
+                         "twice): remove one of them")
+        elif install_dlc.NAME_RE.fullmatch(stored):
+            lines.append(f"- {name}: the game looks for the folder {stored}")
+            fixable = True
+        else:
+            lines.append(f"- {name}: its .header holds a name that is not a package name, so the file is "
+                         "damaged: install the pack again")
+    return ("The game cannot find some installed DLC packages, because the name stored in the package's .header "
+            "file is not the folder's name:\n" + "\n".join(lines) +
+            (f"\nWith the game closed, rename the folder in {pkg_dir} and its .header file in {hdr_dir} to the "
+             "name it looks for. " if fixable else "\n") + "The launcher does not change your files.")
 
 
 def unknown_text(packages) -> str:
