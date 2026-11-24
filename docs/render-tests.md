@@ -7,8 +7,8 @@ and needs the game build, a GPU, Pillow and a profile save. CI runs only the syn
 filesystem and fake clock-worker tests; it never starts the game or opens guest memory.
 
 A check is one game session: 2 min 36 s on the test machine, comparison included, plus about
-36 s for each #512 hang it recovers from. Recording baselines plays the session three times
-(about 8 minutes).
+36 s for each #512 hang it recovers from. Recording baselines plays the session three times, the
+first with empty shader caches (about 9 minutes).
 
 ## Scenes
 
@@ -23,7 +23,7 @@ Millennia Masters sign-up), the cockpit camera, photo mode, then that race.
 | `freeroam_dawn` | the same at 07:47 | 0.010, 1 % | 0.0079, 0.21 % | 0.0074, 0.18 % |
 | `cockpit` | cockpit camera, 12:00 | 0.003, 0.5 % | 0.0004, 0.10 % | 0.0014, 0.10 % |
 | `photo_mode` | photo mode's default camera, 12:00 | 0.016, 2.5 % | 0.0123, 1.89 % | 0.0138, 1.81 % |
-| `race_start` | the race 15 s after the start, the player's car on the grid | 0.008, 1.2 % | 0.0043, 0.69 % | 0.0041, 0.51 % |
+| `race_start` | the race 14 s after the start, the player's car on the grid | 0.008, 1.2 % | 0.0043, 0.69 % | 0.0041, 0.51 % |
 
 Noise is the worst score of an unchanged build (October 2026, one Linux machine): each of six
 recorded runs against the other runs of its recording, and seven checks against three recorded
@@ -111,16 +111,20 @@ be captured.
 `linux-tu4` build under test, with `--retries 2`: it passes when every scene is within its
 tolerance, fails when one is outside it or could not be captured (the report is
 `render-report/index.html` in the prerelease log folder), and is skipped with a message when
-there are no baselines yet. `PRERELEASE_RENDER_FLAGS="--anisotropic_override=0"` adds game flags,
-like `--` above. It plays no part in CI.
+there are no baselines yet. Baselines recorded before #960 fail it ("ended without a report",
+with the reason just above): record them again on a known-good build.
+`PRERELEASE_RENDER_FLAGS="--anisotropic_override=0"` adds game flags, like `--` above. It plays
+no part in CI.
 
 ### Hangs
 
 The game sometimes stops presenting right after it enters free roam (#512). The tool watches
 the frame log (`RECOMP_PERF_CSV`) and the screenshots: no new frame for 40 s (`--hang-secs`),
-no screenshot within 10 s of the trigger, or a game that exited ends the attempt. The tool stops
-that game (by its own PID) and plays the session again from the boot, once by default
-(`--retries N`). The game's guest memory file in /dev/shm is removed once no process maps it.
+no screenshot within 10 s of the trigger, no main loop frame for `--hang-secs` after `world`,
+a car at the spawn that did not drop within 60 s or that came to rest where it did in no
+recorded run (#960, below), or a game that exited ends the attempt.
+The tool stops that game (by its own PID) and plays the session again from the boot, twice by
+default (`--retries N`). The game's guest memory file in /dev/shm is removed once no process maps it.
 
 ## Reading the report
 
@@ -162,15 +166,45 @@ timing differences between runs.
   change: frames 2 s apart in one run differ by 0.1 to 0.5 dssim. The sway follows game time,
   so the steps are timed from the moment free roam starts running (`world`: during the load the
   clock reads the flow's 16:00, then jumps to the save's time, and it starts to advance when the
-  simulation starts; `at S` counts from that moment, found to within 10 ms) and not from the
-  loading screen, whose length varies. Timed this way, the free roam scenes of two runs differ
-  by about 0.001.
+  simulation starts) and not from the loading screen, whose length varies.
+- **The car at the spawn (#960).** Free roam starts with the car dropped half a metre onto the
+  road, and where it came to rest was not the same every run: up to 0.06 degrees of heading and
+  a few millimetres apart. The chase camera, the cockpit and photo mode's default camera turn
+  with the car (photo mode's YAW read 280.0 instead of 280.1), so free roam, cockpit and photo
+  mode failed together with dssim of 0.03 to 0.09, in about half the runs on a busy PC.
+  Two things decided it (found by reading the car's position from guest memory every 10 ms):
+  - how long the frames of the drop took. The game integrates with the real frame time, and
+    the frames right after the load are long (pipelines compiled while the world appears, more
+    so while other games run). The game runs with `FORZA_FRAME_TIME=fixed`: every main loop
+    frame is 1/60 s of game time (its dt), however long it took, and adds a line to
+    `frametime.csv` in the run folder. The drop is then the same, frame by frame, every run.
+  - whether the road held the car at once. With empty shader caches it did, and the car
+    rests at one spot every run; with warm ones the car sinks about 11 cm into the road and is
+    pushed back up some frames later, and it rests at one of a few spots 0.005 degrees apart
+    (two runs in three at one of them). With the fixed frame time everything else follows from
+    the spot, the traffic too: runs at the same spot give free roam pictures 0.0001 apart.
+    `land` waits until the car has come to rest and logs where. `record` plays its first run
+    with empty shader caches (in the run folder) and keeps the spot of each run in
+    `baseline.json` (`spawns`), and a check whose car rests where no recorded run's did (more
+    than 0.002 degrees or 1 mm away) is played again (`--retries`, twice by default).
+- **Game time.** The game runs behind real time after a long frame, so after `world` the steps
+  count frames: `at S` waits for the frame `S * 60` after the latest `world` or `start`, and
+  `wait S` and the shots of a scene count game time too. Before `world` (boot, menus, the load)
+  `wait` stays in real seconds. The race's loading and introduction take more or fewer frames
+  from run to run, so `start` waits for the race itself to start (a CPU driver that stood for a
+  second moves off), and the race scene is 14 s of game time after that. The game looks for the
+  screenshot trigger at every frame (it looked at every tenth, up to 9 frames late).
+- **Baselines from before #960** show the car at another spot and the race at another moment:
+  `check` refuses them (every scene, the title too), record them again. The build must have
+  `FORZA_FRAME_TIME=fixed`: an older build writes `frametime.csv` in blocks of about 100
+  frames, and the scenes come late. The noise columns of the table above were measured before
+  #960.
 - **The title screen** has no clock; its attract sequence starts with the boot and its camera
   moves from the first frame, so it is captured right after the first frame and compared at
   1/8 size, where a frame or two of difference in the boot does not matter.
-- **Masks** leave out what still differs between runs: traffic on the far road and the
-  minimap's traffic dots in free roam, the road ahead and the mirror in the cockpit, and in the
-  race the race clock, the standings, the crowds and the inflatable. Photo mode pauses the
+- **Masks** leave out what still differs between runs: traffic on the far road and the right
+  lane (now and then it still differs, #960) and the minimap's traffic dots in free roam, the
+  road ahead and the mirror in the cockpit, and in the race the race clock, the standings, the crowds and the inflatable. Photo mode pauses the
   world, but edges (the shadows on the road and the rail) still move by a fraction of a pixel
   between runs, so its tolerance is wider.
 - `--sync_pipeline_creation=true`: draws wait for their pipelines instead of being skipped

@@ -335,8 +335,9 @@ extern "C" REX_FUNC(__imp__VdSwap) {
       std::remove(dump_trigger) == 0) {
     DumpFrontBuffer(base, fetch_addr, elapsed, schedule.dir);
   }
+  // The screenshot trigger is looked for at every swap (it was every tenth): tools/render_test.py
+  // times its shots in frames (#960). A missing file costs one failed remove() a frame.
   static const char* shot_trigger = std::getenv("FORZA_SCREENSHOT_TRIGGER");
-  static int shot_polls = 0;
   static int burst_n = 1, burst_every = 1, burst_left = 0, burst_frame = 0;
   static std::once_flag burst_once;
   std::call_once(burst_once, [] {
@@ -351,8 +352,7 @@ extern "C" REX_FUNC(__imp__VdSwap) {
       CaptureHostOutput(elapsed, schedule.dir, true);
       --burst_left;
     }
-  } else if (shot_trigger && *shot_trigger && ++shot_polls % 10 == 0 &&
-             std::remove(shot_trigger) == 0) {
+  } else if (shot_trigger && *shot_trigger && std::remove(shot_trigger) == 0) {
     CaptureHostOutput(elapsed, schedule.dir, burst_n > 1);
     burst_left = burst_n - 1;
     burst_frame = 0;

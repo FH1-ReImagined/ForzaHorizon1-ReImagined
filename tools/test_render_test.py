@@ -142,7 +142,8 @@ class HelperTests(unittest.TestCase):
         captured = {s.split()[1] for sess in cfg["session"] for s in sess["steps"]
                     if s.split()[0] == "capture"}
         self.assertEqual(set(cfg["scenes"]) - captured, set())
-        ops = {"first_frame", "wait", "press", "world", "at", "clock", "capture", "trace", "log"}
+        ops = {"first_frame", "wait", "press", "world", "land", "start", "at", "clock", "capture",
+               "trace", "log"}
         for sess in cfg["session"]:
             for step in sess["steps"]:
                 self.assertIn(step.split()[0], ops, step)

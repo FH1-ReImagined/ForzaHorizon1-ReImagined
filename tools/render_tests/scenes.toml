@@ -3,8 +3,11 @@
 # One session plays the steps below in one game run; each "capture" step saves a scene.
 # Steps: first_frame S (the first frame, then S seconds), wait S, press INPUT[:hold]... (FIFO
 # input, 0.1 s presses 0.8 s apart), world [timeout] (free roam has loaded and its clock has
-# started), at S (S seconds after "world"), clock HH:MM|off (hold the time of day), capture
-# NAME [shots=N] [interval=S], trace on|off (log the clock to clock_trace.txt), log TEXT.
+# started), land [timeout] (the car dropped at the spawn has come to rest where a recorded run's
+# did), start [timeout] (the race has started: a CPU driver moves off), at S (S seconds of game time, main loop frames at 60 fps, after the latest
+# "world" or "start"), clock HH:MM|off (hold the time of day), capture NAME [shots=N]
+# [interval=S], trace on|off (log the clock to clock_trace.txt), log TEXT. "wait" and a
+# capture's interval are real time before "world" and game time after it (docs/render-tests.md).
 #
 # Scene keys: description, shots and interval (captures; each shot saves "burst" consecutive
 # frames), max_dssim and max_bad (tolerances: 1 - mean block SSIM, and the share of blocks that
@@ -35,7 +38,7 @@ steps = [
   "wait 3",
   "press A",          # SINGLE PLAYER
   "world 120",
-  "at 1",             # let free roam settle in before the light changes
+  "land",             # the car dropped at the spawn has come to rest (#960)
   "clock 12:00",
   "at 8",
   "capture freeroam_midday",
@@ -69,7 +72,8 @@ steps = [
   "press A",          # START RACE
   "wait 4",
   "press A",          # skip the rival's introduction
-  "wait 24",
+  "start 90",         # the race starts: the CPU drivers move off
+  "at 14",
   "capture race_start",
 ]
 
@@ -85,12 +89,14 @@ max_bad = 0.01
 
 [scenes.freeroam_midday]
 description = "Free roam at the spawn point (GoPro Millennia Masters), chase camera, held at 12:00."
-masks = [[0, 270, 1280, 110], [40, 380, 240, 240]]   # the far road (traffic), the minimap
+# The far road and the right lane (traffic, its name tags), the minimap. Traffic still differs
+# now and then from run to run (#960).
+masks = [[0, 250, 1280, 130], [800, 380, 480, 60], [40, 380, 240, 240]]
 
 [scenes.freeroam_dawn]
 description = "The same view held at 07:47 (dawn), 12 s after the change so exposure has settled."
 # Traffic's name tags reach a little further than at noon, and its headlights light the trees.
-masks = [[0, 250, 1280, 130], [40, 380, 240, 240]]
+masks = [[0, 250, 1280, 130], [800, 380, 480, 60], [40, 380, 240, 240]]
 max_dssim = 0.01
 max_bad = 0.01
 
@@ -107,7 +113,7 @@ max_dssim = 0.016
 max_bad = 0.025
 
 [scenes.race_start]
-description = "GoPro Millennia Masters, about 15 s after the start with the player's car standing on the grid, 12:00."
+description = "GoPro Millennia Masters, 14 s after the start with the player's car standing on the grid, 12:00."
 # Race clock, standings, minimap, and the crowds and the inflatable, which move differently
 # every run.
 masks = [[60, 105, 170, 35], [1010, 105, 210, 120], [90, 380, 140, 90],
