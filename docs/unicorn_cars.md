@@ -55,7 +55,9 @@ roam loaded, when it was the current car): "read of guest 0x98". The game now gi
 factory paint and logs `Cars: garage car <id> (car <car id>): its paint job file ... (#922)`. Only
 when the file is not in the profile or is empty does it also clear that row's `LiveryFileName`
 (kept the next time the game saves); a file that is there but fails stays named, so it is never
-detached from the car. The `.liv` file itself is never touched. Details: [PROJECT.md](PROJECT.md)
+detached from the car, and it keeps the factory paint only until the file changes: a repaint in the
+paint shop or a replaced file loads in the same session (#959). The `.liv` file itself is never
+touched. Details: [PROJECT.md](PROJECT.md)
 (status log, #922).
 
 ## PlayerDatabase format

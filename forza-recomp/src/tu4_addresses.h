@@ -257,6 +257,7 @@ constexpr uint32_t Tu4Address(uint32_t a) {
     case 0x832FF054: return 0x833EDC08;  // data
     case 0x832FF090: return 0x833EDC44;  // data
     case 0x83305CC4: return 0x833F4A80;  // data
+    case 0x8348695C: return 0x8357C0B8;  // data
     case 0x834B36A8: return 0x835A90B8;  // data
     default: return 0;  // not in the table: rerun tools/tu_address_map.py --cpp
   }
