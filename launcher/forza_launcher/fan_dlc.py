@@ -239,8 +239,14 @@ def mismatch_text(pairs, home) -> str:
     have = {n.lower() for n in names} if CASE_BLIND else names
     pkg_dir, hdr_dir = dlc_dirs(home)
     lost, twice, fixable = [], [], False
+    key = (lambda n: n.lower()) if CASE_BLIND else (lambda n: n)
+    wrong = {key(n) for n, _s in pairs}   # folders whose own header names another folder
     for name, stored in pairs:
-        if (stored.lower() if CASE_BLIND else stored) in have:
+        if key(stored) in have and key(stored) in wrong:
+            lost.append(f"- {name}: its .header names {stored}, whose own .header names another folder, so the "
+                        "headers point at one another and none of these folders is safe to remove: install the "
+                        "pack again")
+        elif key(stored) in have:
             twice.append(f"- {name}: its .header names {stored}, which is installed too. The game uses {stored} "
                          f"and never this copy: remove the folder {name} and the file {name}.header")
         elif install_dlc.NAME_RE.fullmatch(stored):

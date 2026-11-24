@@ -778,6 +778,40 @@ class HeaderName(unittest.TestCase):
         self.assertNotIn("rename the folder in", text)
         self.assertIn("installed twice", text)
 
+    def set_stored(self, folder, stored):
+        data = bytearray(self.hdr(folder).read_bytes())
+        data[264:306] = stored.encode().ljust(42, b"\0")
+        self.hdr(folder).write_bytes(bytes(data))
+
+    def test_crossed_headers_never_say_remove_for_both(self):
+        add_package(self.home, RECARO_SHORT, "Recaro", 3000)
+        add_package(self.home, RECARO, "Recaro", 3000)
+        self.set_stored(RECARO_SHORT, RECARO)
+        self.set_stored(RECARO, RECARO_SHORT)
+        pairs = fan_dlc.header_mismatches(self.home)
+        self.assertEqual(len(pairs), 2)
+        text = fan_dlc.mismatch_text(pairs, self.home)
+        self.assertNotIn("remove the folder", text)
+        self.assertNotIn("installed twice", text)
+        self.assertIn("point at one another", text)
+        self.assertIn("install the pack again", text)
+
+    def test_a_chain_removes_only_what_ends_in_a_working_copy(self):
+        a, c = RECARO_SHORT, RECARO
+        b = "DFCA0F246444BEB5F96E33802B0C3D082B25003F"   # a third, shorter folder
+        for n in (a, b, c):
+            add_package(self.home, n, "Recaro", 3000)
+        self.set_stored(b, a)    # b -> a -> c, c names itself
+        self.set_stored(a, c)
+        pairs = dict(fan_dlc.header_mismatches(self.home))
+        self.assertEqual(pairs, {a: c, b: a})
+        text = fan_dlc.mismatch_text(sorted(pairs.items()), self.home)
+        self.assertEqual(text.count("remove the folder"), 1)
+        self.assertIn(f"remove the folder {a} and the file {a}.header", text)
+        self.assertNotIn(f"remove the folder {b} and", text)
+        self.assertNotIn(f"remove the folder {c} and", text)
+        self.assertIn("point at one another", text)
+
     def test_short_names_skip_the_fan_pack_and_a_header_that_differs(self):
         add_fan(self.home, name=RECARO_SHORT)
         self.assertEqual(fan_dlc.short_names(self.home), [])
