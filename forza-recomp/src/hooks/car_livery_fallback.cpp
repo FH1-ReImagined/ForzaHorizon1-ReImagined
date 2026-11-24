@@ -38,12 +38,12 @@
 
 #include <cstdint>
 #include <cstring>
-#include <span>
 #include <initializer_list>
 #include <map>
 #include <mutex>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <utility>
 
@@ -192,16 +192,19 @@ clf::FileState HostFile(const std::string& name, uint64_t* size, uint64_t* hash)
 }
 
 // Takes `failed` (when not 0), and any other failed load of `path` (when given) that something
-// still holds, out of the game's paint job cache, as sub_825AC6A8 does when a resource's last
-// reference goes, under the cache's lock. Its flag is cleared, so it goes with its last reference
-// without being looked for there, and the next request for its key makes a new one.
+// still holds, out of the game's paint job cache under the cache's lock, the way sub_825AC6A8
+// erases a resource whose last reference went. Its listed flag is cleared too (the hook's own
+// step), so its last Release destroys it directly (sub_825AC6A8's unlisted branch), and the next
+// request for its key makes a new one. The hook holds `failed` while it evicts it; another failed
+// load of `path` could lose its last reference on another thread at that moment, and that one
+// resource would then not be destroyed (a leak, never a use after free).
 void Evict(const PPCContext& ctx, uint8_t* base, uint32_t failed, const std::string& path) {
   PPCContext lock = ctx;
   lock.r3.u64 = LIVERY_CACHE;
   __imp__RtlEnterCriticalSection(lock, base);
   const uint32_t begin = Read(base, LIVERY_CACHE + kCacheBegin);
   uint32_t end = Read(base, LIVERY_CACHE + kCacheEnd);
-  if (begin && end >= begin && end - begin < (1u << 20)) {
+  if (begin && end >= begin && end - begin < (1u << 20) && (end - begin) % 4 == 0) {
     for (uint32_t at = begin; at < end;) {
       const uint32_t res = Read(base, at);
       bool evict = false;
@@ -307,7 +310,6 @@ uint32_t UsableFactory(const PPCContext& ctx, uint8_t* base, uint32_t slot, int3
   return 0;
 }
 
-
 bool FirstReport(uint32_t garage_id) {
   static std::mutex lock;
   static std::set<uint32_t> reported;
@@ -364,8 +366,10 @@ extern "C" REX_FUNC(sub_82C9C440) {
       fresh.r6.u64 = clf::kDrivingFlags;
       __imp__sub_82547EB8(fresh, base);
       made = Read(base, local);
+      // The fresh path gives the factory colour itself when the row no longer names a file or
+      // the new load already failed when it checks (825B8134): that is the factory colour here.
       if (made && made != livery && Loaded(ctx, base, made)) {
-        reloaded = true;
+        reloaded = Read(base, made + kKeyType) == clf::kKeyFile;
       } else {
         Write(base, local, 0);
         if (made) {
@@ -392,7 +396,7 @@ extern "C" REX_FUNC(sub_82C9C440) {
     // The factory colour, as the game's fresh path falls back to it. Without the row there is
     // nothing to make it from (and the fresh path would queue the file that failed again): the
     // driving paint job stays empty, as the game's fresh path leaves it when the row can't be read.
-    if (row) made = UsableFactory(ctx, base, local, car, colour, livery);
+    if (row && !made) made = UsableFactory(ctx, base, local, car, colour, livery);
   }
 
   if (reloaded) {

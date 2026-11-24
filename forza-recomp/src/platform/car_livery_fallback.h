@@ -35,21 +35,25 @@
 // (sub_825AC6A8, only while flag 0x40 of byte +42 says it is listed). A failed one stays listed
 // while anything holds it (a car shown in the garage), and every request for the same key gets
 // it back: the factory colour asked for again is the same failed resource, and a repainted or
-// replaced file isn't read again. So the failed resource is taken out of the cache first (as
-// sub_825AC6A8 does, flag cleared: its holders keep it, and it goes with its last reference),
-// and the next request for that key loads it afresh.
+// replaced file isn't read again. So the failed resource is taken out of the cache first (erased
+// as sub_825AC6A8 erases one, and its listed flag cleared so that its last Release destroys it
+// directly; its holders keep it), and the next request for that key loads it afresh.
 //
-// A remembered row's file is compared by its size and contents, read again from the disk: the
-// file system keeps each file's size from when it was first looked up, so a file replaced
-// outside the game, or rewritten no longer than before, kept the size of the bad one and the row
-// kept its factory colour (#959). A file that changed since it failed is loaded again once
-// (through the game's fresh path, waited for at the Get In call) and used when it loads.
+// A remembered row's file is compared by its size and contents, read again from the disk (the
+// size only when the file is over 1 MB or can't be read): the file system keeps each file's size
+// from when it was first looked up, so a file replaced outside the game, or rewritten no longer
+// than before, kept the size of the bad one and the row kept its factory colour (#959). At the
+// Get In call, a file that is there is loaded once more (through the game's fresh path, waited
+// for) on its first failure in the session and whenever it changed since it failed, and used
+// when it loads. The file compared is the one that failed: a row that comes to name another file
+// (an editor row naming another garage id's file, repainted) keeps the factory colour until the
+// game restarts.
 //
 // The driving paint job is never left empty while the factory colour can be made: a factory
 // colour that fails is taken out of the cache and made once more. It stays empty only when that
-// fails too (the 256-byte block of a type-0 paint job can't be allocated) or when the row can't
-// be read; the game's own fresh path (sub_825B7FA0) also leaves it empty when the row can't be
-// read.
+// fails too (only when the 256-byte block of a type-0 paint job can't be allocated, and
+// sub_82D5ABD8 goes on with that null block itself) or when the row can't be read; the game's own
+// fresh path (sub_825B7FA0) also leaves it empty when the row can't be read.
 
 #pragma once
 

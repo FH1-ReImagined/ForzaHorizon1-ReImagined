@@ -138,18 +138,22 @@ Leaderboard screens, Windows and Steam Deck are not scripted: a hand run in the 
   is listed), so a failed one that a car in the garage still holds is handed back for every request
   of its key: the factory colour asked for again after a failed factory colour came back as the
   same failed resource, which is why #922's fallback left the driving paint job empty then. The
-  fallback now takes the failed resource out of the cache first (the flag cleared, as
-  `sub_825AC6A8` does; its holders keep it), so the factory colour is a new resource, and a factory
+  fallback now takes the failed resource out of the cache first (erased as `sub_825AC6A8` erases
+  one, and its listed flag cleared so its last Release destroys it; its holders keep it), so the
+  factory colour is a new resource, and a factory
   colour that fails is taken out and made once more. A remembered row's file is now compared by its
-  size and contents, read again from the disk: the file system keeps the size an entry had when it
+  size and contents (the size only for a file over 1 MB or one that can't be read), read again
+  from the disk: the file system keeps the size an entry had when it
   was first looked up, so a valid file put in place of the bad one outside the game, or rewritten no
   longer than before, kept the bad file's size and the row its factory colour (diagnosed: the entry
   said 600 bytes for a 1188-byte file). A changed file is handed to the game's path again (any
-  failed load of it taken out of the cache), and at Get In a failed file that changed since it
-  failed is loaded once more and used when it loads (its failing branch ran in game; the override
+  failed load of it taken out of the cache), and at Get In a failed file that is there is loaded once more, on its
+  first failure in the session and whenever it changed since, and used when it loads (its failing branch ran in game; the override
   caught every change first). The empty driving paint job is left only when
   the row can't be read (the game's own fresh path returns nothing then too) or the second factory
-  colour fails too (a type-0 paint job fails only when its 256-byte block can't be allocated). All
+  colour fails too (a type-0 paint job fails only when its 256-byte block can't be allocated). A
+  row that comes to name another file than the one that failed (an editor row naming another
+  garage id's file, then repainted) keeps the factory colour until the game restarts. All
   13 callers of TU4 `sub_82D5D538` (disc `sub_82C9C440`) were checked in both builds; six read the
   handle without a null test (TU4 `824BD834`, `8254AE70`, `8255B65C`, `826FDA18`, `82844D50`,
   `82940FC8`, and their disc twins), and `sub_82D5D6C8`, which several call next, reads it too.
