@@ -45,6 +45,12 @@ def _load(path):
     return files, damage
 
 
+def _key(name) -> str:
+    """The package name the list knows `name` by: itself, or the known name a cut-short folder name stands for (#951)."""
+    from . import fan_dlc
+    return fan_dlc.canonical(name) or name.upper()
+
+
 def display_name(name) -> str:
     """The pack's name (tools/install_dlc.py's table), else the package name."""
     from . import paths
@@ -53,7 +59,7 @@ def display_name(name) -> str:
         import install_dlc
     except ImportError:
         return name
-    return install_dlc.KNOWN_NAMES.get(name.upper(), name)
+    return install_dlc.KNOWN_NAMES.get(_key(name), name)
 
 
 def copy_file(src, dst) -> str:
@@ -78,7 +84,7 @@ def compare(name, digests) -> list:
     """What is wrong with an extracted package against the known-good list, as sentences: digests
     maps every file copied (its path in the package, '/' or os.sep separated) to (size, sha1 hex).
     [] when the package is intact or not in the list."""
-    files = _manifest()[0].get(name.upper())
+    files = _manifest()[0].get(_key(name))
     if not files:
         return []
     got = {p.replace(os.sep, "/").lower(): v for p, v in digests.items()}
@@ -134,7 +140,7 @@ def installed_problems(root) -> list:
         return []
     out = []
     for name in names:
-        expected = files.get(name.upper())
+        expected = files.get(_key(name))
         if not expected or not (base / name).is_dir():
             continue
         have = _index(base / name)
@@ -143,7 +149,7 @@ def installed_problems(root) -> list:
         if wrong:
             out.append((name, f"{_summary(wrong)} {'is' if len(wrong) == 1 else 'are'} missing or "
                               "incomplete", ""))
-        for path, regions in damage.get(name.upper(), {}).items():
+        for path, regions in damage.get(_key(name), {}).items():
             if path in wrong or path.lower() not in have:
                 continue
             for region in regions:
