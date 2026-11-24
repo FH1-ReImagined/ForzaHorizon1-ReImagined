@@ -1141,8 +1141,31 @@ RGBA8 box filter and the 2:10:10:10 one: the copy is bound by memory, not by the
 the scenes #960 has failing at random on main).
 
 Not run: NVIDIA, Windows, DLSS and DLAA, render scale 3, a WEB (640x360) movie at these settings, car
-pictures. Direct3D 12 (ReIGlue's backend) has the same addressing in its own copy of the shader
-and is not changed (#962).
+pictures. Direct3D 12 (ReIGlue's backend) had the same addressing in its own copy of the shader;
+ReIGlue 1130 fixes it (below).
+
+### Direct3D 12 (#962)
+
+ReIGlue 1130 ([sdk_patches.md](sdk_patches.md#reiglue-1130-the-same-on-direct3d-12-962)) ports
+1120 to Direct3D 12's `resolve_downscale.cs.hlsl` and its DXBC. Measured on Windows 11 with a GTX
+1650 Ti, TU4, `gpu_backend = "d3d12"`, a 1080p output, one game build with the plugin swapped
+(ReIGlue main b838685 against 1130 on it, both cross-built for Windows), free roam on a copied save,
+the photo saved and uploaded to a local server, with the same measure as above:
+
+| Picture | Settings | ReIGlue main | With 1130 |
+|---|---|---|---|
+| Photo (1280x720 JPEG) | render scale 2 | 1.86 | 1.03 |
+| Thumbnail (416x240) | render scale 2 | 1.73 | 1.01 |
+| Big Shot (3840x2160) | render scale 2 | 1.83 (1.83 in a second run) | 1.00 |
+| Photo, thumbnail, Big Shot | render scale 1 | 1.03, 1.00, 1.00 | 1.02, 1.00, 1.00 |
+
+With `d3d12_readback_box_filter=false` at render scale 2 the comb is gone as well (photo 1.02,
+thumbnail 1.00, Big Shot 1.00), and the pictures are sharper: the mean step between columns is
+5.03 against 4.51 in the photo, 8.26 against 6.87 in the thumbnail and 3.58 against 3.02 in the
+Big Shot. At render scale 1 the pictures of the two plugins differ by 1.4 of 255 on average in the
+photo and 0.5 in the Big Shot, which is what two runs differ by as the scene moves on. In the first
+run with main's plugin the photo and its thumbnail came out black (the Big Shot did not); a second
+run with the same plugin, the one in the table, and every run with 1130 had them right.
 
 ## Festival video flashes purple (#91, open)
 
