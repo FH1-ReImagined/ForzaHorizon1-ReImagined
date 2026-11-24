@@ -797,8 +797,10 @@ The shifter type is read when the game first sees the wheel, so restart the game
 and gear are sent only once the game has read the wheel's capabilities (the log says `Wheel: the game asked for
 capabilities`); a game that took the wheel for a gamepad would turn them into right stick movement. They share
 the right stick with any other controller connected at the same time (the stick pushed furthest wins), so a
-gamepad whose right stick drifts can disturb the gear: unplug it while driving with the wheel. Keep
-`right_stick_deadzone_percentage` at 0 for the same reason.
+gamepad whose right stick drifts can disturb the gear: unplug it while driving with the wheel. The stick
+deadzones (`left_stick_deadzone_percentage`, `right_stick_deadzone_percentage`) apply only to gamepads, not to
+the wheel (SDK 1150, #952): the right one used to zero a forward gear whenever the clutch was fully up, so the
+car fell to neutral the moment the clutch came out, with or without *Gears need the clutch*.
 
 Axis detection (wheels without a profile) reads where each axis rests when the wheel is plugged in: the one near
 the middle is the steering, those resting at an end are the pedals (throttle, brake, clutch in axis order).
