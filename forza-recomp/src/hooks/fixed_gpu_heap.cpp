@@ -19,8 +19,8 @@
 // an arena of 8 MB chunks of the guest's 4 KB-page physical memory, taken as they are needed
 // and kept for the session (64 MB at most), as for a converted FM4 circuit's streamed textures
 // (fm4_stream_textures.h has why the memory is kept and why a block given back is not handed
-// out again for two seconds). A block over 8 MB gets a chunk of its own size (rounded up to
-// whole 8 MB), kept apart from the 8 MB ones, in the same 64 MB, and handed out again as soon
+// out again for two seconds). A block over 8 MB (with the pages its alignment may skip) gets a
+// chunk of its own size (rounded up to whole 8 MB), kept apart from the 8 MB ones, in the same 64 MB, and handed out again as soon
 // as it comes back (fixed_gpu_heap.h Overflow has why): with Paint job detail 2x a paint job's
 // buffers are 16 and 22 MB, and when the Race Central cutscene (the Green Wristband) ends, the
 // player's car's paint job is drawn again with heap 0x21 at 51 of its 61 MB, no 16 MB in one
@@ -90,6 +90,7 @@ std::unique_lock<std::mutex> Lock() {
 Overflow arena;
 std::unordered_map<uint32_t, uint32_t> sizes;  // block -> the size asked for
 std::atomic<bool> any{false};                  // a block was given: frees may be ours
+bool full_logged = false;                      // "no room" logged since the last chunk added
 uint64_t taken = 0;                            // blocks given so far
 
 // A chunk of `bytes`: guest physical memory that stays allocated, the GPU
@@ -104,6 +105,7 @@ bool AddChunk(uint32_t bytes) {
       !chunk)
     return false;
   arena.AddChunk(chunk, bytes);
+  full_logged = false;
   memory->EnablePhysicalMemoryAccessCallbacks(memory->GetPhysicalAddress(chunk), bytes, true, false);
   memory->TriggerPhysicalMemoryCallbacks(rex::thread::global_critical_region::AcquireDirect(), chunk,
                                          bytes, true, true, true);
@@ -168,11 +170,15 @@ bool Allocate(PPCContext& ctx, uint8_t* base, Original original) {
     }
   }
   if (!block) {
-    // No room here either: the game's own allocation again, which stops the game as before.
-    static std::atomic<bool> full{false};
-    if (!full.exchange(true))
-      REXLOG_WARN("FORZA: the fixedGPU heap's overflow has no room for {} bytes either ({} MB taken, {} KB "
-                  "in use) (#857, #787)", size, arena.capacity() >> 20, arena.held() / 1024);
+    // No room here either: the game's own allocation again, which stops the game as before
+    // (with =always, the heap may still have room). Logged once until a chunk is added.
+    if (!full_logged) {
+      full_logged = true;
+      REXLOG_WARN("FORZA: the fixedGPU heap's overflow has no room for {} bytes ({} of {} MB taken, {} KB in "
+                  "use{}): the game's own allocation gets it (#857, #787)",
+                  size, arena.capacity() >> 20, kMaxBytes >> 20, arena.held() / 1024,
+                  arena.capacity() + ChunkFor(Span(size, alignment)) > kMaxBytes ? ", the cap reached" : "");
+    }
     ctx = call;
     original(ctx, base);
     return true;

@@ -71,7 +71,8 @@ class Arena {
   // The first run long enough, or with best fit the shortest (the lowest of equal ones). A block
   // starts on a multiple of `alignment` (a power of two; up to a page, every block does): the
   // pages before it in its run stay free.
-  uint32_t Take(uint32_t bytes, uint64_t now_ms, uint32_t alignment = kPage) {
+  uint32_t Take(uint32_t bytes, uint64_t now_ms) { return Take(bytes, kPage, now_ms); }
+  uint32_t Take(uint32_t bytes, uint32_t alignment, uint64_t now_ms) {
     Settle(now_ms);
     // So near 4 GB that rounding up to whole pages would wrap to a block of nothing.
     if (bytes > UINT32_MAX - (kPage - 1)) return 0;

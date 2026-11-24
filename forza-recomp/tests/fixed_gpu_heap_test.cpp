@@ -148,7 +148,7 @@ static void TestOverflow() {
   }
   {
     // Alignment: a 64 KB-aligned block skips to the next multiple in its run, and the pages
-    // before it stay free for others. The chunks start one page past a multiple of 64 KB, as the
+    // before it stay free for others. The chunks start one page before a multiple of 64 KB, as the
     // guest's physical heap at 0xE0000000 gives them (seen: E7F2F000).
     static_assert(f::Span(k16, 0x10000) == k16 + 0xF000 && f::Span(k16, 0) == k16);
     static_assert(f::ChunkFor(f::Span(k16, 0x10000)) == 24u << 20);
@@ -179,6 +179,13 @@ static void TestOverflow() {
     tight.AddChunk(0xE7F2F000, k16);
     CHECK(tight.Take(k16, 0x10000, 0) == 0);
     CHECK(tight.Take(k16, f::kPage, 0) == 0xE7F2F000);
+    // An aligned block given back joins the pages skipped before it and the rest of its run.
+    f::Overflow join;
+    join.AddChunk(0xE7F2F000, 24u << 20);
+    const uint32_t mid = join.Take(k16, 0x10000, 0);
+    CHECK(mid == 0xE7F30000);
+    CHECK(join.Give(mid, 0));
+    CHECK(join.Take(24u << 20, f::kPage, 0) == 0xE7F2F000);
   }
   {
     // The cap: 64 MB in all, both pools together.

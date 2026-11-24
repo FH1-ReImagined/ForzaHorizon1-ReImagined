@@ -145,8 +145,8 @@ Leaderboard screens, Windows and Steam Deck are not scripted: a hand run in the 
   chunk and the fourth found the cap; the chunks stay allocated and watched, so this is what the
   game's own heap does; (2) blocks aligned to 64 KB: the 16 MB saved layout (`sub_82D4E7D0`, the
   one photo mode loads) asks for it and stopped the game next; (3) room for that alignment in a
-  new chunk, since the guest's physical heap at 0xE0000000 gives chunks one page past a 64 KB
-  boundary (`E7F2F000`). The arena gained the alignment, best fit and a reuse delay per pool
+  new chunk, since the guest's physical heap at 0xE0000000 gives chunks one page before a 64 KB
+  boundary (`E7F2F000`; its physical address is the boundary). The arena gained the alignment, best fit and a reuse delay per pool
   (`fm4_stream_textures.h`; the FM4 streamed textures keep first fit and the delay). Checked
   (TU4, Linux, the edited save, 2x): the cutscene played, the wristband is Green ("Going Green"),
   the overflow held two chunks (16 + 24 MB, all blocks back within a second), the Amsoil decal

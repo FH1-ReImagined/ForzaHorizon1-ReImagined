@@ -83,8 +83,10 @@ constexpr bool Eligible(uint32_t last, uint32_t size, uint32_t alignment, uint32
 
 // The bytes a block needs in a chunk wherever the chunk starts: its size, and with an alignment
 // over a page the pages it may have to skip. The chunks come from the guest's 4 KB-page physical
-// heap at 0xE0000000, whose addresses are one page off its physical ones, so a chunk the heap
-// aligns to 64 KB starts 4 KB past a multiple of 64 KB (seen: E7F2F000).
+// heap at 0xE0000000, whose addresses are one page off its physical ones, so a chunk starts one
+// page before a multiple of 64 KB (seen: E7F2F000, physical 07F30000). The alignment asked for
+// is met on the guest address, as the game's allocation loop meets it; the one 64 KB request
+// seen (the saved layout) is read back by the CPU (photo mode's copy loads it, checked).
 constexpr uint64_t Span(uint32_t size, uint32_t alignment) {
   return uint64_t(size) + (alignment > kPage ? alignment - kPage : 0);
 }
@@ -99,9 +101,10 @@ constexpr uint64_t ChunkFor(uint64_t span) {
 // The overflow's blocks: those up to one chunk from 8 MB chunks, the larger ones from chunks of
 // their own size, in two separate pools so small blocks never cut up a large chunk (the next
 // large block would find no run long enough and take another chunk each time, up to the cap).
-// Both pools count towards the one kMaxBytes. A small block given back waits
-// fm4_stream_textures::kReuseDelayMs before it is handed out again; a large one is handed out
-// again at once, to the block it fits best. A paint job at 2x makes and frees its 16 MB and
+// Both pools count towards the one kMaxBytes, so the 40 MB of large chunks a 2x paint job takes
+// leave 24 MB for small blocks (#857's car change from the pause menu needed about 2 MB). A
+// small block given back waits fm4_stream_textures::kReuseDelayMs before it is handed out
+// again; a large one is handed out again at once, to the block it fits best. A paint job at 2x makes and frees its 16 MB and
 // 22 MB buffers within a second, again for each paint job drawn (seen at Race Central: 16, 22,
 // 16, 22 MB, each given back 100-300 ms after it was taken). With the delay every one of them
 // took a chunk of its own and the fourth found the cap. The chunks stay allocated and watched,
@@ -113,7 +116,7 @@ constexpr uint64_t ChunkFor(uint64_t span) {
 class Overflow {
  public:
   uint32_t Take(uint32_t size, uint32_t alignment, uint64_t now_ms) {
-    return Pool(Span(size, alignment)).Take(size, now_ms, alignment);
+    return Pool(Span(size, alignment)).Take(size, alignment, now_ms);
   }
   // The bytes of a chunk to allocate for a block that Take had no room for, or 0: the cap
   // reached, or a chunk of its pool refused less than kChunkRetryMs ago.
