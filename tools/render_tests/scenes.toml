@@ -89,14 +89,14 @@ max_bad = 0.01
 
 [scenes.freeroam_midday]
 description = "Free roam at the spawn point (GoPro Millennia Masters), chase camera, held at 12:00."
-# The far road and the right lane (traffic, its name tags), the minimap. Traffic still differs
-# now and then from run to run (#960).
-masks = [[0, 250, 1280, 130], [800, 380, 480, 60], [40, 380, 240, 240]]
+# The far road and the right lane beside the car (traffic, its name tags), the minimap. Traffic
+# still differs now and then from run to run (#960).
+masks = [[0, 250, 1280, 130], [760, 380, 520, 120], [40, 380, 240, 240]]
 
 [scenes.freeroam_dawn]
 description = "The same view held at 07:47 (dawn), 12 s after the change so exposure has settled."
 # Traffic's name tags reach a little further than at noon, and its headlights light the trees.
-masks = [[0, 250, 1280, 130], [800, 380, 480, 60], [40, 380, 240, 240]]
+masks = [[0, 250, 1280, 130], [760, 380, 520, 120], [40, 380, 240, 240]]
 max_dssim = 0.01
 max_bad = 0.01
 
