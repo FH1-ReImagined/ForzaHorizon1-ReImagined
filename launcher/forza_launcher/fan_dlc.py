@@ -127,8 +127,8 @@ def unrecognized(home) -> list:
         p = Package(name, "", offers(pkg_dir / name))
         if name.upper() in mine and not p.fan:
             continue
-        if name.upper() in known and not p.fan:
-            continue
+        if (name.upper() in known or suggestion(name)) and not p.fan:
+            continue   # a known pack, or one whose folder name is a known name with its end cut off (#951)
         hdr = header_file(hdr_dir, name)
         display = (hdr is not None and install_dlc.header_display_name(str(hdr))) or known.get(name.upper()) or name
         out.append(Package(name, display, p.offers))
@@ -149,14 +149,16 @@ def fan_text(packages, installed=True) -> str:
 
 
 # A folder name that is a known package's name with the end cut off (#951: "...25003F4" for "...25003F4D").
-# Known names are 42 characters; asking for 32 keeps the match specific (the first 10 hex digits already
-# tell every known name apart), while a short or generic name is never taken for a package.
+# Such a pack works as it is: its header holds the same cut-short name, and the game opens the folder by
+# that name. Known names are 42 characters and the first 10 already tell them apart; asking for 32 keeps a
+# short or generic name from being taken for a package.
 MIN_PREFIX = 32
 
 
 def suggestion(name):
-    """The known package name that folder `name` is a cut-short copy of, or None: `name` must be at least
-    MIN_PREFIX characters, shorter than the known name, and the start of exactly one known name (any case)."""
+    """The known package name that folder `name` is a cut-short copy of, or None: `name` must be ASCII, at
+    least MIN_PREFIX characters, shorter than the known name, and the start of exactly one known name (any
+    case)."""
     if not name.isascii() or len(name) < MIN_PREFIX:
         return None
     up = name.upper()
@@ -164,27 +166,81 @@ def suggestion(name):
     return hits[0] if len(hits) == 1 else None
 
 
-def suggestion_text(name) -> str:
-    """The sentence that says what a package folder most likely is; "" when it is not a cut-short name."""
-    known = suggestion(name)
-    if known is None:
+def canonical(name):
+    """The known package name (upper case) that folder `name` stands for: itself when known, the name it is a
+    cut-short copy of, else None."""
+    return name.upper() if name.upper() in install_dlc.KNOWN_NAMES else suggestion(name)
+
+
+def short_names(home) -> list:
+    """[(folder, known name)] of the installed packages whose folder name is a known name with its end cut off."""
+    out = []
+    for name in sorted(datafolder.dlc_packages(home)):
+        known = suggestion(name)
+        if known is not None:
+            out.append((name, known))
+    return out
+
+
+def short_text(pairs) -> str:
+    """A quiet note: the pack is recognised and works as it is."""
+    if not pairs:
         return ""
-    return (f"this looks like {install_dlc.KNOWN_NAMES[known]}, but its folder name is missing the last "
-            "character(s)")
+    return "\n".join(f"{name} is the {install_dlc.KNOWN_NAMES[known]} with the end of its folder name cut off; "
+                     "it is recognised and works as it is." for name, known in pairs)
+
+
+HEADER_NAME = slice(264, 306)   # file_name of XCONTENT_AGGREGATE_DATA: the folder the game opens for the pack
+
+
+def stored_name(path):
+    """The package name stored inside a .header file (bytes 264-305), or None when the file cannot be read, is
+    shorter than the 0x148 bytes the game needs (it then ignores the header) or holds no name."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read(install_dlc.HEADER_SIZE)
+    except OSError:
+        return None
+    if len(data) < install_dlc.HEADER_SIZE:
+        return None
+    raw = data[HEADER_NAME].split(b"\0")[0]
+    try:
+        text = raw.decode("ascii")
+    except UnicodeDecodeError:
+        return None
+    return text.strip() or None
+
+
+def header_mismatches(home) -> list:
+    """[(folder, stored name)] of the installed packages whose .header holds another name than the folder's
+    (case aside): the game opens the folder by the stored name, so it cannot find the pack. Reads only."""
+    _pkg_dir, hdr_dir = dlc_dirs(home)
+    out = []
+    for name in sorted(datafolder.dlc_packages(home)):
+        hdr = header_file(hdr_dir, name)
+        stored = stored_name(hdr) if hdr is not None else None
+        if stored is not None and stored.lower() != name.lower():
+            out.append((name, stored))
+    return out
+
+
+def mismatch_text(pairs) -> str:
+    """What the mismatch means and what to do by hand (the launcher changes no files)."""
+    if not pairs:
+        return ""
+    lines = "\n".join(f"- {name}: the game looks for the folder {stored}" for name, stored in pairs)
+    return ("The game cannot find these installed DLC packages, because the name stored in the package's .header "
+            "file is not the folder's name:\n" + lines +
+            f"\nWith the game closed, rename the folder (and its .header file) in {datafolder.DLC_DIR}{os.sep}"
+            "00000002 in the data folder to the name it looks for. The launcher does not change your files.")
 
 
 def unknown_text(packages) -> str:
     """The installed packages that are not known and not the pack (Setup)."""
     if not packages:
         return ""
-    lines = []
-    for p in packages:
-        hint = suggestion_text(p.name)
-        lines.append(f"- {p.label()}" + (f": {hint}." if hint else ""))
-    head = "Installed DLC that is not one of the game's known packages:\n" + "\n".join(lines)
-    if all(suggestion(p.name) for p in packages):
-        return head + "\nPress the button below to fix the folder name."
-    return (head +
+    return ("Installed DLC that is not one of the game's known packages:\n" +
+            "\n".join(f"- {p.label()}" for p in packages) +
             "\nUnofficial or modified packs may cause endless loading. If the game hangs while loading, "
             f"move these out of {datafolder.DLC_DIR}{os.sep}00000002 in the data folder first.")
 
@@ -326,123 +382,3 @@ def moved_text(packages, root, home) -> str:
     else:   # the installer names a folder after the file it came from; Install DLC skips other names
         how = f"{by_hand} (Install DLC does not take a folder of that name)."
     return f"Moved {names} out of the installed DLC to {root} (nothing was deleted). To restore it, {how}"
-
-
-class RenameError(Exception):
-    pass
-
-
-def _entry_exists(d: Path, name: str) -> bool:
-    """Whether `d` holds an entry called `name`, in any case (a Windows folder is not case sensitive)."""
-    want = name.lower()
-    try:
-        with os.scandir(d) as it:
-            return any(e.name.lower() == want for e in it)
-    except FileNotFoundError:
-        return False
-    except OSError:
-        return True   # cannot look: do not rename into it
-
-
-def _name_in_header(data: bytes, known: str) -> bytes:
-    """A copy of header `data` with the package name inside it (bytes 264-305: the game opens the package
-    folder by that name, not by the header's file name) set to `known`; a header of the wrong size is made
-    again from the known name."""
-    if len(data) < install_dlc.HEADER_SIZE:
-        return install_dlc.header_bytes(known, install_dlc.KNOWN_NAMES[known], install_dlc.TITLE_ID)
-    off = 8 + 256
-    return data[:off] + known.encode("ascii").ljust(42, b"\0") + data[off + 42:]
-
-
-def _check_free(home, known):
-    pkg_dir, hdr_dir = dlc_dirs(home)
-    if _entry_exists(pkg_dir, known):
-        raise RenameError(f"{known} is in {pkg_dir} already, so nothing was renamed. "
-                          "If it is a second copy of the same pack, move one of them out by hand.")
-    if _entry_exists(hdr_dir, known + ".header"):
-        raise RenameError(f"{known}.header is in {hdr_dir} already, so nothing was renamed.")
-
-
-def _rename_in(home, name, known, where=""):
-    """The rename inside one user data root: the folder, then a header with the full name inside it."""
-    pkg_dir, hdr_dir = dlc_dirs(home)
-    src, src_hdr = pkg_dir / name, header_file(hdr_dir, name)
-    try:
-        data = _name_in_header(src_hdr.read_bytes(), known) if src_hdr is not None else None
-    except OSError as e:
-        raise RenameError(f"Could not read {src_hdr.name}{where} ({e}). Nothing was changed.")
-    try:
-        os.rename(src, pkg_dir / known)
-    except OSError as e:
-        raise RenameError(f"Could not rename {name}{where} ({e}). Nothing was changed: close the game if it "
-                          "is running and try again.")
-    if data is None:
-        return
-    new_hdr, tmp = hdr_dir / (known + ".header"), hdr_dir / (known + ".header.part")
-    try:
-        tmp.write_bytes(data)
-        os.rename(tmp, new_hdr)
-        os.remove(src_hdr)
-    except OSError as e:
-        for f in (tmp, new_hdr):
-            try:
-                if f.is_file() and f.read_bytes() == data:
-                    os.remove(f)
-            except OSError:
-                pass
-        try:
-            os.rename(pkg_dir / known, src)
-        except OSError as e2:
-            raise RenameError(f"Could not change {src_hdr.name}{where} ({e}), and the folder could not be put "
-                              f"back ({e2}): it is now called {known} in {pkg_dir}.")
-        raise RenameError(f"Could not change {src_hdr.name}{where} ({e}). Nothing was changed.")
-
-
-def rename_package(home, name, known=None) -> str:
-    """Rename the installed package folder `name` to the known name it is a cut-short copy of (suggestion),
-    and its .header file with it (the name inside the header too: the game finds the folder by it). Only
-    the last part of the path changes. Nothing is overwritten: when a folder or header of the new name
-    exists already (here or in a Xenia save's copy of the DLC), or the name is not such a copy, nothing
-    happens and RenameError says why. If a step fails what was done is undone. Returns the new name."""
-    known = known or suggestion(name)
-    if known is None or known != suggestion(name):
-        raise RenameError(f"{name} is not a shortened name of one of the game's DLC packages.")
-    pkg_dir, _hdr_dir = dlc_dirs(home)
-    src = pkg_dir / name
-    if not src.is_dir() or src.is_symlink():
-        raise RenameError(f"{name} is not in {pkg_dir}.")
-    holders = [m for m in mirrors(home) if (dlc_dirs(m)[0] / name).is_dir()]
-    for root in (*holders, home):
-        _check_free(root, known)
-    done = []
-    try:
-        for m in holders:   # the copies of the installed DLC first, as move_out: the next Play copies them back
-            _rename_in(m, name, known, f" (the copy of the installed DLC for the Xenia save {m.name})")
-            done.append(m)
-        _rename_in(home, name, known)
-    except RenameError:
-        for m in reversed(done):   # put the copies back: all or nothing
-            try:
-                os.rename(dlc_dirs(m)[0] / known, dlc_dirs(m)[0] / name)
-                _undo_header(m, name, known)
-            except OSError:
-                pass
-        raise
-    return known
-
-
-def _undo_header(root, name, known):
-    _pkg, hdr_dir = dlc_dirs(root)
-    h = hdr_dir / (known + ".header")
-    if h.is_file():
-        data = h.read_bytes()
-        old = bytearray(data)
-        if len(old) >= install_dlc.HEADER_SIZE:
-            old[264:306] = name.encode("ascii").ljust(42, b"\0")
-        (hdr_dir / (name + ".header")).write_bytes(bytes(old))
-        os.remove(h)
-
-
-def renamed_text(name, known) -> str:
-    return (f"Renamed {name} to {known} ({install_dlc.KNOWN_NAMES[known]}), and its .header file with it. "
-            "Nothing was deleted.")

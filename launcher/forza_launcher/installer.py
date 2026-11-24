@@ -211,7 +211,7 @@ def dlc_warning(found, fan=()) -> str:
     it does. This is recognition, not a check of the package's contents or authenticity. No file I/O."""
     fan = {n.upper() for n in fan}
     unknown = [(name, display) for name, display in found
-               if name.upper() not in install_dlc.KNOWN_NAMES or name.upper() in fan]
+               if not fan_dlc.canonical(name) or name.upper() in fan]
     if not unknown:
         return ""
     unknown.sort(key=lambda item: item[0].upper() not in fan)
