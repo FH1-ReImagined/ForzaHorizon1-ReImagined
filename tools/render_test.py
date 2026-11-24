@@ -13,7 +13,8 @@ using a block SSIM (structure and brightness) plus a chroma check, under per-sce
 
 Baselines live outside the repository (default ~/.local/share/forza-render-baselines, or
 FORZA_RENDER_BASELINES): never commit captures, they are game images. Run folders, the game's
-shader caches and the reports go to ~/.cache/forza-render-tests (FORZA_RENDER_WORK).
+shader caches (empty at every start) and the reports go to ~/.cache/forza-render-tests
+(FORZA_RENDER_WORK).
 
 The idea of fixed scenes with image baselines and a tolerance follows Pinyon Shift's
 tools/run-fh1-render-test.py (BSD-3-Clause, LICENSE-Pinyon-Shift); the code is our own.
@@ -412,11 +413,11 @@ class Session:
         shutil.copytree(source, ud / PROFILE_DIR / TITLE)
         for sub in ("config", "data", "state"):
             (d / "xdg" / sub).mkdir(parents=True)
-        # The game's and Mesa's shader caches are kept between runs; a cold run (record's first)
-        # starts with empty ones in its run folder: the car lands elsewhere then (#960).
-        caches = d if getattr(self.args, "cold", False) else work
-        (caches / "cache").mkdir(parents=True, exist_ok=True)
-        (caches / "xdg-cache").mkdir(parents=True, exist_ok=True)
+        # Every run starts with empty shader caches (the game's and Mesa's, in its run folder):
+        # with warm ones the car dropped at the spawn came to rest at one of several spots,
+        # with cold ones nearly always at the same one (#960, docs/render-tests.md).
+        (d / "cache").mkdir()
+        (d / "xdg-cache").mkdir()
         os.mkfifo(d / "in.fifo")
         game = stage_build(self.args.build, d / "game")
         # The player's variables for the game (the server, the launcher's graphics settings and
@@ -425,7 +426,7 @@ class Session:
         env.update({
             # The player's own settings, saves and caches stay out of the run.
             "XDG_CONFIG_HOME": str(d / "xdg/config"), "XDG_DATA_HOME": str(d / "xdg/data"),
-            "XDG_STATE_HOME": str(d / "xdg/state"), "XDG_CACHE_HOME": str(caches / "xdg-cache"),
+            "XDG_STATE_HOME": str(d / "xdg/state"), "XDG_CACHE_HOME": str(d / "xdg-cache"),
             "FORZA_XUID": self.xuid, "REX_AUDIO_FAIL_OPEN": "all",
             "SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT": "0x0000/0x0000",
             "SDL_JOYSTICK_IGNORE_DEVICES_EXCEPT": "0x0000/0x0000",
@@ -442,7 +443,7 @@ class Session:
         })
         cmd = [str(game / "forza"),
                f"--game_data_root={self.args.game_data}", f"--update_data_root={self.args.update_data}",
-               f"--user_data_root={ud}", f"--cache_root={caches / 'cache'}",
+               f"--user_data_root={ud}", f"--cache_root={d / 'cache'}",
                f"--log_file={d / 'forza.log'}", "--log_level=info",
                *self.cfg["game"]["args"], *self.args.extra]
         self.fps = frame_rate(self.cfg, self.args)
@@ -1043,15 +1044,11 @@ def cmd_record(cfg, args):
     stamp = time.strftime("%Y%m%d-%H%M%S")
     runs, spawns = [], []
     for i in range(args.runs):
-        # The first run starts with empty shader caches: with cold caches the car at the spawn
-        # comes to rest at another spot than with warm ones, and the baselines cover both (#960).
-        args.cold = i == 0
-        log(f"record run {i + 1}/{args.runs}{' (empty shader caches)' if args.cold else ''}")
+        log(f"record run {i + 1}/{args.runs}")
         shots, errors = play(cfg, args, names, f"{stamp}-rec{i + 1}", save / TITLE, xuid, spawns)
         if errors:
             sys.exit("\n".join(sorted(set(errors.values()))))
         runs.append(shots)
-    args.cold = False
     prov = provenance(args)
     report = []
     for name in sorted(names):

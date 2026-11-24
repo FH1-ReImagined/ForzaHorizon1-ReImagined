@@ -7,8 +7,8 @@ and needs the game build, a GPU, Pillow and a profile save. CI runs only the syn
 filesystem and fake clock-worker tests; it never starts the game or opens guest memory.
 
 A check is one game session: 2 min 36 s on the test machine, comparison included, plus about
-36 s for each #512 hang it recovers from. Recording baselines plays the session three times, the
-first with empty shader caches (about 9 minutes).
+36 s for each #512 hang it recovers from. Recording baselines plays the session three times
+(about 8 minutes).
 
 ## Scenes
 
@@ -97,9 +97,9 @@ build folder (world detail, ambient occlusion, the Forza Live server): so the ga
 `tools/prerelease_forza.toml` (offline, no Discord activity, everything else the defaults) as
 its `forza.toml`; the prerelease boot and server checks run the same way (#846). Before
 that, such a file changed every free roam scene and brought Forza Live's messages and photo
-mode's Big Shot line into them. The game's shader cache and Mesa's are kept
-between runs in `~/.cache/forza-render-tests` (`--work DIR` or `FORZA_RENDER_WORK`), and the
-first run on a machine is slower. The game runs offline with `--audio_mute` and
+mode's Big Shot line into them. Every run starts with empty shader caches (the game's and
+Mesa's, in its run folder under `~/.cache/forza-render-tests`, `--work DIR` or
+`FORZA_RENDER_WORK`; #960, below). The game runs offline with `--audio_mute` and
 `REX_AUDIO_FAIL_OPEN=all`, in a 1280x720 window at 60 fps, with the fixed settings of
 `[game] args` in `scenes.toml`. Like the run scripts it waits while someone else holds the
 benchmark lock (`tools/bench_lock.sh`) and does not start with less than 10 GB of free memory.
@@ -178,15 +178,16 @@ timing differences between runs.
     so while other games run). The game runs with `FORZA_FRAME_TIME=fixed`: every main loop
     frame is 1/60 s of game time (its dt), however long it took, and adds a line to
     `frametime.csv` in the run folder. The drop is then the same, frame by frame, every run.
-  - whether the road held the car at once. With empty shader caches it did, and the car
-    rests at one spot every run; with warm ones the car sinks about 11 cm into the road and is
-    pushed back up some frames later, and it rests at one of a few spots 0.005 degrees apart
-    (two runs in three at one of them). With the fixed frame time everything else follows from
-    the spot, the traffic too: runs at the same spot give free roam pictures 0.0001 apart.
-    `land` waits until the car has come to rest and logs where. `record` plays its first run
-    with empty shader caches (in the run folder) and keeps the spot of each run in
-    `baseline.json` (`spawns`), and a check whose car rests where no recorded run's did (more
-    than 0.002 degrees or 1 mm away) is played again (`--retries`, twice by default).
+  - whether the road held the car at once, which depends on the shader caches. With warm ones
+    the car sank about 11 cm into the road and was pushed back up some frames later, and came
+    to rest at one of several spots 0.005 degrees apart. With empty ones the road nearly always
+    held it, and it rests at the same spot: every run starts with empty shader caches. With
+    the fixed frame time everything else follows from the spot, the traffic too: runs at the
+    same spot give free roam pictures 0.0001 apart. `land` waits until the car has come to rest
+    and logs where, `record` keeps each run's spot in `baseline.json` (`spawns`), and a check
+    whose car rests where no recorded run's did (more than 0.002 degrees or 1 mm away; it
+    happened when another program kept the CPU busy) is played again (`--retries`, twice by
+    default).
 - **Game time.** The game runs behind real time after a long frame, so after `world` the steps
   count frames: `at S` waits for the frame `S * 60` after the latest `world` or `start`, and
   `wait S` and the shots of a scene count game time too. Before `world` (boot, menus, the load)
