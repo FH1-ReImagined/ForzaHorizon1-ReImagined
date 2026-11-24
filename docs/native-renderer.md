@@ -1443,6 +1443,168 @@ fourth step, in the game's scene pass hooks: the guest word loads (four byte loa
 and a `bswap` would do) and the lost tail calls. Next: replay (the plan's step 4), which reuses this registry and the generations, and
 whose double-run check can reuse this compare.
 
+### M4, fourth step (4b): verify mode, the lists' replay measured beside the packets (`native_lists=verify`)
+
+Step 4 would let the GPU plugin stop decoding a registered model list packet by packet and walk
+its template instead. Before any replay draws anything, this step builds the replay engine and
+runs it **beside** the packets, into scratch state, so that its cost can be measured and its
+result compared: the plan's step 4b and its second stop rule. **Nothing drawn changes:** the
+packets are decoded as always and stay the ones that draw. `--native_lists=verify` is a test
+mode, off by default (`off` stays the default; `shadow` is unchanged).
+
+**The game** (`src/hooks/native_lists.cpp`) registers the lists exactly as in shadow mode and,
+before its first define, sends ReIGlue 0660's `kOpListMode` (verify). Two more things, for both
+modes on:
+
+- `native_lists` refuses to start (a warning, then off) on a host that is not x86-64 or whose
+  pages are above 4 KB: the third step's open items for aarch64 (the fixup hook's fences have
+  only run where they are compiler barriers; the plugin's reads of freed guest memory are only
+  safe with 4 KB pages).
+- The fixup dispatcher's hook counts fixups entered inside another on the same thread, and those
+  of a list the thread is already fixing up (`nested in another`, `of them on the same list` in
+  the 30 s line). The generation's seqlock has one writer per word, so only the second kind
+  leaves a run unsafe; in verify mode such a list is marked in its state word
+  (`kListStateNested`, bit 31, in the same store as the generation) and the plugin leaves its
+  runs out (`nested-fixup`) until a list is bound to that word again. The seqlock itself is not
+  changed here (the fix, first writer odd and last writer even, is offered on game #948).
+
+**The plugin** (ReIGlue 0660, `fh1_native_list.{h,cpp}`):
+
+- **The program.** At the first run of a list whose key is its template's (shadow's lookup
+  checks: the command buffer still names the buffer, the static words have the key), the
+  template is compiled against the live list: per packet its dword, its header as guest memory
+  holds it and the type-2 padding before it (`Compile`; a tile-bound packet's header is the one
+  the template recorded, so a list first seen untiled gives the same program). A list whose
+  packets are not the template's ops gets no program (counted by reason; 0 in every run).
+- **The replay** (`Replay`) walks the program over the live list in stream order. It checks
+  every header, every padding word and the static words of a tile block and of a constant load as
+  it reaches them, reads **every value from the live list** (slots and static payload words
+  alike, so a word written without a fixup is replayed as the packets see it), and hands what
+  the packets do to a machine in the calls and order of the command processor's handlers:
+  `PacketWriteRegistersFromMem` for a type-0 range and a tile's window, `PacketWriteRegister`
+  for each word of a mark, the three draw registers then the draw's record, the IM_LOAD words.
+  A check that fails stops it **before** that packet does anything, at the padding before it,
+  which is where the interpreter would go on (`handover`, by reason).
+- **Verify mode's scratch state.** The machine calls the command processor's own writers, with
+  the decoder's register file and the batch being recorded swapped for scratch ones (split), or
+  the register file (unsplit). Split, nothing outside them changes (the shaders loaded are the
+  recorder's and are not touched). Unsplit, a draw is kept as its record and not issued, a write
+  of D3D's marks is not stored back to guest memory, and the backend's writers mark its constant
+  buffers, texture bindings and vertex buffer residency stale a second time (the next draw does
+  some work again; nothing else). The registers the program writes (and the scratch write-back's
+  mask and address) are copied in before the run.
+- **Compared per run:** split, the record words **byte for byte** (the packets' are kept across
+  any publish of the batch during the run); the registers the program writes; the record
+  counters; the scratch stores noted for WAIT_REG_MEM; the bin mask; the IM_LOAD words; unsplit,
+  the shaders loaded; every 64th run the whole register file from 0x2000 (the start with the
+  program's registers taken from the replay: any other register a packet wrote shows). Unsplit,
+  where there is no record stream, every 8th run (and every self-check's) also compares the
+  program's registers at each draw packet and whether the draw ran (the packets run with the
+  third step's draw seam open; its write seams do nothing in verify mode).
+- **Timed:** the replay's walk (with its writers) and the packets' decode of the same run, with
+  the order alternated per list (`packets first` / `replay first`, reported apart: the second one
+  finds the list in the cache, so each is taken from the runs it went first). The packets' time
+  leaves out the capture's copies; the runs in which the packets published a batch are timed
+  apart as well. The lookup and checks a replay needs before it starts are timed on their own.
+  Unsplit the packets' time holds the draws' issue, which a replay keeps: the draw checks time
+  each issued draw packet (from its seam to the next register write or IM_LOAD after its own
+  three writes), and that is taken out. Draw-checked and self-check runs are not timed.
+- **Refused** whenever stereo is on, on a host that is not x86-64, with pages above 4 KB, with a
+  backend without the decode/record split (ReIGlue's D3D12 backend) and in the trace builds.
+  Self-checks: `FH1_NATIVE_LISTS_VERIFY_HEADER=N` (a header changed in the program the replay
+  walks: it must hand over at that op), `_VALUE=N` (a value changed: the run must differ),
+  `_TILE=N` (tile 0's mask made tile 1's: counted when that changes whether its window is
+  written). Their runs have counters of their own.
+- **Off the switch** the plugin's code is main's but for one byte test in `PublishRecordBatch`
+  (a load and an untaken branch per published batch) and a constant in the NOP handler's range
+  check (same instructions); function by function against a main build with the same flags
+  (`fncmp.py`): `ExecuteIndirectBuffer`'s off path is the same instructions. The game's three
+  units that read the switch: `cmp eax,1`/`je` became `test al,1`/`jne`, the same count, and the
+  blocks around it moved (±1 instruction per hook call).
+
+**Results** (2026-11-23/24, this PC: Linux, RADV, 8 cores; game `cf0ae638`, ReIGlue `df284fb` to
+`a505deb`; the benchmark uncapped and free roam at 30 fps; the golden save, a hidden display, scratch
+settings).
+
+*Correctness.* 0 differences and 0 handovers in every run:
+
+| Run | Path | Plugin | Frames | Runs verified | Compared, all agree | Every draw compared | Programs |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| V-S2, bench | split | `df284fb` + the shader fix | 27,000 | 27,544,085 | 27,544,085 | (record words) | 1,396 |
+| C-S1, bench, self-checks | split | `df284fb` | 27,600 | 24,239,202 | 23,508,208 | (record words) | 1,398 |
+| T-S1, bench, timed | split | `01b3b1f` | 24,000 | 25,100,309 | 25,100,309 | (record words) | 1,409 |
+| R-S1, free roam, timed | split | `a505deb` | 11,400 | 7,106,003 | 7,106,003 | (record words) | 1,824 |
+| V-U1, bench | unsplit | `df284fb` | 22,200 | 21,821,804 | 21,821,804 | (end only) | 1,410 |
+| C-U2, bench, self-checks | unsplit | `01b3b1f` | 18,000 | 14,863,996 | 14,417,137 | 1,802,142 | 1,440 |
+| T-U1, bench, timed | unsplit | `01b3b1f` | 23,400 | 21,184,455 | 21,184,455 | 2,648,056 | 1,415 |
+| T-U2, bench, timed | unsplit | `a505deb` | 21,600 | 21,495,661 | 21,495,661 | 2,686,957 | 1,437 |
+
+- No template failed to compile, no run was skipped (no list refused, no fixup under way or during
+  a run, no stereo), and no fixup nested in another (`0 nested in another` in every run).
+- The whole-register-file compare (every 64th run) found nothing either.
+- The first smoke run found a real bug, since fixed: split, it saved and restored the shader
+  pointers on the decoder, which are the recorder's. That raced the recorder and drew with
+  stale shaders (31,670 `Failed in backend` draws, none since).
+
+*Self-checks.*
+- **Split** (C-S1): a header changed in the program, 249,888 perturbed, all 249,888 handed over at
+  that op; a value changed, 269,543 / 269,543 differ; a tile mask, 213,911 perturbed, 171,740 of
+  which change whether a window is written, 172,202 differ (the extra ones also carried the value
+  self-check).
+- **Unsplit** (C-U2): the header check catches all of its 153,237 perturbations. Of the value
+  changes 39,311 / 165,290 show, and 322 of the 97,819 tile masks that change a window. Every
+  value change logged as not caught (C-U3, 40 of them) is the first window write of a tile block
+  whose window a later tile of the same block writes again before any draw. Unsplit writes go
+  straight to the register file, so such a write reaches no draw and a value compare cannot see
+  it; the split record words see every write.
+
+*Timing* (each side taken from the runs it went first; ns an op include the writers both make;
+unsplit, the packets' time without the draws' issue, which a replay keeps; "Lookup" is the lookup
+and the checks a replay needs before each run, which the stock decoder does not do; the runs at
+indirect buffers that are not lists, about 330 a frame, would add a lookup miss each, not measured):
+
+| Run | Frames | Load | Runs a frame | Ops a frame | Packets ns/op | Replay ns/op | Draw ns | Gross ms/frame | Lookup | Net ms/frame |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| T-S1 | 22800 | 1.02 | 1080 | 46089 | 24.0 | 15.3 | 0 | 0.401 | 0.068 | 0.333 |
+| R-S1 | 10200 | 1.49 | 636 | 40962 | 24.5 | 16.5 | 0 | 0.326 | 0.090 | 0.237 |
+| T-U1 | 22200 | 0.54 | 929 | 40579 | 56.5 (11.1 without draws) | 10.7 | 1068 | 0.017 | 0.066 | -0.049 |
+| T-U2 | 20400 | 0.60 | 1026 | 43913 | 55.5 (11.7 without draws) | 10.5 | 1038 | 0.051 | 0.071 | -0.020 |
+
+- **Split:**
+  - the replay costs 15-16.5 ns an op against the packets' 24-24.5. That is 8-9 ns saved an op,
+    of the 4-0 profile's ~10.4 ns of dispatch, so the walk itself is cheap [D~].
+  - Gross 0.33-0.40 ms a frame; net of the lookup (63-90 ns a run, 0.07-0.09 ms a frame)
+    **0.24 (free roam) to 0.33 ms (benchmark)**.
+  - Leaving out the 10% of runs in which the packets published a batch: 0.31 and 0.23 ms.
+- **Unsplit:**
+  - the packets' decode without the draws is only 11.1-11.7 ns an op, and the replay with the same
+    writers 10.5-10.7. Net of the lookup, **-0.05 to +0.00 ms a frame**.
+  - The draw timer holds the draw packet's own decode and the next header's (a few percent of its
+    1,040-1,070 ns), so the true figure is a little better, at most about +0.05 ms.
+  - The 4-0 profile's 0.44 ms for unsplit dispatch does not hold: the whole non-draw decode is
+    about 0.5 ms a frame here.
+- The loads before and during the timed runs were 0.5-1.5 cores of other processes: above the
+  0.3 bar of the plan. Their spread between rounds is a few hundredths of a ms, far less than the
+  gap to the target.
+
+**Stop rule 2: triggered.** The plan's target is 0.35-0.5 ms a frame on the benchmark split, and
+~0.3-0.4 in free roam at 30 fps. The measured net saving is below it on both paths:
+- split 0.31-0.33 ms on the benchmark and 0.23-0.24 in free roam;
+- unsplit about nothing.
+
+Unsplit is where a frame-rate gain would show (fewer than six cores). There the stock decoder's
+non-draw work is already nearly as cheap as a replay that still makes every write.
+
+So step 4 stops here: no `native_lists=replay` (4c) without the owner's OK. What a replay of the
+lists could still give is decoder CPU on six or more cores (a thread that does not limit the frame
+there), about 0.3 ms a frame. The next CPU step is to be re-planned (the plan names the native
+passes, step 6). Verify mode stays as a test mode: it is the double-run check a later replay or
+native pass would need.
+
+**Still open:** the remaining timed rounds of the plan's four per mode (the PC was shared); a quiet
+PC below 0.3 cores; Windows and the GTX 1650 Ti laptop (unsplit by default if it has fewer than six
+cores); `scene_msaa=2x`, the race start and photo mode in verify mode; the hour-long streaming soak.
+
 ## Tools
 
 The M0 tools are build options: off, the game and the SDK are the same as without them.
