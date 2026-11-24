@@ -648,6 +648,23 @@ class Session:
         finally:
             g.close()
 
+    def car_still(self, name):
+        """Before a capture near the spawn: the car must still stand where it came to rest
+        ("land"). Traffic sometimes runs into it (#960): the attempt is played again (Hang)."""
+        if self.spawn is None:
+            return
+        g = Guest(self.proc.pid)
+        try:
+            pose = player_pose(g)
+        finally:
+            g.close()
+        if pose is None:
+            return
+        moved = math.hypot(pose[0] - self.spawn[0], pose[1] - self.spawn[1])
+        if moved < 50 and not near_spot(pose, self.spawn):  # 50 m: not on the race's grid
+            raise Hang(f"{name}: the car moved since it came to rest ({moved:.3f} m,"
+                       f" {pose[2] - self.spawn[2]:+.3f} degrees; traffic ran into it?)")
+
     def wait_start(self, timeout):
         """Waits until the race starts: a CPU driver's car that stood still for a second moves
         off (by 0.3 m). The race clock starts then; the race's loading and introduction before
@@ -752,6 +769,7 @@ class Session:
                     continue
                 if self.clock.target is not None and self.clock.addr is None:
                     raise Hang(f"{name}: the time of day is not held (no world clock)")
+                self.car_still(name)
                 paths = []
                 first = self.game_frames()
                 for k in range(shots):

@@ -396,6 +396,19 @@ class SafetyTests(unittest.TestCase):
         with self.assertRaises(rt.Hang):  # 2 mm off
             self.land(self.FALL + [101.088], spawns=[[87.682, -3921.24, 100.09]])
 
+    def test_a_car_moved_since_it_landed_is_played_again(self):
+        s = self.session()
+        s.proc = types.SimpleNamespace(pid=1)
+        s.spawn = (87.68, -3921.24, 100.09, 101.088)
+        with patch.object(rt, "Guest"):
+            with patch.object(rt, "player_pose", lambda _: (87.6801, -3921.24, 100.0905, 101.088)):
+                s.car_still("cockpit")  # where it landed
+            with patch.object(rt, "player_pose", lambda _: (-205.2, -3637.1, 30.0, 106.0)):
+                s.car_still("race_start")  # on the race's grid, far away
+            with patch.object(rt, "player_pose", lambda _: (87.70, -3921.25, 100.3, 101.088)):
+                with self.assertRaises(rt.Hang):
+                    s.car_still("photo_mode")  # pushed
+
     def test_land_before_world_is_an_error(self):
         s = self.session()
         with self.assertRaises(ValueError):

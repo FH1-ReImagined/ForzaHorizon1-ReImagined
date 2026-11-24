@@ -121,8 +121,8 @@ no part in CI.
 The game sometimes stops presenting right after it enters free roam (#512). The tool watches
 the frame log (`RECOMP_PERF_CSV`) and the screenshots: no new frame for 40 s (`--hang-secs`),
 no screenshot within 10 s of the trigger, no main loop frame for `--hang-secs` after `world`,
-a car at the spawn that did not drop within 60 s or that came to rest where it did in no
-recorded run (#960, below), or a game that exited ends the attempt.
+a car at the spawn that did not drop within 60 s, came to rest where it did in no recorded run
+or was moved before a capture (#960, below), or a game that exited ends the attempt.
 The tool stops that game (by its own PID) and plays the session again from the boot, twice by
 default (`--retries N`). The game's guest memory file in /dev/shm is removed once no process maps it.
 
@@ -187,7 +187,8 @@ timing differences between runs.
     and logs where, `record` keeps each run's spot in `baseline.json` (`spawns`), and a check
     whose car rests where no recorded run's did (more than 0.002 degrees or 1 mm away; it
     happened when another program kept the CPU busy) is played again (`--retries`, twice by
-    default).
+    default). So is one whose car no longer stands there when a scene near the spawn is
+    captured: now and then traffic runs into it (photo mode's YAW then read 280.3).
 - **Game time.** The game runs behind real time after a long frame, so after `world` the steps
   count frames: `at S` waits for the frame `S * 60` after the latest `world` or `start`, and
   `wait S` and the shots of a scene count game time too. Before `world` (boot, menus, the load)
