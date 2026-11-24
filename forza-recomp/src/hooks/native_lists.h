@@ -1,6 +1,8 @@
 // forza - native renderer M4 (docs/native-renderer.md, "M4, third step"): the model list
 // registry, behind native_lists (off by default; "shadow": every run of a registered list is
-// compared by the GPU plugin with its template, and nothing drawn changes).
+// compared by the GPU plugin with its template, and nothing drawn changes; "verify", M4's fourth
+// step: the plugin also replays each run's template into scratch state beside the packets,
+// compares and times it, and nothing drawn changes either).
 //
 // The RunCommandBuffer hook (cockpit_gauges.cpp) calls OnRun before the original; the track and
 // procedural models' pass hooks (scene_tiling.cpp) open a GroupScope, so a list is registered
@@ -14,13 +16,14 @@
 
 namespace forza::native_lists {
 
-// 0 the switch not read yet, 1 shadow, 2 off.
+// 0 the switch not read yet, 1 shadow, 2 off, 3 verify (on: odd).
 extern std::atomic<int> g_state;
 bool ReadSwitch();
 inline bool Active() {
   const int s = g_state.load(std::memory_order_relaxed);
-  return s == 1 || (s == 0 && ReadSwitch());
+  return (s & 1) || (s == 0 && ReadSwitch());
 }
+inline bool Verify() { return g_state.load(std::memory_order_relaxed) == 3; }
 
 // RunCommandBuffer (TU4 sub_824469B0: r3 the device, r4 the command buffer), before the
 // original: registers the list with the plugin if it is a model list not registered yet.
