@@ -594,6 +594,302 @@ class Notices(unittest.TestCase):
         self.assertFalse(self.win.setup.fan_dlc.isHidden())
         self.assertEqual(self.win.setup.msg2.text(), "")
 
+    def test_setup_shows_the_note_and_the_mismatch_warning(self):
+        add_package(self.home, RECARO_SHORT, "Recaro", 3000)
+        add_package(self.home, UNKNOWN, "Other", 2999)
+        h = dlc_root(self.home) / "Headers" / "00000002" / (UNKNOWN + ".header")
+        data = bytearray(h.read_bytes())
+        data[264:306] = (UNKNOWN[:-2] + "5D").encode()
+        h.write_bytes(bytes(data))
+        self.refresh()
+        setup = self.win.setup
+        self.assertFalse(setup.dlcnote.isHidden())
+        self.assertIn("works as it is", setup.dlcnote.text())
+        self.assertNotIn(RECARO_SHORT, setup.dlcinstalled.text())
+        self.assertIn("cannot find", setup.dlcinstalled.text())
+        self.assertIn(UNKNOWN[:-2] + "5D", setup.dlcinstalled.text())
+
+    def test_a_lone_short_name_shows_no_warning(self):
+        add_package(self.home, RECARO_SHORT, "Recaro", 3000)
+        self.refresh()
+        self.assertTrue(self.win.setup.dlcinstalled.isHidden())
+        self.assertFalse(self.win.setup.dlcnote.isHidden())
+
+
+RECARO = "DFCA0F246444BEB5F96E33802B0C3D082B25003F4D"
+RECARO_SHORT = RECARO[:-1]   # #951: one character short
+
+
+def snapshot(root):
+    return sorted((str(p.relative_to(root)), p.read_bytes() if p.is_file() else None)
+                  for p in Path(root).rglob("*"))
+
+
+class ShortName(unittest.TestCase):
+    """A package folder named like a known package with the end cut off is that package (#951)."""
+
+    def setUp(self):
+        t = tempfile.TemporaryDirectory()
+        self.addCleanup(t.cleanup)
+        self.home = Path(t.name) / "data"
+
+    def test_prefix_rules(self):
+        for known in install_dlc.KNOWN_NAMES:
+            for cut in range(1, len(known) - fan_dlc.MIN_PREFIX + 1):
+                self.assertEqual(fan_dlc.suggestion(known[:-cut]), known)
+                self.assertEqual(fan_dlc.suggestion(known[:-cut].lower()), known)
+                self.assertEqual(fan_dlc.canonical(known[:-cut]), known)
+            self.assertIsNone(fan_dlc.suggestion(known))                              # the full name: known already
+            self.assertEqual(fan_dlc.canonical(known.lower()), known)
+            self.assertIsNone(fan_dlc.suggestion(known[:fan_dlc.MIN_PREFIX - 1]))     # too short
+
+    def test_ambiguous_prefix(self):
+        fake = {"A" * 40 + "1D": "One", "A" * 40 + "2D": "Two"}
+        with patch.object(install_dlc, "KNOWN_NAMES", fake):
+            self.assertIsNone(fan_dlc.suggestion("A" * 40))
+            self.assertEqual(fan_dlc.suggestion("A" * 40 + "1"), "A" * 40 + "1D")
+
+    def test_odd_names(self):
+        for name in (RECARO[:10], RECARO[:31], "", "DFCA", RECARO + "X", RECARO_SHORT + "Z",
+                     RECARO_SHORT + "\u00e9", "\u00c0" + RECARO[1:-1], RECARO_SHORT + " ", "..",
+                     RECARO_SHORT + ".part"):
+            self.assertIsNone(fan_dlc.suggestion(name), repr(name))
+            self.assertIsNone(fan_dlc.canonical(name), repr(name))
+
+    def test_a_short_name_is_not_unrecognized_and_gets_a_note(self):
+        add_package(self.home, RECARO_SHORT, "January Recaro Car Pack", 3000)
+        add_package(self.home, UNKNOWN, "Other", 2999)
+        self.assertEqual([p.name for p in fan_dlc.unrecognized(self.home)], [UNKNOWN])
+        pairs = fan_dlc.short_names(self.home)
+        self.assertEqual(pairs, [(RECARO_SHORT, RECARO)])
+        text = fan_dlc.short_text(pairs)
+        self.assertIn(install_dlc.KNOWN_NAMES[RECARO], text)
+        self.assertIn("works as it is", text)
+        self.assertEqual(fan_dlc.short_text([]), "")
+
+    def test_a_short_name_with_offer_1975_is_still_the_fan_pack(self):
+        known = RECARO_SHORT
+        add_fan(self.home, name=known)
+        self.assertEqual([p.name for p in fan_dlc.fan_packages(self.home)], [known])
+
+    def test_install_warning_leaves_a_short_name_out(self):
+        self.assertEqual(installer.dlc_warning([(RECARO_SHORT, "x"), (RECARO, "y")]), "")
+        self.assertIn(UNKNOWN, installer.dlc_warning([(RECARO_SHORT, "x"), (UNKNOWN, "z")]))
+
+    def test_the_file_check_uses_the_full_names_list(self):
+        from forza_launcher import dlccheck
+        files = {"A/B.BIN": ("a/b.bin", 3, "x")}
+        fake = ({RECARO: {"a/b.bin": ("a/b.bin", 3, "sha")}}, {})
+        with patch.object(dlccheck, "_manifest", return_value=fake):
+            self.assertEqual(dlccheck.compare(RECARO_SHORT, {"a/b.bin": (3, "sha")}), [])
+            self.assertTrue(dlccheck.compare(RECARO_SHORT, {"a/b.bin": (3, "bad")}))
+            self.assertTrue(dlccheck.compare(RECARO, {}))
+            self.assertEqual(dlccheck.display_name(RECARO_SHORT), install_dlc.KNOWN_NAMES[RECARO])
+        add_package(self.home, RECARO_SHORT, None, 3000, files=[("a/b.bin", b"x")])
+        with patch.object(dlccheck, "_manifest", return_value=fake):
+            (got,) = dlccheck.installed_problems(self.home)
+        self.assertEqual(got[0], RECARO_SHORT)
+
+
+class HeaderName(unittest.TestCase):
+    """The game opens a package by the name stored in its .header (bytes 264-305): warn when it is not the folder's."""
+
+    def setUp(self):
+        t = tempfile.TemporaryDirectory()
+        self.addCleanup(t.cleanup)
+        self.home = Path(t.name) / "data"
+
+    def hdr(self, name):
+        return dlc_root(self.home) / "Headers" / "00000002" / (name + ".header")
+
+    def test_matching_name_no_warning(self):
+        add_package(self.home, RECARO_SHORT, "Recaro", 3000)       # header_bytes stores the folder's name
+        add_official(self.home)
+        self.assertEqual(fan_dlc.header_mismatches(self.home), [])
+        self.assertEqual(fan_dlc.stored_name(self.hdr(RECARO_SHORT)), RECARO_SHORT)
+        self.assertEqual(fan_dlc.mismatch_text([], self.home), "")
+
+    def test_other_case(self):
+        add_package(self.home, RECARO.lower(), "Recaro", 3000)
+        h = self.hdr(RECARO.lower())
+        data = bytearray(h.read_bytes())
+        data[264:306] = RECARO.encode()
+        h.write_bytes(bytes(data))
+        with patch.object(fan_dlc, "CASE_BLIND", True):   # Windows does not tell the two apart
+            self.assertEqual(fan_dlc.header_mismatches(self.home), [])
+        with patch.object(fan_dlc, "CASE_BLIND", False):   # the game looks for the exact name
+            self.assertEqual(fan_dlc.header_mismatches(self.home), [(RECARO.lower(), RECARO)])
+
+    def test_a_case_only_mismatch_is_not_a_duplicate(self):
+        add_package(self.home, RECARO.lower(), "Recaro", 3000)
+        h = self.hdr(RECARO.lower())
+        data = bytearray(h.read_bytes())
+        data[264:306] = RECARO.encode()
+        h.write_bytes(bytes(data))
+        with patch.object(fan_dlc, "CASE_BLIND", False):
+            text = fan_dlc.mismatch_text(fan_dlc.header_mismatches(self.home), self.home)
+        self.assertNotIn("installed twice", text)
+        self.assertIn(f"the game looks for the folder {RECARO}", text)
+        self.assertIn("rename the folder in", text)
+        self.assertIn("ending in .header", text)
+        self.assertIn("Xenia save", text)
+
+    @unittest.skipIf(os.name == "nt", "this file system does not tell cases apart")
+    def test_a_header_in_another_case_is_not_read_on_linux(self):
+        add_package(self.home, RECARO_SHORT, "Recaro", 3000)
+        h = self.hdr(RECARO_SHORT)
+        data = bytearray(h.read_bytes())
+        data[264:306] = RECARO.encode()
+        other = h.with_name(RECARO_SHORT.lower() + ".HEADER")
+        h.unlink()
+        other.write_bytes(bytes(data))
+        with patch.object(fan_dlc, "CASE_BLIND", False):
+            self.assertEqual(fan_dlc.header_mismatches(self.home), [])
+
+    def test_a_duplicate_and_a_damaged_name_say_so(self):
+        add_package(self.home, RECARO_SHORT, "Recaro", 3000)
+        add_package(self.home, RECARO, "Recaro", 3000)
+        data = bytearray(self.hdr(RECARO_SHORT).read_bytes())
+        data[264:306] = RECARO.encode()
+        self.hdr(RECARO_SHORT).write_bytes(bytes(data))
+        add_package(self.home, UNKNOWN, "Other", 2999)
+        data = bytearray(self.hdr(UNKNOWN).read_bytes())
+        data[264:306] = b"../x".ljust(42, b"\0")
+        self.hdr(UNKNOWN).write_bytes(bytes(data))
+        text = fan_dlc.mismatch_text(fan_dlc.header_mismatches(self.home), self.home)
+        self.assertIn("installed twice", text)
+        self.assertIn(f"The game uses {RECARO}: remove the folder {RECARO_SHORT} and the file "
+                      f"{RECARO_SHORT}.header", text)
+        self.assertNotIn("remove one of them", text)
+        self.assertNotIn(f"remove the folder {RECARO} ", text)
+        self.assertIn("The game cannot find some installed DLC packages", text)
+        self.assertIn("damaged", text)
+        self.assertNotIn("../x", text.replace("not a package name", ""))
+        self.assertNotIn("rename the folder in", text)
+
+    def test_a_duplicate_alone_does_not_say_the_game_cannot_find_it(self):
+        add_package(self.home, RECARO_SHORT, "Recaro", 3000)
+        add_package(self.home, RECARO, "Recaro", 3000)
+        data = bytearray(self.hdr(RECARO_SHORT).read_bytes())
+        data[264:306] = RECARO.encode()
+        self.hdr(RECARO_SHORT).write_bytes(bytes(data))
+        text = fan_dlc.mismatch_text(fan_dlc.header_mismatches(self.home), self.home)
+        self.assertNotIn("cannot find", text)
+        self.assertNotIn("rename the folder in", text)
+        self.assertIn("installed twice", text)
+
+    def set_stored(self, folder, stored):
+        data = bytearray(self.hdr(folder).read_bytes())
+        data[264:306] = stored.encode().ljust(42, b"\0")
+        self.hdr(folder).write_bytes(bytes(data))
+
+    def test_crossed_headers_never_say_remove_for_both(self):
+        add_package(self.home, RECARO_SHORT, "Recaro", 3000)
+        add_package(self.home, RECARO, "Recaro", 3000)
+        self.set_stored(RECARO_SHORT, RECARO)
+        self.set_stored(RECARO, RECARO_SHORT)
+        pairs = fan_dlc.header_mismatches(self.home)
+        self.assertEqual(len(pairs), 2)
+        text = fan_dlc.mismatch_text(pairs, self.home)
+        self.assertNotIn("remove the folder", text)
+        self.assertNotIn("installed twice", text)
+        self.assertIn("point at one another", text)
+        self.assertIn("install the pack again", text)
+
+    def test_a_non_ascii_stored_name_is_damaged_and_makes_no_remove_line(self):
+        add_package(self.home, RECARO_SHORT, "Recaro", 3000)
+        add_package(self.home, RECARO, "Recaro", 3000)
+        data = bytearray(self.hdr(RECARO).read_bytes())
+        data[264:306] = "\u00e9".encode("latin-1") + b"\xff".ljust(41, b"\0")
+        self.hdr(RECARO).write_bytes(bytes(data))
+        self.set_stored(RECARO_SHORT, RECARO)
+        pairs = fan_dlc.header_mismatches(self.home)
+        self.assertEqual(sorted(n for n, _s in pairs), sorted([RECARO, RECARO_SHORT]))
+        text = fan_dlc.mismatch_text(pairs, self.home)
+        self.assertNotIn("remove the folder", text)
+        self.assertIn("not a package name", text)
+
+    def test_a_chain_removes_only_what_ends_in_a_working_copy(self):
+        a, c = RECARO_SHORT, RECARO
+        b = "DFCA0F246444BEB5F96E33802B0C3D082B25003F"   # a third, shorter folder
+        for n in (a, b, c):
+            add_package(self.home, n, "Recaro", 3000)
+        self.set_stored(b, a)    # b -> a -> c, c names itself
+        self.set_stored(a, c)
+        pairs = dict(fan_dlc.header_mismatches(self.home))
+        self.assertEqual(pairs, {a: c, b: a})
+        text = fan_dlc.mismatch_text(sorted(pairs.items()), self.home)
+        self.assertEqual(text.count("remove the folder"), 1)
+        self.assertIn(f"remove the folder {a} and the file {a}.header", text)
+        self.assertNotIn(f"remove the folder {b} and", text)
+        self.assertNotIn(f"remove the folder {c} and", text)
+        self.assertIn("point at one another", text)
+
+    def test_short_names_skip_the_fan_pack_and_a_header_that_differs(self):
+        add_fan(self.home, name=RECARO_SHORT)
+        self.assertEqual(fan_dlc.short_names(self.home), [])
+        fan_dlc.unrecognized(self.home)
+        add_package(self.home, UNKNOWN[:-1], None, 2999)
+        t = tempfile.TemporaryDirectory()
+        self.addCleanup(t.cleanup)
+        other = Path(t.name) / "d"
+        add_package(other, RECARO_SHORT, "Recaro", 3000)
+        data = bytearray(self.hdr_in(other, RECARO_SHORT).read_bytes())
+        data[264:306] = RECARO.encode()
+        self.hdr_in(other, RECARO_SHORT).write_bytes(bytes(data))
+        self.assertEqual(fan_dlc.short_names(other), [])
+
+    def hdr_in(self, home, name):
+        return dlc_root(home) / "Headers" / "00000002" / (name + ".header")
+
+    def test_a_different_name_warns_and_says_what_to_rename_to(self):
+        add_package(self.home, RECARO_SHORT, "Recaro", 3000)
+        h = self.hdr(RECARO_SHORT)
+        data = bytearray(h.read_bytes())
+        data[264:306] = RECARO.encode()
+        h.write_bytes(bytes(data))
+        self.assertEqual(fan_dlc.header_mismatches(self.home), [(RECARO_SHORT, RECARO)])
+        text = fan_dlc.mismatch_text(fan_dlc.header_mismatches(self.home), self.home)
+        self.assertIn(RECARO, text)
+        self.assertIn("rename the folder in", text)
+        self.assertIn("Headers", text)
+        self.assertIn(str(dlc_root(self.home) / "00000002"), text)
+        self.assertIn("does not change your files", text)
+
+    def test_unreadable_short_empty_and_odd_headers_do_not_warn(self):
+        add_package(self.home, RECARO_SHORT, "Recaro", 3000)
+        h = self.hdr(RECARO_SHORT)
+        good = h.read_bytes()
+        for data in (b"", good[:100], good[:0x147]):
+            h.write_bytes(data)
+            self.assertEqual(fan_dlc.header_mismatches(self.home), [], len(data))
+        h.write_bytes(b"\0" * 0x148)   # an empty name: the game opens the DLC folder itself, not the pack
+        self.assertEqual(fan_dlc.header_mismatches(self.home), [(RECARO_SHORT, "")])
+        h.unlink()
+        self.assertEqual(fan_dlc.header_mismatches(self.home), [])          # no header at all
+        h.mkdir()                                                           # not a file
+        self.assertEqual(fan_dlc.header_mismatches(self.home), [])
+        self.assertIsNone(fan_dlc.stored_name(self.hdr("nothing")))
+
+    def test_an_unreadable_header(self):
+        add_package(self.home, RECARO_SHORT, "Recaro", 3000)
+        with patch("builtins.open", side_effect=PermissionError("no")):
+            self.assertIsNone(fan_dlc.stored_name(self.hdr(RECARO_SHORT)))
+
+    def test_nothing_is_written_and_xenia_copies_are_left_alone(self):
+        add_package(self.home, RECARO_SHORT, "Recaro", 3000)
+        data = bytearray(self.hdr(RECARO_SHORT).read_bytes())
+        data[264:306] = RECARO.encode()
+        self.hdr(RECARO_SHORT).write_bytes(bytes(data))
+        mirror = self.home / "xenia-E000000000000001"
+        add_package(mirror, RECARO_SHORT, "Recaro", 3000)
+        before = snapshot(self.home)
+        fan_dlc.header_mismatches(self.home)
+        fan_dlc.short_names(self.home)
+        fan_dlc.unrecognized(self.home)
+        fan_dlc.mismatch_text(fan_dlc.header_mismatches(self.home), self.home)
+        self.assertEqual(snapshot(self.home), before)
+
 
 if __name__ == "__main__":
     unittest.main()
