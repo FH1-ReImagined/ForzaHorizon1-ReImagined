@@ -278,7 +278,7 @@ class SafetyTests(unittest.TestCase):
     def test_check_returns_exit_two_for_failed_session(self):
         scene = self.base / "fixture"
         scene.mkdir(parents=True)
-        (scene / "baseline.json").write_text('{"files": []}')
+        (scene / "baseline.json").write_text('{"files": [], "frame_time": "fixed"}')
         save = self.base / "save"
         save.mkdir()
         (save / "save.json").write_text('{"xuid": "1234"}')
@@ -286,6 +286,190 @@ class SafetyTests(unittest.TestCase):
         with patch.object(rt, "play", return_value=({}, {"fixture": "clock worker failed"})), \
                 patch.object(rt, "provenance", return_value={}):
             self.assertEqual(rt.cmd_check(cfg, self.args(report=None)), 2)
+
+    def test_check_refuses_baselines_recorded_with_real_frame_times(self):
+        scene = self.base / "fixture"
+        scene.mkdir(parents=True)
+        (scene / "baseline.json").write_text('{"files": []}')  # before #960
+        cfg = {"scenes": {"fixture": {}}, "defaults": {"max_dssim": .01, "max_bad": .01}}
+        with patch.object(rt, "play") as play, self.assertRaises(SystemExit) as stop:
+            rt.cmd_check(cfg, self.args(report=None))
+        self.assertIn("record them again", str(stop.exception.code))
+        play.assert_not_called()
+
+    def test_check_reports_replays_and_a_size_mismatch_as_a_fail(self):
+        for name in ("big", "fine"):
+            scene = self.base / name
+            scene.mkdir(parents=True)
+            (scene / "baseline.json").write_text('{"files": ["a.png"], "frame_time": "fixed"}')
+        save = self.base / "save"
+        save.mkdir()
+        (save / "save.json").write_text('{"xuid": "1234"}')
+        cfg = {"scenes": {"big": {}, "fine": {}}, "defaults": {"max_dssim": .01, "max_bad": .01}}
+
+        def play(*a, replays=None, **k):
+            replays.append({"session": "s", "attempt": 1, "reason": "the car moved"})
+            return {"big": ["x.png"], "fine": ["y.png"]}, {}
+
+        def match(base, cur, scene):
+            if cur == ["x.png"]:
+                raise ValueError("image sizes differ: (1280, 720) vs (2560, 1440)")
+            return {"dssim": 0.001, "bad": 0.0, "mae": 0.1, "baseline": "a", "current": "y"}
+
+        report = self.root / "report"
+        with patch.object(rt, "play", play), patch.object(rt, "best_match", match), \
+                patch.object(rt, "diff_image"), patch.object(rt.shutil, "copy2"), \
+                patch.object(rt, "provenance", return_value={}):
+            self.assertEqual(rt.cmd_check(cfg, self.args(report=str(report))), 1)
+        data = __import__("json").loads((report / "report.json").read_text())
+        self.assertEqual(data["info"]["replays"][0]["reason"], "the car moved")
+        rows = {r["scene"]: r for r in data["scenes"]}
+        self.assertEqual(rows["big"]["result"], "FAIL")
+        self.assertIn("sizes differ", rows["big"]["error"])
+        self.assertEqual(rows["fine"]["result"], "PASS")
+        self.assertIn("the car moved", (report / "index.html").read_text())
+
+    def test_the_last_attempt_compares_a_car_that_rests_elsewhere(self):
+        with self.assertRaises(rt.Hang):
+            self.land(self.FALL + [101.088], spawns=[[87.68, -3921.24, 100.0950]])
+        s = self.session()
+        s.last_attempt = True
+        s.proc = types.SimpleNamespace(pid=1)
+        s.spawn = (87.68, -3921.24, 100.09, 101.088)
+        with patch.object(rt, "Guest"), \
+                patch.object(rt, "player_pose", lambda _: (87.70, -3921.25, 100.3, 101.088)):
+            s.car_still("photo_mode")  # moved, but the last attempt: captured all the same
+
+    def test_frame_rate_is_the_last_flag_and_never_the_console_rate(self):
+        cfg = {"game": {"args": ["--frame_rate=60"]}}
+        self.assertEqual(rt.frame_rate(cfg, self.args(extra=[])), 60)
+        self.assertEqual(rt.frame_rate(cfg, self.args(extra=["--frame_rate=120"])), 120)
+        with self.assertRaises(ValueError):  # 30 keeps the game's own frame time: no frame log
+            rt.frame_rate(cfg, self.args(extra=["--frame_rate=30"]))
+        with self.assertRaises(ValueError):
+            rt.frame_rate({"game": {}}, self.args(extra=[]))
+        with self.assertRaises(ValueError):  # the two-word form is not read: refused
+            rt.frame_rate(cfg, self.args(extra=["--frame_rate", "120"]))
+
+    def test_game_time_counts_whole_lines_of_the_frame_log(self):
+        s = self.session()
+        s.dir.mkdir(parents=True)
+        self.assertEqual(s.game_frames(), 0)  # no log yet
+        log = s.dir / "frametime.csv"
+        log.write_text("0.000,16.6667,16,1,0,0\n16.667,16.6667,17,1,0,0\n33.3")
+        self.assertEqual(s.game_frames(), 2)  # the partial third line is not a frame yet
+        with open(log, "a") as f:
+            f.write("33,16.6667,16,1,0,0\n")
+        self.assertEqual(s.game_frames(), 3)
+
+    def test_at_steps_wait_for_game_frames_counted_from_the_world_start(self):
+        s = self.session()
+        s.fps, s.world_frame = 60, 100
+        s.cfg = {"game": {}, "scenes": {"x": {}}, "defaults": {"shots": 2, "interval": 0.5}}
+        s.clock = types.SimpleNamespace(target=None, addr=None)
+        s.shot = lambda stem: [stem]
+        s.game_frames = lambda: 580
+        waited = []
+        s.wait_frame = waited.append
+        s.run_steps(["at 1.5", "at 8", "capture x"], {"x"})
+        # The second shot comes 0.5 game seconds (30 frames) after the first.
+        self.assertEqual(waited, [190, 580, 610])
+
+    def test_before_world_at_and_shots_count_frames_from_the_boot(self):
+        s = self.session()
+        s.fps = 60
+        s.cfg = {"game": {}, "scenes": {"x": {}}, "defaults": {"shots": 3, "interval": 0.1}}
+        s.clock = types.SimpleNamespace(target=None, addr=None)
+        s.shot = lambda stem: [stem]
+        s.game_frames = lambda: 31
+        waited = []
+        s.wait_frame = waited.append
+        s.run_steps(["at 0.5", "capture x"], {"x"})
+        self.assertEqual(waited, [30, 37, 43])  # frame 30, then 6 frames apart from the first
+
+    def race_start(self, frames):
+        s = self.session()
+        s.check = lambda: None
+        s.proc = types.SimpleNamespace(pid=1)
+        s.game_frames = lambda: 4321
+        ticks = iter(i * 0.1 for i in range(100000))
+        with patch.object(rt, "Guest"), patch.object(rt, "cpu_cars", side_effect=frames), \
+                patch.object(rt.time, "monotonic", lambda: next(ticks)), \
+                patch.object(rt.time, "sleep", lambda _: None):
+            s.wait_start(1000)
+        return s
+
+    def test_race_start_is_a_cpu_car_moving_off_after_standing(self):
+        frames = ([{}] * 3 + [{8: (100.0, 100.0)}]       # loading, then a car appears
+                  + [{8: (500.0, 500.0)}] * 3             # placed on the grid (a jump)
+                  + [{8: (500.4, 500.0)}]                 # settles: not a start, it stood < 1 s
+                  + [{8: (500.4, 500.0)}] * 15            # stands 1.5 s
+                  + [{8: (500.8, 500.0)}])                # moves off
+        self.assertEqual(self.race_start(frames).world_frame, 4321)
+
+    def test_race_start_ignores_a_car_that_has_not_stood(self):
+        frames = [{8: (float(i), 0.0)} for i in range(40)]  # driving the whole time
+        with self.assertRaises(StopIteration):  # never started: the fake runs out of frames
+            self.race_start(frames)
+
+    def land(self, heights, spawns=None):
+        """Plays the land step against a fake car: one height per main loop frame from frame
+        100 (the world start); it rests at 87.68, -3921.24, heading 100.09."""
+        s = self.session()
+        s.args.spawns = spawns
+        s.check = lambda: None
+        s.proc = types.SimpleNamespace(pid=1)
+        s.fps, s.world_frame = 60, 100
+        frame = {"n": 100}
+        seq = iter(heights)
+        def height(_):
+            frame["n"] += 1
+            return next(seq, heights[-1])
+        s.game_frames = lambda: frame["n"]
+        with patch.object(rt, "Guest"), patch.object(rt, "player_height", height), \
+                patch.object(rt, "player_pose", lambda _: (87.68, -3921.24, 100.09, 101.088)), \
+                patch.object(rt.time, "sleep", lambda _: None):
+            s.land(60)
+        return s
+
+    FALL = [101.58] + [101.59] * 4 + [101.58, 101.5, 101.3, 101.1]  # lifted, then it falls
+
+    def test_land_waits_for_the_car_to_rest_and_keeps_where(self):
+        s = self.land(self.FALL + [101.02, 100.97, 101.097, 101.088])
+        self.assertEqual(s.spawn, (87.68, -3921.24, 100.09, 101.088))
+
+    def test_a_check_plays_again_when_the_car_rests_where_no_baseline_run_did(self):
+        self.land(self.FALL + [101.088], spawns=[[87.6801, -3921.2403, 100.0905]])  # within
+        with self.assertRaises(rt.Hang):  # 0.005 degrees off: the other spot
+            self.land(self.FALL + [101.088], spawns=[[87.68, -3921.24, 100.0950]])
+        with self.assertRaises(rt.Hang):  # 2 mm off
+            self.land(self.FALL + [101.088], spawns=[[87.682, -3921.24, 100.09]])
+
+    def test_a_car_moved_since_it_landed_is_played_again(self):
+        s = self.session()
+        s.proc = types.SimpleNamespace(pid=1)
+        s.spawn = (87.68, -3921.24, 100.09, 101.088)
+        with patch.object(rt, "Guest"):
+            with patch.object(rt, "player_pose", lambda _: (87.6801, -3921.24, 100.0905, 101.088)):
+                s.car_still("cockpit")  # where it landed
+            with patch.object(rt, "player_pose", lambda _: (-205.2, -3637.1, 30.0, 106.0)):
+                s.car_still("race_start")  # on the race's grid, far away
+            with patch.object(rt, "player_pose", lambda _: (87.70, -3921.25, 100.3, 101.088)):
+                with self.assertRaises(rt.Hang):
+                    s.car_still("photo_mode")  # pushed
+
+    def test_land_before_world_is_an_error(self):
+        s = self.session()
+        with self.assertRaises(ValueError):
+            s.land(60)
+
+    def test_a_main_loop_that_stops_is_a_hang(self):
+        s = self.session()
+        s.dir.mkdir(parents=True)
+        s.check = lambda: None
+        s.game_at -= 100
+        with self.assertRaises(rt.Hang):
+            s.wait_frame(1)
 
 
 if __name__ == "__main__":

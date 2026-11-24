@@ -13,7 +13,8 @@ using a block SSIM (structure and brightness) plus a chroma check, under per-sce
 
 Baselines live outside the repository (default ~/.local/share/forza-render-baselines, or
 FORZA_RENDER_BASELINES): never commit captures, they are game images. Run folders, the game's
-shader caches and the reports go to ~/.cache/forza-render-tests (FORZA_RENDER_WORK).
+shader caches (empty at every start) and the reports go to ~/.cache/forza-render-tests
+(FORZA_RENDER_WORK).
 
 The idea of fixed scenes with image baselines and a tolerance follows Pinyon Shift's
 tools/run-fh1-render-test.py (BSD-3-Clause, LICENSE-Pinyon-Shift); the code is our own.
@@ -218,6 +219,74 @@ def clock_address(g):
         return None
 
 
+def cars(g, kind):
+    """{vehicle: (x, y, z)} of the cars of KIND (0 the player's, 1 a CPU driver's), as
+    tools/carlog.py reads the car list (TU4: *(*(*0x833CAAE4 + 4) + 4), slots from +0x80 to
+    +0x84; a slot's vehicle has its kind at +0x2DD0 and its car at +0x2D90, whose position is at
+    -0xA20, y up). Empty while there is none."""
+    out = {}
+    try:
+        root = g.u32(0x833CAAE4)
+        holder = g.u32(root + 4) if ok_ptr(root) else 0
+        lst = g.u32(holder + 4) if ok_ptr(holder) else 0
+        if not ok_ptr(lst):
+            return out
+        first, end = g.u32(lst + 0x80), g.u32(lst + 0x84)
+        if not ok_ptr(first) or end < first or end - first > 256:
+            return out
+        for slot in range(first, end, 4):
+            v = g.u32(slot)
+            if not ok_ptr(v) or g.u32(v + 0x2DD0) != kind:
+                continue
+            car = g.u32(v + 0x2D90)
+            if not ok_ptr(car):
+                continue
+            p = struct.unpack(">3f", g.read(car - 0xA20, 12))
+            if all(math.isfinite(c) for c in p) and (p[0], p[2]) != (0.0, 0.0):
+                out[v] = p  # by vehicle, not slot: the list may be rebuilt while a race loads
+    except (OSError, struct.error):
+        pass
+    return out
+
+
+def cpu_cars(g):
+    """{vehicle: (x, z)} of the CPU drivers' cars."""
+    return {v: (x, z) for v, (x, _, z) in cars(g, 1).items()}
+
+
+def player_height(g):
+    """The height (y) of the player's car, or None."""
+    own = list(cars(g, 0).values())
+    return own[0][1] if own else None
+
+
+def player_pose(g):
+    """(x, z, heading in degrees, y) of the player's car, or None. Its forward vector is at
+    car - 0xA40 (tools/autodrive.py)."""
+    try:
+        root = g.u32(0x833CAAE4)
+        holder = g.u32(root + 4) if ok_ptr(root) else 0
+        lst = g.u32(holder + 4) if ok_ptr(holder) else 0
+        if not ok_ptr(lst):
+            return None
+        first, end = g.u32(lst + 0x80), g.u32(lst + 0x84)
+        if not ok_ptr(first) or end < first or end - first > 256:
+            return None
+        for slot in range(first, end, 4):
+            v = g.u32(slot)
+            if not ok_ptr(v) or g.u32(v + 0x2DD0) != 0:
+                continue
+            car = g.u32(v + 0x2D90)
+            if not ok_ptr(car):
+                continue
+            x, y, z = struct.unpack(">3f", g.read(car - 0xA20, 12))
+            fx, _, fz = struct.unpack(">3f", g.read(car - 0xA40, 12))
+            return x, z, math.degrees(math.atan2(fx, fz)), y
+    except (OSError, struct.error):
+        pass
+    return None
+
+
 class ClockHold(threading.Thread):
     """Writes the held time of day about every 15 ms (once a frame at 60 fps) while a target
     is set. Between two writes the game advances it by less than a game second."""
@@ -313,6 +382,12 @@ class Session:
         self.shm = None
         self.frames_size = 0
         self.frames_at = time.monotonic()
+        self.fps = None
+        self.game_pos = self.game_lines = 0   # read so far of the main loop's frame log
+        self.game_at = time.monotonic()
+        self.world_frame = None   # main loop frame of the latest anchor ("world", "start")
+        self.spawn = None         # where the car came to rest at the spawn ("land")
+        self.last_attempt = False  # play's last attempt: a car elsewhere is compared, not replayed
         self.shots = {}
         self.burst = int(cfg["game"].get("burst", 1))
         self.pool = ThreadPoolExecutor(max_workers=2)
@@ -339,8 +414,11 @@ class Session:
         shutil.copytree(source, ud / PROFILE_DIR / TITLE)
         for sub in ("config", "data", "state"):
             (d / "xdg" / sub).mkdir(parents=True)
-        (work / "cache").mkdir(parents=True, exist_ok=True)
-        (work / "xdg-cache").mkdir(parents=True, exist_ok=True)
+        # Every run starts with empty shader caches (the game's and Mesa's, in its run folder):
+        # with warm ones the car dropped at the spawn came to rest at one of several spots,
+        # with cold ones nearly always at the same one (#960, docs/render-tests.md).
+        (d / "cache").mkdir()
+        (d / "xdg-cache").mkdir()
         os.mkfifo(d / "in.fifo")
         game = stage_build(self.args.build, d / "game")
         # The player's variables for the game (the server, the launcher's graphics settings and
@@ -349,7 +427,7 @@ class Session:
         env.update({
             # The player's own settings, saves and caches stay out of the run.
             "XDG_CONFIG_HOME": str(d / "xdg/config"), "XDG_DATA_HOME": str(d / "xdg/data"),
-            "XDG_STATE_HOME": str(d / "xdg/state"), "XDG_CACHE_HOME": str(work / "xdg-cache"),
+            "XDG_STATE_HOME": str(d / "xdg/state"), "XDG_CACHE_HOME": str(d / "xdg-cache"),
             "FORZA_XUID": self.xuid, "REX_AUDIO_FAIL_OPEN": "all",
             "SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT": "0x0000/0x0000",
             "SDL_JOYSTICK_IGNORE_DEVICES_EXCEPT": "0x0000/0x0000",
@@ -359,13 +437,17 @@ class Session:
             "FORZA_SCREENSHOT_BURST": f"{self.burst}:1",
             # frames.csv grows while frames are presented: the hang watch reads its size.
             "RECOMP_PERF": "1", "RECOMP_PERF_SCENE": "render_test", "RECOMP_PERF_CSV": str(d / "frames.csv"),
+            # Game time (#960, docs/render-tests.md): each main loop frame is 1/frame_rate of game
+            # time however long it took, and a line of frametime.csv, the clock "at" counts.
+            "FORZA_FRAME_TIME": "fixed", "FORZA_FRAMETIME_CSV": str(d / "frametime.csv"),
             "LD_LIBRARY_PATH": f"{self.args.sdk}/lib:{game}",
         })
         cmd = [str(game / "forza"),
                f"--game_data_root={self.args.game_data}", f"--update_data_root={self.args.update_data}",
-               f"--user_data_root={ud}", f"--cache_root={work / 'cache'}",
+               f"--user_data_root={ud}", f"--cache_root={d / 'cache'}",
                f"--log_file={d / 'forza.log'}", "--log_level=info",
                *self.cfg["game"]["args"], *self.args.extra]
+        self.fps = frame_rate(self.cfg, self.args)
         (d / "command.txt").write_text(" ".join(cmd) + "\n")
         with open(d / "run.out", "wb") as out:
             self.proc = subprocess.Popen(cmd, cwd=game, env=env, stdin=subprocess.DEVNULL,
@@ -448,6 +530,37 @@ class Session:
         elif now - self.frames_at > self.args.hang_secs:
             raise Hang(f"no new frames for {self.args.hang_secs:.0f} s")
 
+    def game_frames(self):
+        """Main loop frames the game has run so far: the lines of frametime.csv, which the game
+        flushes every frame in FORZA_FRAME_TIME=fixed mode."""
+        try:
+            with open(self.dir / "frametime.csv", "rb") as f:
+                f.seek(self.game_pos)
+                data = f.read()
+        except FileNotFoundError:
+            data = b""
+        if data:
+            self.game_pos += len(data)
+            self.game_lines += data.count(b"\n")
+            self.game_at = time.monotonic()
+        return self.game_lines
+
+    def wait_frame(self, frame):
+        """Waits until the game has run FRAME main loop frames (game time, #960)."""
+        while self.game_frames() < frame:
+            self.check()
+            if time.monotonic() - self.game_at > self.args.hang_secs:
+                raise Hang(f"the main loop ran no frame for {self.args.hang_secs:.0f} s"
+                           " (a build without FORZA_FRAME_TIME=fixed writes frametime.csv in blocks)")
+            time.sleep(0.002)
+
+    def wait_game(self, secs):
+        """SECS of game time after the world started, or real time before that."""
+        if self.world_frame is None:
+            self.wait(secs)
+        else:
+            self.wait_frame(self.game_frames() + round(secs * self.fps))
+
     def wait(self, secs):
         end = time.monotonic() + secs
         while True:
@@ -493,10 +606,106 @@ class Session:
         (self.dir / "shot.trigger").unlink(missing_ok=True)
         raise Hang("no screenshot within 10 s (the game stopped presenting)")
 
+    def land(self, timeout):
+        """Free roam starts with the car dropped onto the road at the spawn. Waits until it has
+        come to rest (two game seconds after it starts to fall) and logs where: the scenes that
+        follow turn with it (#960, docs/render-tests.md)."""
+        if self.world_frame is None:
+            raise ValueError("land: needs a world step before it")
+        g = Guest(self.proc.pid)
+        try:
+            end = time.monotonic() + timeout
+            top = None
+            while True:
+                self.check()
+                if time.monotonic() > end:
+                    raise Hang("the car did not drop onto the road at the spawn")
+                y = player_height(g)
+                if y is not None:
+                    if top is not None and y < top - 0.005:
+                        break
+                    top = y if top is None else max(top, y)
+                time.sleep(0.002)
+            fall = self.game_frames()
+            low = y
+            while self.game_frames() < fall + 2 * self.fps:
+                self.check()
+                if time.monotonic() > end + 60:
+                    raise Hang("the car did not come to rest at the spawn")
+                y = player_height(g)
+                if y is not None:
+                    low = min(low, y)
+                time.sleep(0.002)
+            pose = player_pose(g)
+            if pose is None:
+                raise Hang("no car after the drop")
+            self.spawn = pose
+            log(f"the car came to rest at {pose[0]:.4f}, {pose[1]:.4f} heading {pose[2]:.4f} degrees"
+                f" (fell from frame {fall - self.world_frame} of the world, {pose[3] - low:.3f} m deep)")
+            known = getattr(self.args, "spawns", None)
+            if known and not any(near_spot(k, pose) for k in known):
+                why = ("the car came to rest where it did in no baseline run "
+                       f"({', '.join(f'{h:.4f}' for _, _, h in sorted(set(map(tuple, known))))} degrees)")
+                if not self.last_attempt:
+                    raise Hang(why + ": playing again")
+                log(why + ": the last attempt, so the scenes are compared all the same")
+        finally:
+            g.close()
+
+    def car_still(self, name):
+        """Before a capture near the spawn: the car must still stand where it came to rest
+        ("land"). Traffic sometimes runs into it (#960): the attempt is played again (Hang)."""
+        if self.spawn is None:
+            return
+        g = Guest(self.proc.pid)
+        try:
+            pose = player_pose(g)
+        finally:
+            g.close()
+        if pose is None:
+            return
+        moved = math.hypot(pose[0] - self.spawn[0], pose[1] - self.spawn[1])
+        if moved < 50 and not near_spot(pose, self.spawn):  # 50 m: not on the race's grid
+            why = (f"{name}: the car moved since it came to rest ({moved:.3f} m,"
+                   f" {pose[2] - self.spawn[2]:+.3f} degrees; traffic ran into it?)")
+            if not self.last_attempt:
+                raise Hang(why)
+            log(why + ": the last attempt, so it is captured all the same")
+
+    def wait_start(self, timeout):
+        """Waits until the race starts: a CPU driver's car that stood still for a second moves
+        off (by 0.3 m). The race clock starts then; the race's loading and introduction before
+        it take more or fewer frames from run to run, so its scenes are timed from here."""
+        end = time.monotonic() + timeout
+        g = Guest(self.proc.pid)
+        try:
+            still = {}  # slot: (position, since)
+            while True:
+                self.check()
+                now = time.monotonic()
+                if now > end:
+                    raise Hang("the race did not start")
+                for slot, (x, z) in cpu_cars(g).items():
+                    pos, since = still.get(slot, ((x, z), now))
+                    moved = math.hypot(x - pos[0], z - pos[1])
+                    if moved > 5:  # placed on the grid (a teleport): it stands from now on
+                        still[slot] = ((x, z), now)
+                    elif moved > 0.3 and now - since >= 1:
+                        self.world_frame = self.game_frames()
+                        log(f"race started (frame {self.world_frame})")
+                        return
+                    elif moved > 0.3:
+                        still[slot] = ((x, z), now)
+                    else:
+                        still.setdefault(slot, ((x, z), now))
+                time.sleep(0.01)
+        finally:
+            g.close()
+
     def wait_world(self, timeout):
         """Waits until free roam runs: the clock resolves (during the load it reads the
         flow's 16:00, then jumps to the save's time and stays there) and then starts to
-        advance. world_at is that moment, to 10 ms."""
+        advance. world_frame is the main loop frame of that moment."""
         end = time.monotonic() + timeout
         g = Guest(self.proc.pid)
         try:
@@ -511,9 +720,9 @@ class Session:
                     break
                 if v != prev:
                     prev = v
-                time.sleep(0.01)
-            self.world_at = time.monotonic()
-            log(f"world running (clock {prev:.1f})")
+                time.sleep(0.002)
+            self.world_frame = self.game_frames()
+            log(f"world running (clock {prev:.1f}, frame {self.world_frame})")
         finally:
             g.close()
 
@@ -527,7 +736,9 @@ class Session:
             words = step.split()
             op, rest = words[0], words[1:]
             if op == "wait":
-                self.wait(float(rest[0]))
+                # Real seconds before the world runs (boot, menus, the load), game seconds after:
+                # the race's countdown and clock run on game time too.
+                self.wait_game(float(rest[0]))
             elif op == "first_frame":
                 end = time.monotonic() + 120
                 while self.frames_size == 0:
@@ -542,10 +753,16 @@ class Session:
                     self.wait(0.8)
             elif op == "world":
                 self.wait_world(float(rest[0]) if rest else 120)
+            elif op == "land":
+                self.land(float(rest[0]) if rest else 60)
+            elif op == "start":
+                self.wait_start(float(rest[0]) if rest else 120)
             elif op == "at":
-                # Real seconds since the world started running (see wait_world): steps timed
-                # this way do not depend on how long the loading took on this machine.
-                self.wait(self.world_at + float(rest[0]) - time.monotonic())
+                # Game seconds (main loop frames) since the world started running or the race
+                # started (wait_world, wait_start), or since the boot before that (the title):
+                # steps timed this way depend neither on how long the loading took nor on how
+                # fast this machine ran the frames since.
+                self.wait_frame((self.world_frame or 0) + round(float(rest[0]) * self.fps))
             elif op == "clock":
                 self.clock.set(None if rest[0] == "off" else parse_time(rest[0]))
             elif op == "capture":
@@ -558,13 +775,17 @@ class Session:
                     continue
                 if self.clock.target is not None and self.clock.addr is None:
                     raise Hang(f"{name}: the time of day is not held (no world clock)")
+                self.car_still(name)
                 paths = []
+                first = self.game_frames()
                 for k in range(shots):
-                    if k:
-                        self.wait(interval)
+                    if k:  # shot k at k * INTERVAL game seconds after the first (a slow shot
+                        # can make the next ones follow at once)
+                        self.wait_frame(first + round(k * interval * self.fps))
                     paths += self.shot(self.dir / f"{name}_{k}")
                 self.shots[name] = paths
-                log(f"captured {name} ({len(paths)} frames)")
+                at = "" if self.world_frame is None else f", from frame {first - self.world_frame} after world/start"
+                log(f"captured {name} ({len(paths)} frames{at})")
             elif op == "trace":  # debugging: the clock every 20 ms into clock_trace.txt
                 if rest[0] == "on":
                     self.clock.trace = (open(self.dir / "clock_trace.txt", "a", buffering=1), time.monotonic())
@@ -582,6 +803,42 @@ def to_png(ppm, png):
     ppm.unlink()
 
 
+# Where the car comes to rest at the spawn varies a little, and every free roam scene (and the
+# traffic) follows it; a check plays again when its car stands where no baseline run's did.
+# Spots seen: 0.005 degrees apart; runs at one spot agree to 0.0001 degrees (#960).
+SPAWN_DEGREES, SPAWN_METRES = 0.002, 0.001
+
+# Baselines recorded with FORZA_FRAME_TIME=fixed and scenes timed in game frames (#960) say so;
+# older ones show the car at another spot of the spawn and cannot be compared with.
+FRAME_TIME = "fixed"
+
+
+def near_spot(a, b):
+    """Two places the car came to rest at the spawn ([x, z, heading]) count as one."""
+    return (abs(a[2] - b[2]) <= SPAWN_DEGREES
+            and math.hypot(a[0] - b[0], a[1] - b[1]) <= SPAWN_METRES)
+
+
+def same_spot(spawns, i, j):
+    """Runs I and J of a recording rested at one spot (true when it was not seen)."""
+    return len(spawns) <= max(i, j) or near_spot(spawns[i], spawns[j])
+
+
+def frame_rate(cfg, args):
+    """The game's frame_rate setting for the run (the last --frame_rate=N flag). At the
+    console's 30 the game keeps its own frame time (no fixed mode, and frametime.csv gets a row
+    per swap, not per main loop frame), so the scenes need another rate."""
+    fps = 30
+    for flag in [*cfg["game"].get("args", []), *getattr(args, "extra", [])]:
+        if flag.startswith("--frame_rate="):
+            fps = int(flag.split("=", 1)[1])
+        elif flag == "--frame_rate":
+            raise ValueError("give the frame rate as --frame_rate=N")
+    if fps == 30:
+        raise ValueError("render tests count game time in frames, which needs a frame_rate other than 30")
+    return fps
+
+
 def parse_time(text):
     if ":" in text:
         h, m = text.split(":")
@@ -593,9 +850,11 @@ def scene_value(cfg, scene, key):
     return scene.get(key, cfg["defaults"][key])
 
 
-def play(cfg, args, wanted, label, save_dir, xuid):
+def play(cfg, args, wanted, label, save_dir, xuid, spawns=None, replays=None):
     """Runs every session that captures a wanted scene, each again after a hang (--retries).
-    Returns ({scene: [png paths]}, {scene: error} for the scenes of a session that failed)."""
+    Returns ({scene: [png paths]}, {scene: error} for the scenes of a session that failed).
+    SPAWNS, a list, gets where the car came to rest at the spawn ("land") in each session;
+    REPLAYS, a list, gets {session, attempt, reason} of every attempt that failed."""
     shots, errors = {}, {}
     for sess in cfg["session"]:
         names = [s.split()[1] for s in sess["steps"] if s.split()[0] == "capture"]
@@ -605,6 +864,7 @@ def play(cfg, args, wanted, label, save_dir, xuid):
             bench_lock_wait(args.lock_wait)
             run_dir = args.work / "runs" / f"{label}-{sess['name']}-{attempt}-{uuid.uuid4().hex}"
             s = Session(cfg, args, run_dir, save_dir, xuid)
+            s.last_attempt = attempt == args.retries + 1
             t0 = time.monotonic()
             failure = None
             try:
@@ -619,9 +879,13 @@ def play(cfg, args, wanted, label, save_dir, xuid):
                     failure = failure or e
             if failure is None:
                 shots.update(s.shots)
+                if spawns is not None and s.spawn:
+                    spawns.append([round(c, 4) for c in s.spawn[:3]])
                 log(f"session {sess['name']} done in {time.monotonic() - t0:.0f} s")
                 break
             log(f"session {sess['name']} attempt {attempt}: {failure}")
+            if replays is not None:
+                replays.append({"session": sess["name"], "attempt": attempt, "reason": str(failure)})
             if attempt == args.retries + 1:
                 for n in set(names) & wanted:
                     errors[n] = f"session {sess['name']} failed {attempt} times ({failure}); log in {run_dir}"
@@ -804,10 +1068,10 @@ def cmd_record(cfg, args):
         sys.exit(f"no save in {save}: pass --save DIR --xuid XUID once (docs/render-tests.md)")
     xuid = json.loads((save / "save.json").read_text())["xuid"]
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    runs = []
+    runs, spawns = [], []
     for i in range(args.runs):
         log(f"record run {i + 1}/{args.runs}")
-        shots, errors = play(cfg, args, names, f"{stamp}-rec{i + 1}", save / TITLE, xuid)
+        shots, errors = play(cfg, args, names, f"{stamp}-rec{i + 1}", save / TITLE, xuid, spawns)
         if errors:
             sys.exit("\n".join(sorted(set(errors.values()))))
         runs.append(shots)
@@ -827,11 +1091,13 @@ def cmd_record(cfg, args):
                 dst = d / f"run{i + 1}_{k}.png"
                 shutil.copy2(p, dst)
                 files[-1].append(dst)
-        # Run-to-run noise: each run's frames against the other runs' (what a check of the
-        # same build scores at worst).
+        # Run-to-run noise: each run's frames against the other runs' whose car rested at the
+        # same spot (what a check of the same build scores at worst; a check plays again
+        # when its car rests elsewhere).
         noise = []
         for i in range(len(files)):
-            others = [p for j, f in enumerate(files) if j != i for p in f]
+            others = [p for j, f in enumerate(files)
+                      if j != i and same_spot(spawns, i, j) for p in f]
             if others:
                 n = clean(best_match(others, files[i], scene))
                 n["baseline"], n["current"] = Path(n["baseline"]).name, Path(n["current"]).name
@@ -840,7 +1106,7 @@ def cmd_record(cfg, args):
         tol = {"max_dssim": scene_value(cfg, scene, "max_dssim"), "max_bad": scene_value(cfg, scene, "max_bad")}
         worst = {k: max((n[k] for n in noise), default=0) for k in ("dssim", "bad", "mae")}
         meta = {"scene": name, "files": files, "noise": noise, "noise_max": worst,
-                "tolerance": tol, **prov}
+                "tolerance": tol, "frame_time": FRAME_TIME, "spawns": spawns, **prov}
         (d / "baseline.json").write_text(json.dumps(meta, indent=1))
         flag = ""
         if worst["dssim"] > tol["max_dssim"] or worst["bad"] > tol["max_bad"]:
@@ -858,11 +1124,21 @@ def cmd_check(cfg, args):
     missing = [n for n in names if not (base / n / "baseline.json").exists()]
     if missing:
         sys.exit(f"no baseline for {', '.join(sorted(missing))} in {base}: record them first")
+    stale = [n for n in names
+             if json.loads((base / n / "baseline.json").read_text()).get("frame_time") != FRAME_TIME]
+    if stale:
+        sys.exit(f"the baselines of {', '.join(sorted(stale))} in {base} were recorded with real frame"
+                 " times (before #960; the car stands differently in free roam now): record them again"
+                 " on a known-good build (tools/render_test.py record, docs/render-tests.md)")
     save = base / "save"
     xuid = json.loads((save / "save.json").read_text())["xuid"]
+    # Where the car came to rest at the spawn in the recorded runs ("land").
+    args.spawns = [p for n in sorted(names)
+                   for p in json.loads((base / n / "baseline.json").read_text()).get("spawns", [])]
     stamp = time.strftime("%Y%m%d-%H%M%S")
     t0 = time.monotonic()
-    shots, errors = play(cfg, args, names, f"{stamp}-check", save / TITLE, xuid)
+    replays = []  # attempts played again (a hang, a car elsewhere): a pass after one is reported
+    shots, errors = play(cfg, args, names, f"{stamp}-check", save / TITLE, xuid, replays=replays)
     out = plain_path(args.report if args.report else args.work / "reports" / f"{stamp}-{uuid.uuid4().hex}")
     out.mkdir(parents=True)  # A report is a new directory, never an existing tree to overwrite.
     rows = []
@@ -877,7 +1153,12 @@ def cmd_check(cfg, args):
             rows.append(dict(row, result="ERROR", error=errors.get(name, "not captured")))
             log(f"{name}: ERROR {rows[-1]['error']}")
             continue
-        res = best_match([base / name / f for f in meta["files"]], shots[name], scene)
+        try:
+            res = best_match([base / name / f for f in meta["files"]], shots[name], scene)
+        except ValueError as err:  # another picture size (a render scale against scale-1 baselines)
+            rows.append(dict(row, result="FAIL", error=str(err)))
+            log(f"{name}: FAIL {err}")
+            continue
         ok = res["dssim"] <= tol["max_dssim"] and res["bad"] <= tol["max_bad"]
         diff_image(res, out / f"{name}.png")
         shutil.copy2(res["current"], out / f"{name}.current.png")
@@ -885,11 +1166,13 @@ def cmd_check(cfg, args):
         rows.append(dict(row, result="PASS" if ok else "FAIL", **clean(res)))
         log(f"{name}: {rows[-1]['result']} dssim {res['dssim']:.4f}/{tol['max_dssim']}"
             f" changed {res['bad']:.2%}/{tol['max_bad']:.2%} mae {res['mae']:.2f}")
-    info = {**provenance(args), "seconds": round(time.monotonic() - t0), "baselines": str(base)}
+    info = {**provenance(args), "seconds": round(time.monotonic() - t0), "baselines": str(base),
+            "replays": replays}
     (out / "report.json").write_text(json.dumps({"info": info, "scenes": rows}, indent=1))
     write_html(out / "index.html", info, rows)
     passed = sum(r["result"] == "PASS" for r in rows)
-    print(f"{passed}/{len(rows)} scenes pass; report: {out / 'index.html'}")
+    again = f" after {len(replays)} replayed attempt(s)" if replays else ""
+    print(f"{passed}/{len(rows)} scenes pass{again}; report: {out / 'index.html'}")
     if not args.keep_runs:
         prune_runs(args.work)
     if any(r["result"] == "ERROR" for r in rows):
@@ -907,14 +1190,20 @@ def write_html(path, info, rows):
            ".PASS{color:#6c6}.FAIL,.ERROR{color:#f66}}</style>",
            "<h1>Render test report</h1><p>"]
     for k, v in info.items():
+        if k == "replays":
+            continue
         out.append(f"<b>{e(k)}</b>: {e(str(v))}<br>")
+    replays = info.get("replays") or []
+    out.append(f"<b>replayed attempts</b>: {len(replays)}<br>")
+    for rp in replays:
+        out.append(f"&nbsp;&nbsp;session {e(str(rp['session']))}, attempt {rp['attempt']}: {e(str(rp['reason']))}<br>")
     out.append("</p><table><tr><th>scene</th><th>result</th><th>dssim / tolerance</th>"
                "<th>changed blocks / tolerance</th><th>mean abs diff</th>"
                "<th>noise when recorded (dssim, changed)</th></tr>")
     for r in rows:
         n = r.get("noise_max") or {}
         res = r["result"]
-        if res == "ERROR":
+        if "error" in r:
             cells = f"<td colspan=3>{e(r['error'])}</td>"
         else:
             cells = (f"<td>{r['dssim']:.4f} / {r['max_dssim']}</td><td>{r['bad']:.2%} / {r['max_bad']:.2%}</td>"
@@ -924,7 +1213,7 @@ def write_html(path, info, rows):
     out.append("</table><p>Each image: baseline | this run | changes (red: lower structural similarity "
                "or a colour shift; blue: masked). Click it for full size.</p>")
     for r in rows:
-        if r["result"] == "ERROR":
+        if "error" in r:
             continue
         s = e(r["scene"])
         out.append(f"<h2 id='{s}'>{s} <span class={r['result']}>{r['result']}</span></h2><p>{e(r['description'])}</p>"
@@ -994,7 +1283,8 @@ def main():
         s.add_argument("--update-data", type=Path, default=Path(os.environ.get("FORZA_UPDATE") or ROOT / "extracted/tu4"),
                        help="the extracted Title Update 4")
         s.add_argument("--hang-secs", type=float, default=40, help="no new frame for this long is a hang")
-        s.add_argument("--retries", type=int, default=1, help="new attempts after a hang (#512)")
+        s.add_argument("--retries", type=int, default=2,
+                       help="new attempts after a hang (#512) or a bad landing at the spawn (#960)")
         s.add_argument("--lock-wait", type=int, default=3600, help="seconds to wait for a benchmark lock")
         s.add_argument("--keep-runs", action="store_true", help="keep every run folder (logs, raw shots)")
         if name in ("record", "probe"):
