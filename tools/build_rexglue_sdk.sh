@@ -103,10 +103,12 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # under 50 ms keeps the gear instead of dropping the car to neutral; the lever's reads are logged (#952).
 # and 1140: the same on Direct3D 12 (its HLSL copy of the shader and the DXBC), so pictures there have
 # no comb edges either (#962).
+# and 1150: the stick deadzones apply to gamepads only, so a right stick deadzone no longer turns a wheel's
+# H-pattern gear into neutral whenever the clutch is fully up (#952).
 # A reviewed full commit can be pinned before a maintainer publishes a tag.
 # When a tag is supplied, its target must still match this immutable commit.
 REIGLUE_TAG=
-REIGLUE_COMMIT=6348cb31de62b82d17fcae76c03f4269b8f520b2  # ReIGlue main: 0650, 1100, 1110, 1120, 1130, 1140
+REIGLUE_COMMIT=8013a7ba487cf4323512ebfdf1b872d9285f2704  # ReIGlue main: 0650, 1100, 1110, 1120, 1130, 1140; 1150 (branch, #952)
 REIGLUE_URL="${REIGLUE_URL:-https://github.com/FH1-ReImagined/ReIGlue}"
 NIGHTLY="${REXSDK_NIGHTLY:-$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64}"
 SRC="${REXSDK_SRC:-$HOME/rexglue-sdk-src-forza/sdk}"

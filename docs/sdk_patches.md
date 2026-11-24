@@ -1123,3 +1123,34 @@ rebuilds the old header byte for byte. The HLSL, and the DXBC itself run on Dire
 vkd3d-proton, pass all of 1120's layout cases (scales 1 to 4 and 7 for 32-bit pixels). The
 pictures in the game on Direct3D 12 are in
 [rendering.md](rendering.md#direct3d-12-962).
+
+## ReIGlue 1150: the stick deadzones leave a racing wheel alone (#952)
+
+The input system applied *Left stick deadzone* and *Right stick deadzone*
+(`left_stick_deadzone_percentage`, `right_stick_deadzone_percentage`, Controls > Controller) to
+every controller's state, the wheel's too. The wheel driver sends the H-pattern gear on the right
+stick X (-1 reverse, 0 neutral, 1 to 7) and the clutch on the right stick Y, and the deadzone is
+radial: it takes the stick's angle from both axes and scales against the range the device's
+capabilities report, for the wheel's right stick X the top gear times 256 (1536 with six gears).
+With the clutch fully up (right Y 0) the angle is 0, the whole deadzone lies on X, and a forward
+gear of a few units fell inside it: the game was sent 0, neutral. The slightest clutch turns the
+angle to almost 90 degrees and lets the gear through; reverse, being negative, always passed.
+So with any right stick deadzone set the car fell to neutral the moment the clutch came fully up,
+with or without *Gears need the clutch*, and with *Clutch pedal* off no forward gear engaged at
+all; the gear's "no request" (10, with *Gear follows the lever's slot* off and out of focus) became
+a neutral request too. That is what a G923 player reports on v0.4.1 (#952), and their log shows the
+driver holding the gear the whole time (`Wheel: H-pattern lever 1, gear 1, clutch 1.00` and no
+change after it); the log does not record the deadzone settings. The left stick deadzone zeroed
+small steering to the right the same way (the radial deadzone only works on positive values, for
+pads too, a separate matter; with 900-degree steering the wheel reports a range of 900, so it was
+negligible there).
+
+1150 applies the deadzones to the gamepads' merged state only. A wheel's state (a device of
+subtype `XINPUT_DEVSUBTYPE_WHEEL`) is merged in after them as it is, so a gamepad next to the
+wheel keeps its deadzone and the wheel's gear survives the merge. The deadzones scale against a
+gamepad's ranges, no longer the wheel's when it was the first device (a pad plugged in while the
+user is already connected still keeps the ranges read when the user connected, as before). Test:
+`tests/unit/input/input_assignment_test.cpp` in ReIGlue: with both deadzones at 0.1, a wheel's
+gears 1, 3, 6 and reverse with the clutch up, and 3rd with the clutch just touched, reach the game
+as they are, and so does the no-request value; next to it a pad's drifting right stick inside its
+own 10 percent is still zeroed. The forward gears and the steering fail without 1150.
