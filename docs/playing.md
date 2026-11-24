@@ -175,6 +175,13 @@ tools/run_forza.sh 120        # a two-minute test run; logs in ${XDG_RUNTIME_DIR
   every player's best lap on each event with its ghost (`scoreboards.json`, `ghosts/`):
   Race Central's LEADERBOARDS show them, and X RIVALS on an event's ticket races you
   against another player's ghost for a bounty.
+  Scores and notifications are also written to a journal beside those files
+  (`scoreboards.journal`, `notifications.journal`) before the game is told they are kept, so
+  closing the game, a crash or a power cut loses none; the whole files are rewritten about
+  once a minute and at the stop (`server.log` says "written whole at the stop"). Back up the
+  whole folder, journals included. The server refuses to start, and says why in `server.log`,
+  when `scoreboards.json` or `notifications.json` cannot be read and there is no usable `.bak`
+  beside it: fix the file's permissions or move it away to start empty.
 - **Frame rate:** `frame_rate = 60` in `forza.toml` (or `tools/play.sh --frame_rate=60`)
   runs the game at 60 fps instead of the console's 30; 120, 144 or any rate up to 240 work
   too. The game times its physics and clocks in real time, so they keep their speed, and
