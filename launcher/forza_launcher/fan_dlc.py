@@ -232,26 +232,35 @@ def header_mismatches(home) -> list:
 
 
 def mismatch_text(pairs, home) -> str:
-    """What the mismatch means and what to do by hand (the launcher changes no files)."""
+    """What the mismatches mean and what to do by hand (the launcher changes no files)."""
     if not pairs:
         return ""
-    have = {n.lower() for n in datafolder.dlc_packages(home)}
+    names = set(datafolder.dlc_packages(home))
+    have = {n.lower() for n in names} if CASE_BLIND else names
     pkg_dir, hdr_dir = dlc_dirs(home)
-    lines, fixable = [], False
+    lost, twice, fixable = [], [], False
     for name, stored in pairs:
-        if stored.lower() in have:
-            lines.append(f"- {name}: its .header names {stored}, which is installed too (the pack is installed "
-                         "twice): remove one of them")
+        if (stored.lower() if CASE_BLIND else stored) in have:
+            twice.append(f"- {name}: its .header names {stored}, which is installed too. The game uses {stored} "
+                         f"and never this copy: remove the folder {name} and the file {name}.header")
         elif install_dlc.NAME_RE.fullmatch(stored):
-            lines.append(f"- {name}: the game looks for the folder {stored}")
+            lost.append(f"- {name}: the game looks for the folder {stored}")
             fixable = True
         else:
-            lines.append(f"- {name}: its .header holds a name that is not a package name, so the file is "
-                         "damaged: install the pack again")
-    return ("The game cannot find some installed DLC packages, because the name stored in the package's .header "
-            "file is not the folder's name:\n" + "\n".join(lines) +
-            (f"\nWith the game closed, rename the folder in {pkg_dir} and its .header file in {hdr_dir} to the "
-             "name it looks for. " if fixable else "\n") + "The launcher does not change your files.")
+            lost.append(f"- {name}: its .header holds a name that is not a package name, so the file is "
+                        "damaged: install the pack again")
+    parts = []
+    if lost:
+        parts.append("The game cannot find some installed DLC packages, because the name stored in the "
+                     "package's .header file is not the folder's name:\n" + "\n".join(lost) +
+                     (f"\nWith the game closed, rename the folder in {pkg_dir} and its .header file in {hdr_dir} "
+                      "to the name it looks for (the folder and the file both get that name, "
+                      "the file ending in .header). If your Xenia save keeps its own copy of the DLC, the next Play "
+                      "copies the old name back unless you rename it there too." if fixable else ""))
+    if twice:
+        parts.append("Some DLC packages are installed twice:\n" + "\n".join(twice) +
+                     f"\nDo this with the game closed, in {pkg_dir} and {hdr_dir}.")
+    return "\n\n".join(parts) + "\nThe launcher does not change your files."
 
 
 def unknown_text(packages) -> str:

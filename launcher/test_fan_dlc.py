@@ -720,6 +720,21 @@ class HeaderName(unittest.TestCase):
         with patch.object(fan_dlc, "CASE_BLIND", False):   # the game looks for the exact name
             self.assertEqual(fan_dlc.header_mismatches(self.home), [(RECARO.lower(), RECARO)])
 
+    def test_a_case_only_mismatch_is_not_a_duplicate(self):
+        add_package(self.home, RECARO.lower(), "Recaro", 3000)
+        h = self.hdr(RECARO.lower())
+        data = bytearray(h.read_bytes())
+        data[264:306] = RECARO.encode()
+        h.write_bytes(bytes(data))
+        with patch.object(fan_dlc, "CASE_BLIND", False):
+            text = fan_dlc.mismatch_text(fan_dlc.header_mismatches(self.home), self.home)
+        self.assertNotIn("installed twice", text)
+        self.assertIn(f"the game looks for the folder {RECARO}", text)
+        self.assertIn("rename the folder in", text)
+        self.assertIn("ending in .header", text)
+        self.assertIn("Xenia save", text)
+
+    @unittest.skipIf(os.name == "nt", "this file system does not tell cases apart")
     def test_a_header_in_another_case_is_not_read_on_linux(self):
         add_package(self.home, RECARO_SHORT, "Recaro", 3000)
         h = self.hdr(RECARO_SHORT)
@@ -743,9 +758,25 @@ class HeaderName(unittest.TestCase):
         self.hdr(UNKNOWN).write_bytes(bytes(data))
         text = fan_dlc.mismatch_text(fan_dlc.header_mismatches(self.home), self.home)
         self.assertIn("installed twice", text)
+        self.assertIn(f"The game uses {RECARO} and never this copy: remove the folder {RECARO_SHORT} and the file "
+                      f"{RECARO_SHORT}.header", text)
+        self.assertNotIn("remove one of them", text)
+        self.assertNotIn(f"remove the folder {RECARO} ", text)
+        self.assertIn("The game cannot find some installed DLC packages", text)
         self.assertIn("damaged", text)
         self.assertNotIn("../x", text.replace("not a package name", ""))
         self.assertNotIn("rename the folder in", text)
+
+    def test_a_duplicate_alone_does_not_say_the_game_cannot_find_it(self):
+        add_package(self.home, RECARO_SHORT, "Recaro", 3000)
+        add_package(self.home, RECARO, "Recaro", 3000)
+        data = bytearray(self.hdr(RECARO_SHORT).read_bytes())
+        data[264:306] = RECARO.encode()
+        self.hdr(RECARO_SHORT).write_bytes(bytes(data))
+        text = fan_dlc.mismatch_text(fan_dlc.header_mismatches(self.home), self.home)
+        self.assertNotIn("cannot find", text)
+        self.assertNotIn("rename the folder in", text)
+        self.assertIn("installed twice", text)
 
     def test_short_names_skip_the_fan_pack_and_a_header_that_differs(self):
         add_fan(self.home, name=RECARO_SHORT)
