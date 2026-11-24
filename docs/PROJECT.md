@@ -130,6 +130,40 @@ Leaderboard screens, Windows and Steam Deck are not scripted: a hand run in the 
 
 ## Status log
 
+- 2026-11-23: **A repainted or replaced paint job file loads in the same session, and the
+  driving paint job is no longer left empty after a failed factory colour (#959, follow-ups of
+  #922).** The game's paint job cache (TU4 `0x8357C0B8`, disc `0x8348695C`: a critical section,
+  then a vector of resources at +28/+32 searched by key in TU4 `sub_82D4C2C0`) is weak: a resource
+  leaves it only when its last reference goes (`sub_825AC6A8`, while flag 0x40 of byte +42 says it
+  is listed), so a failed one that a car in the garage still holds is handed back for every request
+  of its key: the factory colour asked for again after a failed factory colour came back as the
+  same failed resource, which is why #922's fallback left the driving paint job empty then. The
+  fallback now takes the failed resource out of the cache first (erased as `sub_825AC6A8` erases
+  one, and its listed flag cleared so its last Release destroys it; its holders keep it), so the
+  factory colour is a new resource, and a factory
+  colour that fails is taken out and made once more. A remembered row's file is now compared by its
+  size and contents (the size only for a file over 1 MB or one that can't be read), read again
+  from the disk: the file system keeps the size an entry had when it
+  was first looked up, so a valid file put in place of the bad one outside the game, or rewritten no
+  longer than before, kept the bad file's size and the row its factory colour (diagnosed: the entry
+  said 600 bytes for a 1188-byte file). A changed file is handed to the game's path again (any
+  failed load of it taken out of the cache), and at Get In a failed file that is there is loaded once more, on its
+  first failure in the session and whenever it changed since, and used when it loads (its failing branch ran in game; the override
+  caught every change first). The empty driving paint job is left only when
+  the row can't be read (the game's own fresh path returns nothing then too) or the second factory
+  colour fails too (a type-0 paint job fails only when its 256-byte block can't be allocated). A
+  row that comes to name another file than the one that failed (an editor row naming another
+  garage id's file, then repainted) keeps the factory colour until the game restarts. All
+  13 callers of TU4 `sub_82D5D538` (disc `sub_82C9C440`) were checked in both builds; six read the
+  handle without a null test (TU4 `824BD834`, `8254AE70`, `8255B65C`, `826FDA18`, `82844D50`,
+  `82940FC8`, and their disc twins), and `sub_82D5D6C8`, which several call next, reads it too.
+  Checked (TU4, a local switch that makes a car's first factory colour and its first remake count
+  as failed): Get In from Car Select, drive, photo mode and a photo, change car from My Cars twice
+  and back, all with the remade factory colour; with every factory colour forced to fail (the
+  empty slot) the same steps also ran without a fault. A row naming a bad 1188-byte file: factory
+  colour, then the file replaced by a valid one of the same size during the session: Get In loads
+  the new paint job; repainted in the paint shop (a 516-byte file): Get In with the new paint.
+
 - 2026-11-23: **A garage car whose paint job can't be loaded gets its factory paint when it
   becomes the current car instead of closing the game (#922).** A player's Mazda MX-5 Superlight
   (added with the save editor) closed the game at Get In Car, from Car Select and from View Car,
@@ -156,9 +190,10 @@ Leaderboard screens, Windows and Steam Deck are not scripted: a hand run in the 
   DefaultManufacturerColorIndex) and releases the handle. It clears the row's `LiveryFileName`
   (the game's own `UPDATE %s SET LiveryFileName='' WHERE Id=%u`, confirmed by a second query) only
   when the file is not in the profile or is empty; a file that is there but fails (a bad header)
-  stays named, and for the rest of the session the fresh path (disc `sub_82547EB8`) gives that row
-  the factory colour instead of queueing the file again (without that, Get In on such a row led
-  to a loading screen that never ended). Every other case runs the game's code unchanged
+  stays named, and while the row holds the same car and the file the same contents the fresh path
+  (disc `sub_82547EB8`) gives that row the factory colour instead of queueing the file again
+  (without that, Get In on such a row led to a loading screen that never ended); a repaint or a
+  replaced file loads again (#959). Every other case runs the game's code unchanged
   (`tests/car_livery_fallback_test.cpp`). Checked (TU4): missing and 0-byte rows get in with the
   factory paint and the saved row stops naming the file; a row naming a 600-byte bad file gets the
   factory paint, the session goes on and the saved row still names it; a row naming another car's

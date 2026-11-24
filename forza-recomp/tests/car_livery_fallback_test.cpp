@@ -1,13 +1,16 @@
 // A garage car whose paint job can't be loaded (src/platform/car_livery_fallback.h, #922): which
-// failures get the factory paint, which ones also stop the save naming the file, and the
-// statements used for that.
+// failures get the factory paint, which ones also stop the save naming the file, the statements
+// used for that, when a remembered row's file counts as changed (#959) and what leaves the game's
+// paint job cache.
 // Build from the repository root:
 //   g++ -std=c++20 -Wall -Wextra -Werror -Iforza-recomp/src forza-recomp/tests/car_livery_fallback_test.cpp
 //       -o car-livery-fallback-test && ./car-livery-fallback-test
 #include "platform/car_livery_fallback.h"
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <string_view>
 
 namespace clf = forza::car_livery_fallback;
 using clf::Action;
@@ -80,19 +83,41 @@ int main() {
   Check(clf::ProfileRoot("E03:\\..\\x.liv").empty(), "no ..");
   Check(clf::ProfileRoot("a b:\\x.liv").empty(), "no space in the root");
 
-  // A remembered row: the same car, file and size keep the factory colour; a repaint, a deleted
-  // file or another car in a reused garage id end it.
-  const clf::Remembered bad{"E03:\\Liveries\\64.liv", FileState::kPresent, 600, 1233};
-  Check(clf::StillRemembered(bad, bad.path, FileState::kPresent, 600, 1233), "unchanged");
-  Check(!clf::StillRemembered(bad, bad.path, FileState::kPresent, 516, 1233), "repainted");
-  Check(!clf::StillRemembered(bad, bad.path, FileState::kMissing, 0, 1233), "file deleted");
-  Check(!clf::StillRemembered(bad, bad.path, FileState::kPresent, 600, 320), "another car");
-  Check(!clf::StillRemembered(bad, "E03:\\Liveries\\65.liv", FileState::kPresent, 600, 1233),
-        "another file");
-  const clf::Remembered unknown{"x", FileState::kUnknown, 0, 1233};
-  Check(clf::StillRemembered(unknown, "x", FileState::kUnknown, 0, 1233),
+  // A remembered row: the same car, and its file with the same size and contents, keep the
+  // factory colour; a repaint (also one of the same size), a replaced or deleted file, or another
+  // car in a reused garage id end it.
+  const clf::Remembered bad{"E03:\\Liveries\\64.liv", FileState::kPresent, 600, 0x1234, 1233};
+  Check(clf::StillRemembered(bad, FileState::kPresent, 600, 0x1234, 1233), "unchanged");
+  Check(!clf::StillRemembered(bad, FileState::kPresent, 516, 0x1234, 1233), "repainted");
+  Check(!clf::StillRemembered(bad, FileState::kPresent, 600, 0x5678, 1233),
+        "repainted, the same size");
+  Check(!clf::StillRemembered(bad, FileState::kMissing, 0, 0, 1233), "file deleted");
+  Check(!clf::StillRemembered(bad, FileState::kEmpty, 0, 0, 1233), "file emptied");
+  Check(!clf::StillRemembered(bad, FileState::kPresent, 600, 0x1234, 320), "another car");
+  const clf::Remembered unknown{"x", FileState::kUnknown, 0, 0, 1233};
+  Check(clf::StillRemembered(unknown, FileState::kUnknown, 0, 0, 1233),
         "an unmounted profile, the same car");
-  Check(!clf::StillRemembered(unknown, "x", FileState::kPresent, 600, 1233), "mounted since");
+  Check(!clf::StillRemembered(unknown, FileState::kPresent, 600, 1, 1233), "mounted since");
+
+  // The contents' fingerprint (FNV-1a 64).
+  const uint8_t abc[] = {'a', 'b', 'c'};
+  Check(clf::Fingerprint(nullptr, 0) == 0xCBF29CE484222325ull, "nothing");
+  Check(clf::Fingerprint(abc, 3) == 0xE71FA2190541574Bull, "abc");
+  const uint8_t abd[] = {'a', 'b', 'd'};
+  Check(clf::Fingerprint(abc, 3) != clf::Fingerprint(abd, 3), "one byte apart");
+
+  // What leaves the paint job cache: the failed resource itself, and other failed loads of the
+  // same file that something holds; never a loaded one, another file, a factory colour, or one
+  // with no reference left (the game drops that one itself).
+  const std::string_view file = "E03:\\Liveries\\64.liv";
+  Check(clf::Evicts(true, 4, 0, "", "", 0), "the failed one");
+  Check(clf::Evicts(false, 6, clf::kKeyFile, file, file, 1), "another failed load of the file");
+  Check(!clf::Evicts(false, 4, clf::kKeyFile, file, file, 1), "a loaded one");
+  Check(!clf::Evicts(false, 0, clf::kKeyFile, file, file, 1), "one still loading");
+  Check(!clf::Evicts(false, 6, clf::kKeyFile, "E03:\\Liveries\\65.liv", file, 1), "another file");
+  Check(!clf::Evicts(false, 6, 0, "", file, 1), "a failed factory colour that isn't this one");
+  Check(!clf::Evicts(false, 6, clf::kKeyFile, file, file, 0), "no reference left");
+  Check(!clf::Evicts(false, 6, clf::kKeyFile, "", "", 1), "no file given");
 
   Check(clf::kStateFailed == 6, "the failed state");
   Check(clf::kDrivingFlags == 0x80000, "the driving variant's flags");

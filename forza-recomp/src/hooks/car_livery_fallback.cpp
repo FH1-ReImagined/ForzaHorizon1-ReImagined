@@ -10,15 +10,18 @@
 // Otherwise the game's own call runs unchanged. For a failed one it makes the factory colour the
 // way the game's fresh path falls back to it (sub_82C94398 / TU4 sub_82D55428 with the row's
 // CarId and DefaultManufacturerColorIndex), puts it in the driving paint job (the caller's r1+84)
-// and releases the handle as the game's call does at its end. Only when the paint job is a file
-// that the profile doesn't have, or that is empty, does it clear the row's LiveryFileName too,
-// and it says so only when a second query shows the column clear. A file that is there but
-// failed stays named in the save; the game's fresh path (sub_82547EB8 / TU4 sub_825B7FA0, which
-// both callers also take, and which would queue the same file again) gives that row its factory
-// colour instead, as long as the row holds the same car and the file the same size (a repaint
-// or a reused garage id ends it). When the factory colour can't be made (the row can't be read,
-// or the factory colour is what failed), the driving paint job is left empty rather than given a
-// failed one. A warning names the garage id and the car once.
+// and releases the handle as the game's call does at its end. The failed resource is taken out
+// of the game's paint job cache first, so that the factory colour (and any later load of that
+// file) is a new resource, not the failed one again. Only when the paint job is a file that the
+// profile doesn't have, or that is empty, does it clear the row's LiveryFileName too, and it says
+// so only when a second query shows the column clear. A file that is there but failed stays named
+// in the save; the game's fresh path (sub_82547EB8 / TU4 sub_825B7FA0, which both callers also
+// take, and which would queue the same file again) gives that row its factory colour instead, as
+// long as the row holds the same car and the file the same contents (a repaint, a replaced file
+// or a reused garage id ends it). A file that changed since it failed is loaded again once. A
+// factory colour that fails is made once more; the driving paint job is left empty only when that
+// fails too or the row can't be read (as the game's fresh path leaves it then). A warning names
+// the garage id and the car once.
 
 #include "../platform/car_livery_fallback.h"
 #include "../platform/guest_addr.h"
@@ -40,6 +43,7 @@
 #include <mutex>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <utility>
 
@@ -47,16 +51,23 @@ extern "C" REX_FUNC(__imp__sub_82C9C440);  // the paint job's variant of a type 
 extern "C" REX_FUNC(sub_82412688);         // WaitForLoad(resource): false when the load failed
 extern "C" REX_FUNC(__imp__sub_82547EB8);  // the car's paint job from its Career_Garage row
 extern "C" REX_FUNC(sub_82C94398);         // the factory colour paint job (out, CarId, colour)
+extern "C" REX_FUNC(__imp__RtlEnterCriticalSection);
+extern "C" REX_FUNC(__imp__RtlLeaveCriticalSection);
 
 namespace {
 
 namespace clf = forza::car_livery_fallback;
+using rex::X_STATUS;
 
 // The two calls (TU4 825E77D8, 825E7960) and the profile database (TU4 0x833D2FFC); written out
 // in FORZA_ADDR so that tools/tu_address_map.py --cpp finds them.
 #define GET_IN_CALL FORZA_ADDR(0x82571990)
 #define CAREER_CALL FORZA_ADDR(0x82571B18)
 #define PROFILE_DB FORZA_ADDR(0x832E5510)
+// The paint job cache (TU4 0x8357C0B8): a critical section, then the vector of its resources.
+#define LIVERY_CACHE FORZA_ADDR(0x8348695C)
+constexpr uint32_t kCacheBegin = 28, kCacheEnd = 32;
+constexpr uint32_t kReferences = 32, kCacheFlags = 42, kListed = 0x40;
 constexpr uint32_t kQuerySlot = 0x20, kReleaseSlot = 12;
 constexpr uint32_t kRowCountSlot = 0xB8, kIntegerSlot = 0x90;
 constexpr uint32_t kStateByte = 40, kKeyType = 0x40, kKeyName = 0x44;
@@ -150,18 +161,73 @@ std::string KeyName(uint8_t* base, uint32_t livery) {
   return name;
 }
 
-// What the profile holds for that name (and its size); kUnknown when it isn't a profile paint
-// job or the profile isn't mounted.
-clf::FileState HostFile(const std::string& name, uint64_t* size) {
+// What the profile holds for that name (its size and contents, read from the disk now);
+// kUnknown when it isn't a profile paint job or the profile isn't mounted.
+clf::FileState HostFile(const std::string& name, uint64_t* size, uint64_t* hash) {
   *size = 0;
+  *hash = 0;
   const std::string root = clf::ProfileRoot(name);
   auto* vfs = rex::system::kernel_state()->file_system();
   if (root.empty() || !vfs) return clf::FileState::kUnknown;
   if (!vfs->ResolvePath(root + ":\\")) return clf::FileState::kUnknown;
   rex::filesystem::Entry* entry = vfs->ResolvePath(name);
   if (!entry) return clf::FileState::kMissing;
+  // The entry keeps the size it had when first looked up (a file replaced outside the game, or
+  // rewritten no longer than before, kept the old one): the disk's.
+  entry->update();
   *size = entry->size();
-  return *size == 0 ? clf::FileState::kEmpty : clf::FileState::kPresent;
+  if (*size == 0) return clf::FileState::kEmpty;
+  rex::filesystem::File* file = nullptr;
+  if (*size <= (1u << 20) &&
+      entry->Open(rex::filesystem::FileAccess::kFileReadData, &file) == X_STATUS_SUCCESS && file) {
+    std::string data(size_t(*size), '\0');
+    size_t read = 0;
+    if (file->ReadSync(std::span(reinterpret_cast<uint8_t*>(data.data()), data.size()), 0, &read) ==
+        X_STATUS_SUCCESS) {
+      *hash = clf::Fingerprint(reinterpret_cast<const uint8_t*>(data.data()), read);
+    }
+    file->Destroy();
+  }
+  return clf::FileState::kPresent;
+}
+
+// Takes `failed` (when not 0), and any other failed load of `path` (when given) that something
+// still holds, out of the game's paint job cache under the cache's lock, the way sub_825AC6A8
+// erases a resource whose last reference went. Its listed flag is cleared too (the hook's own
+// step), so its last Release destroys it directly (sub_825AC6A8's unlisted branch), and the next
+// request for its key makes a new one. The hook holds `failed` while it evicts it; another failed
+// load of `path` could lose its last reference on another thread at that moment, and that one
+// resource would then not be destroyed (a leak, never a use after free).
+void Evict(const PPCContext& ctx, uint8_t* base, uint32_t failed, const std::string& path) {
+  PPCContext lock = ctx;
+  lock.r3.u64 = LIVERY_CACHE;
+  __imp__RtlEnterCriticalSection(lock, base);
+  const uint32_t begin = Read(base, LIVERY_CACHE + kCacheBegin);
+  uint32_t end = Read(base, LIVERY_CACHE + kCacheEnd);
+  if (begin && end >= begin && end - begin < (1u << 20) && (end - begin) % 4 == 0) {
+    for (uint32_t at = begin; at < end;) {
+      const uint32_t res = Read(base, at);
+      bool evict = false;
+      if (res) {
+        const uint8_t state = forza::GuestPtr(base, res + kStateByte)[0];
+        const uint32_t type = Read(base, res + kKeyType);
+        const bool named = !path.empty() && state == clf::kStateFailed && type == clf::kKeyFile;
+        evict = clf::Evicts(res == failed, state, type, named ? KeyName(base, res) : std::string(),
+                            path, Read(base, res + kReferences));
+      }
+      if (!evict) {
+        at += 4;
+        continue;
+      }
+      uint8_t* flags = forza::GuestPtr(base, res + kCacheFlags);
+      *flags = uint8_t(*flags & ~kListed);
+      std::memmove(forza::GuestPtr(base, at), forza::GuestPtr(base, at + 4), end - at - 4);
+      end -= 4;
+      Write(base, LIVERY_CACHE + kCacheEnd, end);
+    }
+  }
+  lock.r3.u64 = LIVERY_CACHE;
+  __imp__RtlLeaveCriticalSection(lock, base);
 }
 
 const char* Describe(clf::FileState file) {
@@ -218,6 +284,32 @@ void MakeFactory(const PPCContext& ctx, uint8_t* base, uint32_t slot, int32_t ca
   sub_82C94398(make, base);
 }
 
+// WaitForLoad on `resource`: true when it loaded.
+bool Loaded(const PPCContext& ctx, uint8_t* base, uint32_t resource) {
+  const uint8_t* state = forza::GuestPtr(base, resource + kStateByte);
+  if (state[0] == 4 && state[1] == 4) return true;
+  PPCContext wait = ctx;
+  wait.r3.u64 = resource;
+  sub_82412688(wait, base);
+  return (wait.r3.u32 & 0xFF) != 0;
+}
+
+// A loaded factory colour paint job in `slot`, or 0 there. One that fails (or comes back as the
+// failed paint job) is taken out of the cache and made once more.
+uint32_t UsableFactory(const PPCContext& ctx, uint8_t* base, uint32_t slot, int32_t car,
+                       int32_t colour, uint32_t failed) {
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    MakeFactory(ctx, base, slot, car, colour);
+    const uint32_t made = Read(base, slot);
+    if (made && made != failed && Loaded(ctx, base, made)) return made;
+    Write(base, slot, 0);
+    if (!made) continue;
+    Evict(ctx, base, made, std::string());
+    Virtual(ctx, base, made, kReleaseSlot, {made});
+  }
+  return 0;
+}
+
 bool FirstReport(uint32_t garage_id) {
   static std::mutex lock;
   static std::set<uint32_t> reported;
@@ -236,23 +328,19 @@ extern "C" REX_FUNC(sub_82C9C440) {
     __imp__sub_82C9C440(ctx, base);
     return;
   }
-  const uint8_t* state = forza::GuestPtr(base, livery + kStateByte);
-  bool failed = false;
-  if (!(state[0] == 4 && state[1] == 4)) {
-    PPCContext wait = ctx;
-    wait.r3.u64 = livery;
-    sub_82412688(wait, base);
-    failed = (wait.r3.u32 & 0xFF) == 0;
-  }
-  if (!failed) {
+  if (Loaded(ctx, base, livery)) {
     __imp__sub_82C9C440(ctx, base);
     return;
   }
   const uint32_t key_type = Read(base, livery + kKeyType);
   const std::string name = key_type == clf::kKeyFile ? KeyName(base, livery) : std::string();
-  uint64_t size = 0;
-  const clf::FileState file = name.empty() ? clf::FileState::kUnknown : HostFile(name, &size);
-  const clf::Action action = clf::Decide(failed, key_type, file);
+  uint64_t size = 0, hash = 0;
+  const clf::FileState file =
+      name.empty() ? clf::FileState::kUnknown : HostFile(name, &size, &hash);
+  const clf::Action action = clf::Decide(true, key_type, file);
+  // Later requests for this paint job (its factory colour below, the file once it changes) make
+  // a new resource instead of getting the failed one back.
+  Evict(ctx, base, livery, name);
 
   const bool get_in = lr == GET_IN_CALL;
   const uint32_t career_car = get_in ? ctx.r29.u32 : ctx.r30.u32;
@@ -260,44 +348,67 @@ extern "C" REX_FUNC(sub_82C9C440) {
   const std::string table = TableName(base, career_car);
   int32_t car = 0, colour = 0;
   const bool row = FactoryColour(ctx, base, table, garage_id, &car, &colour);
-  bool cleared = false;
-  if (action == clf::Action::kDetach) {
-    int32_t clear = 0;
-    cleared = Run(ctx, base, clf::ClearLiverySql(table, garage_id), nullptr) &&
-              Run(ctx, base, clf::ClearedSql(table, garage_id), &clear) && clear == 1;
-  }
-  if (key_type == clf::kKeyFile && !cleared && row) {
-    Keep(table, garage_id, clf::Remembered{name, file, size, car});
-  }
-
-  // The factory colour, as the game's fresh path falls back to it. Without the row there is
-  // nothing to make it from (and the fresh path would queue the file that failed again): the
-  // driving paint job stays empty, as it does when the factory colour itself is what failed (the
-  // cache hands back the same failed resource). The callers take their fresh path next time.
   const uint32_t local = ctx.r1.u32 + kFreshLocal;
   Write(base, local, 0);
-  if (row) MakeFactory(ctx, base, local, car, colour);
-  uint32_t made = Read(base, local);
-  bool made_failed = !made || made == livery;
-  if (!made_failed) {
-    PPCContext wait = ctx;
-    wait.r3.u64 = made;
-    sub_82412688(wait, base);
-    made_failed = (wait.r3.u32 & 0xFF) == 0;
-  }
-  if (made_failed && made) {
-    Virtual(ctx, base, made, kReleaseSlot, {made});
-    made = 0;
+  uint32_t made = 0;
+
+  // A file that is there and isn't the one that failed before (it changed since, or it is the
+  // first failure this session: it may have changed since the car was shown) is read again once,
+  // the way the game's fresh path reads the row and queues it, and used when it loads.
+  bool reloaded = false;
+  if (action == clf::Action::kFactory && file == clf::FileState::kPresent && row) {
+    const std::optional<clf::Remembered> then = Kept(table, garage_id);
+    if (!then || !clf::StillRemembered(*then, file, size, hash, car)) {
+      PPCContext fresh = ctx;
+      fresh.r3.u64 = local;
+      fresh.r4.u64 = career_car;
+      fresh.r5.u64 = garage_id;
+      fresh.r6.u64 = clf::kDrivingFlags;
+      __imp__sub_82547EB8(fresh, base);
+      made = Read(base, local);
+      // The fresh path gives the factory colour itself when the row no longer names a file or
+      // the new load already failed when it checks (825B8134): that is the factory colour here.
+      if (made && made != livery && Loaded(ctx, base, made)) {
+        reloaded = Read(base, made + kKeyType) == clf::kKeyFile;
+      } else {
+        Write(base, local, 0);
+        if (made) {
+          Evict(ctx, base, made, name);
+          Virtual(ctx, base, made, kReleaseSlot, {made});
+        }
+        made = 0;
+      }
+    }
   }
 
-  if (FirstReport(garage_id)) {
+  bool cleared = false;
+  if (reloaded) {
+    Forget(table, garage_id);
+  } else {
+    if (action == clf::Action::kDetach) {
+      int32_t clear = 0;
+      cleared = Run(ctx, base, clf::ClearLiverySql(table, garage_id), nullptr) &&
+                Run(ctx, base, clf::ClearedSql(table, garage_id), &clear) && clear == 1;
+    }
+    if (key_type == clf::kKeyFile && !cleared && row) {
+      Keep(table, garage_id, clf::Remembered{name, file, size, hash, car});
+    }
+    // The factory colour, as the game's fresh path falls back to it. Without the row there is
+    // nothing to make it from (and the fresh path would queue the file that failed again): the
+    // driving paint job stays empty, as the game's fresh path leaves it when the row can't be read.
+    if (row && !made) made = UsableFactory(ctx, base, local, car, colour, livery);
+  }
+
+  if (reloaded) {
+    REXLOG_INFO("Cars: garage car {} (car {}): its paint job file loads now (#959)", garage_id, car);
+  } else if (FirstReport(garage_id)) {
     const char* what = key_type == clf::kKeyFile ? "its paint job file" : "its paint";
     const char* why = key_type == clf::kKeyFile ? Describe(file) : "could not be loaded";
     const char* save = cleared                              ? "; the save no longer names that file"
                        : action == clf::Action::kDetach     ? "; the save could not be changed"
                        : key_type == clf::kKeyFile          ? "; the save still names that file"
                                                             : "";
-    if (made_failed) {
+    if (!made) {
       REXLOG_ERROR("Cars: garage car {} (car {}): {} {}, and its factory paint could not be made "
                    "either; it drives without a paint job for now{} (#922)",
                    garage_id, car, what, why, save);
@@ -328,11 +439,13 @@ extern "C" REX_FUNC(sub_82547EB8) {
     __imp__sub_82547EB8(ctx, base);
     return;
   }
-  uint64_t size = 0;
-  const clf::FileState file = HostFile(then->path, &size);
-  if (!clf::StillRemembered(*then, then->path, file, size, car)) {
-    // Repainted, the file gone, or another car in that garage id: the game's own path again.
+  uint64_t size = 0, hash = 0;
+  const clf::FileState file = HostFile(then->path, &size, &hash);
+  if (!clf::StillRemembered(*then, file, size, hash, car)) {
+    // Repainted, the file replaced or gone, or another car in that garage id: the game's own path
+    // again, which reads the file afresh (not a failed load of it some car still holds).
     Forget(table, garage_id);
+    Evict(ctx, base, 0, then->path);
     __imp__sub_82547EB8(ctx, base);
     return;
   }

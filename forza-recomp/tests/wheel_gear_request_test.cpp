@@ -166,6 +166,81 @@ int main() {
               LeverThroughNeutral(h, 1, 10.0, kNeutralTransitMs) == 1,
           "from neutral at the start");
   }
+  {
+    // #952 (ReIGlue 1130): Gears need the clutch on, a gear engaged and the clutch let out, the
+    // lever reads something else for a moment while it stays in its slot. EngageGear takes a new
+    // gear only with the clutch, so a read of another gear dropped the car to neutral, and the
+    // lever back in its slot could not engage again without the clutch: neutral until the clutch
+    // went down. The lever as the state polls read it (240 a second): the engaged gears, in order.
+    struct Step {
+      int lever;
+      float clutch;
+      double ms;
+    };
+    auto drive = [](const std::vector<Step>& steps, double hold) {
+      LeverHold h;
+      int engaged = kGearNeutral;
+      double now = 1000.0;
+      std::vector<int> seen;
+      for (const Step& s : steps) {
+        for (const double until = now + s.ms; now < until; now += 1000.0 / 240.0) {
+          engaged = EngageLeverGear(h, s.lever, engaged, now, hold, true, s.clutch, 0.5f);
+          if (seen.empty() || seen.back() != engaged) {
+            seen.push_back(engaged);
+          }
+        }
+      }
+      return seen;
+    };
+    using V = std::vector<int>;
+    const double one_read = 1000.0 / 240.0;
+    // Into 3rd with the clutch down, clutch out, then a one-read misread, back in 3rd.
+    for (int misread : {2, 4, 5, kGearReverse}) {
+      Check(drive({{3, 1.0f, 300}, {3, 0.0f, 500}, {misread, 0.0f, one_read}, {3, 0.0f, 500}},
+                  kNeutralTransitMs) == V{3},
+            "a one-read misread of another gear, clutch out: 3rd stays");
+    }
+    Check(drive({{3, 1.0f, 300}, {3, 0.0f, 500}, {4, 0.0f, 30}, {3, 0.0f, 500}},
+                kNeutralTransitMs) == V{3},
+          "another gear read for 30 ms, clutch out: 3rd stays");
+    // Neutral was already carried for wheel_shifter_neutral_ms (#468); with 0, it is now too.
+    Check(drive({{3, 1.0f, 300}, {3, 0.0f, 500}, {kGearNeutral, 0.0f, one_read}, {3, 0.0f, 500}},
+                kNeutralTransitMs) == V{3},
+          "a one-read neutral, clutch out: 3rd stays");
+    Check(drive({{3, 1.0f, 300}, {3, 0.0f, 500}, {kGearNeutral, 0.0f, one_read}, {3, 0.0f, 500}},
+                0.0) == V{3},
+          "wheel_shifter_neutral_ms 0, a one-read neutral, clutch out: 3rd stays");
+    // A real move still counts: into neutral with the clutch up (after the hold through neutral),
+    // and into another slot without the clutch, which is neutral; neither engages without it.
+    Check(drive({{3, 1.0f, 300}, {3, 0.0f, 500}, {kGearNeutral, 0.0f, 600}, {3, 0.0f, 500}},
+                kNeutralTransitMs) == V{3, kGearNeutral},
+          "lever to neutral, clutch up: neutral, and 3rd needs the clutch again");
+    Check(drive({{3, 1.0f, 300}, {3, 0.0f, 500}, {kGearNeutral, 0.0f, 100}, {4, 0.0f, 500}},
+                kNeutralTransitMs) == V{3, kGearNeutral},
+          "3 > 4 without the clutch: neutral");
+    Check(drive({{3, 1.0f, 300}, {3, 0.0f, 500}, {kGearNeutral, 0.0f, 100}, {4, 0.0f, 500},
+                 {4, 1.0f, 100}},
+                kNeutralTransitMs) == V{3, kGearNeutral, 4},
+          "then the clutch down: 4th");
+    Check(drive({{3, 1.0f, 300}, {kGearNeutral, 1.0f, 100}, {4, 1.0f, 500}},
+                kNeutralTransitMs) == V{3, 4},
+          "3 > 4 with the clutch: 4th, no neutral between");
+    Check(drive({{3, 1.0f, 300}, {kGearNeutral, 1.0f, 100}, {kGearNeutral, 0.0f, 600}}, 0.0) ==
+              V{3, kGearNeutral},
+          "with the clutch down, neutral at once with wheel_shifter_neutral_ms 0");
+    // A lever left in neutral that reads 4th for one read every 100 ms (near its gate), clutch
+    // up: neutral once the hold and the 50 ms are over, the misreads restarting neither.
+    std::vector<Step> flicker = {{3, 1.0f, 300}, {3, 0.0f, 500}};
+    for (int i = 0; i < 30; i++) {
+      flicker.push_back({kGearNeutral, 0.0f, 100.0 - one_read});
+      flicker.push_back({4, 0.0f, one_read});
+    }
+    Check(drive(flicker, kNeutralTransitMs) == V{3, kGearNeutral},
+          "neutral with misreads of 4th, clutch up: neutral");
+    flicker.push_back({kGearNeutral, 1.0f, 500});
+    Check(drive(flicker, kNeutralTransitMs) == V{3, kGearNeutral},
+          "and the clutch then engages nothing");
+  }
   std::puts("wheel gear request: ok");
   return 0;
 }

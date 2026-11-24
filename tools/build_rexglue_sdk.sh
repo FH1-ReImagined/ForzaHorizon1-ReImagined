@@ -99,6 +99,8 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # and 1120: the copy to guest memory at a render scale takes each guest pixel's own host pixels, and an
 # unsigned 8:8:8:8 or 2:10:10:10 color copy their average, so pictures at render scale 2 or a 1440p
 # output have no comb edges (#905).
+# and 1130: with Gears need the clutch and the clutch up, a lever that reads another gear or no gear for
+# under 50 ms keeps the gear instead of dropping the car to neutral; the lever's reads are logged (#952).
 # and 1140: the same on Direct3D 12 (its HLSL copy of the shader and the DXBC), so pictures there have
 # no comb edges either (#962).
 # A reviewed full commit can be pinned before a maintainer publishes a tag.
