@@ -367,10 +367,14 @@ add("mnk_passthrough", "Raw keyboard to the game", "Controls", "bool", False,
 add("vibration", "Controller vibration", "Controls", "bool", True, "", "Controller")
 add("guide_button", "Guide button pass-through", "Controls", "bool", False, "", "Controller")
 add("left_stick_deadzone_percentage", "Left stick deadzone", "Controls", "float", 0.0,
-    "Fraction of the stick's range, 0 to 1. Gamepads only: a racing wheel is not affected.",
+    "The stick reads as centred within this fraction of its full range (edge to edge), in every "
+    "direction: 0.1 is about the first 20 percent of its travel from the centre. Gamepads only: "
+    "a racing wheel is not affected.",
     "Controller", lo=0, hi=1, step=0.01)
 add("right_stick_deadzone_percentage", "Right stick deadzone", "Controls", "float", 0.0,
-    "Fraction of the stick's range, 0 to 1. Gamepads only: a racing wheel is not affected.",
+    "The stick reads as centred within this fraction of its full range (edge to edge), in every "
+    "direction: 0.1 is about the first 20 percent of its travel from the centre. Gamepads only: "
+    "a racing wheel is not affected.",
     "Controller", lo=0, hi=1, step=0.01)
 add("input_backend", "Input backend", "Controls", "choice", "sdl",
     "SDL works with any pad; XInput is Windows only.", "Controller",
