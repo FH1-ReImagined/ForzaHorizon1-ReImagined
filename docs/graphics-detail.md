@@ -320,7 +320,17 @@ never asks for it.
 The game makes these from memory it reserves at start for render textures: the guest's
 physical memory in use was the same at Console and 2x (357 MB in free roam). The graphics card
 holds a copy of each (the render ones at the render scale squared) and the EDRAM strips while
-the paint job is drawn. Only cars with a paint job pay: in single player that is the player's
+the paint job is drawn. When the game's heap for them has no room, the TU4 build serves them from
+memory it keeps for that heap (#787): after the Race Central cutscene (the Green Wristband) heap
+0x21 "fixedGPU" held 49-51 of its 61 MB with no 16 MB in one piece, and the player's paint job is
+drawn again then. `src/hooks/fixed_gpu_heap.cpp` gives a block over 8 MB (with its alignment) a chunk of its own (up
+to 64 MB in all with the smaller blocks), hands it out again as soon as it comes back, and takes
+blocks aligned to 64 KB (the saved layout). Measured there: the 16 MB render texture, the
+compression's 22,413,312-byte scratch texture, both again, and the 16 MB saved layout, each given
+back within a second; two chunks (16 + 24 MB) held all of them. The base game build has no such
+overflow, so 2x can still stop it there; the launcher's tooltip says so.
+
+Only cars with a paint job pay: in single player that is the player's
 car (the 7 CPU cars of the GoPro Millennia Masters race and the traffic have none); online,
 each player's car with one. 4096x4096 (4x) does not fit: the first such texture was not made
 and the game stopped on the missing livery, so the option stops at 2x.

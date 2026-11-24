@@ -130,6 +130,30 @@ Leaderboard screens, Windows and Steam Deck are not scripted: a hand run in the 
 
 ## Status log
 
+- 2026-11-24: **Paint job detail 2x no longer crashes the game after the Race Central cutscene
+  (#787, #779).** Reproduced with a copy of the paint job test save set to the Yellow wristband
+  with 230 XP (the launcher's save editor values): fast travel to Race Central, X, the Green
+  Wristband cutscene. On main at 2x the game stopped as it ends, when it draws the player's paint
+  job again, exactly as in #779: guest 4 (the capacity stop), `r29=0x01000000`, heap 0x21
+  (`r30=83396AF0`) at 50.3 of its 61 MB, the same chain `82D83798 82AA4B48 82CEB1DC ... 82D535C4`
+  (the 2048x2048 `LivRenderTexture`). #916's overflow served blocks up to one 8 MB chunk only.
+  Now a block over that gets a chunk of its own, its size rounded up to whole 8 MB, from a second
+  pool (`fixed_gpu_heap.h` `Overflow`) so small blocks never cut it up; both pools share the 64 MB.
+  Three things were needed, each seen in game: (1) the large blocks are handed out again as soon
+  as they come back, best fit: the paint job takes and frees 16 MB and 22,413,312 bytes twice
+  within a second, and with the 2-second reuse delay of the small blocks every one took a new
+  chunk and the fourth found the cap; the chunks stay allocated and watched, so this is what the
+  game's own heap does; (2) blocks aligned to 64 KB: the 16 MB saved layout (`sub_82D4E7D0`, the
+  one photo mode loads) asks for it and stopped the game next; (3) room for that alignment in a
+  new chunk, since the guest's physical heap at 0xE0000000 gives chunks one page before a 64 KB
+  boundary (`E7F2F000`; its physical address is the boundary). The arena gained the alignment, best fit and a reuse delay per pool
+  (`fm4_stream_textures.h`; the FM4 streamed textures keep first fit and the delay). Checked
+  (TU4, Linux, the edited save, 2x): the cutscene played, the wristband is Green ("Going Green"),
+  the overflow held two chunks (16 + 24 MB, all blocks back within a second), the Amsoil decal
+  is on the car when driving and photo mode's copy loads the saved layout; at Console the same
+  steps used no overflow. Tests in `tests/fixed_gpu_heap_test.cpp`. The base game build has no
+  overflow at all (it is TU4 only), so the Paint job detail tooltip says 2x can still crash there.
+
 - 2026-11-23: **A repainted or replaced paint job file loads in the same session, and the
   driving paint job is no longer left empty after a failed factory colour (#959, follow-ups of
   #922).** The game's paint job cache (TU4 `0x8357C0B8`, disc `0x8348695C`: a critical section,
