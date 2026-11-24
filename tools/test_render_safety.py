@@ -297,6 +297,49 @@ class SafetyTests(unittest.TestCase):
         self.assertIn("record them again", str(stop.exception.code))
         play.assert_not_called()
 
+    def test_check_reports_replays_and_a_size_mismatch_as_a_fail(self):
+        for name in ("big", "fine"):
+            scene = self.base / name
+            scene.mkdir(parents=True)
+            (scene / "baseline.json").write_text('{"files": ["a.png"], "frame_time": "fixed"}')
+        save = self.base / "save"
+        save.mkdir()
+        (save / "save.json").write_text('{"xuid": "1234"}')
+        cfg = {"scenes": {"big": {}, "fine": {}}, "defaults": {"max_dssim": .01, "max_bad": .01}}
+
+        def play(*a, replays=None, **k):
+            replays.append({"session": "s", "attempt": 1, "reason": "the car moved"})
+            return {"big": ["x.png"], "fine": ["y.png"]}, {}
+
+        def match(base, cur, scene):
+            if cur == ["x.png"]:
+                raise ValueError("image sizes differ: (1280, 720) vs (2560, 1440)")
+            return {"dssim": 0.001, "bad": 0.0, "mae": 0.1, "baseline": "a", "current": "y"}
+
+        report = self.root / "report"
+        with patch.object(rt, "play", play), patch.object(rt, "best_match", match), \
+                patch.object(rt, "diff_image"), patch.object(rt.shutil, "copy2"), \
+                patch.object(rt, "provenance", return_value={}):
+            self.assertEqual(rt.cmd_check(cfg, self.args(report=str(report))), 1)
+        data = __import__("json").loads((report / "report.json").read_text())
+        self.assertEqual(data["info"]["replays"][0]["reason"], "the car moved")
+        rows = {r["scene"]: r for r in data["scenes"]}
+        self.assertEqual(rows["big"]["result"], "FAIL")
+        self.assertIn("sizes differ", rows["big"]["error"])
+        self.assertEqual(rows["fine"]["result"], "PASS")
+        self.assertIn("the car moved", (report / "index.html").read_text())
+
+    def test_the_last_attempt_compares_a_car_that_rests_elsewhere(self):
+        with self.assertRaises(rt.Hang):
+            self.land(self.FALL + [101.088], spawns=[[87.68, -3921.24, 100.0950]])
+        s = self.session()
+        s.last_attempt = True
+        s.proc = types.SimpleNamespace(pid=1)
+        s.spawn = (87.68, -3921.24, 100.09, 101.088)
+        with patch.object(rt, "Guest"), \
+                patch.object(rt, "player_pose", lambda _: (87.70, -3921.25, 100.3, 101.088)):
+            s.car_still("photo_mode")  # moved, but the last attempt: captured all the same
+
     def test_frame_rate_is_the_last_flag_and_never_the_console_rate(self):
         cfg = {"game": {"args": ["--frame_rate=60"]}}
         self.assertEqual(rt.frame_rate(cfg, self.args(extra=[])), 60)
@@ -332,11 +375,17 @@ class SafetyTests(unittest.TestCase):
         # The second shot comes 0.5 game seconds (30 frames) after the first.
         self.assertEqual(waited, [190, 580, 610])
 
-    def test_at_before_world_is_an_error(self):
+    def test_before_world_at_and_shots_count_frames_from_the_boot(self):
         s = self.session()
         s.fps = 60
-        with self.assertRaises(ValueError):
-            s.run_steps(["at 1", "capture x"], {"x"})
+        s.cfg = {"game": {}, "scenes": {"x": {}}, "defaults": {"shots": 3, "interval": 0.1}}
+        s.clock = types.SimpleNamespace(target=None, addr=None)
+        s.shot = lambda stem: [stem]
+        s.game_frames = lambda: 31
+        waited = []
+        s.wait_frame = waited.append
+        s.run_steps(["at 0.5", "capture x"], {"x"})
+        self.assertEqual(waited, [30, 37, 43])  # frame 30, then 6 frames apart from the first
 
     def race_start(self, frames):
         s = self.session()

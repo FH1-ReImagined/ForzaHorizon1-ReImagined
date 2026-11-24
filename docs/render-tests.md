@@ -104,8 +104,9 @@ Mesa's, in its run folder under `~/.cache/forza-render-tests`, `--work DIR` or
 `[game] args` in `scenes.toml`. Like the run scripts it waits while someone else holds the
 benchmark lock (`tools/bench_lock.sh`) and does not start with less than 10 GB of free memory.
 
-The exit status is 0 when every scene passes, 1 when one fails and 2 when a scene could not
-be captured.
+The exit status is 0 when every scene passes, 1 when one fails (a picture of another size than
+the baselines', for example at another render scale, is a failure too) and 2 when a scene could
+not be captured.
 
 `tools/prerelease.sh` runs this check as its `render` step (`--only render`) against the
 `linux-tu4` build under test, with `--retries 2`: it passes when every scene is within its
@@ -124,7 +125,12 @@ no screenshot within 10 s of the trigger, no main loop frame for `--hang-secs` a
 a car at the spawn that did not drop within 60 s, came to rest where it did in no recorded run
 or was moved before a capture (#960, below), or a game that exited ends the attempt.
 The tool stops that game (by its own PID) and plays the session again from the boot, twice by
-default (`--retries N`). The game's guest memory file in /dev/shm is removed once no process maps it.
+default (`--retries N`). Every replayed attempt and its reason are listed in the report
+(`report.json` `info.replays`, `index.html`) and in the prerelease RESULT line ("N replays: ..."),
+so a pass after a replay shows. On the last attempt a car that came to rest elsewhere or was moved
+does not end the attempt: the scenes are captured and compared, and a real change that moves the
+car every run fails with pictures. The game's guest memory file in /dev/shm is removed once no
+process maps it.
 
 ## Reading the report
 
@@ -189,10 +195,13 @@ timing differences between runs.
     happened when another program kept the CPU busy) is played again (`--retries`, twice by
     default). So is one whose car no longer stands there when a scene near the spawn is
     captured: now and then traffic runs into it (photo mode's YAW then read 280.3).
-- **Game time.** The game runs behind real time after a long frame, so after `world` the steps
-  count frames: `at S` waits for the frame `S * 60` after the latest `world` or `start`, and
-  `wait S` and the shots of a scene count game time too. Before `world` (boot, menus, the load)
-  `wait` stays in real seconds. The race's loading and introduction take more or fewer frames
+  With the fixed frame time the render tests no longer cover the game's real frame time path
+  (the vblank-paced dt of `frame_time.cpp`, motion under uneven dt); the render thread and the
+  GPU emulation still run in real time.
+- **Game time.** The game runs behind real time after a long frame, so the steps count frames:
+  `at S` waits for the frame `S * 60` after the latest `world` or `start` (after the boot before
+  the first `world`), the shots of a scene are game time apart, and after `world` `wait S` counts
+  game time too. Before `world` (boot, menus, the load) `wait` stays in real seconds. The race's loading and introduction take more or fewer frames
   from run to run, so `start` waits for the race itself to start (a CPU driver that stood for a
   second moves off), and the race scene is 14 s of game time after that. The game looks for the
   screenshot trigger at every frame (it looked at every tenth, up to 9 frames late).
@@ -202,8 +211,11 @@ timing differences between runs.
   frames, and the scenes come late. The noise columns of the table above were measured before
   #960.
 - **The title screen** has no clock; its attract sequence starts with the boot and its camera
-  moves from the first frame, so it is captured right after the first frame and compared at
-  1/8 size, where a frame or two of difference in the boot does not matter.
+  moves in game frames. Before `world`, `at` and the shots count main loop frames from the boot
+  (`frametime.csv` counts them from the first one), so the title is taken at `at 0.5`, 30 frames
+  in, and its shots 6 frames apart. Taken on real-time intervals after the first frame, its window
+  slid by up to 0.8 s against the baselines' and it scored 0.0146 of its 0.015 in one run in four
+  (#960). It is compared at 1/8 size.
 - **Masks** leave out what still differs between runs: traffic on the far road and the right
   lane (now and then it still differs, #960) and the minimap's traffic dots in free roam, the
   road ahead and the mirror in the cockpit, the road behind the car in photo mode (traffic),

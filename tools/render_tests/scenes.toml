@@ -5,9 +5,9 @@
 # input, 0.1 s presses 0.8 s apart), world [timeout] (free roam has loaded and its clock has
 # started), land [timeout] (the car dropped at the spawn has come to rest where a recorded run's
 # did), start [timeout] (the race has started: a CPU driver moves off), at S (S seconds of game time, main loop frames at 60 fps, after the latest
-# "world" or "start"), clock HH:MM|off (hold the time of day), capture NAME [shots=N]
-# [interval=S], trace on|off (log the clock to clock_trace.txt), log TEXT. "wait" and a
-# capture's interval are real time before "world" and game time after it (docs/render-tests.md).
+# "world" or "start", or after the boot), clock HH:MM|off (hold the time of day), capture NAME [shots=N]
+# [interval=S], trace on|off (log the clock to clock_trace.txt), log TEXT. "wait" is real time
+# before "world" and game time after it; a capture's interval is game time (docs/render-tests.md).
 #
 # Scene keys: description, shots and interval (captures; each shot saves "burst" consecutive
 # frames), max_dssim and max_bad (tolerances: 1 - mean block SSIM, and the share of blocks that
@@ -31,6 +31,7 @@ max_bad = 0.005
 name = "festival"
 steps = [
   "first_frame 0",
+  "at 0.5",           # game time from the boot: the attract camera moves in frames
   "capture title",
   "press START",
   "wait 5",
@@ -78,9 +79,9 @@ steps = [
 ]
 
 [scenes.title]
-description = "PRESS START over the first shot of the attract sequence, right after the boot."
-# The attract camera moves from the first frame and the boot's length varies by a frame or two,
-# so this is compared at 1/8 size (64x64-pixel blocks): logo, colours, exposure, bloom.
+description = "PRESS START over the first shot of the attract sequence, half a game second after the boot."
+# The attract camera moves from the first frame; the shots are timed in main loop frames from the
+# boot (#960). Compared at 1/8 size (64x64-pixel blocks): logo, colours, exposure, bloom.
 shots = 10
 interval = 0.1
 scale = 8
@@ -91,12 +92,12 @@ max_bad = 0.01
 description = "Free roam at the spawn point (GoPro Millennia Masters), chase camera, held at 12:00."
 # The far road and the right lane beside the car (traffic, its name tags), the minimap. Traffic
 # still differs now and then from run to run (#960).
-masks = [[0, 250, 1280, 130], [760, 380, 520, 120], [40, 380, 240, 240]]
+masks = [[0, 250, 1280, 130], [830, 380, 450, 120], [40, 380, 240, 240]]
 
 [scenes.freeroam_dawn]
 description = "The same view held at 07:47 (dawn), 12 s after the change so exposure has settled."
 # Traffic's name tags reach a little further than at noon, and its headlights light the trees.
-masks = [[0, 250, 1280, 130], [760, 380, 520, 120], [40, 380, 240, 240]]
+masks = [[0, 250, 1280, 130], [830, 380, 450, 120], [40, 380, 240, 240]]
 max_dssim = 0.01
 max_bad = 0.01
 
@@ -108,9 +109,9 @@ max_dssim = 0.003
 [scenes.photo_mode]
 description = "Photo mode's default camera (TAKE PHOTO) at the spawn point, 12:00; the world is paused."
 # Edges move by a fraction of a pixel between runs (shadow edges on the road and the rail), so
-# the world, paused here, is still not identical. The road behind the car is masked: traffic
-# on it still differs now and then (#960).
-masks = [[0, 170, 720, 100]]
+# the world, paused here, is still not identical. The road behind the car is masked, around the
+# PITCH/YAW/ROLL readout: traffic on it still differs now and then (#960).
+masks = [[0, 170, 60, 100], [235, 170, 485, 100], [60, 245, 175, 25]]
 max_dssim = 0.016
 max_bad = 0.025
 

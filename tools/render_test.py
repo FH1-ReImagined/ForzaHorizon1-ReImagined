@@ -387,6 +387,7 @@ class Session:
         self.game_at = time.monotonic()
         self.world_frame = None   # main loop frame of the latest anchor ("world", "start")
         self.spawn = None         # where the car came to rest at the spawn ("land")
+        self.last_attempt = False  # play's last attempt: a car elsewhere is compared, not replayed
         self.shots = {}
         self.burst = int(cfg["game"].get("burst", 1))
         self.pool = ThreadPoolExecutor(max_workers=2)
@@ -643,8 +644,11 @@ class Session:
                 f" (fell from frame {fall - self.world_frame} of the world, {pose[3] - low:.3f} m deep)")
             known = getattr(self.args, "spawns", None)
             if known and not any(near_spot(k, pose) for k in known):
-                raise Hang("the car came to rest where it did in no baseline run "
-                           f"({', '.join(f'{h:.4f}' for _, _, h in known)} degrees): playing again")
+                why = ("the car came to rest where it did in no baseline run "
+                       f"({', '.join(f'{h:.4f}' for _, _, h in sorted(set(map(tuple, known))))} degrees)")
+                if not self.last_attempt:
+                    raise Hang(why + ": playing again")
+                log(why + ": the last attempt, so the scenes are compared all the same")
         finally:
             g.close()
 
@@ -662,8 +666,11 @@ class Session:
             return
         moved = math.hypot(pose[0] - self.spawn[0], pose[1] - self.spawn[1])
         if moved < 50 and not near_spot(pose, self.spawn):  # 50 m: not on the race's grid
-            raise Hang(f"{name}: the car moved since it came to rest ({moved:.3f} m,"
-                       f" {pose[2] - self.spawn[2]:+.3f} degrees; traffic ran into it?)")
+            why = (f"{name}: the car moved since it came to rest ({moved:.3f} m,"
+                   f" {pose[2] - self.spawn[2]:+.3f} degrees; traffic ran into it?)")
+            if not self.last_attempt:
+                raise Hang(why)
+            log(why + ": the last attempt, so it is captured all the same")
 
     def wait_start(self, timeout):
         """Waits until the race starts: a CPU driver's car that stood still for a second moves
@@ -752,11 +759,10 @@ class Session:
                 self.wait_start(float(rest[0]) if rest else 120)
             elif op == "at":
                 # Game seconds (main loop frames) since the world started running or the race
-                # started (wait_world, wait_start): steps timed this way depend neither on how
-                # long the loading took nor on how fast this machine ran the frames since.
-                if self.world_frame is None:
-                    raise ValueError(f"{step}: needs a world step before it")
-                self.wait_frame(self.world_frame + round(float(rest[0]) * self.fps))
+                # started (wait_world, wait_start), or since the boot before that (the title):
+                # steps timed this way depend neither on how long the loading took nor on how
+                # fast this machine ran the frames since.
+                self.wait_frame((self.world_frame or 0) + round(float(rest[0]) * self.fps))
             elif op == "clock":
                 self.clock.set(None if rest[0] == "off" else parse_time(rest[0]))
             elif op == "capture":
@@ -773,9 +779,7 @@ class Session:
                 paths = []
                 first = self.game_frames()
                 for k in range(shots):
-                    if k and self.world_frame is None:
-                        self.wait(interval)
-                    elif k:  # shot k at k * INTERVAL game seconds after the first (a slow shot
+                    if k:  # shot k at k * INTERVAL game seconds after the first (a slow shot
                         # can make the next ones follow at once)
                         self.wait_frame(first + round(k * interval * self.fps))
                     paths += self.shot(self.dir / f"{name}_{k}")
@@ -846,10 +850,11 @@ def scene_value(cfg, scene, key):
     return scene.get(key, cfg["defaults"][key])
 
 
-def play(cfg, args, wanted, label, save_dir, xuid, spawns=None):
+def play(cfg, args, wanted, label, save_dir, xuid, spawns=None, replays=None):
     """Runs every session that captures a wanted scene, each again after a hang (--retries).
     Returns ({scene: [png paths]}, {scene: error} for the scenes of a session that failed).
-    SPAWNS, a list, gets where the car came to rest at the spawn ("land") in each session."""
+    SPAWNS, a list, gets where the car came to rest at the spawn ("land") in each session;
+    REPLAYS, a list, gets {session, attempt, reason} of every attempt that failed."""
     shots, errors = {}, {}
     for sess in cfg["session"]:
         names = [s.split()[1] for s in sess["steps"] if s.split()[0] == "capture"]
@@ -859,6 +864,7 @@ def play(cfg, args, wanted, label, save_dir, xuid, spawns=None):
             bench_lock_wait(args.lock_wait)
             run_dir = args.work / "runs" / f"{label}-{sess['name']}-{attempt}-{uuid.uuid4().hex}"
             s = Session(cfg, args, run_dir, save_dir, xuid)
+            s.last_attempt = attempt == args.retries + 1
             t0 = time.monotonic()
             failure = None
             try:
@@ -878,6 +884,8 @@ def play(cfg, args, wanted, label, save_dir, xuid, spawns=None):
                 log(f"session {sess['name']} done in {time.monotonic() - t0:.0f} s")
                 break
             log(f"session {sess['name']} attempt {attempt}: {failure}")
+            if replays is not None:
+                replays.append({"session": sess["name"], "attempt": attempt, "reason": str(failure)})
             if attempt == args.retries + 1:
                 for n in set(names) & wanted:
                     errors[n] = f"session {sess['name']} failed {attempt} times ({failure}); log in {run_dir}"
@@ -1129,7 +1137,8 @@ def cmd_check(cfg, args):
                    for p in json.loads((base / n / "baseline.json").read_text()).get("spawns", [])]
     stamp = time.strftime("%Y%m%d-%H%M%S")
     t0 = time.monotonic()
-    shots, errors = play(cfg, args, names, f"{stamp}-check", save / TITLE, xuid)
+    replays = []  # attempts played again (a hang, a car elsewhere): a pass after one is reported
+    shots, errors = play(cfg, args, names, f"{stamp}-check", save / TITLE, xuid, replays=replays)
     out = plain_path(args.report if args.report else args.work / "reports" / f"{stamp}-{uuid.uuid4().hex}")
     out.mkdir(parents=True)  # A report is a new directory, never an existing tree to overwrite.
     rows = []
@@ -1144,7 +1153,12 @@ def cmd_check(cfg, args):
             rows.append(dict(row, result="ERROR", error=errors.get(name, "not captured")))
             log(f"{name}: ERROR {rows[-1]['error']}")
             continue
-        res = best_match([base / name / f for f in meta["files"]], shots[name], scene)
+        try:
+            res = best_match([base / name / f for f in meta["files"]], shots[name], scene)
+        except ValueError as err:  # another picture size (a render scale against scale-1 baselines)
+            rows.append(dict(row, result="FAIL", error=str(err)))
+            log(f"{name}: FAIL {err}")
+            continue
         ok = res["dssim"] <= tol["max_dssim"] and res["bad"] <= tol["max_bad"]
         diff_image(res, out / f"{name}.png")
         shutil.copy2(res["current"], out / f"{name}.current.png")
@@ -1152,11 +1166,13 @@ def cmd_check(cfg, args):
         rows.append(dict(row, result="PASS" if ok else "FAIL", **clean(res)))
         log(f"{name}: {rows[-1]['result']} dssim {res['dssim']:.4f}/{tol['max_dssim']}"
             f" changed {res['bad']:.2%}/{tol['max_bad']:.2%} mae {res['mae']:.2f}")
-    info = {**provenance(args), "seconds": round(time.monotonic() - t0), "baselines": str(base)}
+    info = {**provenance(args), "seconds": round(time.monotonic() - t0), "baselines": str(base),
+            "replays": replays}
     (out / "report.json").write_text(json.dumps({"info": info, "scenes": rows}, indent=1))
     write_html(out / "index.html", info, rows)
     passed = sum(r["result"] == "PASS" for r in rows)
-    print(f"{passed}/{len(rows)} scenes pass; report: {out / 'index.html'}")
+    again = f" after {len(replays)} replayed attempt(s)" if replays else ""
+    print(f"{passed}/{len(rows)} scenes pass{again}; report: {out / 'index.html'}")
     if not args.keep_runs:
         prune_runs(args.work)
     if any(r["result"] == "ERROR" for r in rows):
@@ -1174,14 +1190,20 @@ def write_html(path, info, rows):
            ".PASS{color:#6c6}.FAIL,.ERROR{color:#f66}}</style>",
            "<h1>Render test report</h1><p>"]
     for k, v in info.items():
+        if k == "replays":
+            continue
         out.append(f"<b>{e(k)}</b>: {e(str(v))}<br>")
+    replays = info.get("replays") or []
+    out.append(f"<b>replayed attempts</b>: {len(replays)}<br>")
+    for rp in replays:
+        out.append(f"&nbsp;&nbsp;session {e(str(rp['session']))}, attempt {rp['attempt']}: {e(str(rp['reason']))}<br>")
     out.append("</p><table><tr><th>scene</th><th>result</th><th>dssim / tolerance</th>"
                "<th>changed blocks / tolerance</th><th>mean abs diff</th>"
                "<th>noise when recorded (dssim, changed)</th></tr>")
     for r in rows:
         n = r.get("noise_max") or {}
         res = r["result"]
-        if res == "ERROR":
+        if "error" in r:
             cells = f"<td colspan=3>{e(r['error'])}</td>"
         else:
             cells = (f"<td>{r['dssim']:.4f} / {r['max_dssim']}</td><td>{r['bad']:.2%} / {r['max_bad']:.2%}</td>"
@@ -1191,7 +1213,7 @@ def write_html(path, info, rows):
     out.append("</table><p>Each image: baseline | this run | changes (red: lower structural similarity "
                "or a colour shift; blue: masked). Click it for full size.</p>")
     for r in rows:
-        if r["result"] == "ERROR":
+        if "error" in r:
             continue
         s = e(r["scene"])
         out.append(f"<h2 id='{s}'>{s} <span class={r['result']}>{r['result']}</span></h2><p>{e(r['description'])}</p>"

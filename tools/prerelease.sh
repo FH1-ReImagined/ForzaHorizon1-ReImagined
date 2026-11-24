@@ -322,19 +322,27 @@ check_render() {
         python3 -I - "$rep" <<'PYEOF' || rc=1
 import json, sys
 rep = sys.argv[1]
-rows = json.load(open(rep + "/report.json"))["scenes"]
+report = json.load(open(rep + "/report.json"))
+rows = report["scenes"]
+# Attempts played again before the one that counted (a hang, a car that came to rest elsewhere
+# at the spawn, #960): a pass after one says so.
+replays = report.get("info", {}).get("replays") or []
+again = (f" ({len(replays)} replays: " + "; ".join(r["reason"][:120] for r in replays) + ")"
+         if replays else "")
 bad = [r for r in rows if r["result"] != "PASS"]
 for r in bad:
     if r["result"] == "ERROR":
         print(f"{r['scene']}: not captured: {r['error'][:200]}")
+    elif "error" in r:
+        print(f"{r['scene']}: {r['error'][:200]}")
     else:
         print(f"{r['scene']}: dssim {r['dssim']:.4f} (tolerance {r['max_dssim']}), "
               f"changed {r['bad']:.2%} ({r['max_bad']:.2%})")
 if bad:
     print("RESULT: " + ", ".join(f"{r['scene']} {r['result']}" for r in bad)
-          + f" ({len(rows) - len(bad)}/{len(rows)} pass; {rep}/index.html)")
+          + f" ({len(rows) - len(bad)}/{len(rows)} pass; {rep}/index.html){again}")
     sys.exit(1)
-print(f"RESULT: {len(rows)}/{len(rows)} scenes match the baselines ({rep}/index.html)")
+print(f"RESULT: {len(rows)}/{len(rows)} scenes match the baselines ({rep}/index.html){again}")
 PYEOF
     else
         echo "RESULT: render_test.py check ended without a report (status $rc)"
