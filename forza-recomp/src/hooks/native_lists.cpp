@@ -32,6 +32,18 @@
 
 #include "native_lists.h"
 
+#include <fmt/format.h>
+#include <rex/cvar.h>
+#include <rex/logging.h>
+#include <rex/ppc/context.h>
+#include <rex/ppc/func.h>
+#include <rex/system/kernel_state.h>
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdint>
+
 #include "../debug/d3d_trace.h"
 #include "../debug/list_trace.h"
 #include "../platform/guest_addr.h"
@@ -41,17 +53,9 @@
 #include "../platform/native_shadow_record.h"
 #include "../platform/scene_tiling.h"
 #include "native_device.h"
-
-#include <fmt/format.h>
-#include <rex/cvar.h>
-#include <rex/logging.h>
-#include <rex/ppc/context.h>
-#include <rex/ppc/func.h>
-#include <rex/system/kernel_state.h>
-
-#include <atomic>
-#include <chrono>
-#include <cstdint>
+#if !defined(_WIN32)
+#include <unistd.h>
+#endif
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -62,7 +66,10 @@
 REXCVAR_DEFINE_STRING(native_lists, "off", "Display",
                       "Testing (native renderer): off; shadow (the track's model lists are "
                       "converted and registered with the GPU plugin, which compares every run "
-                      "of one with its template; nothing drawn changes). Read at the start");
+                      "of one with its template; nothing drawn changes); verify (registered the "
+                      "same way, and the plugin replays each run's template into scratch state "
+                      "beside the packets, compares and times it; nothing drawn changes). x86-64 "
+                      "with 4 KB pages only. Read at the start");
 
 namespace forza::native_lists {
 
@@ -71,17 +78,43 @@ namespace {
 thread_local uint32_t t_group = 0xFF;
 }  // namespace
 
+namespace {
+// Why native_lists stays off on this host (docs "M4, fourth step"): the fixup hook's fences have
+// only run where they are compiler barriers (x86-64), and the plugin's reads of freed guest
+// memory are only safe with pages of 4 KB. Null: it may run.
+const char* HostRefusal() {
+#if !defined(__x86_64__) && !defined(_M_X64)
+  return "not an x86-64 host";
+#elif defined(_WIN32)
+  return nullptr;  // 4 KB pages on x86-64 Windows
+#else
+  const long page = sysconf(_SC_PAGESIZE);
+  return page > 0 && page <= 4096 ? nullptr : "host pages above 4 KB";
+#endif
+}
+}  // namespace
+
 bool ReadSwitch() {
   static std::once_flag once;
   std::call_once(once, [] {
     const std::string mode = REXCVAR_GET(native_lists);
-    const bool on = mode == "shadow";
-    g_state.store(on ? 1 : 2, std::memory_order_relaxed);
-    if (on)
+    int state = mode == "shadow" ? 1 : mode == "verify" ? 3 : 2;
+    if (state != 2) {
+      if (const char* why = HostRefusal()) {
+        REXLOG_WARN("native_lists: {} refused ({}), off", mode, why);
+        state = 2;
+      }
+    }
+    g_state.store(state, std::memory_order_relaxed);
+    if (state == 1)
       REXLOG_INFO("native_lists: shadow (the model lists are registered with the GPU plugin, "
                   "which compares each run with its template; nothing drawn changes)");
+    if (state == 3)
+      REXLOG_INFO("native_lists: verify (the model lists are registered with the GPU plugin, "
+                  "which replays each run's template into scratch state beside the packets, "
+                  "compares and times it; nothing drawn changes)");
   });
-  return g_state.load(std::memory_order_relaxed) == 1;
+  return g_state.load(std::memory_order_relaxed) & 1;
 }
 
 void SetGroup(uint32_t group) { t_group = group; }
@@ -139,6 +172,8 @@ struct Counts {
            refused = 0, defined = 0, define_words = 0, bound = 0, dropped = 0, unloads = 0,
            unload_by_header = 0, unload_by_address = 0, not_device = 0, recording = 0,
            ring_full = 0, no_room = 0, fixups = 0, convert_ns = 0, run_ns = 0;
+  // Fixups entered inside another on the same thread; of the same list's state word.
+  uint64_t nested_fixups = 0, nested_same_list = 0;
   uint64_t refusals[nl::kRefuseTooLarge + 1] = {};
 };
 
@@ -154,6 +189,7 @@ struct State {
   uint32_t* define_ack_word = nullptr;
   uint32_t device = 0;  // the device of the first model list call
   bool memory_failed = false;
+  bool mode_sent = false;  // verify: kOpListMode is in the stream
   std::vector<uint32_t> tmpl;
   std::vector<uint8_t> header, patch, pm4;
   Counts n;
@@ -212,12 +248,13 @@ void Log(State& s, uint64_t now) {
       "new, {} in a reused command buffer); {} converted ({} from a retiled copy), {} refused "
       "({}); {} templates sent ({} words), {} lists bound now, {} dropped ({} unloads: {} by "
       "header, {} by address); not registered: {} on another device, {} recording, {} ring "
-      "full, {} without room; {} fixups of bound lists; conversion {:.1f} ms in all, the hook "
-      "{:.3f} ms in all ({:.2f} us a call)",
+      "full, {} without room; {} fixups of bound lists ({} nested in another, {} of them on the "
+      "same list); conversion {:.1f} ms in all, the hook {:.3f} ms in all ({:.2f} us a call)",
       n.calls, n.lists, n.current, n.fresh, n.reused, n.converted, n.retiled, n.refused,
       refusals.empty() ? " none" : refusals.c_str(), n.defined, n.define_words, s.lists.size(),
       n.dropped, n.unloads, n.unload_by_header, n.unload_by_address, n.not_device, n.recording,
-      n.ring_full, n.no_room, n.fixups, double(n.convert_ns) * 1e-6, double(n.run_ns) * 1e-6,
+      n.ring_full, n.no_room, n.fixups, n.nested_fixups, n.nested_same_list,
+      double(n.convert_ns) * 1e-6, double(n.run_ns) * 1e-6,
       n.calls ? double(n.run_ns) * 1e-3 / double(n.calls) : 0.0);
   s.next_log_ns = now + 30'000'000'000ull;
 }
@@ -338,6 +375,10 @@ void Register(PPCContext& ctx, uint8_t* base, uint32_t dev, uint32_t cb, uint32_
     b.slot = nl::kNone;
   }
   const uint32_t state = b.slot != nl::kNone ? s.states + b.slot * 4 : 0;
+  // A state word taken again starts without the nested-fixup mark of its last list (an even
+  // generation still, so no run reads it as a fixup under way).
+  if (state && (Load32(base, state) & nl::kListStateNested))
+    Store32(base, state, (Load32(base, state) & ~nl::kListStateNested) + 2);
   const uint32_t bind[nl::kListBindWords] = {
       nl::kMagicHost, nl::kOpListBind, phys,        words, b.template_id, refusal, state, cb,
       patch,          patch_words,     Group(), retiled ? nl::kListRetiled : 0u};
@@ -415,6 +456,16 @@ void OnRun(PPCContext& ctx, uint8_t* base) {
     return;
   }
   if (!AllocateMemory(s)) return;
+  if (Verify() && !s.mode_sent) {
+    // Before the first define: the plugin replays the lists' runs into scratch state too.
+    const uint32_t mode[nl::kListModeWords] = {nl::kMagicHost, nl::kOpListMode,
+                                               nl::kListModeVerify, 0};
+    if (!Emit(ctx, base, dev, mode, nl::kListModeWords)) {
+      ++s.n.no_room;
+      return;
+    }
+    s.mode_sent = true;
+  }
   if (!SendDrops(ctx, base, dev, s)) {
     ++s.n.no_room;
     return;
@@ -457,16 +508,37 @@ extern "C" REX_FUNC(sub_82D19210) {
   }
   const uint32_t cb = nls::Plausible(ctx.r3.u32) ? nls::Load32(base, ctx.r3.u32) : 0;
   uint32_t word = 0;
+  // The fixups this thread is inside (their lists' state words, 0 for one of no bound list).
+  static thread_local uint32_t t_depth = 0;
+  static thread_local uint32_t t_words[8] = {};
   {
     nls::State& s = nls::S();
     std::lock_guard<std::mutex> lock(s.mutex);
     const forza::native_list::Bound* b = s.lists.Get(cb);
-    if (b && b->slot != forza::native_list::kNone && s.states) {
-      word = s.states + b->slot * 4;
-      nls::Store32(base, word, nls::Load32(base, word) + 1);
+    if (b && b->slot != forza::native_list::kNone && s.states) word = s.states + b->slot * 4;
+    // Nested in another fixup on this thread: counted. The generation's seqlock has one writer
+    // per word, so only a fixup of a list this thread is already fixing up leaves it unsafe; in
+    // verify mode that list is marked in the same store (the plugin leaves its runs out until it
+    // is bound again; the seqlock itself is not changed here).
+    bool same = false;
+    if (t_depth) {
+      ++s.n.nested_fixups;
+      for (uint32_t i = 0; i < std::min<uint32_t>(t_depth, 8); ++i)
+        same |= word && t_words[i] == word;
+      s.n.nested_same_list += same;
+    }
+    if (word) {
+      uint32_t generation = nls::Load32(base, word) + 1;
+      if (same && nls::Verify()) generation |= forza::native_list::kListStateNested;
+      nls::Store32(base, word, generation);
       ++s.n.fixups;
     }
   }
+  if (t_depth < 8) t_words[t_depth] = word;
+  ++t_depth;
+  struct Depth {
+    ~Depth() { --t_depth; }
+  } depth_scope;
   // A seqlock's writer: the odd generation stored before the fixup's writes, the even one after
   // them (the plugin reads the generation, the slots, then the generation again). On x86 the
   // fences only hold the compiler back; a weakly ordered CPU needs them as barriers.

@@ -33,6 +33,10 @@ namespace forza::native_list {
 constexpr uint32_t kMagicHost = 0x4648314Eu;  // "FH1N", a host packet's first word
 constexpr uint32_t kOpListDefine = 0x20, kOpListBind = 0x21, kOpListDrop = 0x22;
 constexpr uint32_t kListDefineWords = 8, kListBindWords = 12, kListDropWords = 4;
+// ReIGlue 0660: the mode (native_lists=verify), sent once before the first define; and the flag
+// verify mode sets in a list's state word when a fixup of it ran inside another fixup.
+constexpr uint32_t kOpListMode = 0x23, kListModeWords = 4, kListModeVerify = 1;
+constexpr uint32_t kListStateNested = 0x80000000u;
 constexpr uint32_t kListRefused = 0xFFFFFFFFu;
 constexpr uint32_t kListGroupNone = 0xFF;
 constexpr uint32_t kListRetiled = 1;
