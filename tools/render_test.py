@@ -115,14 +115,21 @@ def disjoint(a, b):
 # The SDK reads its settings from forza.toml next to the executable, and the launcher writes the
 # player's there (world detail, ambient occlusion, the Forza Live server): in a build folder the
 # player plays from, it changed every free roam scene and brought Forza Live's messages into
-# them. The game runs from a folder of the build's own files without it (logs/ is the SDK's).
+# them. The game runs from a folder of the build's own files without it (logs/ is the SDK's), with
+# the release checks' own settings file in its place (#846, shared with tools/prerelease.sh).
 STAGE_SKIP = {"forza.toml", "logs"}
+CHECK_TOML = ROOT / "tools" / "prerelease_forza.toml"
+RUN_UNSET = {"FORZA_SERVER", "FORZA_NET", "FORZA_SERVER_RELAY", "FORZA_ROOM", "FORZA_GAMERTAG",
+             "FORZA_LIVE_SIGNIN", "FORZA_GRAPHICS_SETTINGS", "FORZA_RELAUNCHED",
+             "FORZA_LAUNCHER_RELAUNCH", "FORZA_AUTOPRESS", "FORZA_SCREENSHOT_BURST", "FORZA_GAME_DIR",
+             "REX_LIVE_SERVER"}
 
 
 def stage_build(build, dest):
     """A new folder with hard links (copies on another file system) of the build folder's files,
-    except forza.toml, for the game to run from. Folders and symlinks are left out: the game
-    loads its plugin from its own folder and gets every other path on the command line."""
+    except forza.toml, for the game to run from, and a copy of CHECK_TOML as its forza.toml.
+    Folders and symlinks are left out: the game loads its plugin from its own folder and gets
+    every other path on the command line."""
     build = Path(build).resolve()
     dest.mkdir()
     for p in sorted(build.iterdir()):
@@ -134,6 +141,7 @@ def stage_build(build, dest):
             shutil.copy2(p, dest / p.name)
     if not (dest / "forza").is_file():
         raise ValueError(f"no forza executable in {build}")
+    shutil.copyfile(CHECK_TOML, dest / "forza.toml")
     return dest
 
 
@@ -335,8 +343,9 @@ class Session:
         (work / "xdg-cache").mkdir(parents=True, exist_ok=True)
         os.mkfifo(d / "in.fifo")
         game = stage_build(self.args.build, d / "game")
-        env = {k: v for k, v in os.environ.items()
-               if k not in ("FORZA_SERVER", "FORZA_NET", "FORZA_AUTOPRESS", "FORZA_SCREENSHOT_BURST")}
+        # The player's variables for the game (the server, the launcher's graphics settings and
+        # relaunch hand-over): the same list as tools/prerelease_game.sh PRERELEASE_UNSET.
+        env = {k: v for k, v in os.environ.items() if k not in RUN_UNSET}
         env.update({
             # The player's own settings, saves and caches stay out of the run.
             "XDG_CONFIG_HOME": str(d / "xdg/config"), "XDG_DATA_HOME": str(d / "xdg/data"),

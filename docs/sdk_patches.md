@@ -1015,3 +1015,22 @@ With the setting off nothing of this is recorded. The command buffer tests its t
 `Trail::Record` is main's, and IssueDraw tests the setting twice a draw; a loss then logs a line
 that names the setting. The checks on RADV and the cost are in rendering.md;
 `tools/test_device_lost_trail.cpp` covers the trail and the line.
+
+## ReIGlue 1110: memory read once more after a release is dropped when allocated again (ReIGlue #64)
+
+The GPU's copy of guest memory holds a page as up to date once it uploads it, and a write watch on
+the page tells it when the CPU changes it. A watch can only be armed on a page a heap holds and
+the guest may write. A block released while a frame still queued reads it was uploaded again and
+held as up to date with no watch; once the block was allocated again, nothing reported the writes
+to it and the GPU drew the old bytes for whatever the game put there (#895: other textures' texels
+on an FM4 circuit). The same for a page the game held read-only and later made writable.
+
+With 1110 an allocation of physical memory drops the GPU's copy of the pages it gives new contents
+(pages committed again keep theirs, and what the GPU wrote there), and a protection change that
+makes pages writable drops it as it already did for watched pages, whether or not a page was
+watched. Requests, uploads, allocations and protection changes cost the same within the noise; in
+a render test run the game made 69 committing allocations and 95 writable protection changes.
+ReIGlue's `tests/shared_memory_watch_test.cpp` plays the release, late read, allocation and write
+against the real guest memory. The calls #895 added after its chunk allocations (`fm4_track.cpp`,
+`fixed_gpu_heap.cpp`: `EnablePhysicalMemoryAccessCallbacks`, then `TriggerPhysicalMemoryCallbacks`)
+now repeat what the allocation does and can go.

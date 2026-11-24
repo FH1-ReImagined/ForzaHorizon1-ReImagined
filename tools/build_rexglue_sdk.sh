@@ -94,10 +94,14 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # and 1100: with gpu_device_lost_setup_breadcrumbs (off: nothing is recorded), a device loss also
 # says what was recorded since the draw before the unfinished one and whether the GPU finished
 # that work or hung in the draw itself (#913).
+# and 1110: an allocation of physical memory, and a protection change that makes pages writable,
+# drop the GPU's copy of the range also where no page was watched (ReIGlue #64, the cause of #895).
+# and 1120: a copy to guest memory at a draw resolution scale takes each guest pixel's own host
+# pixels (#905).
 # A reviewed full commit can be pinned before a maintainer publishes a tag.
 # When a tag is supplied, its target must still match this immutable commit.
 REIGLUE_TAG=
-REIGLUE_COMMIT=ce42a71540906d8fda48f1f83069d8ce80bcb8a2  # ReIGlue main: 0650 (#66), and 1100 (#913, ReIGlue #67)
+REIGLUE_COMMIT=b838685939bd6fd648603a637a5fa703c5cac270  # ReIGlue main: 0650, 1100 (ReIGlue #67), 1110, 1120
 REIGLUE_URL="${REIGLUE_URL:-https://github.com/FH1-ReImagined/ReIGlue}"
 NIGHTLY="${REXSDK_NIGHTLY:-$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64}"
 SRC="${REXSDK_SRC:-$HOME/rexglue-sdk-src-forza/sdk}"

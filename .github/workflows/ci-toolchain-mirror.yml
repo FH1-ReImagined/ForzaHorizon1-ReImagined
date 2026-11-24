@@ -67,13 +67,18 @@ jobs:
         run: |
           unpinned="$RUNNER_TEMP/toolchain/UNPINNED"
           [ -s "$unpinned" ] || exit 0
+          count="$(grep -c . "$unpinned")"
           {
-            echo "### Add these lines to launcher/packaging/ci_toolchain_sha256sums.txt"
+            echo "### $count files to pin in launcher/packaging/ci_toolchain_sha256sums.txt"
+            echo
+            echo "They are in the release now, each checked against the PPA's signed index. CI keeps"
+            echo "installing only the pinned files, and this run fails every week until a pull request"
+            echo "adds these lines:"
             echo
             echo '```'
             cat "$unpinned"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           cat "$unpinned"
-          echo "::error::The release has files that ci_toolchain_sha256sums.txt doesn't pin; CI won't use them until it does (lines above and in the run summary)."
+          echo "::error title=$count files to pin::The release has $count files that ci_toolchain_sha256sums.txt doesn't pin; CI won't use them until a pull request adds the lines above (also in the run summary). Nothing else failed."
           exit 1
