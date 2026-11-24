@@ -42,8 +42,12 @@ constexpr uint32_t Rounded(uint32_t size) { return (size + kPage - 1) & ~(kPage 
 // a frame still queued can read it once more, the GPU side then holds its copy as up to date
 // with nothing watching the pages, and what is written there after the next allocation is
 // never seen. Not thread safe (the hook locks).
+// The heap 0x21 overflow (src/platform/fixed_gpu_heap.h, #787) also keeps a pool with no reuse
+// delay and best fit, for blocks over one chunk: `reuse_delay_ms` and `best_fit`.
 class Arena {
  public:
+  explicit Arena(uint64_t reuse_delay_ms = kReuseDelayMs, bool best_fit = false)
+      : reuse_delay_ms_(reuse_delay_ms), best_fit_(best_fit) {}
   // A chunk of guest memory to cut blocks from (the hook allocates it).
   void AddChunk(uint32_t address, uint32_t bytes) {
     ++chunks_;
@@ -64,28 +68,42 @@ class Arena {
   }
   // A block of at least `bytes`, or 0 when no free run is long enough (the hook then adds a
   // chunk, or the allocation fails as it did). `now_ms` is any clock that does not go back.
-  uint32_t Take(uint32_t bytes, uint64_t now_ms) {
+  // The first run long enough, or with best fit the shortest (the lowest of equal ones). A block
+  // starts on a multiple of `alignment` (a power of two; up to a page, every block does): the
+  // pages before it in its run stay free.
+  uint32_t Take(uint32_t bytes, uint64_t now_ms, uint32_t alignment = kPage) {
     Settle(now_ms);
     // So near 4 GB that rounding up to whole pages would wrap to a block of nothing.
     if (bytes > UINT32_MAX - (kPage - 1)) return 0;
+    if (alignment < kPage) alignment = kPage;
+    if (alignment & (alignment - 1)) return 0;
     bytes = Rounded(bytes ? bytes : 1);
+    auto found = free_.end();
+    uint32_t found_start = 0;
     for (auto it = free_.begin(); it != free_.end(); ++it) {
-      if (it->second < bytes) continue;
-      const uint32_t address = it->first, rest = it->second - bytes;
-      free_.erase(it);
-      if (rest) free_.emplace(address + bytes, rest);
-      used_.emplace(address, bytes);
-      held_ += bytes;
-      if (held_ > peak_) peak_ = held_;
-      return address;
+      const uint64_t start = (uint64_t(it->first) + alignment - 1) & ~uint64_t(alignment - 1);
+      if (start + bytes > uint64_t(it->first) + it->second) continue;
+      if (found != free_.end() && it->second >= found->second) continue;
+      found = it;
+      found_start = uint32_t(start);
+      if (!best_fit_ || it->second == bytes) break;
     }
-    return 0;
+    if (found == free_.end()) return 0;
+    const uint32_t run = found->first, length = found->second;
+    const uint32_t before = found_start - run, rest = length - before - bytes;
+    free_.erase(found);
+    if (before) free_.emplace(run, before);
+    if (rest) free_.emplace(found_start + bytes, rest);
+    used_.emplace(found_start, bytes);
+    held_ += bytes;
+    if (held_ > peak_) peak_ = held_;
+    return found_start;
   }
   // A block given back; false when the address is not a block of this arena in use.
   bool Give(uint32_t address, uint64_t now_ms) {
     auto it = used_.find(address);
     if (it == used_.end()) return false;
-    cooling_.push_back({address, it->second, now_ms + kReuseDelayMs});
+    cooling_.push_back({address, it->second, now_ms + reuse_delay_ms_});
     held_ -= it->second;
     used_.erase(it);
     return true;
@@ -130,6 +148,8 @@ class Arena {
   std::deque<Cooling> cooling_;                  // given back, in the order they came
   uint64_t capacity_ = 0, held_ = 0, peak_ = 0;
   uint64_t ask_again_ms_ = 0;  // no chunk request before this
+  uint64_t reuse_delay_ms_;
+  bool best_fit_;
   uint32_t chunks_ = 0;
   bool refused_ = false;  // the last chunk request was refused
 };

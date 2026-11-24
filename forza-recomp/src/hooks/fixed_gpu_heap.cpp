@@ -19,7 +19,12 @@
 // an arena of 8 MB chunks of the guest's 4 KB-page physical memory, taken as they are needed
 // and kept for the session (64 MB at most), as for a converted FM4 circuit's streamed textures
 // (fm4_stream_textures.h has why the memory is kept and why a block given back is not handed
-// out again for two seconds). XMemFree, XMemSize and the manager's free know these blocks.
+// out again for two seconds). A block over 8 MB gets a chunk of its own size (rounded up to
+// whole 8 MB), kept apart from the 8 MB ones, in the same 64 MB, and handed out again as soon
+// as it comes back (fixed_gpu_heap.h Overflow has why): with Paint job detail 2x a paint job's
+// buffers are 16 and 22 MB, and when the Race Central cutscene (the Green Wristband) ends, the
+// player's car's paint job is drawn again with heap 0x21 at 51 of its 61 MB, no 16 MB in one
+// piece (#787). XMemFree, XMemSize and the manager's free know these blocks.
 // When the arena has no room either, the game's own allocation runs again and stops as before.
 // A heap with room is never touched: the game runs exactly as it did until the heap is full.
 // "Ends in the heap" is wider than the heap's own category: vehicleGPU (0x26) and nuiGPU (0x22)
@@ -34,7 +39,6 @@
 #include "../platform/guest_addr.h"
 
 #if FORZA_TU4
-#include "fm4_stream_textures.h"
 #include "../platform/game_heap.h"
 #include "../platform/guest_memory.h"
 
@@ -53,7 +57,6 @@
 
 namespace forza::fixed_gpu_heap {
 namespace {
-namespace st = forza::fm4_stream_textures;
 namespace gh = forza::game_heap;
 
 enum class Mode { kOff, kOnFailure, kAlways };
@@ -84,26 +87,26 @@ thread_local uint8_t stop_was = 0;  // the stop byte as the game had it before t
 std::unique_lock<std::mutex> Lock() {
   return in_call ? std::unique_lock<std::mutex>(mutex, std::defer_lock) : std::unique_lock<std::mutex>(mutex);
 }
-st::Arena arena;
+Overflow arena;
 std::unordered_map<uint32_t, uint32_t> sizes;  // block -> the size asked for
 std::atomic<bool> any{false};                  // a block was given: frees may be ours
 uint64_t taken = 0;                            // blocks given so far
 
-// A chunk for the arena: guest physical memory that stays allocated, the GPU side's copy of it
-// dropped once (fm4_track.cpp's streamed textures do the same, see there).
-bool AddChunk() {
+// A chunk of `bytes`: guest physical memory that stays allocated, the GPU
+// side's copy of it dropped once (fm4_track.cpp's streamed textures do the same, see there).
+bool AddChunk(uint32_t bytes) {
   auto* memory = REX_KERNEL_MEMORY();
   auto* heap = memory->LookupHeapByType(true, kPage);
   uint32_t chunk = 0;
-  if (!heap || !heap->Alloc(st::kChunkBytes, kPage,
+  if (!heap || !heap->Alloc(bytes, kPage,
                             rex::memory::kMemoryAllocationReserve | rex::memory::kMemoryAllocationCommit,
                             rex::memory::kMemoryProtectRead | rex::memory::kMemoryProtectWrite, true, &chunk) ||
       !chunk)
     return false;
-  arena.AddChunk(chunk, st::kChunkBytes);
-  memory->EnablePhysicalMemoryAccessCallbacks(memory->GetPhysicalAddress(chunk), st::kChunkBytes, true, false);
+  arena.AddChunk(chunk, bytes);
+  memory->EnablePhysicalMemoryAccessCallbacks(memory->GetPhysicalAddress(chunk), bytes, true, false);
   memory->TriggerPhysicalMemoryCallbacks(rex::thread::global_critical_region::AcquireDirect(), chunk,
-                                         st::kChunkBytes, true, true, true);
+                                         bytes, true, true, true);
   return true;
 }
 }  // namespace
@@ -136,7 +139,7 @@ bool Allocate(PPCContext& ctx, uint8_t* base, Original original) {
   }
   const PPCContext call = ctx;
   // Every request that ends in this heap takes the lock, also one the overflow cannot serve
-  // (over 8 MB): with the stop byte cleared for another thread's request, its failure would
+  // (over 64 MB): with the stop byte cleared for another thread's request, its failure would
   // return nothing instead of stopping the game.
   std::lock_guard<std::mutex> lock(mutex);
   struct InCall {
@@ -144,7 +147,7 @@ bool Allocate(PPCContext& ctx, uint8_t* base, Original original) {
     ~InCall() { in_call = false; }
   } in;
   stop_was = *stop;
-  const bool eligible = Eligible(last, size, alignment, st::kChunkBytes);
+  const bool eligible = Eligible(last, size, alignment, kMaxBytes);
   if (!eligible || mode != Mode::kAlways) {
     if (eligible) *stop = 0;
     original(ctx, base);
@@ -152,18 +155,24 @@ bool Allocate(PPCContext& ctx, uint8_t* base, Original original) {
     if (ctx.r3.u32 || !eligible) return true;
   }
   const uint64_t now = NowMs();
-  uint32_t block = arena.Take(size, now);
+  uint32_t block = arena.Take(size, alignment, now);
   bool added = false;
-  if (!block && arena.MayAddChunk(now)) {
-    added = AddChunk();
-    if (added) block = arena.Take(size, now);
-    else if (arena.ChunkRefused(now))
-      REXLOG_WARN("FORZA: no {} MB left in one piece in the guest's memory for the fixedGPU heap's "
-                  "overflow ({} MB taken, {} MB in use) (#857)",
-                  st::kChunkBytes >> 20, arena.capacity() >> 20, arena.held() >> 20);
+  if (!block) {
+    if (const uint32_t bytes = arena.Grow(size, alignment, now)) {
+      added = AddChunk(bytes);
+      if (added) block = arena.Take(size, alignment, now);
+      else if (arena.Refused(size, alignment, now))
+        REXLOG_WARN("FORZA: no {} MB left in one piece in the guest's memory for the fixedGPU heap's "
+                    "overflow ({} MB taken, {} MB in use) (#857)",
+                    bytes >> 20, arena.capacity() >> 20, arena.held() >> 20);
+    }
   }
   if (!block) {
     // No room here either: the game's own allocation again, which stops the game as before.
+    static std::atomic<bool> full{false};
+    if (!full.exchange(true))
+      REXLOG_WARN("FORZA: the fixedGPU heap's overflow has no room for {} bytes either ({} MB taken, {} KB "
+                  "in use) (#857, #787)", size, arena.capacity() >> 20, arena.held() / 1024);
     ctx = call;
     original(ctx, base);
     return true;
