@@ -776,7 +776,14 @@ button.
   raise it; 0 gives neutral at once, as before.
 - **Realistic shifting:** `wheel_shifter_clutch` makes a new gear engage only while the clutch is pressed at
   least `wheel_clutch_threshold` (default half way); moved into a gear without the clutch, the car stays in
-  neutral until you press it. Off by default (the lever's gear engages at once).
+  neutral until you press it. Off by default (the lever's gear engages at once). With the clutch up, the car
+  leaves its gear only once the lever has read something else for 50 ms (SDK 1130, #952): a shifter that
+  reads another gear for a moment while the lever stays in its slot (or no gear, with
+  `wheel_shifter_neutral_ms` at 0) used to drop the car to neutral, and the lever back in its slot could
+  not put the gear in again without the clutch. A real move to neutral with the clutch up is neutral 50 ms
+  later (after the hold through neutral above); a shift with the clutch down is taken at once, and no gear
+  ever engages without the clutch. The log shows what the lever read, the gear it gave and the clutch,
+  e.g. `Wheel: H-pattern lever 3, gear 3, clutch 0.00` (the first 1000 lines per wheel).
 - **Sequential:** `wheel_shifter = sequential` with `wheel_shifter_buttons = up=N,down=M` adds a sequential
   shifter next to the paddles (up and down act as the right and left bumper, the wheel layouts' shift up and
   shift down). At a standstill the game's downshift drops to 1st, as with the bumpers.

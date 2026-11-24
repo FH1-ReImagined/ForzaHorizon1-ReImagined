@@ -1066,3 +1066,39 @@ the shader has the same addressing and is not changed (#962).
 cases with 1120, 45 of 81 with the shader before (27 of 27 box filter cases with both).
 [rendering.md](rendering.md#comb-edges-at-render-scale-2-905) has the pictures measured in the
 game.
+
+## ReIGlue 1130: a gear survives a lever that misreads for a moment with the clutch up (#952)
+
+With *Gears need the clutch* (`wheel_shifter_clutch`) a gear the clutch did not let in is neutral
+(`EngageGear`). In a gear with the clutch let out, a read of the lever that showed another gear took
+the car to neutral at once, and once the lever was back in its slot that was a new gear for
+`EngageGear`, which the clutch had to let in: the car stayed in neutral until the clutch went down
+again. A read of no gear was already carried for `wheel_shifter_neutral_ms` (400 ms, 0404), except
+with that setting at 0. A TH8S player (#952, *Gear follows the lever's slot* on, threshold 0.5)
+reports the car dropping to neutral when the clutch comes out fully.
+
+1130 (`EngageLeverGear`, `src/input/wheel/wheel_gear_request.h`): with the clutch needed and below
+its threshold, an engaged gear is left only once the lever has read something else for
+`kLeverSettleMs` (50 ms); a read that is back in the slot sooner keeps the gear. While a change is
+pending, the gear carried through neutral is the engaged one, so a misread gear never engages when
+the clutch goes down with the lever in neutral (the rule a clutch-rejected slot already had), and
+only for what is left of the hold since the lever left its slot, so a lever that sits in neutral
+and now and then reads another gear is neutral after the hold and the 50 ms. It only delays leaving
+a gear: a real move to neutral with the clutch up is neutral 50 ms after the hold through neutral
+ends, a shift with the clutch down or with the setting off is taken at once, and nothing engages
+without the clutch. A lever that reads no gear for longer than the hold and 50 ms is still neutral:
+that is the lever out of its slot.
+
+The driver also logs the lever: every change of what it read or the gear it gave, in both modes of
+`wheel_shifter_follow_slot`, `Wheel: H-pattern lever 3, gear 3, clutch 0.00`, the first 1000 lines
+per wheel. Before, *Gear follows the lever's slot* logged no request, and the gear changes stop
+after 16, so a player's log showed nothing of the lever.
+
+Tests: `forza-recomp/tests/wheel_gear_request_test.cpp` (the lever polled 240 times a second). With
+ReIGlue before 1130 these fail: a one-read misread of 2nd, 4th, 5th or reverse in 3rd with the clutch
+out, another gear for 30 ms, and a one-read neutral with `wheel_shifter_neutral_ms` 0; all keep 3rd
+now. These pass before and after: a one-read neutral with the hold at 400; a lever to neutral; 3 > 4
+without the clutch, then the clutch; 3 > 4 with it; neutral at once with the clutch down and the hold
+at 0; and a lever in neutral that reads 4th once every 100 ms, which is neutral after the hold and
+engages nothing when the clutch then goes down. ReIGlue's `tests/wheel_gear_transit_test.cpp` has
+the same cases.
