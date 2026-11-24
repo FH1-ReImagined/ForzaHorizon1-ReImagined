@@ -366,6 +366,16 @@ def build_status(root: Path, title_update: str = ""):
     return "none", "The game has not been built yet."
 
 
+STALE_IMPORT_NOTE = ("The game needs a rebuild before it can use content imported now: press Build in Setup "
+                     "before you play.")
+
+
+def stale_build(root: Path, title_update: str = ""):
+    """The reason text when the installed build is older than the launcher's sources, else ''."""
+    state, detail = build_status(root, title_update)
+    return detail if state == "stale" else ""
+
+
 # ---- running programs ------------------------------------------------------------------------
 
 def kill_tree(proc):
