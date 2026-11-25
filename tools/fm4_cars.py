@@ -1084,6 +1084,8 @@ FAMILY_TABLES = {
 }
 FAMILY_PREFIX = {"engine": "List_UpgradeEngine", "body": "List_UpgradeCarBody",
                  "drivetrain": "List_UpgradeDrivetrain"}
+# The column naming a part of each family in the rows of the part's own tables.
+PART_COLUMN = {"engine": "EngineID", "body": "CarBodyID", "drivetrain": "DrivetrainID", "motor": "MotorID"}
 # Third level: any column of the rows above with these names points into these tables.
 REFS = [(re.compile(r"(?i)^TorqueCurve.*ID$"), "List_TorqueCurve", "TorqueCurveID"),
         (re.compile(r"(?i)^AeroPhysicsID$"), "List_AeroPhysics", "AeroPhysicsID")]
@@ -1235,6 +1237,106 @@ def make_moves(fm4db, fh1db, fm4_names, fh1_names, merges):
     return out
 
 
+TWIN_BASE = 55000
+# FH1's car ids stay under 65536: with two cars of 551241 and 551340 in the database, no imported
+# car loaded (the game spawned its default car), while 55282 and 55414 did (#841).
+CAR_ID_LIMIT = 65536
+
+
+def twin_id(n, taken=(), limit=None):
+    """A new id for what an FM4 car FH1 has as a traffic car brings as its own (#841): the car
+    (and so its rows), its wheel, its engine or drivetrain. It is 55000 + the id, a 55 in front
+    of a three-digit one: 935 -> 55935, 282 -> 55282, 1241 -> 56241, engine 800 -> 55800. That
+    stays clear of the ids FH2 gave the FM4 cars it shares (a 5 in front: the SLK55 AMG's 51525),
+    which UDLC carries into FH1. None when that id is taken or not under limit."""
+    new = TWIN_BASE + n
+    if new in taken or (limit is not None and new >= limit):
+        return None
+    return new
+
+
+def made_from(v, key):
+    """True for an id made from key, as the games key a car's or a part's rows: key x 1000 + n."""
+    return isinstance(v, int) and not isinstance(v, bool) and key * 1000 <= v < (key + 1) * 1000
+
+
+def electric_only(db, cid):
+    """True for a car with electric motor rows and no engine row (FM4's Leaf and Tesla Roadster)."""
+    try:
+        motor = db.execute("select 1 from List_UpgradeMotor where Ordinal=? limit 1", (cid,)).fetchone()
+        engine = db.execute("select 1 from List_UpgradeEngine where Ordinal=? limit 1", (cid,)).fetchone()
+    except sqlite3.Error:  # a database without the motor tables
+        return False
+    return bool(motor) and not engine
+
+
+def twin_name(name):
+    """The MediaName of that copy: a 5 after the make's part, VW_Beetle_04 -> VW_5_Beetle_04
+    (#841). Make and year stay where they are."""
+    make, sep, rest = str(name).partition("_")
+    return "%s_5_%s" % (make, rest) if sep else "%s_5" % name
+
+
+def twin_file(rel, name, out):
+    """A car's (or wheel's) file under its copy's name (twin_name): the models found by the car's
+    name (<name>*.carbin at the top), the digital gauge (DigitalGauge/Dash_<name>.*) and a wheel's
+    last_<name>*.xml. Other files keep their names: the gauge's .fbf names its textures."""
+    if name == out:
+        return rel
+    folder, sep, base = rel.rpartition("/")
+    low, key = base.lower(), name.lower()
+    if not folder and low.endswith(".carbin") and low.startswith(key):
+        base = out + base[len(name):]
+    elif folder.lower() == "digitalgauge" and low.startswith("dash_" + key):
+        base = base[:5] + out + base[5 + len(name):]
+    elif not folder and low.startswith("last_" + key) and low.endswith(".xml"):
+        base = base[:5] + out + base[5 + len(name):]
+    return folder + sep + base
+
+
+def traffic_twins(fm4db, fh1db, skip=(), taken=()):
+    """{FM4 car id: (new id, new MediaName, (new wheel id, new wheel MediaName) or None)} for the
+    FM4 cars FH1 has only as a traffic car: the same id and MediaName, not selectable
+    (IsSelectable 0), its model cut down (#841: the 2004 Beetle and PT Cruiser, the 2010 Taurus
+    SHO, the 2011 Prius and Leaf). FH1's traffic car stays as it is, so traffic loads nothing
+    bigger; FM4's comes in beside it as a car of its own (twin_id, twin_name) with its own copy
+    of its stock wheel (FH1's is the traffic car's, cut down too). skip: lowercase MediaNames
+    left out (FH1's DLC cars); taken: car ids the installed DLC uses. NUL_Car_00, a placeholder
+    in both games, is not one."""
+    if "IsSelectable" not in columns(fh1db, "Data_Car"):
+        return {}
+    fh = {cid: (str(name).lower(), sel) for cid, name, sel in fh1db.execute(
+        "select Id, MediaName, IsSelectable from Data_Car")}
+    ids = set(fh) | {r[0] for r in fm4db.execute("select Id from Data_Car")} | set(taken)
+    names = {n for n, _ in fh.values()} | {str(r[0]).lower() for r in fm4db.execute("select MediaName from Data_Car")}
+    wheels = {}
+    for db in (fm4db, fh1db):
+        for wid, wname in db.execute("select ID, MediaName from List_Wheels"):
+            wheels[wid] = str(wname)
+    wheel_names = {n.lower() for n in wheels.values()}
+    out = {}
+    for cid, name, wid in fm4db.execute("select Id, MediaName, StockWheelID from Data_Car order by Id"):
+        low = str(name).lower()
+        hit = fh.get(cid)
+        if not hit or hit[0] != low or hit[1] or low in skip or low.startswith("nul_"):
+            continue
+        new_id, new_name = twin_id(cid, ids, CAR_ID_LIMIT), twin_name(name)
+        if new_id is None or new_name.lower() in names:
+            continue
+        ids.add(new_id)
+        wheel = None
+        wname = fm4db.execute("select MediaName from List_Wheels where ID=?", (wid,)).fetchone() \
+            if wid is not None else None
+        if wname:
+            new_wid = twin_id(wid, wheels)
+            if new_wid is not None and twin_name(wname[0]).lower() not in wheel_names:
+                wheel = (new_wid, twin_name(wname[0]))
+                wheels[new_wid] = wheel[1]
+                wheel_names.add(wheel[1].lower())
+        out[cid] = (new_id, new_name, wheel)
+    return out
+
+
 def engine_clash(fm4db, fh1db, engine_id):
     """True when FH1's database has an engine of that id that is not FM4's (another MediaName)."""
     try:
@@ -1250,10 +1352,14 @@ class Database:
     merges: {FM4 make id: FH1 make id} (make_merges), the cars of those makes join FH1's;
     moves: {FM4 make id: new id} (make_moves), those makes and their cars take the new id."""
 
-    def __init__(self, fm4db, fh1db, merges=None, moves=None):
+    def __init__(self, fm4db, fh1db, merges=None, moves=None, twins=None):
         self.fm4, self.fh1 = fm4db, fh1db
         self.merges = dict(merges or {})
         self.moves = dict(moves or {})
+        self.twins = dict(twins or {})  # traffic_twins: {FM4 car id: (new id, new name, wheel)}
+        # {(a twin's id, FM4's engine MediaName): the MediaName of its own copy} (_own_parts)
+        self.part_names = {}
+        self._next_key = {}  # table -> the next key after the highest either game uses (_fresh_key)
         # "_&N" references the rows take from FH1's own tables, not FM4's (strings() skips them)
         self.fh1_refs = set()
         # the moved makes' names: FM4's own strings although FH1 has its make of the same id
@@ -1352,6 +1458,174 @@ class Database:
         for pat, table, col in REFS:
             keys = {v for r in all_rows for c, v in r.items() if pat.match(c) and v is not None}
             self._add(table, self._select(table, col, keys))
+        self._separate_twins()
+
+    def _keys(self, table, col):
+        """Every value of col in table, in either game's database and in the rows collected."""
+        out = {r.get(col) for r in self.rows.get(table, {}).values()}
+        for db, have in ((self.fm4, self.fm4_tables), (self.fh1, self.fh1_tables)):
+            if table in have and col in columns(db, table):
+                out |= {v for (v,) in db.execute("select [%s] from [%s]" % (col, table))}
+        return out
+
+    def _fresh_key(self, table):
+        """A key of table after the highest either game (or the rows collected) uses."""
+        if table not in self._next_key:
+            pk = columns(self.fh1, table)[0]
+            self._next_key[table] = 1 + max([0] + [v for v in self._keys(table, pk)
+                                                   if isinstance(v, int) and not isinstance(v, bool)])
+        self._next_key[table] += 1
+        return self._next_key[table] - 1
+
+    def _separate_twins(self):
+        """The traffic twins' rows (traffic_twins) as cars of their own beside FH1's traffic
+        cars, whose rows have the same keys: the car id and every id made from it (car id x 1000
+        + n: its upgrade, physics, part, colour and body rows, and the references between
+        them), its MediaName, thumbnail and stock wheel. A row of its own whose key is neither
+        (its engine combos) takes a key after the highest either game uses. Then the parts FH1
+        has only on traffic cars become the twin's own (_own_parts)."""
+        if not self.twins:
+            return
+        car_col = dict(CAR_TABLES)
+
+        for table, rows in list(self.rows.items()):
+            pk = columns(self.fh1, table)[0]
+            rekeyed = {}
+            for key, row in rows.items():
+                c = row.get(car_col[table]) if table in car_col else None
+                if c not in self.twins:
+                    c = next((t for t in self.twins for col, v in row.items()
+                              if col.lower().endswith("id") and made_from(v, t)), None)
+                if c is None:
+                    rekeyed[key] = row
+                    continue
+                n, name, wheel = self.twins[c]
+                for col, v in list(row.items()):
+                    if table in car_col and col == car_col[table] and v == c:
+                        row[col] = n
+                    elif col.lower().endswith("id") and made_from(v, c):
+                        row[col] = n * 1000 + (v - c * 1000)
+                if table == "Data_Car":
+                    row["MediaName"] = name
+                    if isinstance(row.get("Thumbnail"), str):
+                        row["Thumbnail"] = re.sub(r"(?i)(thumbnail_)%d(\.xds)$" % c, r"\g<1>%d\2" % n, row["Thumbnail"])
+                    if wheel:
+                        row["StockWheelID"] = wheel[0]
+                    # every car's ModelId is its id; the game's car view (Restrictions_Data_Car) finds
+                    # a car's parts and whether it is installed by it, and 282 is the traffic car's
+                    if row.get("ModelId") == c:
+                        row["ModelId"] = n
+                if table in car_col and row.get(pk) == key and pk != car_col[table]:
+                    row[pk] = self._fresh_key(table)  # a key not made from the car id: a new one
+                rekeyed[row.get(pk)] = row
+            self.rows[table] = rekeyed
+        wheels = self.rows.get("List_Wheels", {})
+        for c, (n, name, wheel) in self.twins.items():
+            old = self.fm4.execute("select StockWheelID from Data_Car where Id=?", (c,)).fetchone()
+            if wheel and old and old[0] in wheels:
+                row = dict(wheels[old[0]])  # FH1's traffic car keeps the original row
+                row["ID"], row["MediaName"] = wheel
+                wheels[wheel[0]] = row
+        self._own_parts()
+
+    def _own_parts(self):
+        """Each engine, drivetrain, body and motor a twin's rows name that FH1 has only on
+        traffic cars (every FH1 car naming it has IsSelectable 0) becomes the twin's own (#841):
+        FH1 cut those down for traffic (the Leaf's single gear became six, the Prius' CVT none,
+        and the engines' EngineTuning is a traffic one, #840), and its traffic cars keep them.
+        FM4's rows of the part are copied under 55000 + its id (twin_id: engine 800 -> 55800,
+        its rows 800000 + n -> 55800000 + n and so the torque curves in that range), an
+        engine's or motor's MediaName with "_FM4" after it: the game finds the EngineTuning by
+        that name, and FH1's own file of the old name, the traffic one, wins over an import's (as
+        in Forza Imported DLC Maker, which names such an engine the same way). A part an FH1 car
+        you can drive has stays shared, as it does for any imported car."""
+        if "IsSelectable" not in columns(self.fh1, "Data_Car"):
+            return
+        selectable = dict(self.fh1.execute("select Id, IsSelectable from Data_Car"))
+        car_col = dict(CAR_TABLES)
+        mine = {n for n, _, _ in self.twins.values()}
+        for fam, srcs in FAMILIES.items():
+            part = PART_COLUMN[fam]
+            prefix = FAMILY_PREFIX.get(fam)
+            tabs = [(t, c) for t, c in FAMILY_TABLES.get(fam, []) if c in columns(self.fh1, t)]
+            tabs += [(t, c) for t in sorted(self.rows) if prefix and t.startswith(prefix) and t != prefix
+                     for c in columns(self.fh1, t) if c.lower() == part.lower()]
+            owners = {}  # the part's id -> the twins naming it
+            for t, c in srcs:
+                for row in self.rows.get(t, {}).values():
+                    if row.get(car_col[t]) in mine and row.get(c) is not None:
+                        owners.setdefault(row[c], set()).add(row[car_col[t]])
+            for key in sorted(owners):
+                users = set()
+                for t, c in srcs:
+                    if t in self.fh1_tables and c in columns(self.fh1, t):
+                        users |= {u for (u,) in self.fh1.execute("select distinct [%s] from [%s] where [%s]=?"
+                                                                  % (car_col[t], t, c), (key,))}
+                users &= set(selectable)
+                if users and not any(selectable[u] for u in users):
+                    self._own_part(fam, key, owners[key], srcs, tabs)
+
+    def _own_part(self, fam, key, owners, srcs, tabs):
+        """The part key of family fam as the owners' (twins') own (_own_parts). Nothing changes
+        when no new id is free or a key it needs is taken."""
+        taken = set()
+        for t, c in tabs:
+            pk = columns(self.fh1, t)[0]
+            taken |= self._keys(t, c)
+            if pk != c:  # a part's rows are keyed by its id x 1000 + n
+                taken |= {v // 1000 for v in self._keys(t, pk) if isinstance(v, int)}
+        new = twin_id(key, taken)
+        if new is None:
+            return
+
+        def move(v):
+            return new * 1000 + (v - key * 1000)
+
+        copies, refs, names = [], {}, {}
+        for t, c in tabs:
+            pk = columns(self.fh1, t)[0]
+            for row in self.rows.get(t, {}).values():
+                if row.get(c) != key:
+                    continue
+                r = dict(row)
+                r[c] = new
+                if pk != c:
+                    r[pk] = move(row[pk]) if made_from(row.get(pk), key) else self._fresh_key(t)
+                if fam in ("engine", "motor") and row.get("MediaName"):
+                    r["MediaName"] = "%s_FM4" % row["MediaName"]
+                    names[row["MediaName"]] = r["MediaName"]
+                for pat, rt, rc in REFS:
+                    for x, v in row.items():
+                        if pat.match(x) and made_from(v, key) and v in self.rows.get(rt, {}):
+                            r[x] = move(v)
+                            refs[(rt, rc, move(v))] = dict(self.rows[rt][v], **{rc: move(v)})
+                copies.append((t, pk, r))
+        if any(r[pk] in self._keys(t, pk) for t, pk, r in copies) or \
+                any(v in self._keys(rt, rc) for rt, rc, v in refs) or \
+                any(n in self._keys(t, "MediaName") for n in names.values() for t, _ in FAMILY_TABLES.get(fam, [])):
+            return
+        for t, pk, r in copies:
+            self.rows[t][r[pk]] = r
+        for (rt, rc, v), r in refs.items():
+            self.rows[rt][v] = r
+        for t, c in srcs:
+            for row in self.rows.get(t, {}).values():
+                if row.get(dict(CAR_TABLES)[t]) in owners and row.get(c) == key:
+                    row[c] = new
+        if not any(row.get(c) == key for t, c in srcs for row in self.rows.get(t, {}).values()):
+            # no other car of the import names FM4's rows of the part (FH1 has its own)
+            for t, c in tabs:
+                if t in self.rows:
+                    self.rows[t] = {k: row for k, row in self.rows[t].items() if row.get(c) != key}
+            named = {v for rows in self.rows.values() for row in rows.values()
+                     for x, v in row.items() if any(p.match(x) for p, _, _ in REFS)}
+            for rt, rc, v in refs:
+                old = v - (new - key) * 1000
+                if old not in named:
+                    self.rows[rt].pop(old, None)
+        for o in owners:
+            for old, name in names.items():
+                self.part_names[(o, old)] = name
 
     def finish(self, report):
         """Drop rows FH1 already has (same key); refuse rows whose key FH1 uses for something
@@ -1678,23 +1952,39 @@ class Converter:
         if not self.donors:
             raise ConvertError("no physicsdefinition.bin in the FH1 car archives")
 
+    def twins(self):
+        """traffic_twins for these files: the FM4 cars FH1 has only as traffic cars, imported as
+        cars of their own beside them (#841). FH1's DLC cars are not among them."""
+        if getattr(self, "_twins", None) is None:
+            dlc_names, dlc_ids = self.fh1.dlc_car_names()
+            skip = {n.lower() for n in FH1_DLC_CARS} | set(dlc_names)
+            self._twins = traffic_twins(self.fm4db, self.fh1db, skip, dlc_ids)
+        return self._twins
+
     def candidates(self):
-        """[(id, MediaName, reason)] for every FM4 car FH1 lacks; reason (None for a car that
-        can be converted) says why one is left out."""
+        """[(id, MediaName, reason)] for every FM4 car FH1 lacks, and those FH1 has only as a
+        traffic car (twins: their FM4 id and name here, converted under twin_id and twin_name);
+        reason (None for a car that can be converted) says why one is left out."""
         fh_ids = {r[0] for r in self.fh1db.execute("select Id from Data_Car")}
         fh_names = {str(r[0]).lower() for r in self.fh1db.execute("select MediaName from Data_Car")}
         dlc_names, dlc_ids = self.fh1.dlc_car_names()
         files = self.fm4.car_files()
+        twins = self.twins()
         out = []
         for cid, name, make in self.fm4db.execute("select Id, MediaName, MakeID from Data_Car order by Id").fetchall():
             low = str(name).lower()
-            if cid in fh_ids or low in fh_names or cid in dlc_ids or low in dlc_names:
+            if cid not in twins and (cid in fh_ids or low in fh_names or cid in dlc_ids or low in dlc_names):
                 continue
             reason = None
             if name in FH1_DLC_CARS or low in {n.lower() for n in FH1_DLC_CARS}:
                 reason = "an FH1 DLC car"
             elif low not in files:
                 reason = "no model in the FM4 files given"
+            elif cid in twins and electric_only(self.fm4db, cid):
+                # FH1 finds a car's engine sound by its stock engine, and a car without one
+                # loaded to a grey world in Forza Imported DLC Maker; FH1's own Leaf (the traffic
+                # car) is dressed as a petrol car for that
+                reason = "an electric car without an engine row, which FH1 needs (not done yet)"
             else:
                 reason = self.needs(cid)
             out.append((cid, name, reason))
@@ -1749,8 +2039,11 @@ class Converter:
                 return miss % ("the files of its wheel %s" % wheel[0])
         return None
 
-    def convert_wheel(self, name):
-        if name in self.wheels_done or self.fh1.has_wheel(name):
+    def convert_wheel(self, name, out_name=None):
+        """FM4's wheel name as FH1's, unless FH1 has it; written as out_name (a traffic twin's own
+        copy, twin_file: FH1's copy is the traffic car's, kept for it), else under its own."""
+        out_name = out_name or name
+        if out_name in self.wheels_done or (out_name == name and self.fh1.has_wheel(name)):
             return True
         files = self.fm4.wheel_files(name)
         if not files:
@@ -1759,11 +2052,13 @@ class Converter:
             low = rel.lower()
             if low in SKIP_FILES:
                 continue
+            out_rel = twin_file(rel, name, out_name)
+            path = "media/wheels/%s/%s" % (out_name, out_rel)
             if low.endswith(".carbin"):
-                self.put("media/wheels/%s/%s" % (name, rel), fm4_carbin.convert(m.read(), "wheel/%s/%s" % (name, low)))
+                self.put(path, fm4_carbin.convert(m.read(), "wheel/%s/%s" % (out_name, out_rel.lower())))
             else:
-                self.put("media/wheels/%s/%s" % (name, rel), member=m)
-        self.wheels_done.add(name)
+                self.put(path, member=m)
+        self.wheels_done.add(out_name)
         return True
 
     def _audio_zip_names(self, game_media, rel):
@@ -1795,7 +2090,7 @@ class Converter:
                 "on e.EngineID=u.EngineID")} | {n.lower() for n in FH1_DLC_CARS}
             self._louder_done = set()
 
-    def audio_plan(self, car_name, engine_names):
+    def audio_plan(self, car_name, engine_names, source=None):
         """What the car's engine sound needs that FH1 lacks, as a list of (what, path, data or
         source file, name for the report), checked before anything is written: FH1 has every
         FM4 disc car's sound banks and harmonic tuning, and the car and engine tuning
@@ -1805,11 +2100,16 @@ class Converter:
         (louder_engine, #712): FH1's copy, else FM4's, and FM4's where FH1's is a traffic car's
         placeholder and FM4's is not (traffic_tuning, #840). A tuning or sound bank that no file
         given has raises ConvertError: the game stops with its disc read error where it misses
-        one (#776)."""
+        one (#776). source: the car's MediaName in FM4's files when it is written as another
+        (a traffic twin's CarModelTuning, read as FM4's and written under car_name, #841).
+        engine_names: MediaNames, or (the name in the import, FM4's name) for a twin's own copy of
+        an engine (Database.part_names: its EngineTuning is FM4's, under the new name)."""
         self._audio_sources()
-        wanted = [("cmt", car_name + "_CMT.xml")] + [("et", e + "_ET.xml") for e in engine_names]
+        wanted = [("cmt", car_name + "_CMT.xml", (source or car_name) + "_CMT.xml")] + \
+            [("et", out + "_ET.xml", fm + "_ET.xml")
+             for out, fm in (e if isinstance(e, tuple) else (e, e) for e in engine_names)]
         plan, hts = [], []
-        for kind, fname in wanted:
+        for kind, fname, fm_name in wanted:
             rel = "media/%s/%s" % (AUDIO_ZIPS[kind][:-4].lower(), fname)
             engine = fname[:-len("_ET.xml")].lower() if kind == "et" else None
             fh_src = self._fh_audio[kind].get(fname.lower())
@@ -1818,7 +2118,7 @@ class Converter:
                 # FH1's level (ENGINE_GAIN), in the mod, which outranks every archive.
                 if engine in self._louder_done:
                     continue
-                fm_src = self._fm_audio[kind].get(fname.lower())
+                fm_src = self._fm_audio[kind].get(fm_name.lower())
                 src = fh_src or fm_src
                 if not src:
                     continue
@@ -1835,7 +2135,7 @@ class Converter:
             elif fh_src:
                 continue
             else:
-                src = self._fm_audio[kind].get(fname.lower())
+                src = self._fm_audio[kind].get(fm_name.lower())
                 if not src:
                     continue
                 data = Member(ZIPS.get(src[0]), src[0], src[1]).read()
@@ -1891,7 +2191,11 @@ class Converter:
         """The car's engine sound set-up (audio_plan), written."""
         self.audio_apply(car_name, self.audio_plan(car_name, engine_names), report)
 
-    def convert_car(self, cid, name):
+    def convert_car(self, cid, name, out_id=None, out_name=None):
+        """FM4's car cid (its files under name) as FH1's, written as out_id and out_name (a traffic
+        twin's: traffic_twins, twin_file), else under its own."""
+        out_id = cid if out_id is None else out_id
+        out_name = out_name or name
         self.load_donors()
         disp, files = self.fm4.car_files()[name.lower()]
         names = {rel.lower(): (rel, m) for rel, m in files}
@@ -1901,29 +2205,30 @@ class Converter:
         maxdata = names.get("physics/maxdata.xml")
         if not maxdata:
             raise ConvertError("%s: no physics/maxdata.xml" % name)
-        base = "media/cars/%s/" % name
+        base = "media/cars/%s/" % out_name
         main_fh1 = None
         for low, (rel, m) in sorted(names.items()):
             if low in SKIP_FILES:
                 continue
+            out_rel = twin_file(rel, name, out_name)
             if low.endswith(".carbin"):
-                data = fm4_carbin.convert(m.read(), "car/%s/%s" % (name, low))
+                data = fm4_carbin.convert(m.read(), "car/%s/%s" % (out_name, out_rel.lower()))
                 if low == name.lower() + ".carbin":
                     year = self.fm4db.execute("select Year from Data_Car where Id=?", (cid,)).fetchone()
                     data = fm4_carbin.set_lights(data, car_lights(data, year[0] if year else 2000))
                     main_fh1 = data
-                self.put(base + "stripped_" + low, fm4_carbin.strip(data))
-                self.put(base + rel, data)
+                self.put(base + "stripped_" + out_rel.lower(), fm4_carbin.strip(data))
+                self.put(base + out_rel, data)
             elif low == "carattribs.xml":
-                self.put(base + rel, carattribs_v21(m.read(), self.donor_attribs))
+                self.put(base + out_rel, carattribs_v21(m.read(), self.donor_attribs))
             else:
-                self.put(base + rel, member=m)
+                self.put(base + out_rel, member=m)
         pts = model_points(main_fh1)
         phys, donor = fm4_physdef.build(maxdata[1].read(), pts, self.donors)
         self.put(base + "physicsdefinition.bin", phys)
         thumb = self.fm4.thumbnail(cid)
         if thumb:
-            self.put("media/ui/textures/thumbnails/thumbnail_%d.xds" % cid, thumb)
+            self.put("media/ui/textures/thumbnails/thumbnail_%d.xds" % out_id, thumb)
         return donor
 
     def strings(self, rows, report, fh1_refs=(), own_refs=()):
@@ -2019,43 +2324,55 @@ class Converter:
         fm4_names = self.fm4.strings("List_CarMake", "en")
         fh1_names = self.fh1.strings_raw("List_CarMake", "en")[1]
         merges = make_merges(self.fm4db, self.fh1db, fm4_names, fh1_names)
+        twins = {c: t for c, t in self.twins().items() if c in {cid for cid, _ in chosen}}
         db = Database(self.fm4db, self.fh1db, merges,
-                      make_moves(self.fm4db, self.fh1db, fm4_names, fh1_names, merges))
+                      make_moves(self.fm4db, self.fh1db, fm4_names, fh1_names, merges), twins)
         db.collect([c for c, _ in chosen])
         rows = db.finish(report)
         wheels = {r["StockWheelID"] for r in rows.get("Data_Car", [])}
-        wheel_names = {}
+        wheel_names = {}  # wheel id in the rows -> (FM4's wheel name, its name in the import)
         for wid in wheels:
             r = self.fm4db.execute("select MediaName from List_Wheels where ID=?", (wid,)).fetchone()
             if r:
-                wheel_names[wid] = r[0]
+                wheel_names[wid] = (r[0], r[0])
+        for c, (_, _, wheel) in twins.items():
+            old = self.fm4db.execute("select w.MediaName from Data_Car c join List_Wheels w on "
+                                     "w.ID=c.StockWheelID where c.Id=?", (c,)).fetchone()
+            if wheel and old:
+                wheel_names[wheel[0]] = (old[0], wheel[1])
         done = []
+        dlc = getattr(self.fm4, "dlc_car_ids", set())
+        report["dlc_cars"] = []
         for k, (cid, name) in enumerate(chosen):
             if cancelled():
                 raise Cancelled()
+            out_id, out_name = twins[cid][:2] if cid in twins else (cid, name)
             if progress:
-                progress(k, len(chosen), name)
+                progress(k, len(chosen), out_name)
             else:
-                log("converting %s (%d)" % (name, cid))
+                log("converting %s (%d)" % (out_name, out_id))
             try:
-                engines = [r[0] for r in self.fm4db.execute(
+                engines = [(db.part_names.get((out_id, r[0]), r[0]), r[0]) for r in self.fm4db.execute(
                     "select e.MediaName from List_UpgradeEngine u join Data_Engine e on "
                     "e.EngineID=u.EngineID where u.Ordinal=?", (cid,))]
-                sound = self.audio_plan(name, engines)  # a car missing a sound file is left out first
-                self.convert_car(cid, name)
-                row = [r for r in rows["Data_Car"] if r["Id"] == cid][0]
-                self.audio_apply(name, sound, report)
+                # a car missing a sound file is left out first
+                sound = self.audio_plan(out_name, engines, source=name)
+                self.convert_car(cid, name, out_id, out_name)
+                row = [r for r in rows["Data_Car"] if r["Id"] == out_id][0]
+                self.audio_apply(out_name, sound, report)
                 wn = wheel_names.get(row["StockWheelID"])
-                if wn and not self.convert_wheel(wn):
-                    log("  %s: no files for its wheel %s" % (name, wn))
-                done.append(cid)
-                report["cars"].append((cid, name, row["ClassID"], round(row["PerformanceIndex"] * 1000)))
+                if wn and not self.convert_wheel(*wn):
+                    log("  %s: no files for its wheel %s" % (out_name, wn[0]))
+                done.append(out_id)
+                report["cars"].append((out_id, out_name, row["ClassID"], round(row["PerformanceIndex"] * 1000)))
+                if cid in dlc:
+                    report["dlc_cars"].append((out_id, out_name))
+                if cid in twins:
+                    report.setdefault("twins", []).append((cid, out_id, out_name))
             except (ConvertError, fm4_carbin.CarbinError, fm4_physdef.PhysdefError) as e:
                 report["skipped"].append((cid, "%s: %s" % (name, e)))
         if not done:
             raise ConvertError("no car converted")
-        dlc = getattr(self.fm4, "dlc_car_ids", set())
-        report["dlc_cars"] = [(cid, name) for cid, name, _, _ in report["cars"] if cid in dlc]
         keep = set(done)
         rows = {t: [r for r in rs if t not in dict(CAR_TABLES) or r.get(dict(CAR_TABLES)[t]) in keep]
                 for t, rs in rows.items()}

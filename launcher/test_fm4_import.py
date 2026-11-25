@@ -191,6 +191,16 @@ class FakeConverter:
         return {"cars": [(1119, "BUG_Veyron_09", 8, 872)], "skipped": [(1500, "XYZ_Thing_10: no model")]}
 
 
+class TwinConverter(FakeConverter):
+    """FH1 has the Leaf as a traffic car, and FM4's is left out (#841)."""
+
+    def candidates(self):
+        return super().candidates() + [(1365, "NIS_Leaf_11", "an electric car without an engine row")]
+
+    def twins(self):
+        return {1365: (51365, "NIS_5_Leaf_11", None)}
+
+
 class _Setup:
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -217,6 +227,13 @@ class _Setup:
 
 
 class Fm4ImportTests(_Setup, unittest.TestCase):
+
+    def test_a_traffic_cars_fm4_car_left_out_is_named(self):
+        """#841: the import passed over FH1's traffic cars' FM4 cars in silence."""
+        msg = fm4cars.build(self.cfg, self.disc1, None, converter=TwinConverter)
+        self.assertIn("2 could not be converted", msg)
+        self.assertEqual(FakeConverter.runs, [[1119]])
+        self.assertIn("NIS_Leaf_11: an electric car without an engine row", fm4cars.status(self.cfg)["skipped"])
 
     def test_publishes_the_mod_enabled_last_and_removes_it(self):
         msg = self.build()
