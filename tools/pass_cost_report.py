@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Report of a pass ledger run (docs/rendering.md, "Pass ledger"; ReIGlue 0670).
+"""Report of a pass ledger run (docs/rendering.md, "Pass ledger"; ReIGlue 0670, 0680).
 
 The game run with --fh1_pass_cost_csv=<file> writes <file>: per window of fh1_pass_cost_every
 frames, a row per segment label and draw class (and a "segment" row per label, a "frame" row per
@@ -17,7 +17,10 @@ chosen:
   - the checks: the issued draws and resolves of all labels equal the frame cost's draws in every
     window (exact); the decoder's time adds up to its thread clock (within 5%); with --run, each
     thread's time against /proc (the run's snaps.jsonl, within 5%: the decoder, the recorder's
-    busy time plus its time between batches, the render thread).
+    busy time plus its time between batches, the render thread);
+  - with the deletion switch (FORZA_TEST_SKIP_PASS, docs/rendering.md "Pass deletion"): the draws
+    and resolves it skipped per label ("del" in the table), and a check that it skipped exactly
+    its passes' (no draw whose pass id was not its segment's label).
 
   tools/pass_cost_report.py PASS.csv [--gpu GPU.csv] [--run RUN_DIR] [--windows A-B]
                             [--delta] [--check] [--json OUT]
@@ -40,9 +43,10 @@ STAGES = ["shaders", "pipeline", "render_pass", "texture_sets", "samplers", "con
 SUMS = ["segments", "rdr_cpu_ms", "other_device", "rdr_flush_ms", "rdr_flush_calls", "submitted",
         "runs", "dec_ms", "dec_draws", "dec_skipped", "rec_ms", "rec_draws", "rec_issue_ms",
         "rec_copies", "rec_copy_ms", "rec_empty", "delta_draws", "stage_draws"] + \
-       ["same_" + g for g in GROUPS] + ["stage_same_" + s for s in STAGES]
+       ["same_" + g for g in GROUPS] + ["stage_same_" + s for s in STAGES] + \
+       ["rec_skipped", "rec_skipped_copies", "rec_skip_ms"]
 FRAME = ["frames", "frame_draws", "dec_thread_ms", "rec_thread_ms", "rec_idle_ms", "dec_idle_ms",
-         "marks", "stale_marks"]
+         "marks", "stale_marks", "skip_wrong_skipped", "skip_wrong_kept"]
 TOLERANCE = 0.05
 
 
@@ -90,8 +94,8 @@ def read_ledger(path, windows=None, epochs=None):
             for k in SUMS:
                 if k in ("segments", "rdr_cpu_ms", "other_device"):
                     continue
-                c[k] += num(r[k])
-                e["sums"][k] += num(r[k])
+                c[k] += num(r.get(k))  # 0670's CSV has no 0680 columns
+                e["sums"][k] += num(r.get(k))
             per_window[w]["issued"] += num(r["rec_draws"]) + num(r["rec_copies"])
     # In the order of the frame (a label's mean place among the frame's labels).
     ordered = sorted(labels.items(), key=lambda kv: kv[1]["sums"]["order_x_frames"] /
@@ -189,6 +193,14 @@ def checks(labels, frame, per_window, proc=None, render="g11", split=True):
                 ok = theirs > 0 and abs(mine - theirs) <= TOLERANCE * theirs
                 out.append(("%s against /proc" % name, ok,
                             "ledger %.3f ms a frame, /proc %.3f" % (mine, theirs)))
+    deleted = sum(e["sums"]["rec_skipped"] + e["sums"]["rec_skipped_copies"]
+                  for e in labels.values())
+    if deleted:
+        wrong = frame["skip_wrong_skipped"] + frame["skip_wrong_kept"]
+        out.append(("deletion switch skipped only its passes", wrong == 0,
+                    "%.0f draws and resolves skipped, %.0f skipped whose segment is another pass, "
+                    "%.0f kept whose segment is one it names" % (
+                        deleted, frame["skip_wrong_skipped"], frame["skip_wrong_kept"])))
     if split and frame["rec_thread_ms"]:
         busy = sum(e["sums"]["rec_ms"] for e in labels.values())
         out.append(("recorder busy within its clock", busy <= frame["rec_thread_ms"] * (1 + TOLERANCE),
@@ -216,8 +228,13 @@ def report(labels, frame, per_window, gpu, delta, proc, split, render):
                  "sub/dec/skip/iss = draws submitted, decoded, skipped by a predicate, issued; gpu "
                  "= GPU profile" % ("" if split else " (the whole command processor)"))
     lines.append("")
+    deleted = any(e["sums"]["rec_skipped"] or e["sums"]["rec_skipped_copies"]
+                  for e in labels.values())
+    if deleted:
+        lines.append("del = draws / resolves the deletion switch skipped (FORZA_TEST_SKIP_PASS)")
+        lines.append("")
     head = ("| label | targets | seg | rdr cpu | rdr flush | dec | rec | issue | copy | sub | dec "
-            "draws | skip | iss | gpu |")
+            "draws | skip | iss | gpu |" + (" del |" if deleted else ""))
     lines.append(head)
     lines.append("|" + " --- |" * (head.count("|") - 1))
     total = collections.Counter()
@@ -232,14 +249,18 @@ def report(labels, frame, per_window, gpu, delta, proc, split, render):
             fmt(s["rdr_flush_ms"] / fr), fmt(s["dec_ms"] / fr), fmt(s["rec_ms"] / fr),
             fmt(s["rec_issue_ms"] / fr), fmt(s["rec_copy_ms"] / fr), fmt(s["submitted"] / fr, 0),
             fmt(s["dec_draws"] / fr, 0), fmt(s["dec_skipped"] / fr, 0),
-            fmt((s["rec_draws"] + s["rec_copies"]) / fr, 0), fmt(gms) if gpu else "-"))
+            fmt((s["rec_draws"] + s["rec_copies"]) / fr, 0), fmt(gms) if gpu else "-") +
+            (" %s / %s |" % (fmt(s["rec_skipped"] / fr, 0), fmt(s["rec_skipped_copies"] / fr, 0))
+             if deleted else ""))
     lines.append("| **all** | | %.1f | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |" % (
         total["segments"] / fr, fmt(total["rdr_cpu_ms"] / fr), fmt(total["rdr_flush_ms"] / fr),
         fmt(total["dec_ms"] / fr), fmt(total["rec_ms"] / fr), fmt(total["rec_issue_ms"] / fr),
         fmt(total["rec_copy_ms"] / fr), fmt(total["submitted"] / fr, 0),
         fmt(total["dec_draws"] / fr, 0), fmt(total["dec_skipped"] / fr, 0),
         fmt((total["rec_draws"] + total["rec_copies"]) / fr, 0),
-        fmt(total["gpu"]) if gpu else "-"))
+        fmt(total["gpu"]) if gpu else "-") +
+        (" %s / %s |" % (fmt(total["rec_skipped"] / fr, 0), fmt(total["rec_skipped_copies"] / fr, 0))
+         if deleted else ""))
     lines.append("")
     lines.append("By draw class (the render thread's CPU and the GPU are per label only):")
     lines.append("")

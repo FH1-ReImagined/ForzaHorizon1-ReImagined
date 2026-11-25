@@ -23,16 +23,30 @@ namespace forza::pass_ledger {
 inline bool On() {
   return native_device::g_hooks.load(std::memory_order_relaxed) & native_device::kHookLedger;
 }
-// Reads the switch (once; the shadow mask function's first call, on the render thread).
+// The track's, the procedural models' and the cars' draw hooks open a ClassScope: with the
+// ledger on, or with the test switch FORZA_TEST_SKIP_LIST_GROUPS (one test of the same word).
+inline bool Scoped() {
+  return native_device::g_hooks.load(std::memory_order_relaxed) &
+         (native_device::kHookLedger | native_device::kHookSkipLists);
+}
+// Reads the switch (once; the shadow mask function's first call, on the render thread), and the
+// test switches FORZA_TEST_SKIP_LIST_GROUPS and FORZA_TEST_SKIP_PASS (docs/rendering.md "Pass
+// deletion").
 void ReadSwitch();
 
 // The track's, the procedural models' and the cars' draws on this thread: their class, pass and
-// layer (platform/pass_ledger.h Class). The hooks open one only while On(), in a branch of their
-// own, so that off they keep their tail calls.
+// layer (platform/pass_ledger.h Class), and whether FORZA_TEST_SKIP_LIST_GROUPS skips their
+// lists. The hooks open one only while Scoped(), in a branch of their own, so that off they keep
+// their tail calls.
 struct Scope {
   uint32_t cls = 0xFF, pass = 0xFF, layer = 0;
+  bool skip = false;
 };
 Scope& CurrentScope();
+// Whether FORZA_TEST_SKIP_LIST_GROUPS names the group of a track or procedural scope.
+bool SkipsGroup(uint32_t cls, uint32_t pass, uint32_t layer);
+// The RunCommandBuffer hook's own flag (cockpit_gauges.cpp): it returns before the original.
+void SetListSkip(bool skip);
 class ClassScope {
  public:
   ClassScope(uint32_t cls, uint32_t pass, uint32_t layer) {
@@ -41,14 +55,26 @@ class ClassScope {
     s.cls = cls;
     s.pass = pass;
     s.layer = layer;
+    s.skip = SkipsGroup(cls, pass, layer);
+    if (s.skip != saved_.skip) SetListSkip(s.skip);
   }
-  ~ClassScope() { CurrentScope() = saved_; }
+  ~ClassScope() {
+    Scope& s = CurrentScope();
+    if (s.skip != saved_.skip) SetListSkip(saved_.skip);
+    s = saved_;
+  }
   ClassScope(const ClassScope&) = delete;
   ClassScope& operator=(const ClassScope&) = delete;
 
  private:
   Scope saved_;
 };
+
+// FORZA_TEST_SKIP_LIST_GROUPS: a RunCommandBuffer call the switch skips (native_device.cpp
+// FlushScope, instead of the ledger's FlushBegin; the label still sees its pass), and once a
+// frame at the swap (the warning every 10 s).
+void SkippedList();
+void TestSwitchSwap();
 
 // The shadow mask function runs (from its start to the world pass's resolve of the mask).
 void SetMask(bool running);

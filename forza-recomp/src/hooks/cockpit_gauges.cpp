@@ -89,7 +89,10 @@ bool Plausible(uint32_t address) { return address >= 0x00100000 && address < 0xF
 
 // The local player's car's render thread presentation, 0 while unknown.
 std::atomic<uint32_t> local_presentation{0};
-thread_local bool drawing_cockpit = false;
+// What DrawModelNow does besides its call (0: nothing): the lit gauges of the cockpit's models,
+// and the test switch FORZA_TEST_SKIP_LIST_GROUPS (pass_ledger.cpp), which skips the call.
+constexpr uint8_t kDrawCockpit = 1, kDrawSkipList = 2;
+thread_local uint8_t draw_model_now = 0;
 
 // Whether `deferred` (a car's deferred presentation) belongs to this console's player.
 bool LocalPlayersCar(uint8_t* base, uint32_t deferred) {
@@ -144,9 +147,11 @@ namespace {
     OriginalDrawCarModel(ctx, base);
     return;
   }
-  drawing_cockpit = true;
+  // A car's scope (ClassScope, open while the test switch is on) never skips its lists, so the
+  // flag holds only this here.
+  draw_model_now = kDrawCockpit;
   OriginalDrawCarModel(ctx, base);
-  drawing_cockpit = false;
+  draw_model_now = 0;
 }
 // The pass ledger: a car's models (pass r5), whose lists are the clones (out of line, so that
 // the hook keeps its tail calls while the ledger is off).
@@ -158,12 +163,29 @@ namespace {
 
 extern "C" REX_FUNC(DrawCarModel) {
   FORZA_LIST_TRACE_CONTEXT(kCar, ctx.r5.u32, ctx.r6.u32);
-  if (forza::pass_ledger::On()) [[unlikely]] {
+  if (forza::pass_ledger::Scoped()) [[unlikely]] {
     DrawCarModelLedger(ctx, base);
     return;
   }
   DrawCarModelBody(ctx, base);
 }
+
+// The test switch FORZA_TEST_SKIP_LIST_GROUPS (pass_ledger.h ClassScope, on the render thread).
+void forza::pass_ledger::SetListSkip(bool skip) {
+  if (skip) {
+    draw_model_now |= kDrawSkipList;
+  } else {
+    draw_model_now &= uint8_t(~kDrawSkipList);
+  }
+}
+
+namespace {
+// Out of line, so that the test above stays one compare of the flag (its value is not kept in a
+// register for this second test).
+[[gnu::noinline, gnu::cold]] bool DrawModelNowSkipped() {
+  return (draw_model_now & kDrawSkipList) != 0;
+}
+}  // namespace
 
 // r3 = the shader constant shadow the model is drawn with, r4 = the model.
 extern "C" REX_FUNC(DrawModelNow) {
@@ -176,10 +198,11 @@ extern "C" REX_FUNC(DrawModelNow) {
   forza::native_device::FlushScope native_flush(forza::native_device::kPointRunCommandBuffer,
                                                 ctx, base);
 #endif
-  if (!drawing_cockpit) {
+  if (!draw_model_now) {
     OriginalDrawModelNow(ctx, base);
     return;
   }
+  if (DrawModelNowSkipped()) return;  // FORZA_TEST_SKIP_LIST_GROUPS: not run
   const uint32_t constants = ctx.r3.u32;
   const uint32_t amount = constants + gauges::kHeadlightAmountOffset;
   const uint32_t game = Load32(base, amount);

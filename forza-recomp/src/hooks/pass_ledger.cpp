@@ -17,6 +17,8 @@
 
 #include "pass_ledger.h"
 
+#include "native_lists.h"
+
 #include "../platform/guest_addr.h"
 #include "../platform/guest_memory.h"
 #include "../platform/native_shadow_record.h"
@@ -28,6 +30,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -53,18 +56,40 @@ namespace {
 thread_local Scope t_scope;
 thread_local bool t_render_thread = false;
 thread_local bool t_mask = false;
+// FORZA_TEST_SKIP_LIST_GROUPS's groups (bit g: group g); written once in ReadSwitch, before the
+// hooks' bit that makes anything read it.
+uint32_t g_skip_groups = 0;
 }  // namespace
 
 Scope& CurrentScope() { return t_scope; }
+
+bool SkipsGroup(uint32_t cls, uint32_t pass, uint32_t layer) {
+  if (!g_skip_groups || (cls != kClassTrack && cls != kClassProcedural)) return false;
+  const uint32_t group = native_lists::GroupScope::GroupOf(pass, layer);
+  return group < 21 && ((g_skip_groups >> group) & 1);
+}
 
 void SetMask(bool running) {
   if (t_render_thread) t_mask = running;
 }
 
+#if FORZA_TU4
+namespace {
+void ReadTestSwitches();
+}
+#endif
+
 void ReadSwitch() {
   const std::string csv = rex::cvar::GetFlagByName("fh1_pass_cost_csv");
 #if FORZA_TU4
-  if (csv.empty()) return;
+  ReadTestSwitches();
+  if (csv.empty()) {
+    if (const char* skip = std::getenv("FORZA_TEST_SKIP_PASS"); skip && *skip)
+      REXLOG_WARN(
+          "FORZA_TEST_SKIP_PASS: needs the pass ledger (fh1_pass_cost_csv), whose marks name "
+          "the passes; nothing is skipped");
+    return;
+  }
   t_render_thread = true;
   native_device::g_hooks.fetch_or(native_device::kHookLedger, std::memory_order_relaxed);
   REXLOG_INFO(
@@ -174,6 +199,13 @@ struct Render {
   Interval interval;
   uint64_t segment_cpu = 0;
   Labeler labeler;
+  // FORZA_TEST_SKIP_PASS: class marks carry the pass id so far; the last one sent.
+  bool pass_ids = false;
+  uint32_t pass_id_sent = 0;
+  // FORZA_TEST_SKIP_LIST_GROUPS: lists skipped (all, and since the last warning).
+  // (skipped_lists: any thread with a skipped scope can count; the rest the render thread's.)
+  std::atomic<uint64_t> skipped_lists{0};
+  uint64_t skipped_lists_warned = 0, warned_ns = 0, skip_frames = 0;
   // Counts for the log.
   uint64_t frames = 0, marks = 0, lost = 0, lists = 0, lists_unparsed = 0, recording = 0;
 };
@@ -234,11 +266,17 @@ void Emit(PPCContext& ctx, uint8_t* base, const uint32_t* words, uint32_t n) {
   if (!nd::EmitHostPacket(ctx, base, r.dev, words, n)) ++r.lost;
 }
 
-void ClassChange(PPCContext& ctx, uint8_t* base, uint32_t cls) {
+void ClassChange(PPCContext& ctx, uint8_t* base, uint32_t cls, uint32_t pass_id) {
   Render& r = R();
-  uint32_t w[kClassWords];
-  ClassMark(++r.seq, cls, r.current, r.interval, w);
-  Emit(ctx, base, w, kClassWords);
+  uint32_t w[kClassWordsWithPass];
+  if (r.pass_ids) {
+    ClassMarkWithPass(++r.seq, cls, r.current, r.interval, pass_id, w);
+    Emit(ctx, base, w, kClassWordsWithPass);
+    r.pass_id_sent = pass_id;
+  } else {
+    ClassMark(++r.seq, cls, r.current, r.interval, w);
+    Emit(ctx, base, w, kClassWords);
+  }
   r.interval = Interval();
   r.current = cls;
   r.force = false;
@@ -253,6 +291,14 @@ void SegmentEnd(PPCContext& ctx, uint8_t* base) {
   Emit(ctx, base, w, kEndWords);
   r.interval = Interval();
   r.segment_cpu = cpu;
+}
+
+// FORZA_TEST_SKIP_PASS: right after a segment end, a class mark (the same class) with the next
+// segment's pass id, for the draws D3D makes before the game's next flush call (after the swap:
+// the next frame's first segment's).
+void PassIdMark(PPCContext& ctx, uint8_t* base) {
+  Render& r = R();
+  if (r.pass_ids) ClassChange(ctx, base, r.current, r.labeler.Provisional());
 }
 
 void LogFrames() {
@@ -300,6 +346,7 @@ void FlushBegin(nd::Point point, PPCContext& ctx, uint8_t* base, nd::LedgerFlush
     // the world pass did not end ends here).
     SegmentEnd(ctx, base);
     r.labeler.Frame();
+    PassIdMark(ctx, base);
     t_mask = false;
     r.force = true;
     LogFrames();
@@ -309,7 +356,11 @@ void FlushBegin(nd::Point point, PPCContext& ctx, uint8_t* base, nd::LedgerFlush
   const Scope& scope = t_scope;
   r.labeler.Saw(scope.cls != 0xFF ? int(scope.pass) : -1, scope.cls == kClassCar, t_mask);
   const uint32_t cls = ClassOf(kind, scope.cls, scope.layer);
-  if (cls != kNoClass && (cls != r.current || r.force)) ClassChange(ctx, base, cls);
+  if (cls != kNoClass) {
+    // With FORZA_TEST_SKIP_PASS a draw's pass id changes the class mark too.
+    const uint32_t pass_id = r.pass_ids ? r.labeler.Provisional() : 0;
+    if (cls != r.current || r.force || pass_id != r.pass_id_sent) ClassChange(ctx, base, cls, pass_id);
+  }
   switch (kind) {
     case Flush::kDraw:
     case Flush::kUp:
@@ -342,9 +393,68 @@ void FlushEnd(PPCContext& ctx, uint8_t* base, nd::LedgerFlush& f) {
     r.interval.flush_ns += SteadyNs() - f.start_ns;
     ++r.interval.calls;
     // Still at the call's depth: a flush point D3D's make-space call reaches is its own.
-    if (Flush(f.kind) == Flush::kResolve) SegmentEnd(ctx, base);
+    if (Flush(f.kind) == Flush::kResolve) {
+      SegmentEnd(ctx, base);
+      PassIdMark(ctx, base);
+    }
   }
   --r.depth;
+}
+
+namespace {
+
+void ReadTestSwitches() {
+  if (const char* groups = std::getenv("FORZA_TEST_SKIP_LIST_GROUPS"); groups && *groups) {
+    uint32_t bad = 0;
+    g_skip_groups = ParseSkipGroups(groups, &bad);
+    if (bad)
+      REXLOG_WARN("FORZA_TEST_SKIP_LIST_GROUPS={}: {} part(s) not a list group 0-20, ignored",
+                  groups, bad);
+    if (g_skip_groups) {
+      native_device::g_hooks.fetch_or(native_device::kHookSkipLists, std::memory_order_relaxed);
+      R().warned_ns = SteadyNs();
+      REXLOG_WARN(
+          "FORZA_TEST_SKIP_LIST_GROUPS={}: TEST SWITCH ON, the track's and procedural models' "
+          "command lists of those groups are not run (the frame is wrong by design)",
+          groups);
+    }
+  }
+  if (const char* skip = std::getenv("FORZA_TEST_SKIP_PASS"); skip && *skip) {
+    Render& r = R();
+    r.pass_ids = true;
+    r.labeler.SetPrediction(true);
+    REXLOG_INFO(
+        "FORZA_TEST_SKIP_PASS={}: the pass ledger's class marks carry each draw's pass id (the "
+        "GPU plugin skips them)",
+        skip);
+  }
+}
+
+}  // namespace
+
+void SkippedList() {
+  Render& r = R();
+  r.skipped_lists.fetch_add(1, std::memory_order_relaxed);
+  // The segment's label still sees the pass (the ledger's other rows keep their names).
+  if (t_render_thread && r.depth == 0) {
+    const Scope& scope = t_scope;
+    r.labeler.Saw(int(scope.pass), false, t_mask);
+  }
+}
+
+void TestSwitchSwap() {
+  Render& r = R();
+  ++r.skip_frames;
+  const uint64_t now = SteadyNs();
+  if (now - r.warned_ns < 10000000000ull) return;
+  const uint64_t lists = r.skipped_lists.load(std::memory_order_relaxed);
+  REXLOG_WARN(
+      "FORZA_TEST_SKIP_LIST_GROUPS: TEST SWITCH ON, {} command lists not run in the last {:.1f} s "
+      "({} frames; {} in all)",
+      lists - r.skipped_lists_warned, double(now - r.warned_ns) * 1e-9, r.skip_frames, lists);
+  r.skipped_lists_warned = lists;
+  r.skip_frames = 0;
+  r.warned_ns = now;
 }
 
 }  // namespace forza::pass_ledger
