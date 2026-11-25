@@ -682,6 +682,10 @@ def _build_plan(cfg: Config, game: GameInstall, write, refresh_xenia, log, saver
         note = fm4cars.tuning_notice(cfg, log)
         if note:
             notes.append(note)
+        # one made before #931: the cars' collision hulls mirrored front to back, once
+        note = fm4cars.hull_notice(cfg, log)
+        if note:
+            notes.append(note)
     args += mods.launch_args(cfg, named)
     from . import loading_tips  # ReImagined loading-screen tips (Settings > Gameplay), first in the order
     loading_tips.launch_args(cfg, args, write, log)

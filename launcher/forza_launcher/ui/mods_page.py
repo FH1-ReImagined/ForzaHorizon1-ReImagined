@@ -473,6 +473,9 @@ class ModsPage(FolderListPage):
                 if fm4cars.traffic_tuned(self.cfg):
                     text += (" Some of them (such as the 2006 Ford Focus ST) have a cut-down traffic car's "
                              "engine sound: import again to give them FM4's.")
+                if fm4cars.mirrored_hull(self.cfg):
+                    text += (" Their collision shape is mirrored front to back (an earlier import): "
+                             "import again to fix it.")
                 self.fm4_message.setText(text)
             else:
                 self.fm4_message.setText("")
