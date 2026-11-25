@@ -875,6 +875,10 @@ void AliasAtlasTiles(uint8_t* base, uint32_t t) {
 }
 thread_local bool fm4_stx_active = false;
 thread_local uint32_t fm4_stx_last = 0, fm4_stx_ids = 0;
+// The track whose world is loading, from its texture pack's name (<track>.stx.bin, lower
+// case): the streaming pool's extra blocks are for a converted circuit's world (#849, below).
+std::mutex world_track_mu;
+std::string world_track;
 }  // namespace
 
 // The pack's loop (in sub_82E323A0): n = sub_82D095C0, numbers = sub_82D099E0 (the last
@@ -886,6 +890,16 @@ extern "C" REX_FUNC(sub_82E323A0) {
     REXLOG_INFO("FM4TRACK: texture pack '{}' r7 {:08X} r8 {:08X}", path, ctx.r7.u32, ctx.r8.u32);
   }
   for (auto& ch : path) ch = char(std::tolower(static_cast<unsigned char>(ch)));
+  if (const auto stx = path.rfind(".stx.bin"); stx != std::string::npos) {
+    const auto slash = path.find_last_of("\\/", stx);
+    const auto from = slash == std::string::npos ? 0 : slash + 1;
+    const std::string track = path.substr(from, stx - from);
+    auto* vfs = rex::system::kernel_state()->file_system();
+    if (!track.empty() && vfs && vfs->ResolvePath("game:\\media\\tracks\\" + track)) {  // a track's pack
+      std::lock_guard<std::mutex> lock(world_track_mu);
+      world_track = track;
+    }
+  }
   fm4_stx_active =
       !c.ids.empty() && path.find("\\" + c.track + ".stx.bin") != std::string::npos;
   fm4_stx_last = fm4_stx_ids = 0;
@@ -1719,33 +1733,47 @@ extern "C" REX_FUNC(sub_82DD6C08) {
 #endif
 
 #if FORZA_TU4
-// The streaming file blocks: sub_82E3A208 makes the pool the first time a file is streamed,
-// 22440 blocks of 1028 bytes (23 MB) linked in a free list at 0x835A0B40, and sub_82E3A2E8
-// takes one block from it. Colorado's zones fit; a converted FM4 circuit's hold more (the
-// pool ran dry after a few minutes of Suzuka, and the next file read wrote through a null
-// block, sub_82E3CAE8). tools/fm4_pvs.py writes what a converted track needs into
-// media/tracks/<track>/fm4_stream_blocks.txt (the largest union of a zone's and its six
-// neighbours' model files, in KB, with a margin). When the pool is made, the largest such
-// number of the tracks in game:\media\tracks\ is linked in at once, up to kMaxBlocks in all;
-// FH1's own data has no such file and keeps its pool as it is. The game makes the pool again
-// when a world loads (all its blocks free again): the blocks added are kept and linked in
-// again each time, never allocated twice. Should a converted track still empty the pool,
-// 4096 more blocks are added each time, up to the same cap, with a warning.
+// The streaming file blocks: sub_82E3A208 (CPreLoadChunkManager::Initialize) makes the pool at
+// the game's first streamed file, 22440 blocks of 1028 bytes (23 MB) linked in a free list at
+// 0x835A0B40, and sub_82E3A2E8 takes one block from it. Colorado's zones fit; a converted FM4
+// circuit's hold more (the pool ran dry after a few minutes of Suzuka, and the next file read
+// wrote through a null block, sub_82E3CAE8). tools/fm4_pvs.py writes what a converted track
+// needs into media/tracks/<track>/fm4_stream_blocks.txt (the largest union of a zone's and its
+// six neighbours' model files, in KB, with a margin). The game makes the pool again when a
+// world loads (all its blocks free again). The extra blocks are added only when the pool is
+// made for a converted circuit's world (the track whose texture pack, <track>.stx.bin, loaded
+// last has the file): that track's number is linked in, up to kMaxBlocks in all. The first
+// pool, made before any world, and a world of FH1's own (no such file) keep the game's 22440.
+// The blocks added are kept for the process and linked in again each time the pool is made,
+// never allocated twice; a later world that asks for more gets the difference. Should a
+// converted track still empty the pool (or its world's pool was made before its pack loaded),
+// what its world asks for, or at least 4096 more blocks, are added then, up to the same cap,
+// with a warning. The blocks come in one piece from the system part of the guest's 0x00000000
+// heap (SystemHeapAlloc), which kernel objects, XMA contexts and other hooks share: a failed
+// allocation is logged with its size and that part's free space, and the free space is logged
+// each time the pool is made (and with FORZA_ZONE_TRACE, on every zone made live or dropped).
 namespace {
 using rex::X_STATUS;
-constexpr uint32_t kBlock = 1028, kGameBlocks = 22440, kMaxBlocks = 65536;  // 64 MB in all
+constexpr uint32_t kBlock = 1028, kGameBlocks = 22440, kMaxBlocks = 98304;  // 96 MB in all
 constexpr uint32_t kFreeList = 0x835A0B40, kPoolMade = 0x835A0B44;
 std::atomic<uint32_t> stream_blocks{kGameBlocks};
 bool converted_track = false;
 std::vector<std::pair<uint32_t, uint32_t>> stream_chunks;  // guest address, blocks
+std::mutex stream_chunks_mu;  // AddStreamBlocks from the pool's making and from a top-up
 
-// The blocks the converted tracks ask for (0: none installed).
-uint32_t TrackStreamBlocks() {
+// The blocks the converted tracks ask for (0: none): every folder of game:\media\tracks, or
+// only the one named track (lower case) when given.
+uint32_t TrackStreamBlocks(const std::string& only = {}) {
   auto* vfs = rex::system::kernel_state()->file_system();
   auto* tracks = vfs ? vfs->ResolvePath("game:\\media\\tracks") : nullptr;
   if (!tracks) return 0;
   uint32_t want = 0;
   for (const auto& dir : tracks->children()) {
+    if (!only.empty()) {
+      std::string name = dir->name();
+      for (auto& ch : name) ch = char(std::tolower(static_cast<unsigned char>(ch)));
+      if (name != only) continue;
+    }
     auto* entry = dir->GetChild("fm4_stream_blocks.txt");
     if (!entry || entry->size() == 0 || entry->size() > 64) continue;
     rex::filesystem::File* file = nullptr;
@@ -1762,6 +1790,45 @@ uint32_t TrackStreamBlocks() {
   return want;
 }
 
+// What the world loading now asks for (0: not a converted circuit's world).
+uint32_t WorldStreamBlocks() {
+  std::string track;
+  {
+    std::lock_guard<std::mutex> lock(world_track_mu);
+    track = world_track;
+  }
+  return track.empty() ? 0 : TrackStreamBlocks(track);
+}
+
+// The free space of the system part of the guest's 0x00000000 heap (its top 256 MB, where
+// SystemHeapAlloc takes from), in bytes, and its largest free run (one allocation's most).
+struct SystemFree {
+  uint64_t free = 0, largest = 0;
+};
+SystemFree SystemHeapSpace() {
+  SystemFree out;
+  auto* heap = REX_KERNEL_MEMORY()->LookupHeap(0x3FFFF000);
+  if (!heap || heap->heap_size() < (256u << 20)) return out;
+  const uint64_t end = uint64_t(heap->heap_base()) + heap->heap_size();
+  for (uint64_t a = end - (256u << 20); a < end;) {
+    rex::memory::HeapAllocationInfo info{};
+    if (!heap->QueryRegionInfo(uint32_t(a), &info)) break;
+    const uint64_t size = std::max<uint64_t>(info.region_size, heap->page_size());
+    if (!info.state) {
+      out.free += std::min(size, end - a);
+      out.largest = std::max(out.largest, std::min(size, end - a));
+    }
+    a += size;
+  }
+  return out;
+}
+
+void LogSystemHeapFree(const char* when) {
+  const SystemFree f = SystemHeapSpace();
+  REXLOG_INFO("FM4TRACK: system heap ({}): {:.1f} MB free of 256, largest free run {:.1f} MB",
+              when, f.free / 1048576.0, f.largest / 1048576.0);
+}
+
 // Links a chunk of blocks in front of the free list.
 void LinkChunk(uint8_t* base, uint32_t mem, uint32_t count) {
   const uint32_t head = Load32(base, kFreeList);
@@ -1776,10 +1843,18 @@ void LinkChunk(uint8_t* base, uint32_t mem, uint32_t count) {
 
 // A new chunk of count blocks (guest heap, kept for the process), linked in; false if none.
 bool AddStreamBlocks(uint8_t* base, uint32_t count) {
+  std::lock_guard<std::mutex> lock(stream_chunks_mu);
   count = std::min(count, kMaxBlocks - std::min(kMaxBlocks, stream_blocks.load()));
   if (!count) return false;
   const uint32_t mem = REX_KERNEL_MEMORY()->SystemHeapAlloc(kBlock * count);
-  if (!mem) return false;
+  if (!mem) {
+    const SystemFree f = SystemHeapSpace();
+    REXLOG_ERROR("FM4TRACK: no {} streaming blocks: the system heap has no {} bytes ({:.1f} MB) "
+                 "in one piece ({:.1f} MB free of 256, largest free run {:.1f} MB); the pool "
+                 "keeps {} blocks", count, kBlock * count, kBlock * count / 1048576.0,
+                 f.free / 1048576.0, f.largest / 1048576.0, stream_blocks.load());
+    return false;
+  }
   stream_chunks.emplace_back(mem, count);
   LinkChunk(base, mem, count);
   stream_blocks += count;
@@ -1793,16 +1868,24 @@ extern "C" REX_FUNC(sub_82E3A208) {
   __imp__sub_82E3A208(ctx, base);
   if (made || !Load32(base, kPoolMade)) return;
   // The pool is made under its own lock (sub_82E3A2E8 waits on it); blocks are taken after.
-  if (!stream_chunks.empty()) {  // made again: the blocks added before are free again too
-    for (const auto& [mem, count] : stream_chunks) LinkChunk(base, mem, count);
-    REXLOG_INFO("FM4TRACK: streaming pool made again: {} blocks", stream_blocks.load());
-    return;
+  static bool scanned = false;
+  if (!scanned) {  // whether any converted track is installed (the top-ups and fallbacks)
+    scanned = true;
+    converted_track = TrackStreamBlocks() != 0;
   }
-  const uint32_t want = TrackStreamBlocks();
-  converted_track = want != 0;
-  if (want > kGameBlocks && AddStreamBlocks(base, want - kGameBlocks))
-    REXLOG_INFO("FM4TRACK: streaming blocks {} (the game's {} and {} for converted tracks)",
-                stream_blocks.load(), kGameBlocks, want - kGameBlocks);
+  {
+    std::lock_guard<std::mutex> lock(stream_chunks_mu);
+    if (!stream_chunks.empty()) {  // made again: the blocks added before are free again too
+      for (const auto& [mem, count] : stream_chunks) LinkChunk(base, mem, count);
+      REXLOG_INFO("FM4TRACK: streaming pool made again: {} blocks", stream_blocks.load());
+    }
+  }
+  const uint32_t want = converted_track ? WorldStreamBlocks() : 0;
+  const uint32_t have = stream_blocks.load();
+  if (want > have && AddStreamBlocks(base, want - have))
+    REXLOG_INFO("FM4TRACK: streaming blocks {} (the game's {} and {} for the converted circuit's "
+                "world)", stream_blocks.load(), kGameBlocks, stream_blocks.load() - kGameBlocks);
+  LogSystemHeapFree("streaming pool made");
 }
 
 extern "C" REX_FUNC(__imp__sub_82E3A2E8);
@@ -1810,9 +1893,14 @@ extern "C" REX_FUNC(sub_82E3A2E8) {
   if (converted_track && Load32(base, kPoolMade) && !Load32(base, kFreeList)) {
     static std::mutex m;
     std::lock_guard<std::mutex> lock(m);
-    if (!Load32(base, kFreeList) && AddStreamBlocks(base, 4096))
-      REXLOG_WARN("FM4TRACK: streaming blocks ran out: 4096 more, {} in all (raise the "
-                  "track's fm4_stream_blocks.txt)", stream_blocks.load());
+    if (!Load32(base, kFreeList)) {
+      const uint32_t want = WorldStreamBlocks(), have = stream_blocks.load();
+      const uint32_t more = std::max<uint32_t>(4096, want > have ? want - have : 0);
+      if (AddStreamBlocks(base, more))
+        REXLOG_WARN("FM4TRACK: streaming blocks ran out: {} more, {} in all (raise the "
+                    "track's fm4_stream_blocks.txt)", stream_blocks.load() - have,
+                    stream_blocks.load());
+    }
   }
   __imp__sub_82E3A2E8(ctx, base);
 }
@@ -1821,7 +1909,8 @@ extern "C" REX_FUNC(sub_82E3A2E8) {
 #if FORZA_TU4
 // Zone bookkeeping for FORZA_ZONE_TRACE runs: zone requests dropped (sub_82E1AFD8: r3 the
 // presentation, r4 the zone), the loaded-zone list (presentation+0xA08..0xA0C, 16 bytes each,
-// +0xC the zone) and the streaming blocks in use (0x835A0B48), on every make-live and drop.
+// +0xC the zone), the streaming blocks in use (0x835A0B48) and the system heap's free space
+// (#849), on every make-live and drop.
 namespace {
 bool ZoneTrace() {
   static const bool on = std::getenv("FORZA_ZONE_TRACE") != nullptr;
@@ -1839,6 +1928,7 @@ void LogZones(uint8_t* base, uint32_t pres, const char* what, uint32_t zone) {
               "instance objects in use {}, placements in use {}", what, zone, loaded, ids,
               pending, Load32(base, 0x835A0B48), ipool && GuestReadable(ipool + 12) ? Load32(base, ipool + 12) : 0,
               ppool && GuestReadable(ppool + 12) ? Load32(base, ppool + 12) : 0);
+  LogSystemHeapFree(what);
 }
 }  // namespace
 extern "C" REX_FUNC(__imp__sub_82E1AFD8);

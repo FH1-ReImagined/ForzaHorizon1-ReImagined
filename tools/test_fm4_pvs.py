@@ -233,10 +233,10 @@ class StreamPool(unittest.TestCase):
 
     def test_the_games_cap_with_the_margin(self):
         with mock.patch.object(fm4_pvs, "STREAM_MARGIN", 1.25):
-            self.assertTrue(fm4_pvs.fits_stream_pool(52428))
-            self.assertTrue(fm4_pvs.fits_stream_pool(52429))   # 65536.25 asked: 65536
-            self.assertFalse(fm4_pvs.fits_stream_pool(52430))
-        self.assertEqual(fm4_pvs.MAX_STREAM_BLOCKS, 65536)
+            self.assertTrue(fm4_pvs.fits_stream_pool(78642))
+            self.assertTrue(fm4_pvs.fits_stream_pool(78643))   # 98303.75 asked: 98304
+            self.assertFalse(fm4_pvs.fits_stream_pool(78644))
+        self.assertEqual(fm4_pvs.MAX_STREAM_BLOCKS, 98304)
 
 
 class GroundCopyInTheReach(unittest.TestCase):
