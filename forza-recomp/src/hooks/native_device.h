@@ -1,5 +1,6 @@
 // forza - native renderer M2: the host device layer at the Xbox D3D library's flush points, in
-// shadow mode (src/hooks/native_device.cpp, docs/native-renderer.md "M2: shadow mode").
+// shadow mode (src/hooks/native_device.cpp, docs/native-renderer.md "M2: shadow mode"). The
+// pass ledger (pass_ledger.h) marks its passes at the same flush points.
 //
 // The flush points that other hooks already wrap (RunCommandBuffer in cockpit_gauges.cpp) open a
 // FlushScope around their original call; the shadow mask hook (scene_resolution.cpp) starts the
@@ -42,6 +43,20 @@ enum Point : uint32_t {
 
 extern std::atomic<bool> g_shadow_mode;
 inline bool Enabled() { return g_shadow_mode.load(std::memory_order_relaxed); }
+// What the flush points do besides their call: the shadow mode's records, the pass ledger's
+// marks (pass_ledger.h). Zero: each flush point is one load and one branch.
+constexpr uint8_t kHookShadow = 1, kHookLedger = 2;
+extern std::atomic<uint8_t> g_hooks;
+inline bool Hooked() { return g_hooks.load(std::memory_order_relaxed) != 0; }
+
+// The pass ledger's state of one flush call (pass_ledger.cpp).
+// Set by pass_ledger::FlushBegin before anything reads it (no initializers: the flush points'
+// FlushScope stays as cheap to make while the ledger is off).
+struct LedgerFlush {
+  uint64_t start_ns;
+  uint32_t kind;
+  bool counted;
+};
 
 // Around a flush point's original call.
 class FlushScope {
@@ -54,6 +69,7 @@ class FlushScope {
   bool Skip() const { return skip_; }
 
  private:
+  void ShadowEnd();
   PPCContext& ctx_;
   uint8_t* base_;
   bool active_;
@@ -63,6 +79,8 @@ class FlushScope {
   uint32_t args_[8] = {};
   uint64_t vertex_dirty_ = 0, pixel_dirty_ = 0;
   uint64_t entry_ns_ = 0;
+  bool ledger_ = false;
+  LedgerFlush ledger_flush_;
 };
 
 // A host packet (ReIGlue 0610: a type-3 NOP whose first word is "FH1N"; `n` words in host order,

@@ -1596,3 +1596,72 @@ modification (#164). The last finished draws use other car shaders in the same s
 losses, both on car paint among the 2,000-4,000 draws of a race's frame, point at the car's
 draws; they do not show whether the GPU hung in the paint draw or in the work recorded for it
 first, which 1100's line says once the player turns on Detailed GPU reset report.
+
+## Pass ledger: what each pass costs on each thread (native renderer R0)
+
+A measurement tool for the native renderer roadmap's first milestone (R0): per pass of the frame,
+the time of the three threads that limit it (the game's render thread, the GPU command decoder
+"GPU Commands" and the GPU recorder "GPU Recorder"; with the command processor not split, the
+decoder's column is the whole command processor), the GPU's time with `fh1_gpu_profile`, the
+draws the game submits per pass (counted where the game makes them, so the count does not change
+with the EDRAM tiles), and with the change-mask counter, per draw, which render state groups and
+recorder stages are unchanged since the previous draw. It ships off: without
+`fh1_pass_cost_csv` the game writes no marks and the GPU plugin's hooks are a null test and a
+branch never taken (ReIGlue 0670; the off path's instructions and timing are in the PR).
+
+How it works: at its D3D flush points (`src/hooks/native_device.cpp`, `src/hooks/pass_ledger.cpp`)
+the render thread writes small host packets into its command stream (ReIGlue 0610's "FH1N"
+NOPs): a class mark when the draws change class (D3D draws, UP draws, clears, the track's model
+lists, the procedural models' lists, a car's lists, other lists) and a segment end after each
+Resolve and before the swap. A segment is labelled by the first presentation pass whose track or
+procedural lists it draws (`p4 #0`: the scene's first segment; the number after `#` counts the
+segments of that pass in the frame), `c<pass> #k` when it only draws cars (cars number their
+passes their own way), `mask #k` inside the sun's shadow mask function, otherwise by the last
+named segment and how many segments after it (`p4 #0 +3`). The plugin reads the marks in stream
+order on both its threads. A list's draws are counted from its packets once per command buffer.
+
+Running it (the benchmark, with the frame cost CSV for the checks):
+
+    forza ... --fh1_pass_cost_csv=pass.csv --fh1_frame_cost_csv=cost.csv
+              [--fh1_pass_cost_every=60] [--fh1_gpu_profile=5 --fh1_gpu_profile_csv=gpu.csv]
+              [--fh1_pass_delta_stats=true]   # the change-mask counter; or FORZA_VK_DELTA_STATS=1
+    tools/pass_cost_report.py pass.csv [--gpu gpu.csv] [--run RUN_DIR] [--windows A-B] [--delta] --check
+
+Reading it: the report prints a table per label in frame order (the render targets of the label's
+first draw as pitch, MSAA and the color and depth formats; segments a frame; the render thread's
+CPU and its time inside the flush points; the decoder's and the recorder's time; IssueDraw's time
+for draws and for resolves; draws submitted, decoded, skipped by a predicate and issued; GPU ms),
+the same per draw class, and with `--delta` the unchanged shares. Its checks: the issued draws and
+resolves of all labels equal the frame cost CSV's draws in every window (exact), the decoder's
+labels add up to its thread clock (5%), and with `--run` (a `scratchpad/cpu-profile/run.sh` run
+folder) each thread against `/proc` (5%; the recorder's busy time plus its time between batches is
+an upper bound, since that time is spinning or asleep). `tools/test_pass_cost_report.py` has
+fixtures that must fail each check.
+
+What to keep in mind:
+- The marks cost the render thread and both GPU threads some time (about 575 marks a frame in the
+  benchmark, three times that read by the decoder in the scene's tiles): compare passes with each
+  other in one run, and per-draw frame times only between runs with the ledger off.
+- The decoder's time per segment is its thread CPU clock, less its CPU outside the ring (polling
+  for the game's next commands: the report's "outside the ring", and in the clock check); spinning
+  inside WAIT_REG_MEM or while it waits for the recorder stays in the segment's total. Its split
+  among draw classes inside a segment follows the time stamp counter while it runs the ring, with
+  those waits left out, so a class's share is an estimate and the segment's total the measured one.
+  The recorder's time is its busy time inside batches. Unsplit, GPU waits inside IssueDraw (the
+  frames in flight) are in the class of the draw that waited.
+- The swap's own work after its call (the present) is the label `swap`, at the start of the next
+  frame on every thread and on the GPU. The frame the ledger starts in is dropped (the game turns
+  its marks on in the middle of a frame). GPU time whose segment had not ended when the profile
+  read it (a resolve read back in the middle of a segment) is named at the next reading, or shown
+  as unlabelled.
+- A command list's draw count is kept per command buffer, its first buffer and size: a list
+  recorded again in place with the same size keeps its old count; nested indirect buffers inside a
+  list are not followed. With `native_render=hybrid` the calls the plugin draws natively are still
+  counted as submitted.
+- A tiled segment's commands run once per tile: its decoder and recorder time and its decoded
+  draws are all the tiles', its submitted draws the game's once.
+- The change-mask counter compares about 3,300 registers at every draw on the decoder and hashes
+  the recorder's stage outputs: do not time with it on.
+- Not measured: the EDRAM surfaces a pass reads before writing them, who reads each resolve, and
+  per-class GPU time (the GPU profile's rows are per label and class, the report shows them per
+  label).

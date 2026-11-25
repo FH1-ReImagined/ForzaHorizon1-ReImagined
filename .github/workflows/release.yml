@@ -320,6 +320,14 @@ jobs:
           g++ -std=c++20 -O0 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -D_GLIBCXX_SANITIZE_VECTOR -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/native_list_registry_test.cpp -o "$RUNNER_TEMP/native-list-registry-test-checked"
           "$RUNNER_TEMP/native-list-registry-test-checked"
       - if: runner.os == 'Linux'
+        name: Native renderer pass ledger (the marks, the labels, the report and its checks)
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/pass_ledger_test.cpp -o "$RUNNER_TEMP/pass-ledger-test"
+          "$RUNNER_TEMP/pass-ledger-test"
+          g++ -std=c++20 -O0 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/pass_ledger_test.cpp -o "$RUNNER_TEMP/pass-ledger-test-checked"
+          "$RUNNER_TEMP/pass-ledger-test-checked"
+          python3 -m unittest discover -s tools -p 'test_pass_cost_report.py' -v
+      - if: runner.os == 'Linux'
         name: CPU drivers without rubber banding
         run: |
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -I forza-recomp/src forza-recomp/tests/ai_catchup_test.cpp -o "$RUNNER_TEMP/ai-catchup-test"

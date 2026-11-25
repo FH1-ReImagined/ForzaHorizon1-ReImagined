@@ -29,6 +29,8 @@
 
 #include "native_device.h"
 
+#include "pass_ledger.h"
+
 #include "../debug/d3d_trace.h"
 #include "../platform/guest_addr.h"
 #include "../platform/guest_memory.h"
@@ -68,6 +70,7 @@ namespace forza::native_device {
 
 std::atomic<bool> g_shadow_mode{false};
 std::atomic<bool> g_hybrid{false};
+std::atomic<uint8_t> g_hooks{0};
 
 }  // namespace forza::native_device
 
@@ -361,6 +364,11 @@ void ShadowMaskBegin(PPCContext& ctx, uint8_t* base) {
       const bool hybrid = mode == "hybrid";
       const bool on = mode == "shadow" || hybrid;
       const bool was_hybrid = g_hybrid.exchange(hybrid);
+      if (on) {
+        g_hooks.fetch_or(kHookShadow, std::memory_order_relaxed);
+      } else {
+        g_hooks.fetch_and(uint8_t(~kHookShadow), std::memory_order_relaxed);
+      }
       if (on != g_shadow_mode.exchange(on) || hybrid != was_hybrid)
         REXLOG_INFO("native_render: {}",
                     hybrid ? "hybrid (the shadow mask's passes are recorded; its blurs are drawn "
@@ -379,7 +387,9 @@ void ShadowMaskBegin(PPCContext& ctx, uint8_t* base) {
                                       });
     rex::cvar::RegisterChangeCallback("native_render",
                                       [apply](std::string_view, std::string_view v) { apply(v); });
+    pass_ledger::ReadSwitch();  // the pass ledger (pass_ledger.cpp), on this thread
   });
+  if (pass_ledger::On()) pass_ledger::SetMask(true);
   if (!Enabled()) return;
   Island& is = CurrentIsland();
   EndIsland(ctx, base);  // one the world pass did not close
@@ -398,7 +408,13 @@ void ShadowMaskBegin(PPCContext& ctx, uint8_t* base) {
 }
 
 FlushScope::FlushScope(Point point, PPCContext& ctx, uint8_t* base)
-    : ctx_(ctx), base_(base), active_(Enabled()), point_(point) {
+    : ctx_(ctx), base_(base), active_(false), point_(point) {
+  const uint8_t hooks = g_hooks.load(std::memory_order_relaxed);
+  if (!hooks) return;
+  // The pass ledger's mark goes before the call's own words (and the records below).
+  ledger_ = (hooks & kHookLedger) != 0;
+  if (ledger_) pass_ledger::FlushBegin(point, ctx, base, ledger_flush_);
+  active_ = (hooks & kHookShadow) != 0;
   if (!active_) return;
   CountCall(point);
   if (t_depth++ != 0) return;  // only the call the game made counts as the flush point
@@ -470,7 +486,12 @@ FlushScope::FlushScope(Point point, PPCContext& ctx, uint8_t* base)
 }
 
 FlushScope::~FlushScope() {
-  if (!active_) return;
+  if (active_) ShadowEnd();
+  // After the call's words and records: a resolve ends the ledger's segment here.
+  if (ledger_) pass_ledger::FlushEnd(ctx_, base_, ledger_flush_);
+}
+
+void FlushScope::ShadowEnd() {
   --t_depth;
   if (point_ == kPointSwap) LogFrames();
   if (!record_) return;
@@ -625,7 +646,7 @@ namespace nd = forza::native_device;
   extern "C" REX_FUNC(__imp__##function);                  \
   extern "C" REX_FUNC(function) {                          \
     FORZA_D3D_TRACE_SCOPE(function);                       \
-    if (!nd::Enabled()) {                                  \
+    if (!nd::Hooked()) {                                   \
       __imp__##function(ctx, base);                        \
       return;                                              \
     }                                                      \
@@ -636,7 +657,7 @@ namespace nd = forza::native_device;
 #define NATIVE_FLUSH_POINT_UNTRACED(point, function)       \
   extern "C" REX_FUNC(__imp__##function);                  \
   extern "C" REX_FUNC(function) {                          \
-    if (!nd::Enabled()) {                                  \
+    if (!nd::Hooked()) {                                   \
       __imp__##function(ctx, base);                        \
       return;                                              \
     }                                                      \
@@ -697,7 +718,7 @@ extern "C" REX_FUNC(sub_82441B80) {
 // the original directly.
 extern "C" REX_FUNC(__imp__sub_824933E0);
 extern "C" REX_FUNC(sub_824933E0) {
-  if (!nd::Enabled()) {
+  if (!nd::Hooked()) {
     __imp__sub_824933E0(ctx, base);
     return;
   }
@@ -706,6 +727,10 @@ extern "C" REX_FUNC(sub_824933E0) {
     nd::MaskResolveScope mask_resolve;
     __imp__sub_824933E0(ctx, base);
   }
+  // The shadow mask's segments end with the world pass's resolve of the mask (pass ledger).
+  if (lr == nd::kWorldPassMaskResolve && forza::pass_ledger::On())
+    forza::pass_ledger::SetMask(false);
+  if (!nd::Enabled()) return;
   if (lr == nd::kWorldPassMaskResolve && nd::CurrentIsland().open && !nd::t_depth) {
     const uint64_t t0 = nd::NowNs();
     nd::EndIsland(ctx, base);

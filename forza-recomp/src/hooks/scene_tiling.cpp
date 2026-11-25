@@ -33,6 +33,7 @@
 
 #include "../debug/list_trace.h"
 #include "native_lists.h"
+#include "pass_ledger.h"
 #include "../platform/guest_addr.h"
 #include "../platform/guest_memory.h"
 #include "../platform/scene_resolution.h"
@@ -286,8 +287,8 @@ extern "C" REX_FUNC(HasRecordedList) {
 // its last argument (r10) picks the recorded lists (TrackDrawLists: presentation, pass, r5,
 // layer, item, r9) over the direct path. For passes 3 and 5 the function does the pass's own
 // work and finds no list; pass 4's are drawn after it.
-extern "C" REX_FUNC(TrackDrawPass) {
-  FORZA_LIST_TRACE_CONTEXT(kTrack, ctx.r4.u32, ctx.r6.u32);
+namespace {
+[[gnu::always_inline]] inline void TrackDrawPassBody(PPCContext& ctx, uint8_t* base) {
   const forza::native_lists::GroupScope native_lists_group(ctx.r4.u32, ctx.r6.u32);
   const uint32_t pass = ctx.r4.u32;
   const uint32_t list_pass = tiling::RecordedListPass(pass);
@@ -315,14 +316,30 @@ extern "C" REX_FUNC(TrackDrawPass) {
   ListsForFewerTiles scope;
   TrackDrawLists(ctx, base);
 }
+// The pass ledger: the track's lists of pass r4, layer r6 (out of line, so that the hook keeps
+// its tail calls while the ledger is off).
+[[gnu::noinline, gnu::cold]] void TrackDrawPassLedger(PPCContext& ctx, uint8_t* base) {
+  const forza::pass_ledger::ClassScope ledger_scope(forza::pass_ledger::kClassTrack, ctx.r4.u32,
+                                                    ctx.r6.u32);
+  TrackDrawPassBody(ctx, base);
+}
+}  // namespace
+
+extern "C" REX_FUNC(TrackDrawPass) {
+  FORZA_LIST_TRACE_CONTEXT(kTrack, ctx.r4.u32, ctx.r6.u32);
+  if (forza::pass_ledger::On()) [[unlikely]] {
+    TrackDrawPassLedger(ctx, base);
+    return;
+  }
+  TrackDrawPassBody(ctx, base);
+}
 
 // proceduralGeometry::CProceduralModels (vtable +164): draws the instances of one scene pass
 // (its ninth argument, r1 + 84) and layer (r9) from each model's recorded lists, skipping
 // models without one; it has no direct path. Passes 3 and 5 are drawn as pass 4.
-extern "C" REX_FUNC(ProceduralDrawPass) {
-  const uint32_t at = ctx.r1.u32 + 84;
-  const uint32_t pass = Load32(base, at);
-  FORZA_LIST_TRACE_CONTEXT(kProcedural, pass, ctx.r9.u32);
+namespace {
+[[gnu::always_inline]] inline void ProceduralDrawPassBody(PPCContext& ctx, uint8_t* base,
+                                                          uint32_t at, uint32_t pass) {
   const forza::native_lists::GroupScope native_lists_group(pass, ctx.r9.u32);
   const uint32_t list_pass = tiling::RecordedListPass(pass);
   if (list_pass == pass) {
@@ -335,6 +352,24 @@ extern "C" REX_FUNC(ProceduralDrawPass) {
     OriginalProceduralDrawPass(ctx, base);
   }
   Store32(base, at, pass);
+}
+[[gnu::noinline, gnu::cold]] void ProceduralDrawPassLedger(PPCContext& ctx, uint8_t* base,
+                                                           uint32_t at, uint32_t pass) {
+  const forza::pass_ledger::ClassScope ledger_scope(forza::pass_ledger::kClassProcedural, pass,
+                                                    ctx.r9.u32);
+  ProceduralDrawPassBody(ctx, base, at, pass);
+}
+}  // namespace
+
+extern "C" REX_FUNC(ProceduralDrawPass) {
+  const uint32_t at = ctx.r1.u32 + 84;
+  const uint32_t pass = Load32(base, at);
+  FORZA_LIST_TRACE_CONTEXT(kProcedural, pass, ctx.r9.u32);
+  if (forza::pass_ledger::On()) [[unlikely]] {
+    ProceduralDrawPassLedger(ctx, base, at, pass);
+    return;
+  }
+  ProceduralDrawPassBody(ctx, base, at, pass);
 }
 
 // The view of pass r4 changed (CTrackPresentation vtable +352): every model's lists of that

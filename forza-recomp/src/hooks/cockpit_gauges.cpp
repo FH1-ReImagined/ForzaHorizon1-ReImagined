@@ -30,6 +30,7 @@
 #include "../debug/list_trace.h"
 #include "native_device.h"
 #include "native_lists.h"
+#include "pass_ledger.h"
 #include "../platform/cockpit_gauges.h"
 #include "../platform/guest_addr.h"
 #include "../platform/guest_memory.h"
@@ -135,8 +136,8 @@ extern "C" REX_FUNC(SetHeadLightAmount) {
 }
 
 // Render thread: r3 = the car's presentation, r6 = the model group.
-extern "C" REX_FUNC(DrawCarModel) {
-  FORZA_LIST_TRACE_CONTEXT(kCar, ctx.r5.u32, ctx.r6.u32);
+namespace {
+[[gnu::always_inline]] inline void DrawCarModelBody(PPCContext& ctx, uint8_t* base) {
   const uint32_t presentation = ctx.r3.u32;
   if (!gauges::IsCockpitGroup(ctx.r6.u32) || !REXCVAR_GET(cockpit_gauges_lit) || !presentation ||
       presentation != local_presentation.load(std::memory_order_relaxed)) {
@@ -146,6 +147,22 @@ extern "C" REX_FUNC(DrawCarModel) {
   drawing_cockpit = true;
   OriginalDrawCarModel(ctx, base);
   drawing_cockpit = false;
+}
+// The pass ledger: a car's models (pass r5), whose lists are the clones (out of line, so that
+// the hook keeps its tail calls while the ledger is off).
+[[gnu::noinline, gnu::cold]] void DrawCarModelLedger(PPCContext& ctx, uint8_t* base) {
+  const forza::pass_ledger::ClassScope ledger_scope(forza::pass_ledger::kClassCar, ctx.r5.u32, 0);
+  DrawCarModelBody(ctx, base);
+}
+}  // namespace
+
+extern "C" REX_FUNC(DrawCarModel) {
+  FORZA_LIST_TRACE_CONTEXT(kCar, ctx.r5.u32, ctx.r6.u32);
+  if (forza::pass_ledger::On()) [[unlikely]] {
+    DrawCarModelLedger(ctx, base);
+    return;
+  }
+  DrawCarModelBody(ctx, base);
 }
 
 // r3 = the shader constant shadow the model is drawn with, r4 = the model.
