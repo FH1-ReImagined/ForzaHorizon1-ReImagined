@@ -345,7 +345,7 @@ def repair_factory_paint(cfg, profile, cancelled=lambda: False, progress=lambda 
             supported = {cid for cid, _, _ in unicorns.CARS}
             candidates = [row for row in db.execute(
                 "SELECT Id, CarId FROM Career_Garage WHERE DefaultManufacturerColorIndex=0 "
-                "AND LiveryFileName='' AND OriginalOwner='ReImagined' AND NumOwners=1 AND Flags=73")
+                "AND LiveryFileName='' AND OriginalOwner='ReImagined' AND NumOwners=1")
                 if row['CarId'] in supported]
             if not candidates:
                 return PaintRepairResult(())
