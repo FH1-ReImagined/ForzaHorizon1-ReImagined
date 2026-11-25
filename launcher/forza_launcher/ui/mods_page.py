@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QFileDialog, QHBoxLayout, QHea
                                QMessageBox, QProgressBar, QPushButton, QTableWidget,
                                QTableWidgetItem, QVBoxLayout, QWidget)
 
-from .. import GITHUB_URL, fm4cars, mods
+from .. import GITHUB_URL, builder, fm4cars, mods
 from .pages import open_folder, scroll_page
 from .widgets import card, label
 from . import theme
@@ -564,6 +564,8 @@ class ModsPage(FolderListPage):
         self.fm4_progress.hide()
         self.refresh()
         self._fm4_state()
+        if ok and builder.stale_build(self.cfg.data_home(), self.cfg["tu_package"]):
+            message = f"{message}\n{builder.STALE_IMPORT_NOTE}".strip()
         self.fm4_message.setText(message)
 
     def _fm4_remove(self):
