@@ -1642,10 +1642,22 @@ What to keep in mind:
 - The marks cost the render thread and both GPU threads some time (about 575 marks a frame in the
   benchmark, three times that read by the decoder in the scene's tiles): compare passes with each
   other in one run, and per-draw frame times only between runs with the ledger off.
-- The decoder's time per segment is its thread CPU clock; its split among draw classes inside a
-  segment follows the time stamp counter while it runs the ring (WAIT_REG_MEM left out), so a
-  class's share is an estimate and the segment's total is exact. The recorder's time is its busy
-  time inside batches.
+- The decoder's time per segment is its thread CPU clock, less its CPU outside the ring (polling
+  for the game's next commands: the report's "outside the ring", and in the clock check); spinning
+  inside WAIT_REG_MEM or while it waits for the recorder stays in the segment's total. Its split
+  among draw classes inside a segment follows the time stamp counter while it runs the ring, with
+  those waits left out, so a class's share is an estimate and the segment's total the measured one.
+  The recorder's time is its busy time inside batches. Unsplit, GPU waits inside IssueDraw (the
+  frames in flight) are in the class of the draw that waited.
+- The swap's own work after its call (the present) is the label `swap`, at the start of the next
+  frame on every thread and on the GPU. The frame the ledger starts in is dropped (the game turns
+  its marks on in the middle of a frame). GPU time whose segment had not ended when the profile
+  read it (a resolve read back in the middle of a segment) is named at the next reading, or shown
+  as unlabelled.
+- A command list's draw count is kept per command buffer, its first buffer and size: a list
+  recorded again in place with the same size keeps its old count; nested indirect buffers inside a
+  list are not followed. With `native_render=hybrid` the calls the plugin draws natively are still
+  counted as submitted.
 - A tiled segment's commands run once per tile: its decoder and recorder time and its decoded
   draws are all the tiles', its submitted draws the game's once.
 - The change-mask counter compares about 3,300 registers at every draw on the decoder and hashes

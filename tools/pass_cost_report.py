@@ -41,8 +41,8 @@ SUMS = ["segments", "rdr_cpu_ms", "other_device", "rdr_flush_ms", "rdr_flush_cal
         "runs", "dec_ms", "dec_draws", "dec_skipped", "rec_ms", "rec_draws", "rec_issue_ms",
         "rec_copies", "rec_copy_ms", "rec_empty", "delta_draws", "stage_draws"] + \
        ["same_" + g for g in GROUPS] + ["stage_same_" + s for s in STAGES]
-FRAME = ["frames", "frame_draws", "dec_thread_ms", "rec_thread_ms", "rec_idle_ms", "marks",
-         "stale_marks"]
+FRAME = ["frames", "frame_draws", "dec_thread_ms", "rec_thread_ms", "rec_idle_ms", "dec_idle_ms",
+         "marks", "stale_marks"]
 TOLERANCE = 0.05
 
 
@@ -71,7 +71,7 @@ def read_ledger(path, windows=None, epochs=None):
             cls = r["class"]
             if cls == "frame":
                 for k in FRAME:
-                    frame[k] += num(r[k])
+                    frame[k] += num(r.get(k))
                 per_window[w]["frame_draws"] += num(r["frame_draws"])
                 per_window[w]["dec_thread_ms"] += num(r["dec_thread_ms"])
                 continue
@@ -81,7 +81,7 @@ def read_ledger(path, windows=None, epochs=None):
             if cls == "segment":
                 for k in ("segments", "rdr_cpu_ms", "other_device"):
                     e["sums"][k] += num(r[k])
-                e["sums"]["order_x_frames"] += num(r["order"]) * num(r["frames"])
+                e["sums"]["order_x_frames"] += num(r.get("order")) * num(r["frames"])
                 e["sums"]["order_frames"] += num(r["frames"])
                 if not e["rt"] and r["rt_surface"] != "00000000":
                     e["rt"] = rt_name(r["rt_surface"], r["rt_color"], r["rt_depth"])
@@ -93,7 +93,6 @@ def read_ledger(path, windows=None, epochs=None):
                 c[k] += num(r[k])
                 e["sums"][k] += num(r[k])
             per_window[w]["issued"] += num(r["rec_draws"]) + num(r["rec_copies"])
-            per_window[w]["dec_ms"] += num(r["dec_ms"])
     # In the order of the frame (a label's mean place among the frame's labels).
     ordered = sorted(labels.items(), key=lambda kv: kv[1]["sums"]["order_x_frames"] /
                      max(kv[1]["sums"]["order_frames"], 1))
@@ -108,8 +107,9 @@ def rt_name(surface, color, depth):
                                      d & 0xFFF)
 
 
-def read_gpu(path, epochs=None, windows=None):
-    """The GPU profile's pass rows: {label name: {kind: ms a frame}}, averaged over its windows."""
+def read_gpu(path, windows=None):
+    """The GPU profile's pass rows: {label name: {kind: ms a frame}}, averaged over its windows
+    (the GPU profile's own, every fh1_gpu_profile seconds: --gpu-windows picks them)."""
     sums = collections.defaultdict(collections.Counter)
     seen = set()
     frames = 0.0
@@ -152,6 +152,8 @@ def read_proc(run):
         name = rb[0]
         if name.startswith("XThread"):
             name = "g%02d" % guest.index(int(tid))
+        else:
+            name = re.sub(r"\s*\(.*$|\s*[0-9]+$", "", name)  # "GPU Commands (F8..." as cut by comm
         threads[name] = threads.get(name, 0.0) + (rb[1] - ra[1]) / 1e6
     return threads, frames, (a["t"], b["t"])
 
@@ -164,29 +166,34 @@ def checks(labels, frame, per_window, proc=None, render="g11", split=True):
                 "issued draws and resolves of all labels = the frame cost's draws in %d of %d "
                 "windows%s" % (len(per_window) - len(bad), len(per_window),
                                (" (first off: window %d)" % min(bad)) if bad else "")))
-    dec = sum(e["sums"]["dec_ms"] for e in labels.values())
+    # The decoder's labels and its time outside the ring (waiting for the game) against its clock.
+    dec = sum(e["sums"]["dec_ms"] for e in labels.values()) + frame["dec_idle_ms"]
     clock = frame["dec_thread_ms"]
     ok = clock > 0 and abs(dec - clock) <= TOLERANCE * clock
     out.append(("decoder sums to its clock", ok,
-                "decoder ms over the labels %.1f, its thread clock %.1f" % (dec, clock)))
+                "decoder ms over the labels and outside the ring %.1f, its thread clock %.1f" % (
+                    dec, clock)))
     if proc:
         threads, frames, _ = proc
         fr = frame["frames"]
         if fr and frames:
             pairs = [("GPU Commands", dec)]
             if split:
-                pairs.append(("GPU Recorder", sum(e["sums"]["rec_ms"] for e in labels.values()) +
-                              frame["rec_idle_ms"]))
+                # The recorder's thread clock (its busy time inside batches is below it: the rest
+                # is its spinning between batches).
+                pairs.append(("GPU Recorder", frame["rec_thread_ms"]))
             pairs.append((render, sum(e["sums"]["rdr_cpu_ms"] for e in labels.values())))
             for name, ledger in pairs:
                 mine = ledger / fr
                 theirs = threads.get(name, 0.0) / frames
                 ok = theirs > 0 and abs(mine - theirs) <= TOLERANCE * theirs
-                if name == "GPU Recorder":
-                    # Its time between batches is spinning (CPU) or asleep (not): an upper bound.
-                    ok = theirs > 0 and mine >= theirs * (1 - TOLERANCE)
                 out.append(("%s against /proc" % name, ok,
                             "ledger %.3f ms a frame, /proc %.3f" % (mine, theirs)))
+    if split and frame["rec_thread_ms"]:
+        busy = sum(e["sums"]["rec_ms"] for e in labels.values())
+        out.append(("recorder busy within its clock", busy <= frame["rec_thread_ms"] * (1 + TOLERANCE),
+                    "busy inside batches %.1f ms, its thread clock %.1f ms (%.0f%%)" % (
+                        busy, frame["rec_thread_ms"], 100 * busy / frame["rec_thread_ms"])))
     return out
 
 
@@ -197,9 +204,12 @@ def fmt(v, digits=3):
 def report(labels, frame, per_window, gpu, delta, proc, split, render):
     fr = frame["frames"] or 1
     lines = []
-    lines.append("%d frames in %d windows (%s); marks %.0f a frame (%.0f read again)" % (
-        frame["frames"], len(per_window), "split" if split else "one command processor thread",
-        frame["marks"] / fr, frame["stale_marks"] / fr))
+    lines.append("%d frames in %d windows (%s); marks %.0f a frame (%.0f read again); the decoder "
+                 "outside the ring %.3f ms, the recorder between batches %.3f ms a frame" % (
+                     frame["frames"], len(per_window),
+                     "split" if split else "one command processor thread",
+                     frame["marks"] / fr, frame["stale_marks"] / fr, frame["dec_idle_ms"] / fr,
+                     frame["rec_idle_ms"] / fr))
     lines.append("")
     lines.append("ms a frame (draws a frame). rdr = render thread (CPU, in flush points); dec = "
                  "decoder%s; rec = recorder busy; issue/copy = IssueDraw's draws/resolves; "
@@ -252,10 +262,15 @@ def report(labels, frame, per_window, gpu, delta, proc, split, render):
         head = "| label | " + " | ".join(kinds) + " |"
         lines.append(head)
         lines.append("|" + " --- |" * (len(kinds) + 1))
-        for name in [e["name"] for e in labels.values()]:
+        names = [e["name"] for e in labels.values()]
+        for name in names + [n for n in ("unlabelled", "?") if n in gpu and n not in names]:
             if name not in gpu:
                 continue
             lines.append("| %s | %s |" % (name, " | ".join(fmt(gpu[name].get(k, 0)) for k in kinds)))
+        other = sum(sum(v.values()) for n, v in gpu.items() if n not in names)
+        lines.append("")
+        lines.append("GPU ms a frame not in the labels above (other windows' labels, unlabelled): "
+                     "%.3f" % other)
     if delta:
         lines.append("")
         lines.append("Change-mask counter: share of draws with the group or stage unchanged since "
@@ -303,6 +318,7 @@ def main(argv=None):
     p.add_argument("--run")
     p.add_argument("--render", default="g11", help="the render thread's name in /proc (g11)")
     p.add_argument("--windows")
+    p.add_argument("--gpu-windows", help="the GPU profile CSV's windows, A-B")
     p.add_argument("--delta", action="store_true")
     p.add_argument("--check", action="store_true")
     p.add_argument("--json")
@@ -315,7 +331,13 @@ def main(argv=None):
         windows = (int(m.group(1)), int(m.group(2)))
     proc = read_proc(a.run) if a.run else None
     labels, frame, per_window, split = read_ledger(a.csv, windows, proc[2] if proc else None)
-    gpu = read_gpu(a.gpu, windows=None) if a.gpu else {}
+    gpu_windows = None
+    if a.gpu_windows:
+        m = re.match(r"^(\d+)-(\d+)$", a.gpu_windows)
+        if not m:
+            p.error("--gpu-windows A-B")
+        gpu_windows = (int(m.group(1)), int(m.group(2)))
+    gpu = read_gpu(a.gpu, gpu_windows) if a.gpu else {}
     text, results = report(labels, frame, per_window, gpu, a.delta, proc, split, a.render)
     sys.stdout.write(text)
     if a.json:

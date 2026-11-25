@@ -35,6 +35,12 @@
 #include <vector>
 
 #if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <intrin.h>
 #include <windows.h>
 #else
@@ -97,7 +103,13 @@ uint64_t SteadyNs() {
 uint64_t ThreadCpuNs() {
 #if defined(_WIN32)
 #if defined(_M_X64) || defined(__x86_64__)
+  // The thread's cycles at the time stamp counter's rate: only where it is invariant.
   static const double ns_per_cycle = [] {
+    int regs[4] = {};
+    __cpuid(regs, int(0x80000000u));
+    if (uint32_t(regs[0]) < 0x80000007u) return 0.0;
+    __cpuid(regs, int(0x80000007u));
+    if (!((uint32_t(regs[3]) >> 8) & 1)) return 0.0;
     LARGE_INTEGER frequency, first, last;
     if (!QueryPerformanceFrequency(&frequency) || !QueryPerformanceCounter(&first)) return 0.0;
     const uint64_t tsc_first = __rdtsc();
@@ -284,9 +296,11 @@ void FlushBegin(nd::Point point, PPCContext& ctx, uint8_t* base, nd::LedgerFlush
   f.kind = uint32_t(kind);
   f.counted = true;
   if (kind == Flush::kSwap) {
-    // Everything after the last resolve, then the frame's labels start again.
+    // Everything after the last resolve, then the frame's labels start again (and a mask scope
+    // the world pass did not end ends here).
     SegmentEnd(ctx, base);
     r.labeler.Frame();
+    t_mask = false;
     r.force = true;
     LogFrames();
     f.start_ns = SteadyNs();
@@ -324,11 +338,13 @@ void FlushBegin(nd::Point point, PPCContext& ctx, uint8_t* base, nd::LedgerFlush
 void FlushEnd(PPCContext& ctx, uint8_t* base, nd::LedgerFlush& f) {
   if (!t_render_thread) return;
   Render& r = R();
+  if (f.counted) {
+    r.interval.flush_ns += SteadyNs() - f.start_ns;
+    ++r.interval.calls;
+    // Still at the call's depth: a flush point D3D's make-space call reaches is its own.
+    if (Flush(f.kind) == Flush::kResolve) SegmentEnd(ctx, base);
+  }
   --r.depth;
-  if (!f.counted) return;
-  r.interval.flush_ns += SteadyNs() - f.start_ns;
-  ++r.interval.calls;
-  if (Flush(f.kind) == Flush::kResolve) SegmentEnd(ctx, base);
 }
 
 }  // namespace forza::pass_ledger

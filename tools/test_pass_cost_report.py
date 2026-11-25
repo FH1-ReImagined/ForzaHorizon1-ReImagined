@@ -18,7 +18,7 @@ STAGES = pass_cost_report.STAGES
 HEADER = ("window,epoch,frames,split,label,name,class,layer,segments,order,rdr_cpu_ms,other_device,"
           "rdr_flush_ms,rdr_flush_calls,submitted,runs,dec_ms,dec_draws,dec_skipped,rec_ms,"
           "rec_draws,rec_issue_ms,rec_copies,rec_copy_ms,rec_empty,rt_surface,rt_color,rt_depth,"
-          "frame_draws,dec_thread_ms,rec_thread_ms,rec_idle_ms,marks,stale_marks,delta_draws," +
+          "frame_draws,dec_thread_ms,rec_thread_ms,rec_idle_ms,dec_idle_ms,marks,stale_marks,delta_draws," +
           ",".join("same_" + g for g in GROUPS) + ",stage_draws," +
           ",".join("stage_same_" + s for s in STAGES)).split(",")
 
@@ -55,8 +55,8 @@ def ledger(issued_off=0, decoder_off=0.0):
                          rec_copies=60, rec_copy_ms=3.0))
         lines.append(row(w, 60, "00000000", "frame", "frame",
                          frame_draws=9000 + 1800 + 180 + 120 + 60 + issued_off,
-                         dec_thread_ms=126.0 + decoder_off, rec_thread_ms=240.0,
-                         rec_idle_ms=30.0, marks=600, stale_marks=300))
+                         dec_thread_ms=132.0 + decoder_off, rec_thread_ms=234.0,
+                         rec_idle_ms=30.0, dec_idle_ms=6.0, marks=600, stale_marks=300))
     return "\n".join(lines) + "\n"
 
 
@@ -84,6 +84,7 @@ class ReportTest(unittest.TestCase):
         code, text = run([path, "--check", "--delta", "--json", js])
         self.assertEqual(code, 0, text)
         self.assertIn("120 frames in 2 windows (split)", text)
+        self.assertIn("the decoder outside the ring 0.100 ms", text)
         # The scene: 3 segments, 1 ms render thread, 2 ms decoder, 3.67 ms recorder, a frame.
         self.assertIn("| p4 #0 | 640 4x c3@0 d1@1024 | 3.0 | 1.000 | - | 2.000 | 3.667 | 3.000 | "
                       "0.100 | 110 | 180 | - | 183 | - |", text)
@@ -113,7 +114,7 @@ class ReportTest(unittest.TestCase):
         path = self.write("pass.csv", ledger())
         run_dir = os.path.join(self.dir.name, "run")
         os.makedirs(run_dir)
-        # 120 frames between the snapshots; /proc: decoder 2.1 ms a frame, recorder 3.9, render
+        # 120 frames between the snapshots; /proc: decoder 2.2 ms a frame, recorder 3.9, render
         # thread (the guest thread created twelfth) 1.1.
         def snap(label, t, dec, rec, rdr):
             th = {"100": ["GPU Commands", dec], "101": ["GPU Recorder", rec]}
@@ -122,7 +123,7 @@ class ReportTest(unittest.TestCase):
             return json.dumps({"t": t, "label": label, "th": th})
         with open(os.path.join(run_dir, "snaps.jsonl"), "w") as f:
             f.write(snap("start", 1000.0, 0, 0, 0) + "\n")
-            f.write(snap("end", 1002.0, int(2.1e6 * 120), int(3.9e6 * 120), int(1.1e6 * 120)) + "\n")
+            f.write(snap("end", 1002.0, int(2.2e6 * 120), int(3.9e6 * 120), int(1.1e6 * 120)) + "\n")
         with open(os.path.join(run_dir, "cost.csv"), "w") as f:
             f.write("epoch,ms\n")
             for i in range(121):
