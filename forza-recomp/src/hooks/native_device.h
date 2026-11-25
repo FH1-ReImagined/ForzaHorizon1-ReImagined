@@ -45,7 +45,8 @@ extern std::atomic<bool> g_shadow_mode;
 inline bool Enabled() { return g_shadow_mode.load(std::memory_order_relaxed); }
 // What the flush points do besides their call: the shadow mode's records, the pass ledger's
 // marks (pass_ledger.h). Zero: each flush point is one load and one branch.
-constexpr uint8_t kHookShadow = 1, kHookLedger = 2;
+// kHookSkipLists: the test switch FORZA_TEST_SKIP_LIST_GROUPS (pass_ledger.cpp).
+constexpr uint8_t kHookShadow = 1, kHookLedger = 2, kHookSkipLists = 4;
 extern std::atomic<uint8_t> g_hooks;
 inline bool Hooked() { return g_hooks.load(std::memory_order_relaxed) != 0; }
 

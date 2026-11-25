@@ -10,16 +10,25 @@
 // argument ("c2 #0": cars number their passes otherwise); "mask #k" inside the sun's shadow mask
 // function; otherwise the last named segment's label and how many segments after it this one is
 // ("p4 #0 +3": the third after the scene's first).
+//
+// The deletion switch (test only; docs/rendering.md "Pass deletion"): with FORZA_TEST_SKIP_PASS
+// set, every class mark also carries the segment's pass id so far (Labeler::Provisional, a tenth
+// word) and a class mark is written whenever it changes, so that the plugin knows a draw's pass
+// when it records it; FORZA_TEST_SKIP_LIST_GROUPS names the list groups (pass * 3 + layer) whose
+// command lists the render thread does not run (SkipGroups).
 #pragma once
 
 #include <cstdint>
 #include <cstring>
+#include <utility>
+#include <vector>
 
 namespace forza::pass_ledger {
 
 constexpr uint32_t kMagic = 0x4648314Eu;  // "FH1N"
 constexpr uint32_t kOpPassClass = 0x30, kOpPassEnd = 0x31;
 constexpr uint32_t kClassWords = 9, kEndWords = 11;
+constexpr uint32_t kClassWordsWithPass = 10;  // FORZA_TEST_SKIP_PASS: [9] the pass id so far
 
 enum Class : uint32_t {
   kClassD3D = 0,
@@ -120,6 +129,11 @@ class Labeler {
     }
     mask_ = false;
     pass_ = car_pass_ = -1;
+    if (predict_) {
+      frame_.emplace_back(last_, label);
+      last_ = label;
+      predicted_ = Successor(label);
+    }
     return label;
   }
   // The frame ends (after the swap's segment end).
@@ -129,15 +143,63 @@ class Labeler {
     mask_count_ = 0;
     std::memset(pass_count_, 0, sizeof(pass_count_));
     std::memset(car_count_, 0, sizeof(car_count_));
+    if (predict_) {
+      // The frame the switch was read in is a part of one (the game reads it at the shadow
+      // mask): no prediction from it.
+      if (partial_) {
+        partial_ = false;
+        previous_.clear();
+      } else {
+        previous_.swap(frame_);
+      }
+      frame_.clear();
+      last_ = kFrameStart;
+      predicted_ = Successor(kFrameStart);
+    }
+  }
+
+  // The deletion switch: the label the segment in progress has so far, for the draws the plugin
+  // records before the segment ends. What the segment has drawn decides it as End() would, except
+  // that before a shadow mask or a presentation pass has been seen (the frame's first draws, a
+  // clear before a pass's lists, a car drawn before the track's lists), the label the segment
+  // after the same label had in the previous frame stands for it. End() can still differ (the
+  // frame's structure changed): the plugin counts the draws whose pass id was not their
+  // segment's. Off (without SetPrediction), only End() is used.
+  // `mid_frame`: switched on inside a frame, whose labels predict nothing.
+  void SetPrediction(bool on, bool mid_frame = true) {
+    predict_ = on;
+    partial_ = mid_frame;
+  }
+  uint32_t Provisional() const {
+    if (mask_) return Label(kKindShadowMask, 0, mask_count_, 0);
+    if (pass_ >= 0) return Label(kKindPresentation, uint32_t(pass_), pass_count_[pass_], 0);
+    if (car_pass_ >= 0) {
+      if (predicted_ && (predicted_ >> 24) == kKindPresentation) return predicted_;
+      return Label(kKindCars, uint32_t(car_pass_), car_count_[car_pass_], 0);
+    }
+    if (predicted_) return predicted_;
+    return base_ | (after_ + 1 < 0xFF ? after_ + 1 : 0xFF);
   }
 
  private:
+  static constexpr uint32_t kFrameStart = 0;  // not a label (kinds start at 1)
+  uint32_t Successor(uint32_t label) const {
+    for (const auto& p : previous_) {
+      if (p.first == label) return p.second;
+    }
+    return 0;
+  }
   bool mask_ = false;
   int pass_ = -1, car_pass_ = -1;
   uint32_t base_ = Label(kKindStart, 0, 0, 0);
   uint32_t after_ = 0;
   uint32_t mask_count_ = 0;
   uint32_t pass_count_[8] = {}, car_count_[8] = {};
+  // The prediction: this frame's (label, the next label) pairs so far, the previous frame's, the
+  // last label ended and the label predicted for the segment in progress (0: none).
+  bool predict_ = false, partial_ = false;
+  std::vector<std::pair<uint32_t, uint32_t>> frame_, previous_;
+  uint32_t last_ = kFrameStart, predicted_ = 0;
 };
 
 // The numbers of the flush calls of one class since the previous mark.
@@ -148,12 +210,18 @@ struct Interval {
 
 inline uint32_t Clamp32(uint64_t v) { return v > 0xFFFFFFFFull ? 0xFFFFFFFFu : uint32_t(v); }
 
-// kOpPassClass (host order): the class changes from `old_class` to `new_class`.
+// kOpPassClass (host order): the class changes from `old_class` to `new_class`. With the
+// deletion switch, `out` has kClassWordsWithPass words and [9] is the pass id so far.
 inline void ClassMark(uint32_t seq, uint32_t new_class, uint32_t old_class, const Interval& i,
                       uint32_t* out) {
   const uint32_t w[kClassWords] = {kMagic,      kOpPassClass, seq,     new_class, old_class,
                                    Clamp32(i.flush_ns), i.calls, i.draws, i.runs};
   std::memcpy(out, w, sizeof(w));
+}
+inline void ClassMarkWithPass(uint32_t seq, uint32_t new_class, uint32_t old_class,
+                              const Interval& i, uint32_t pass_id, uint32_t* out) {
+  ClassMark(seq, new_class, old_class, i, out);
+  out[kClassWords] = pass_id;
 }
 // kOpPassEnd (host order).
 inline void EndMark(uint32_t seq, uint32_t label, uint64_t cpu_ns, uint32_t cls, const Interval& i,
@@ -162,6 +230,30 @@ inline void EndMark(uint32_t seq, uint32_t label, uint64_t cpu_ns, uint32_t cls,
                                  cls,     Clamp32(i.flush_ns), i.calls, i.draws, i.runs,
                                  other_device};
   std::memcpy(out, w, sizeof(w));
+}
+
+// FORZA_TEST_SKIP_LIST_GROUPS: list groups (pass * 3 + layer, 0-20) separated by commas, as a
+// mask (bit g: group g). `bad` counts the parts that are not a group.
+inline uint32_t ParseSkipGroups(const char* text, uint32_t* bad) {
+  uint32_t mask = 0, wrong = 0;
+  while (text && *text) {
+    while (*text == ' ' || *text == ',') ++text;
+    if (!*text) break;
+    uint32_t value = 0, digits = 0;
+    while (*text >= '0' && *text <= '9' && digits < 4) {
+      value = value * 10 + uint32_t(*text++ - '0');
+      ++digits;
+    }
+    const bool end = !*text || *text == ',' || *text == ' ';
+    if (digits && end && value < 21) {
+      mask |= 1u << value;
+    } else {
+      ++wrong;
+      while (*text && *text != ',') ++text;
+    }
+  }
+  if (bad) *bad = wrong;
+  return mask;
 }
 
 }  // namespace forza::pass_ledger

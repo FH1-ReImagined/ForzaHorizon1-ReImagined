@@ -1665,3 +1665,61 @@ What to keep in mind:
 - Not measured: the EDRAM surfaces a pass reads before writing them, who reads each resolve, and
   per-class GPU time (the GPU profile's rows are per label and class, the report shows them per
   label).
+
+### Pass deletion: what the frame costs without a pass (test only)
+
+Two environment variables, for measuring only (like `FORZA_TEST_NO_STENCIL_EXPORT`: no setting,
+no launcher option; the frame is wrong by design while either is set, and the log says so every
+10 seconds). They answer how much of each thread and of the GPU a pass takes, by taking it out.
+
+`FORZA_TEST_SKIP_PASS=<kinds>[,copies]` (ReIGlue 0680; needs the pass ledger on, since its marks
+name the passes): the GPU recorder returns at the top of IssueDraw for the draws of those passes.
+The render thread and the decoder still do all their work, so the change is the recorder's (or,
+unsplit, the command processor's per-draw part) and the GPU's draws. Without `copies` a skipped
+draw still binds its render targets as the draw would (the EDRAM ownership transfers into and out
+of the pass's surfaces stay) and the pass's resolves run; with `copies` neither does: the pass's
+EDRAM share on the GPU goes too, except that a skipped resolve still clears what it clears and
+marks its destination resolved (the passes that remain draw on the same cleared surfaces and load
+the same textures again, with old contents). The kinds, by the ledger's labels on the track:
+
+| kind | labels | what |
+| --- | --- | --- |
+| `shadow` | `p6 #k` | the sun's shadow maps (list groups 18-20), with the frame's start before them |
+| `prepass` | `p0 #k` | the depth pre-pass |
+| `cube` | `p1 #k` | the reflection cube's six faces |
+| `scene` | `p4 #k`, `+1` to `+3` | the 3D scene: its tiles and the tiles' resolves |
+| `tiles` | the same, read again | the scene's second and third EDRAM tiles only |
+| `post` | `p4 #k +4` on | post-processing, bloom, the minimap, the HUD |
+| `mask` | `mask #k`, `+j` | the sun's shadow mask |
+| `cars` | `c<pass> #k` | the cars-only segments |
+| `start` | `start`, `+j` | the frame's segments before its first named one |
+| `none` | | nothing: the baseline run (the game marks the pass ids as in the others) |
+| `pN`, `pN+A`, `pN+A-B`, `cN` | | a presentation (cars-only) pass N: its named segments, or those A to B after them |
+
+A segment's label is only known at its end (it is the first pass whose lists it draws), so with
+the switch set the game's class marks carry each draw's pass id so far, and before the segment
+has drawn a list the label the segment after the same one had in the previous frame stands for it
+(the frame's first draws, a clear or a car before a pass's lists). The recorder counts the draws
+whose pass id was not their segment's final label; `tools/pass_cost_report.py --check` fails on
+any (`deletion switch skipped only its passes`), and its table has the skipped draws and resolves
+per label (`del`). `tiles` and `post` assume the default three-tile scene (`scene_msaa=game`); the
+skipped draws do not follow the HUD layer's switch, so `post` is for runs without an upscaler or
+an independent scene size. A skipped draw can change what other passes cost (deleting the depth
+pre-pass makes the scene shade more; a skipped resolve leaves its texture and its clear undone):
+compare the other passes' zones between runs before reading a pass's number, against a baseline
+with `FORZA_TEST_SKIP_PASS=none` (the pass ids cost the marks a little). Also lost with a skipped
+draw: its occlusion query samples (the game may cull other things the next frame), its memexport
+writes, and its texture and memory uploads (they move into the next pass that uses the same
+textures). D3D12 binds nothing for a skipped draw; in VR the right eye's replay reads the marks
+again, so `tiles` skips its scene; the native renderer's own shadow mask draws are not skipped.
+
+`FORZA_TEST_SKIP_LIST_GROUPS=18,19,20` (the game): the RunCommandBuffer hook (`sub_824469B0`)
+does not run the track's and procedural models' command lists of those list groups (pass x 3 +
+layer; 18-20 are the shadow maps' three layers): nothing of them is made on the render thread, so
+the decoder, the recorder and the GPU never see them either. With the ledger on, the segments keep
+their labels. The difference between this and `FORZA_TEST_SKIP_PASS` for the same lists is the
+render thread's and the decoder's part. With `native_lists=shadow` the skipped lists are still
+registered with the plugin before the hook returns.
+
+    FORZA_TEST_SKIP_PASS=shadow,copies forza ... --fh1_pass_cost_csv=pass.csv
+    FORZA_TEST_SKIP_LIST_GROUPS=18,19,20 forza ... --fh1_pass_cost_csv=pass.csv

@@ -327,7 +327,7 @@ namespace {
 
 extern "C" REX_FUNC(TrackDrawPass) {
   FORZA_LIST_TRACE_CONTEXT(kTrack, ctx.r4.u32, ctx.r6.u32);
-  if (forza::pass_ledger::On()) [[unlikely]] {
+  if (forza::pass_ledger::Scoped()) [[unlikely]] {
     TrackDrawPassLedger(ctx, base);
     return;
   }
@@ -365,7 +365,7 @@ extern "C" REX_FUNC(ProceduralDrawPass) {
   const uint32_t at = ctx.r1.u32 + 84;
   const uint32_t pass = Load32(base, at);
   FORZA_LIST_TRACE_CONTEXT(kProcedural, pass, ctx.r9.u32);
-  if (forza::pass_ledger::On()) [[unlikely]] {
+  if (forza::pass_ledger::Scoped()) [[unlikely]] {
     ProceduralDrawPassLedger(ctx, base, at, pass);
     return;
   }

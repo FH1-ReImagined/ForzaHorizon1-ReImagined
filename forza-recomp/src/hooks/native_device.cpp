@@ -411,6 +411,16 @@ FlushScope::FlushScope(Point point, PPCContext& ctx, uint8_t* base)
     : ctx_(ctx), base_(base), active_(false), point_(point) {
   const uint8_t hooks = g_hooks.load(std::memory_order_relaxed);
   if (!hooks) return;
+  if (hooks & kHookSkipLists) [[unlikely]] {
+    // The test switch FORZA_TEST_SKIP_LIST_GROUPS: a list of a skipped group is not run (the
+    // RunCommandBuffer hook returns), so nothing of it is marked, recorded or counted.
+    if (point == kPointRunCommandBuffer && pass_ledger::CurrentScope().skip) {
+      skip_ = true;
+      pass_ledger::SkippedList();
+      return;
+    }
+    if (point == kPointSwap) pass_ledger::TestSwitchSwap();
+  }
   // The pass ledger's mark goes before the call's own words (and the records below).
   ledger_ = (hooks & kHookLedger) != 0;
   if (ledger_) pass_ledger::FlushBegin(point, ctx, base, ledger_flush_);
