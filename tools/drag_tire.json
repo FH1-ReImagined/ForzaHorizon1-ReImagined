@@ -863,7 +863,7 @@
   "Description": {
    "ids": "IDS_Description_DragTire",
    "key": 63249,
-   "text": "Install drag racing tires for maximum straight-line grip off the line. Not suited to corners or loose surfaces.",
+   "text": "Install drag racing tires for maximum grip off the line. Less grip under braking and slightly less in corners.",
    "sec4": 8744
   }
  },

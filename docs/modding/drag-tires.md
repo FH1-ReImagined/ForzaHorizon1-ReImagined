@@ -26,8 +26,8 @@ Race's, but its lateral friction curves peak about 6% lower (1.21 against 1.29, 
 1.03), at a larger slip angle, and fall further past the peak; it also loses more grip when cold
 or overheated. That is what the game showed on a BRZ: grip −0.06 against its race tires. Nothing in
 the database sets a compound's grip per surface, so nothing here says how it does on dirt or grass.
-The game's own description of the tire (warshack4874's text, below) says it is not suited to
-corners or loose surfaces.
+The tire's description in the game (below) says the same: more grip off the line, less under
+braking and slightly less in corners.
 
 - [For players](#for-players)
 - [What the mod is made of](#what-the-mod-is-made-of)
