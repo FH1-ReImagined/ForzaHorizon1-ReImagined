@@ -1,0 +1,10 @@
+# The settings of the release checks' own game runs (#846). tools/prerelease.sh (boot, server)
+# and tools/render_test.py copy this file next to the executable of each run's own copy of the
+# build, in place of the build folder's forza.toml: the launcher writes the player's settings
+# there, and the SDK reads only that file. Whatever is not set here is the build's default; each
+# check's own options are on its command line, which outranks this file.
+
+# Offline. The server check names its local server in FORZA_SERVER, which outranks this.
+live_server = ""
+# The checks' games do not show up on the Discord of whoever runs them.
+discord_presence = false

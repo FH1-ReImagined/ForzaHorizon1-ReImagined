@@ -175,6 +175,13 @@ tools/run_forza.sh 120        # a two-minute test run; logs in ${XDG_RUNTIME_DIR
   every player's best lap on each event with its ghost (`scoreboards.json`, `ghosts/`):
   Race Central's LEADERBOARDS show them, and X RIVALS on an event's ticket races you
   against another player's ghost for a bounty.
+  Scores and notifications are also written to a journal beside those files
+  (`scoreboards.journal`, `notifications.journal`) before the game is told they are kept, so
+  closing the game, a crash or a power cut loses none; the whole files are rewritten about
+  once a minute and at the stop (`server.log` says "written whole at the stop"). Back up the
+  whole folder, journals included. The server refuses to start, and says why in `server.log`,
+  when `scoreboards.json` or `notifications.json` cannot be read and there is no usable `.bak`
+  beside it: fix the file's permissions or move it away to start empty.
 - **Frame rate:** `frame_rate = 60` in `forza.toml` (or `tools/play.sh --frame_rate=60`)
   runs the game at 60 fps instead of the console's 30; 120, 144 or any rate up to 240 work
   too. The game times its physics and clocks in real time, so they keep their speed, and
@@ -776,7 +783,14 @@ button.
   raise it; 0 gives neutral at once, as before.
 - **Realistic shifting:** `wheel_shifter_clutch` makes a new gear engage only while the clutch is pressed at
   least `wheel_clutch_threshold` (default half way); moved into a gear without the clutch, the car stays in
-  neutral until you press it. Off by default (the lever's gear engages at once).
+  neutral until you press it. Off by default (the lever's gear engages at once). With the clutch up, the car
+  leaves its gear only once the lever has read something else for 50 ms (SDK 1130, #952): a shifter that
+  reads another gear for a moment while the lever stays in its slot (or no gear, with
+  `wheel_shifter_neutral_ms` at 0) used to drop the car to neutral, and the lever back in its slot could
+  not put the gear in again without the clutch. A real move to neutral with the clutch up is neutral 50 ms
+  later (after the hold through neutral above); a shift with the clutch down is taken at once, and no gear
+  ever engages without the clutch. The log shows what the lever read, the gear it gave and the clutch,
+  e.g. `Wheel: H-pattern lever 3, gear 3, clutch 0.00` (the first 1000 lines per wheel).
 - **Sequential:** `wheel_shifter = sequential` with `wheel_shifter_buttons = up=N,down=M` adds a sequential
   shifter next to the paddles (up and down act as the right and left bumper, the wheel layouts' shift up and
   shift down). At a standstill the game's downshift drops to 1st, as with the bumpers.
@@ -790,8 +804,10 @@ The shifter type is read when the game first sees the wheel, so restart the game
 and gear are sent only once the game has read the wheel's capabilities (the log says `Wheel: the game asked for
 capabilities`); a game that took the wheel for a gamepad would turn them into right stick movement. They share
 the right stick with any other controller connected at the same time (the stick pushed furthest wins), so a
-gamepad whose right stick drifts can disturb the gear: unplug it while driving with the wheel. Keep
-`right_stick_deadzone_percentage` at 0 for the same reason.
+gamepad whose right stick drifts can disturb the gear: unplug it while driving with the wheel. The stick
+deadzones (`left_stick_deadzone_percentage`, `right_stick_deadzone_percentage`) apply only to gamepads, not to
+the wheel (SDK 1150, #952): the right one used to zero a forward gear whenever the clutch was fully up, so the
+car fell to neutral the moment the clutch came out, with or without *Gears need the clutch*.
 
 Axis detection (wheels without a profile) reads where each axis rests when the wheel is plugged in: the one near
 the middle is the steering, those resting at an end are the pedals (throttle, brake, clutch in axis order).

@@ -1066,6 +1066,107 @@ stage, and the benchmark without a frame cap. ReIGlue's Direct3D 12 backend has 
 split (no fractional raster in its code), so it has no such copy; it was not run, and neither
 was ReGPU (its own renderer, which offers FSR 1 only).
 
+## Comb edges at render scale 2 (#905)
+
+A picture the game reads on the CPU at render scale 2 or a 1440p output had comb edges: fine
+vertical detail and the logo's edges jagged in pairs of columns. That covers a saved photo and its
+thumbnail, a Big Shot's tiles and a replay movie's frames. At a 1080p output with SMAA or FSR 3, the
+pictures drawn in the scene layer had it too (a Big Shot); the ones 1000 copies from the HUD layer's
+fractional raster did not (#879). The copy to guest memory downscales the scaled resolve with
+`resolve_downscale.cs.glsl`, whose point sample took guest pixel i's host pixels as one contiguous
+block. The scaled resolve stores each 16-byte guest quad as scale_x * scale_y host quads, a column
+of scale_y after the other ([Scaled storage layout correction](#scaled-storage-layout-correction-336)),
+so at render scale 2 guest columns 4k and 4k+1 got host column 8k (rows 2y and 2y+1), and 4k+2 and
+4k+3 host column 8k+4. ReIGlue 1120 ([sdk_patches.md](sdk_patches.md#reiglue-1120-pictures-at-render-scale-2-without-comb-edges-905))
+addresses the quads at every pixel size, and gives unsigned 8:8:8:8 and 2:10:10:10 color copies
+the box filter (the average of each guest pixel's host pixels, as 1000 does). The photo and its
+thumbnail are 8:8:8:8; a Big Shot's front buffers and the movie's frames are 2:10:10:10.
+
+The measure is the mean step between pixel columns x and x+1 at odd x divided by the step at even
+x (RGB, over the whole picture). A clean picture is about 1.00; a copy that takes one host column
+for two guest columns is about 2. For the movies it is taken on luma only, leaving out the steps
+across VC-1's 8-pixel block edges (4:2:0 chroma changes every second column), as the median of
+every 15th frame. TU4, Linux, RX 9060 XT (RADV), the same game build with ReIGlue main's plugin
+(44c896c, before 1110) and with 1120 on it (since rebased onto 1110, which changes none of its
+lines), free roam on a copied save, the photo saved and uploaded to a local server:
+
+| Picture | Settings | ReIGlue main | With 1120 |
+|---|---|---|---|
+| Photo (1280x720 JPEG) | render scale 2, 1080p output | 1.94 | 1.04 |
+| Thumbnail (416x240) | render scale 2, 1080p output | 1.81 | 1.00 |
+| Big Shot (3840x2160) | render scale 2, 1080p output | 1.86 | 1.00 |
+| Photo | FSR 3 Quality, 1440p output | 2.20 | 1.05 |
+| Thumbnail | FSR 3 Quality, 1440p output | 1.85 | 1.00 |
+| Big Shot | FSR 3 Quality, 1440p output | 2.07 | 1.00 |
+| Big Shot | SMAA, 1080p output | 1.87 | 1.00 |
+| Photo and thumbnail | SMAA, 1080p output (copied by 1000) | 1.16, 1.15 | 1.16, 1.14 |
+| Replay movie, LARGE 15 s (1280x720) | render scale 2, 1080p output | 1.63 (1.38 to 2.17) | 1.03 (1.01 to 1.16) |
+| Replay movie, LARGE 15 s | FSR 3 Quality, 1440p output | 1.58 (1.38 to 2.32) | 1.03 (1.01 to 1.08) |
+| Replay movie, LARGE 15 s | default settings | 1.03 (1.00 to 1.11) | 1.03 (1.01 to 1.06) |
+| Photo, thumbnail, Big Shot | default settings (720p); 1080p output, render scale 1 | 1.03, 0.99, 1.00; 1.03, 1.00, 1.00 | 1.03, 1.00, 1.00; 1.03, 1.00, 1.00 |
+
+With `vulkan_readback_box_filter=false` at render scale 2 the comb is gone as well (photo 1.03,
+thumbnail 0.99, Big Shot 1.00), and the pictures are sharper than with the average: the mean step
+between columns is 5.00 against 4.53 in the photo, 8.28 against 6.83 in the thumbnail and 3.50
+against 3.00 in the Big Shot.
+
+At render scale 1 the copy never reaches the downscale: it is a buffer copy from shared memory, the
+same commands as before, so its pictures and its cost cannot change. The pictures of two runs
+differ anyway, as the time of day and the traffic move on: two runs of main at default settings
+differ by 2.18 of 255 on average in the photo, main and 1120 by 1.91.
+
+The shader alone, on a scaled resolve buffer packed in that layout with the CPU Vulkan driver and
+on the RX 9060 XT (scales 1 to 3 on each axis, source offsets 0, 16 and 256 bytes, one and two
+tiles): 32-bit point, centre and box sampling (8:8:8:8, and 2:10:10:10 at each endianness up to
+16in32) 189 of 189 cases right, 8-, 16- and 64-bit point and centre 162 of 162. The old shader got
+45 of its 81 32-bit cases and 66 of the 162 others right, and every copy at scale 1 is byte for
+byte the old shader's (27 cases). Against 1000's copy run at an integer raster with real tiling,
+the centre sample and both box filters match it, but for at most 1 in the last bit at 6 host
+pixels a guest pixel (1000 rounds in floats). `tools/test_vulkan_thumbnail_readback.py`, which
+packs its data on its own, gives 81 of 81 and 45 of 81 (27 of 27 box filter cases with both).
+
+Cost, measured with the PC to itself (benchmark lock, no other game), standing 100 s in free roam
+at a 60 fps cap with `fh1_gpu_profile` and the frame cost CSV. At render scale 1 the readbacks'
+GPU time rounds to 0.00 ms a frame in every 20 s report with both plugins (all of the command
+processor's GPU work 5.57 to 5.72 ms a frame on main, 5.58 to 5.82 with 1120). The readback
+path's CPU time is 0.0058 against 0.0041 ms a frame over the session (7.6 KB a frame copied back),
+which is noise: the scale 1 copy runs the same commands. At render scale 2 it is 0.0085 against
+0.0073 ms, and the GPU work 13.8 to 14.7 against 13.7 to 14.0 ms. The shader alone, a 1280x720
+copy between host-visible buffers on the RX 9060 XT (200 dispatches, three rounds), takes 210 to
+212 us at scale 1 and 593 to 594 us at scale 2 for each of main's point sample, the new one, the
+RGBA8 box filter and the 2:10:10:10 one: the copy is bound by memory, not by the four reads.
+
+`tools/render_test.py check` (render scale 1, the same game build): 6 of 6 scenes with 1120, and
+4 of 6 with main's plugin right before it (free roam at dawn and photo mode's camera failed, two of
+the scenes #960 has failing at random on main).
+
+Not run: NVIDIA, Windows, DLSS and DLAA, render scale 3, a WEB (640x360) movie at these settings, car
+pictures. Direct3D 12 (ReIGlue's backend) had the same addressing in its own copy of the shader;
+ReIGlue 1140 fixes it (below).
+
+### Direct3D 12 (#962)
+
+ReIGlue 1140 ([sdk_patches.md](sdk_patches.md#reiglue-1140-the-same-on-direct3d-12-962)) ports
+1120 to Direct3D 12's `resolve_downscale.cs.hlsl` and its DXBC. Measured on Windows 11 with a GTX
+1650 Ti, TU4, `gpu_backend = "d3d12"`, a 1080p output, one game build with the plugin swapped
+(ReIGlue main b838685 against 1140 on it, both cross-built for Windows), free roam on a copied save,
+the photo saved and uploaded to a local server, with the same measure as above:
+
+| Picture | Settings | ReIGlue main | With 1140 |
+|---|---|---|---|
+| Photo (1280x720 JPEG) | render scale 2 | 1.86 | 1.03 |
+| Thumbnail (416x240) | render scale 2 | 1.73 | 1.01 |
+| Big Shot (3840x2160) | render scale 2 | 1.83 (1.83 in a second run) | 1.00 |
+| Photo, thumbnail, Big Shot | render scale 1 | 1.03, 1.00, 1.00 | 1.02, 1.00, 1.00 |
+
+With `d3d12_readback_box_filter=false` at render scale 2 the comb is gone as well (photo 1.02,
+thumbnail 1.00, Big Shot 1.00), and the pictures are sharper: the mean step between columns is
+5.03 against 4.51 in the photo, 8.26 against 6.87 in the thumbnail and 3.58 against 3.02 in the
+Big Shot. At render scale 1 the pictures of the two plugins differ by 1.4 of 255 on average in the
+photo and 0.5 in the Big Shot, which is what two runs differ by as the scene moves on. In the first
+run with main's plugin the photo and its thumbnail came out black (the Big Shot did not); a second
+run with the same plugin, the one in the table, and every run with 1140 had them right.
+
 ## Festival video flashes purple (#91, open)
 
 Report: RX 9070 XT, Windows 11, Vulkan, v0.1.12, `frame_rate` 240, render scale 2, AF 16x,
@@ -1386,7 +1487,57 @@ Other settings turns it off):
 
   The unfinished draw is the oldest the GPU still had: the one it hung on, or one stuck behind
   it. Its VS/PS are the hashes the `Creating graphics pipeline state with VS ..., PS ...` lines
-  use.
+  use. The marker after a draw is written once the draw and everything recorded before it has
+  finished, so "unfinished" also covers the work the emulator recorded since the draw before (a
+  new render pass, render target transfers, texture loads, barriers). ReIGlue 1100 (#913) can
+  tell the two apart, with `gpu_device_lost_setup_breadcrumbs` on (Advanced > Log > Detailed GPU
+  reset report in the launcher; off by default, for a player whose GPU resets). It then counts
+  the commands recorded between two guest draws, keeps them with the draw's shader modifications
+  and render pass, and gives a draw that had such work a second marker right before its draw
+  command. A loss then logs a second line:
+
+  ```
+  GPU breadcrumbs, unfinished #40970478 (draw): VS modification 000000400000003F, PS modification
+  000400000016003F, render pass 0x0000038C (1x, depth D24FS8, color 0 2_10_10_10_FLOAT); recorded
+  since #40970477, before the draw command: 1 render pass, 1 render pass end, 3 draws, 2
+  barriers; the GPU finished that work: it hung in the draw itself
+  ```
+
+  or `the GPU did not finish that work: it hung in it (or in the draw, if the draw ran alongside
+  it)`. A draw with nothing recorded between it and the draw before needs no marker: the one
+  after the draw before already says that everything before it finished, and the line ends
+  `nothing else was recorded since #N: it hung in the draw itself`. When the draw before is in
+  another submission, the presenter's work on the queue between the two is not counted: the line
+  names both submissions and only says "it hung in the draw itself" when the marker proves it.
+  NVIDIA's checkpoints get no verdict (they say where they got, not what finished). What counts
+  as work: render pass begins and ends, draws,
+  dispatches, barriers, copies, attachment clears, query commands, conditional rendering, hoist
+  points (where the uploads moved before the render pass run) and upscaling passes. The draw
+  command itself does not count. With the setting off nothing of this is recorded, and the second
+  line only names the setting.
+
+  Checked on an RX 9060 XT (RADV, 2026-11-23) with local debug builds that are not in the SDK:
+  in a stream dump of one free roam frame, 121 of its 2,778 guest draws had work of their own and
+  got the marker, each right before its draw command, with no mismatches. 77,538 reads of the two
+  markers while the game ran never found the marker before a draw ahead of the unfinished one, nor
+  at a draw without work. Two real stalls of the GPU, released from the host after about 50 ms
+  (no reset), checked the verdicts: with the GPU stopped in the work before a draw, the marker
+  before the draw still held an older number ("did not finish that work"); stopped right after a
+  marked draw's draw command, it held the draw's own number ("it hung in the draw itself").
+  `FORZA_TEST_GPU_LOSS_AT_FRAME` logged the line with the setting on (the GPU was only between
+  two submissions, so no verdict) and the short line with it off.
+
+  Cost. Off, the hot paths keep main's shape (checked in the disassembly): the command buffer
+  tests its two flags with one 16-bit compare and a branch (2 instructions, where main's own test
+  took 7), `Trail::Record` is the same, and each draw tests the setting twice. In the benchmark
+  race (1280x720, three rounds in turn, each run alone) the frame rate followed the other load on
+  the PC (ReIGlue main alone ranged from 116 to 182 fps), so it cannot tell the three apart. The
+  CPU time per frame can: the command processor's thread took 2.48 ms with ReIGlue main, 2.54 ms
+  with the setting off and 2.57 ms with it on (run-to-run spread 0.11-0.21 ms), its recorder
+  thread 4.83, 4.56 and 4.77 ms, the whole game 17.9, 17.4 and 17.9 ms: no difference beyond the
+  spread. On, the extra GPU work is one marker per draw that had work of its own (about 4% of the
+  draws); an earlier version that marked the same draws measured +0.04 ms of GPU time per frame
+  (standard error 0.07 ms).
 - **Direct3D 12**: DRED (auto-breadcrumbs, page faults) is on without the debug layer. The log
   names the operation each unfinished command list was on (`DrawIndexedInstanced (draw 412 of
   the list's 980)`), the four before it, and the allocations at a page fault's address.
@@ -1408,3 +1559,40 @@ later, and both `VK_AMD_buffer_marker` and the checkpoints named the resolve rig
 hang point as the last finished and the draw after it as unfinished; on Direct3D 12 the removal
 hook showed DRED on without the debug layer (no command list in flight, no page fault). RADV was
 checked with the simulated loss only: a real reset there would reset the desktop's GPU too.
+
+### The Vega APU of #551 and #913
+
+One player's Ryzen 7 7730U (Radeon Vega iGPU, device 0x15E7, AMD's last driver for it, 256 MB
+device-local heaps) lost the device 16 times in the logs attached to #551 and #913 (2026-10-22
+to 11-15): 15 on Vulkan, 1 on Direct3D 12 (`DEVICE_HUNG`), at the 720p and the 540p scene, at
+30, 40 and 60 fps: in races (8), in free roam (3, one of them online), in an online Infected
+round (1) and in the early builds that did not log the scene (4). It came 4 to 36 minutes into
+a session, after about 32 minutes of play on average on Vulkan from 0.2.0 to 0.2.9; the only
+session of 0.3.1 ran 58 minutes without one, which that average gives about one chance in six.
+The frames before were as in the rest of the session (typically 33-40 ms, with single frames of
+50-530 ms), and device-local memory stayed at 240 of 486 MB from 0.2.2 on: the GPU stops at
+once, it does not slow down or run out of memory. A `TdrDelay` of 8 s was tried, but it did not
+apply: the device was still lost about 2 s after the last frame, Windows' default limit.
+
+Two of the losses had breadcrumbs, and both unfinished draws were the paint of a car's body:
+
+| Build | Where | Last finished | Unfinished |
+| --- | --- | --- | --- |
+| 0.2.9 | street race, as it ended | draw 451 of 1001: VS `CC571B5698969835`, PS `CEFA92734D5B6995`, 920 vertices | draw 452: VS `3805429FBEA641F6`, PS `7D37972741B4D1C2`, 373 vertices |
+| 0.3.7 | festival race, 64% | draw 25 of 992: VS `29DFC07ED7DD16F3`, PS `147BBECA1BB6232E`, 14 vertices | draw 26: VS `82281A5FB565D5C3`, PS `66A4BC137EAE22CB`, 5065 vertices |
+
+All eight shaders are in the title update's `shaders/cars/shaders_v16.fxobj` (the vertex shaders
+as bound from blobs `CFBC0F65BAF98834`, `3C64D4EE3AE816F5`, `CCB32790906E4B15` and
+`FF8C7B9534042F4B`). The two unfinished pixel shaders are paint shaders (`PaintColor`,
+`TwoTone*`, `Stripe*`, `Metal*`, `Fresnel*`): 8 and 6 texture fetches (base, damage, dirt mask,
+the shadow mask at fetch constant 13, the environment and static environment maps; in `66A4...`
+also the dirt and background maps) and one `SetTextureLod` each, no loop, no kill, no depth
+export, and 3 and 1 forward jumps (on bool constants, one unconditional), so the translator's
+main loop has its switch. The prebuild list has their pipelines in one state only: the scene's
+render pass with depth D24FS8 and color 0 2_10_10_10_FLOAT, depth test greater-or-equal with
+writes, stencil always replace, blending by source alpha, no sample-rate shading, in 1x, 2x and
+4x variants (the 540p scene is 1x); some of `82281A5F...`'s variants have the dirt seam
+modification (#164). The last finished draws use other car shaders in the same state. Two named
+losses, both on car paint among the 2,000-4,000 draws of a race's frame, point at the car's
+draws; they do not show whether the GPU hung in the paint draw or in the work recorded for it
+first, which 1100's line says once the player turns on Detailed GPU reset report.

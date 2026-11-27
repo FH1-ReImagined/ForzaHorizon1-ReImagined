@@ -28,6 +28,9 @@
 // they matter: more than 4 s (a load) still counts as one 60 Hz frame, and dt is at least
 // 0.1 ms. FORZA_FRAME_TIME=game keeps the millisecond frame time (for comparisons);
 // FORZA_FRAMETIME_LOG=1 logs the dt statistics every 10 s, FORZA_FRAMETIME_CSV each frame.
+// FORZA_FRAME_TIME=fixed (tests, tools/render_test.py, #960): away from 30 fps every frame's dt
+// is 1/frame_rate however long it took, and the CSV (whose time column stays real time) is
+// flushed every line.
 
 #include "frame_time.h"
 #include "../debug/stall_watch.h"
@@ -76,6 +79,14 @@ bool PreciseFrameTime() {
   static const bool on = [] {
     const char* v = std::getenv("FORZA_FRAME_TIME");
     return !(v && std::strcmp(v, "game") == 0);
+  }();
+  return on;
+}
+
+bool FixedFrameTime() {
+  static const bool on = [] {
+    const char* v = std::getenv("FORZA_FRAME_TIME");
+    return v && std::strcmp(v, "fixed") == 0;
   }();
   return on;
 }
@@ -340,7 +351,8 @@ bool FrameTime(uint8_t* base, uint32_t game_ms, double& dt_out) {
   }
   const uint64_t min_step = freq / 10000;  // 0.1 ms, the game's minimum dt
   if (stamp < prev + min_step) stamp = prev + min_step;
-  const double dt = double(stamp - prev) / double(freq);
+  const bool fixed = FixedFrameTime();
+  const double dt = fixed ? 1.0 / rate : double(stamp - prev) / double(freq);
   prev = stamp;
   if (FrameTimeLog()) {
     const double ms = dt * 1000.0;
@@ -361,6 +373,7 @@ bool FrameTime(uint8_t* base, uint32_t game_ms, double& dt_out) {
     const bool car = OwnCarPosition(base, x, z);
     std::fprintf(csv, "%.3f,%.4f,%u,%d,%.3f,%.3f\n", double(stamp - first) * 1000.0 / double(freq),
                  dt * 1000.0, game_ms, int(paced), car ? x : 0.0f, car ? z : 0.0f);
+    if (fixed) std::fflush(csv);  // the render test counts the lines as they come
   }
   if (dt > 4.0) return false;  // the game's rule: a long pause counts as one 60 Hz frame
   dt_out = dt;

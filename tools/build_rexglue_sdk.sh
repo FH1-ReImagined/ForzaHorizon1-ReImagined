@@ -89,10 +89,27 @@ SDK_COMMIT=bd833a2ab69d305f99ddf57418fc38ffec8af93d  # nightly 0.10.0.24 (nightl
 # also in a rally stage, whose frames start with a draw to the front buffer (#879).
 # and 0640: the list trace, a study build option (REXGLUE_FH1_LIST_TRACE, off: the plugin is
 # unchanged) that times the command lists the game runs (native renderer M4).
+# and 0650: the model list registry and its shadow compare (native_lists=shadow; without the
+# game's switch no registry packet arrives and the plugin decodes as before; native renderer M4).
+# and 1100: with gpu_device_lost_setup_breadcrumbs (off: nothing is recorded), a device loss also
+# says what was recorded since the draw before the unfinished one and whether the GPU finished
+# that work or hung in the draw itself (#913).
+# and 1110: an allocation of physical memory, and a protection change that makes pages writable,
+# drop the GPU's copy of the range also where no page was watched (ReIGlue #64, the cause of #895).
+# and 1120: the copy to guest memory at a render scale takes each guest pixel's own host pixels, and an
+# unsigned 8:8:8:8 or 2:10:10:10 color copy their average, so pictures at render scale 2 or a 1440p
+# output have no comb edges (#905).
+# and 1130: with Gears need the clutch and the clutch up, a lever that reads another gear or no gear for
+# under 50 ms keeps the gear instead of dropping the car to neutral; the lever's reads are logged (#952).
+# and 1140: the same on Direct3D 12 (its HLSL copy of the shader and the DXBC), so pictures there have
+# no comb edges either (#962).
+# and 1150: the stick deadzones apply to gamepads only, so a right stick deadzone no longer turns a wheel's
+# H-pattern gear into neutral whenever the clutch is fully up (#952).
+# and 1160: the stick deadzones zero a stick drifting left or down too (they only worked on positive values).
 # A reviewed full commit can be pinned before a maintainer publishes a tag.
 # When a tag is supplied, its target must still match this immutable commit.
 REIGLUE_TAG=
-REIGLUE_COMMIT=18fa1cc468d4d8b3a2ee5aa8f0480bae68e734b9  # ReIGlue main: 0530, 0570-0640, 0700, 0800, 0900, 1000, 1010 (#65)
+REIGLUE_COMMIT=8f09c08e3c6d9753de42c14eb999011b00277082  # ReIGlue main: 0650, 1100, 1110, 1120, 1130, 1140, 1150, 1160
 REIGLUE_URL="${REIGLUE_URL:-https://github.com/FH1-ReImagined/ReIGlue}"
 NIGHTLY="${REXSDK_NIGHTLY:-$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64}"
 SRC="${REXSDK_SRC:-$HOME/rexglue-sdk-src-forza/sdk}"

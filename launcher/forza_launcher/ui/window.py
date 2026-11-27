@@ -663,7 +663,7 @@ class MainWindow(QMainWindow):
                     pass
         self.start_game(True)
 
-    def start_game(self, vr=None):
+    def start_game(self, vr=None, stale_ok=False):
         if self.radio.busy():
             self.play.show_message("Wait for the radio build to finish before starting the game.", True)
             return
@@ -687,6 +687,14 @@ class MainWindow(QMainWindow):
         if not ok:
             self.play.show_message(msg, True)
             return
+        if not stale_ok and game.outside_build(self.cfg) is None:
+            old = builder.stale_build(self.cfg.data_home(), self.cfg["tu_package"])
+            if old:
+                choice = self._stale_build_choice(old)
+                if choice == "build":
+                    self.show_page(1)
+                if choice != "play":
+                    return
         self.settings.flush()
         preparation = (self.cfg.data_home(), install.dir, self.cfg.settings.get("fh1_upscaler"))
         if (dlss.enabled(self.cfg) or dlss.menu_runtime_enabled(self.cfg)) and self._dlss_prepared != preparation:
@@ -700,6 +708,21 @@ class MainWindow(QMainWindow):
             self._start_failed(e)
             return
         self.saves.before_launch(plan, lambda: self._start_plan(plan))
+
+    def _stale_build_choice(self, detail):
+        """Play with a game built by an older launcher: 'build' (go to Setup), 'play' or '' (closed)."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("The game needs a rebuild")
+        box.setText("The game was built with an older version, and needs a rebuild.")
+        box.setInformativeText(detail + "\n\nPress Build now to go to Setup > Build. Playing the old build can "
+                               "crash, especially on content you imported with this launcher (FM4 tracks and cars).")
+        build = box.addButton("Build now", QMessageBox.AcceptRole)
+        anyway = box.addButton("Play anyway", QMessageBox.DestructiveRole)
+        box.setDefaultButton(build)
+        box.exec()
+        clicked = box.clickedButton()
+        return "build" if clicked is build else "play" if clicked is anyway else ""
 
     def _start_failed(self, error):
         if str(error) != self._last_start_error:
@@ -791,13 +814,13 @@ class MainWindow(QMainWindow):
         self.status(message, not ok)
         if ok:
             self._dlss_prepared = self._dlss_preparing
-            self.start_game()
+            self.start_game(stale_ok=True)
         else:
             if not dlss.enabled(self.cfg) and dlss.menu_runtime_enabled(self.cfg):
                 # DLSS is optional in a native session. A failed download must
                 # not prevent playing offline with native rendering.
                 self._dlss_prepared = self._dlss_preparing
-                self.start_game()
+                self.start_game(stale_ok=True)
                 self.play.show_message(f"Native rendering is available. Could not set up NVIDIA DLSS: {message}",
                                        True, keep=True)
             else:

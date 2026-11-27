@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QDialogBut
                                QHeaderView, QLabel, QListWidget, QListWidgetItem, QProgressBar, QPushButton,
                                QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
-from .. import fm4tracks
+from .. import builder, fm4tracks
 from .widgets import card, label
 
 EXPERIMENTAL_TAG = "Experimental"
@@ -338,6 +338,8 @@ class Fm4TracksCard(QWidget):
         self._drop_work()
         self.refresh()
         self.changed.emit()
+        if ok and builder.stale_build(self.cfg.data_home(), self.cfg["tu_package"]):
+            message = f"{message}\n{builder.STALE_IMPORT_NOTE}".strip()
         self.message.setText(message)
 
 

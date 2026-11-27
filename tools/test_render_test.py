@@ -126,8 +126,13 @@ class HelperTests(unittest.TestCase):
             if os.name != "nt":
                 (build / "update").symlink_to(build / "texcompress")
             game = rt.stage_build(build, Path(t) / "game")
-            self.assertEqual(sorted(p.name for p in game.iterdir()), ["forza", "librexgpu-xenos.so"])
+            self.assertEqual(sorted(p.name for p in game.iterdir()),
+                             ["forza", "forza.toml", "librexgpu-xenos.so"])
             self.assertEqual((game / "forza").read_text(), "forza")
+            # The release checks' own settings in its place, a file of its own (#846)
+            self.assertEqual((game / "forza.toml").read_bytes(), rt.CHECK_TOML.read_bytes())
+            self.assertEqual((build / "forza.toml").read_text(), "forza.toml")
+            self.assertEqual((build / "forza.toml").stat().st_nlink, 1)
             (build / "forza").unlink()
             with self.assertRaises(ValueError):
                 rt.stage_build(build, Path(t) / "game2")
@@ -137,7 +142,8 @@ class HelperTests(unittest.TestCase):
         captured = {s.split()[1] for sess in cfg["session"] for s in sess["steps"]
                     if s.split()[0] == "capture"}
         self.assertEqual(set(cfg["scenes"]) - captured, set())
-        ops = {"first_frame", "wait", "press", "world", "at", "clock", "capture", "trace", "log"}
+        ops = {"first_frame", "wait", "press", "world", "land", "start", "at", "clock", "capture",
+               "trace", "log"}
         for sess in cfg["session"]:
             for step in sess["steps"]:
                 self.assertIn(step.split()[0], ops, step)

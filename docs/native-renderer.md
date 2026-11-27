@@ -957,6 +957,492 @@ unload) with a shadow compare of every list draw in the running game; replay of 
 the command processor; then native passes, which also need M3's executor and a path for the
 clones (the cars). FM4's `SET_CONSTANT2` tile blocks are a decision for after that census.
 
+### M4, third step: the registry and the shadow compare (`native_lists=shadow`)
+
+The game now converts the track's model lists while it runs and registers them with the GPU
+plugin, and the plugin compares every run of a registered list with what its template says the
+list does. **Nothing drawn changes:** every buffer is still decoded as before; the compare runs
+beside it. `--native_lists=off` is the default (read once, at the start), and off the game and
+the plugin do what they did (below).
+
+**The game** (`src/hooks/native_lists.cpp`, the pure part `src/platform/native_list_registry.h`):
+
+- At each RunCommandBuffer call (the hook in `cockpit_gauges.cpp`) of a model's list (a command
+  buffer of type 9 with the files' marker after its patch table) on the game's D3D device (the
+  device of the first such call: a call on any other is counted, `not registered: on another
+  device`, and none was seen) that is not registered yet, the list is converted from a copy of its header, its patch table and its
+  PM4, with the measurements of the second step taken in: the flags in the files' form
+  (`FilesFormFlags`: `(flags & ~0x2101) | 0x6`, now in `native_list.h`), and no area C (it is not
+  in memory: the key and the slots come from the header, the patch table and the PM4).
+- **A list first seen untiled is converted from a retiled copy.** With `scene_msaa=2x|off` and in
+  the game's 12- and 16-car races every scene pass list first runs for pass 3 or 5, already
+  untiled; the copy gets the headers `scene_tiling.cpp` replaced put back (it keeps them per
+  list, `SavedHeaders`), and only if every saved word is still that header's NOP (otherwise the
+  list is refused as `retile`). Conversion at the model's load would have needed the loader's
+  thread and timing, which nothing has measured; the first run comes after the load in stream
+  order, and the retiled copy is the list as it was loaded.
+- The template goes into a 4 MB ring of guest memory, once per key (lists with the same static
+  words share it), with **`kOpListDefine`** (ReIGlue 0650): its id, address, words, a sequence
+  number, a hash, and the address of an acknowledgement word, where the plugin stores the
+  sequence number once it has read the template. The word is 64-byte aligned; the plugin stores
+  it with release order after its last read of the template and the game loads it with acquire
+  before it reuses the memory, so the pair orders the reads and the reuse on any CPU, not only on
+  x86. A define whose sequence number is not newer than the last one acknowledged (a tiled replay
+  decodes the same packet again) is dropped before the plugin reads anything, so a replay of a
+  define that failed (hash, cap) cannot read ring memory the game has reused since; a define
+  whose packet could not be written gives its ring memory and its sequence number back at once
+  (PRs #934 and ReIGlue #68). The ring reuses only memory the plugin has
+  acknowledged (a define the ring has no room for waits for the next call; a template larger than
+  the whole ring is refused, `too-large`, rather than converted again at every call). This is
+  not the plan's `kOpRef` ring of 0610: a `kOpRef` message holds at most 16,384 words and nobody
+  acknowledges it, while a template can be larger and the game must know when it may reuse the
+  memory.
+- **`kOpListBind`**: the list's physical address and dwords, its template (or the converter's
+  refusal with its code: a refused list is bound too, so its runs are counted), a state word,
+  the command buffer, its patch table and the pass group being drawn (a scope in the track and
+  procedural models' pass hooks, `scene_tiling.cpp`). The **state word** (one of 65,536 in a
+  guest table) holds the list's generation: the fixup dispatcher's hook (`sub_82D19210`, moved
+  here from the list trace, which keeps its counting) adds one before the fixup writes the list
+  and one after, so the generation is odd while a fixup is under way (with release fences around
+  the fixup's writes, a seqlock's writer; on x86 they only hold the compiler back).
+- **`kOpListDrop`**: when a command buffer object holds another list now (its segment, length or
+  patch table changed), and when a model is unloaded: `sub_82D19668` frees a model's headers
+  (`+4`, `+16` bytes) and its PM4 (`+8`, `+20`), and every list whose command buffer is in the
+  headers' range or whose PM4 is in the PM4's range is dropped at the next call (a model that
+  shares another's data, `+0` set, frees nothing).
+- The packets are host packets (ReIGlue 0610's NOP) written into the main device's command
+  buffer just before the call's own words (`EmitHostPacket`, `native_device.cpp`), so a list is
+  registered before the indirect buffer that runs it is decoded.
+
+**The plugin** (ReIGlue 0650, `fh1_native_list.cpp`, the pure part `fh1_native_list.h` with a
+copy of the template's readers): the three ops are handled on the decoder, as it reads them
+(today's host packets go to the recorder). `ExecuteIndirectBuffer` looks the buffer's address
+up; for a registered list:
+
+- **the lookup's checks**, any failure counted with its reason: the indirect buffer's length is
+  the registered one (`length`), the command buffer still names this buffer (`rebound`), and the
+  list's static words still have the template's key (the key read again on every run, tiled or
+  untiled). A key that differs is counted by when: **`key-at-bind`** when no key check since the
+  list was bound found the template's key (the template does not describe the list it was bound
+  for: a slot in the wrong place, a word the converter got wrong; never the game's doing, so it
+  must be 0), **`static-words-changed`** when an earlier run since the bind had the template's key
+  (the game wrote a static word after that run);
+- **the pool**: the template's slots read from the live list when the state word's generation
+  changed since the last run, as a replay would; read on every run too, and a pool that differs
+  while the generation did not is counted (`stale`: a slot written without a fixup). The read is
+  a seqlock's: the generation, the slots, the generation again (acquire fences between); an odd
+  generation, or one that changed between the two reads, is a run during a fixup and is not
+  compared (`fixup-in-progress`: a torn snapshot could disagree falsely, or in principle agree).
+  The generation is read once more after the list's last packet, and a run a fixup started or
+  ended in gets no verdict either (`fixup-during-run`, its draws left out of the counts): the
+  fixup may have rewritten words the packets read;
+- **every draw**, also one its predicate skips: the template's view of the state the draw starts
+  with (the register file at the buffer's start, the list's writes up to the draw overlaid, the
+  tile block applied for the **live** bin select and mask, the draws' own three registers) against
+  the register file the packets produced, over what a draw's shaders and fixed function read
+  (registers 0x2000-0x23FF, the ALU, fetch, bool and loop constants); the vertex and pixel
+  shader loaded; the bin mask; whether the draw runs; and that it is the template's next draw;
+- **the end of the list**: the whole register file except D3D's marks, the bin mask and the
+  shaders. The marks (`SCRATCH_REG6/7`, 0x5000-0x5002) are left out: nothing reads them (no
+  packet, no CPU read, no write-back to memory: second step, question 12), so a replay may drop
+  them, and this compare does not hold a replay to them.
+- **the registers written**, before each draw and after the last: the set of registers the
+  packets wrote since the previous draw (the command processor's write paths report every write
+  while a run is open: `PacketWriteRegister`, `PacketWriteRegistersFromMem`,
+  `WriteRegisterRangeFromRing`, `Fh1WritePlainRangeFromRing`, COND_WRITE's register write)
+  against the set the template writes there (the draw's delta, and the tile block's window when
+  the block's packets are among the draw's), whatever the values. The values alone cannot see a
+  template write whose value is already in the register file the run starts from: D3D's segment
+  sets the selected tile's window before the list, so a tile block whose mask is another tile's
+  (the block not applied for the live select) agreed by value; so would a write the template
+  leaves out or puts on another register where both already hold the value. The registers a
+  packet writes as part of what it does (the event initiator 0x21F9; a draw's DMA base, size and
+  initiator 0x21FA-0x21FC) are left out of the sets, their values are compared as before, and so
+  are the marks. Two tile blocks of the same draw where the later one overwrites the earlier
+  still look the same in the template and in the packets, which is what a replay would do too.
+- A lookup that finds nothing is counted with the other buffers, except at an address a list was
+  bound at before (dropped since: `misses at a dropped list's address`, apart, so a drop decoded
+  before its list's last run would show). A bind repeated with the same words is kept (the packet
+  replayed for another tile); one that differs in anything, the pass group and the retiled flag
+  included, replaces the binding. The plugin keeps at most 16 M template words (64 MB; past it a
+  define is acknowledged and counted, `past the cap`, and its lists' runs are `no-template`).
+- A summary every 600 frames: runs and draws compared and agreeing, by pass group; every run not
+  compared by reason; the key checks tiled and untiled; generation changes and stale pools; the
+  compare's own time. Self-checks, in the running game: `FH1_NATIVE_LISTS_PERTURB=N` changes, in
+  every Nth run's template view, the value of the first register the list writes before its first
+  draw; `FH1_NATIVE_LISTS_PERTURB_TILE=N` gives, in every Nth run of a tiled list, the first tile
+  block of the template view the second tile's mask (the case the values alone could not see);
+  `FH1_NATIVE_LISTS_PERTURB_SLOT=N` moves a one-word slot of every Nth template one dword on as the
+  plugin reads it (a slot table one dword off).
+
+Unit tests: `tests/native_list_registry_test.cpp` (game, CI) for the registry's state, the
+template ring and its acknowledgements, the state words, the retiled copy (and its refusals),
+and two lists whose templates are kept as a fixture (`tests/native_list_fixture.h`): the test
+fails if the converter makes others. ReIGlue's `tests/fh1_native_list_test.cpp` runs the
+plugin's readers, registry and compare on that same fixture beside a small interpreter of the
+lists' packets: `Validate` takes both templates and refuses damaged ones (every single word of
+both changed six ways, the readers run on each one it takes, under the sanitizers); the key the
+same after fixups, with the loader's flags and untiled, another after a static word, a mask, a
+table word or a shader's type bits changed; a define repeated, a bind repeated or replaced, a
+lookup with a wrong length, an address dropped and bound to another list; and the compare agrees
+for each tile's bin select (the first tile's with bit 31), the masks lists are seen to start with
+(0xFFFFFFFF, 0x80000000, 0x8, 0xA, 0x2), a select outside every tile, and untiled, and
+disagrees, in the field it should, for a register the template does not know, a stale pool, a
+predicate the other way, draws out of order, and a template told untiled for a tiled list; by the
+registers written alone (the values agreeing), for a tile block with another tile's mask while
+the register file holds the selected tile's window, and for a template write moved to another
+register where both hold the value; and the key check says `key-at-bind` for a template whose
+slot is one dword off, from the first check, and `static-words-changed` only after a check that
+matched (a bind replaced starts again).
+
+**Acceptance [M].** Every scene of the second step, with `--native_lists=shadow`, the binaries
+of this step: the game at `7e9f53bc` (this branch's code; the merges after it changed no file of
+it) and the plugin at ReIGlue `6191326` (0650 with the registers-written check and the key
+check's two reasons). RX 9060 XT, RADV; 1280x720 on a hidden display, no `forza.toml`, a copy of
+the test save, Colorado, offline; two games at a time, so these are not timed runs. Frames are the
+swaps the command processor decoded from the first registry packet on (the menus included); the
+counts are those of the last summary of each run (every 600 frames). A run is one list's indirect
+buffer run once (a scene pass list runs once per tile its INDIRECT_BUFFER packet is not predicated
+off for: second step, question 6). The plugin's first version (`3c08ad4`, without the
+registers written) agreed the same way in the same eight scenes (70.5 M runs, 150.0 M draws).
+
+| Run | Scene | Frames | Runs compared (untiled) | Agree | Draws compared | Agree | Not compared | Key checks tiled / untiled, differing | Stale pools | Generation changes |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- | ---: | ---: |
+| g-bench | the built-in benchmark race (8 cars), uncapped | 15,600 | 14,347,878 (0) | **100%** | 26,121,789 | **100%** | none | 14,347,878 / 0, 0 / 0 | 0 | 981 |
+| g-race | race start at 30 fps: GoPro Millennia Masters, 8 cars, standing on the grid | 12,600 | 7,556,100 (0) | **100%** | 16,086,808 | **100%** | none | 7,556,100 / 0, 0 / 0 | 0 | 568 |
+| g-free | free roam at 30 fps, driving (throttle held in pulses) | 11,400 | 5,746,150 (0) | **100%** | 13,272,203 | **100%** | none | 5,746,150 / 0, 0 / 0 | 0 | 640 |
+| g-stand | free roam at 30 fps, standing at the spawn | 11,400 | 5,966,277 (0) | **100%** | 14,237,001 | **100%** | none | 5,966,277 / 0, 0 / 0 | 0 | 158 |
+| g-photo | photo mode (TAKE PHOTO) at the spawn, 30 fps | 11,400 | 7,128,077 (0) | **100%** | 17,655,387 | **100%** | none | 7,128,077 / 0, 0 / 0 | 0 | 143 |
+| g-msaaoff | free roam at 30 fps, driving, scene_msaa=off (one pass) | 11,400 | 3,547,865 (2,106,615) | **100%** | 11,133,852 | **100%** | none | 1,441,250 / 2,106,615, 0 / 0 | 0 | 1,626 |
+| g-race2x | the benchmark race with scene_msaa=2x (the two-tile scenario of the 12- and 16-car races), uncapped | 15,000 | 11,998,360 (8,784,736) | **100%** | 22,481,112 | **100%** | none | 3,213,624 / 8,784,736, 0 / 0 | 0 | 982 |
+| g-race2x30 | the same at 30 fps (a shorter run) | 5,400 | 4,315,498 (3,142,767) | **100%** | 8,173,270 | **100%** | none | 1,172,731 / 3,142,767, 0 / 0 | 0 | 979 |
+| g-perturb | the benchmark race, uncapped, FH1_NATIVE_LISTS_PERTURB=1000 (a value) | 13,200 | 11,971,406 (0) | **99.9000%** | 22,267,936 | **99.9101%** | none | 11,971,406 / 0, 0 / 0 | 0 | 962 |
+| g-tile | the benchmark race, uncapped, FH1_NATIVE_LISTS_PERTURB_TILE=1000 (a tile mask) | 15,600 | 13,503,266 (0) | **99.9805%** | 25,568,471 | **99.9897%** | none | 13,503,266 / 0, 0 / 0 | 0 | 1,091 |
+| g-slot | the benchmark race, uncapped, FH1_NATIVE_LISTS_PERTURB_SLOT=4 (a slot one dword off) | 15,600 | 11,284,199 (0) | **100%** | 19,611,359 | **100%** | key-at-bind 2,493,282 | 13,777,481 / 0, 2,493,282 / 0 | 0 | 777 |
+| g-tile2x | the benchmark race with scene_msaa=2x, FH1_NATIVE_LISTS_PERTURB_TILE=1000 | 16,200 | 13,001,686 (9,404,512) | **100%** | 24,634,010 | **100%** | none | 3,597,174 / 9,404,512, 0 / 0 | 0 | 951 |
+
+**Again after the last fixes [M]** (the off-path seams, the seqlock read, the bind's group and
+flag, the misses counted apart, the template cap; game `dc53a72c`, plugin ReIGlue `2ba5fd6`; the
+same PC, two games at a time):
+
+| Run | Scene | Frames | Runs compared (untiled) | Agree | Draws compared | Agree | Not compared | Misses at a dropped list's address | Runs during a fixup / stale |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | ---: | --- |
+| h-bench | the built-in benchmark race, uncapped | 16,200 | 14,940,493 (0) | **100%** | 27,249,409 | **100%** | none | 0 | 0 / 0 |
+| h-race | race start at 30 fps, standing on the grid | 12,600 | 7,554,816 (0) | **100%** | 16,083,830 | **100%** | none | 0 | 0 / 0 |
+| h-race2x | the benchmark race with `scene_msaa=2x`, uncapped | 16,200 | 11,636,213 (8,333,635) | **100%** | 23,232,207 | **100%** | none | 0 | 0 / 0 |
+
+No define went past the cap (1.59 M template words at most), no list was refused, none ran on
+another device.
+
+**At the merged heads [M]** (the acknowledgement's release and acquire, a failed define's
+reservation given back, replays dropped by sequence, a run during a fixup not compared, the
+generation read again at the list's end; game `923db1b5`, plugin ReIGlue `c34ef49`; one game at a
+time):
+
+| Run | Scene | Frames | Runs compared (untiled) | Agree | Draws compared | Agree | Not compared | Fixup in progress / during the run | Fixups of bound lists |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: |
+| i-bench | the built-in benchmark race, uncapped | 15,000 | 12,371,399 (0) | **100%** | 23,664,824 | **100%** | none | 0 / 0 | 7,837 |
+| i-race2x | the benchmark race with `scene_msaa=2x`, uncapped | 18,000 | 12,631,368 (8,651,795) | **100%** | 25,365,571 | **100%** | none | 0 / 0 | 7,665 |
+
+No stale pool, no miss at a dropped list's address, no ring full; 1,354 and 677 defines were
+replays (the same packet decoded again for another tile) and were dropped by their sequence
+number, none failed its hash check. No run met a fixup at either read of the generation, so the
+new skips are shown by the unit test only.
+
+**On Windows [M]** (Vulkan, an RTX 5060 Ti, the benchmark race at 60 fps, plugin ReIGlue
+`832648f`: the acknowledgement and the first read's skip, without the list end's read): with
+`native_lists=off` and `shadow` the runs completed; in shadow mode, with the game's MSAA 5,032,933
+runs and 9,564,595 draws compared, with `scene_msaa=2x` 4,170,565 runs (2,945,249 untiled) and
+8,215,139 draws, every one agreeing; 12,142 fixups and 673 unloads in the two runs, no stale
+pool, no ring full, no run during a fixup.
+
+- **Every run compared agrees, and every draw**: 60.6 million runs (14.0 million of them untiled)
+  and 129.2 million draws in the eight scene runs, on what the shaders read, the shaders, the bin
+  mask, whether the draw runs, the registers written before each draw and after the last, and the
+  whole register file at each list's end. The pass groups seen are 0 (the depth pre-pass), 3
+  (pass 1), 12-14 (the scene pass's three layers) and 18 (the shadow maps); no list of pass 2
+  (groups 6-8) ran in these scenes.
+- **The untiled runs' key is the retiled template's (self-consistency):** with `scene_msaa=off`
+  and `2x` the scene pass lists ran untiled 2.11 M, 8.78 M and 3.14 M times. On every one of them
+  the key the plugin read from the untiled words (it reads a NOP as the tile-bound header it
+  replaced) equalled the key of the template the game had converted from a retiled copy (845, 940
+  and 965 lists): the two readings of the same list agree with each other. That is all these runs
+  show. No run compared a retiled copy's key with the same list's key while it runs tiled, or with
+  the files' keys (the second step's `FH1_LIST_KEYS` method), so that the retiled copy is the list
+  as loaded rests on `Retile`'s checks (every saved word still that header's NOP) and its unit
+  test. No key check differed in any scene run, so `key-at-bind` and `static-words-changed` are 0.
+  The other lists of those runs (passes 0, 1 and 6) run as they were recorded.
+- **Question 9 of the plan (a fixup against run order) [M]:** no pool was ever stale (a slot whose
+  word changed while the generation did not: 0 in every run), and no run met a fixup under way (an
+  odd generation, or one that moved during the slots' read or the run: 0). The generation changed
+  143-1,626 times a run, each time the slots were read
+  again: every slot write the game made went through the fixup dispatcher, as the plan read from
+  the code.
+- **The live bin values:** the compare starts from the bin select and mask the command processor
+  has when the list starts (the second step saw the first tile's select 0x80000003, and pass 6
+  lists starting with mask 0x8, 0xA or 0x2), and every run agrees with what it started from. No
+  counter says which start masks these runs met, so that 0x8, 0xA and 0x2 in particular agree
+  rests on the unit test, as the rewritten static words do (below). No draw inside a list
+  was skipped by its predicate (0 in every run): after a tile block the mask is all ones, and the
+  tiles a call skips are those whose INDIRECT_BUFFER packet is predicated off, which are not runs.
+- **The self-checks**, each a benchmark race with one fault put into what the plugin reads:
+  - **a value (g-perturb):** 11,971 runs had one register value of their template view changed,
+    and exactly those 11,971 runs disagree (20,021 of their draws and 10,881 of their ends, all in
+    the state registers); every other run agrees.
+  - **a tile mask (g-tile):** 10,386 runs of tiled lists had their first tile block's mask made the
+    second tile's; for 2,636 of them the live select is one no block of the view matches any more
+    (the others select a tile whose own block still applies last, so the view does not change),
+    and exactly those 2,636 runs disagree, each in one draw, in the registers written alone: the
+    window values agree, since D3D's segment set the first tile's window before the list (the case
+    the values alone could not see; the log names register 0x2080, written by the packets and not
+    by the template). With `scene_msaa=2x` (g-tile2x) no run was perturbed: every scene pass
+    list runs untiled there, and the lists that run tiled have no tile block.
+  - **a slot one dword off (g-slot):** 349 templates had a one-word slot moved one dword on as the
+    plugin read them; their lists' 2,493,282 runs were all counted `key-at-bind` (not compared),
+    none `static-words-changed`, and every other run agrees.
+
+| Run | Lists converted (from a retiled copy) | Refused | Templates sent (words) | Lists bound at the end | Dropped (unloads) | Not registered | Fixups of bound lists | Game hook, in all |
+| --- | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: |
+| g-bench | 1,976 (0) | 0 | 1,397 (1,582,037) | 926 | 1,050 (559) | none | 8,457 | 846.279 ms (0.07 us a call) |
+| g-race | 769 (0) | 0 | 650 (803,368) | 717 | 52 (27) | none | 5,456 | 551.607 ms (0.08 us a call) |
+| g-free | 1,472 (0) | 0 | 1,327 (1,905,567) | 469 | 1,003 (496) | none | 7,471 | 413.761 ms (0.08 us a call) |
+| g-stand | 225 (0) | 0 | 193 (225,661) | 225 | 0 (0) | none | 1,344 | 614.962 ms (0.11 us a call) |
+| g-photo | 334 (0) | 0 | 270 (318,231) | 334 | 0 (0) | none | 1,324 | 656.898 ms (0.09 us a call) |
+| g-msaaoff | 2,180 (845) | 0 | 1,737 (2,165,912) | 863 | 1,317 (636) | none | 22,092 | 994.82 ms (0.18 us a call) |
+| g-race2x | 2,000 (940) | 0 | 1,435 (1,598,583) | 865 | 1,135 (596) | none | 8,504 | 1011.702 ms (0.09 us a call) |
+| g-race2x30 | 2,046 (965) | 0 | 1,396 (1,580,740) | 825 | 1,221 (634) | none | 8,722 | 666.878 ms (0.16 us a call) |
+| g-perturb | 1,958 (0) | 0 | 1,403 (1,589,654) | 980 | 978 (523) | none | 8,213 | 1034.696 ms (0.1 us a call) |
+| g-tile | 2,107 (0) | 0 | 1,437 (1,603,255) | 809 | 1,298 (671) | none | 9,133 | 857.547 ms (0.08 us a call) |
+| g-slot | 2,064 (0) | 0 | 1,398 (1,583,921) | 809 | 1,255 (656) | none | 9,199 | 885.838 ms (0.08 us a call) |
+| g-tile2x | 1,967 (922) | 0 | 1,410 (1,588,611) | 981 | 986 (531) | none | 8,426 | 993.123 ms (0.08 us a call) |
+
+- The lists are converted at their first run on the render thread: 225-2,180 a session, 4.4-49.3
+  ms in all. Templates are shared by key: 193-1,737 sent. A template goes into the ring once; no
+  define ever waited for room, no packet lacked room in the command buffer, and no list ran on
+  another device or into a recording one (as the second step found).
+- **Drops:** every list an unload dropped was found by its command buffer in the freed headers'
+  range (by the PM4's range alone: none). A drop packet is decoded again when its D3D segment is
+  run again for another tile; the plugin then finds nothing to drop (368-370 in the benchmark
+  races, 184-185 with `scene_msaa=2x`, none in the other runs).
+
+**What is not compared, and why:**
+
+- **Every buffer that is not a model list** (234-597 a frame: D3D's own segments, which hold the
+  state flush in front of each list and D3D's draws; the clones, the cars and the objects drawn the
+  same way; the HUD's slots). They are not registered: their path is the plan's step 5.
+- **A run whose lookup check fails:** a length that is not the registered one, a command buffer
+  that no longer names the buffer, a key that is not the template's (`key-at-bind` or
+  `static-words-changed`, above), a list inside a list. **None happened in the scene runs.** The
+  second step saw one benchmark model's first vertex constant words rewritten after their first
+  run in four of seven benchmark sessions (trace builds); in the 16 benchmark race sessions of
+  this step in shadow mode (the first version's eight and this version's eight, `scene_msaa=2x`
+  and the self-checks among them) it did not happen. That such a run becomes a counted fallback
+  (`static-words-changed`) and not a disagreement rests on the unit test (a static word changed
+  after a check that matched) and on the code (the plugin counts and skips the run before any
+  compare), not on a run. `key-at-bind` is what a template wrong from the start gives instead
+  (g-slot above: every run of such a list, from the first, and never `static-words-changed`); it
+  is a converter error and must stay 0.
+- **A list the converter refuses:** none of Colorado's (0 refused in every run); it would be bound
+  with its reason, and its runs counted by reason.
+- **Lists the game did not register** (another device, a recording one, a full template ring, no
+  room in the command buffer): none.
+- **Inside a compared run,** D3D's marks at the list's end (above), and, at each draw, the
+  registers outside 0x2000-0x23FF and the constants, which the end-of-list compare covers. The
+  registers-written sets leave out the marks and the four registers a draw or event packet writes
+  itself (0x21F9-0x21FC), whose values are compared.
+- **FM4 circuits and the converted worlds** are not this step's: Colorado only. Their lists the
+  converter does not know are refused (the first step's census), so they would be bound as refused
+  and decoded as before.
+- **The 16-car race** cannot be run offline (second step); its render scenario can, and is the
+  `scene_msaa=2x` runs.
+
+**What shadow mode costs [M]** (the same runs; the compare's own time on the decoder thread from
+its clock, the game's hook from its own, both over each whole run):
+
+| Run | Runs a frame | Draws a frame | Compare, us a run (start / draws / end) | Compare, ms a frame | Game hook, ms a frame |
+| --- | ---: | ---: | --- | ---: | ---: |
+| g-bench | 920 | 1,674 | 5.36 (2.77 / 1.39 / 1.20) | 4.93 | 0.054 |
+| g-race | 600 | 1,277 | 5.97 (3.07 / 1.65 / 1.25) | 3.58 | 0.044 |
+| g-free | 504 | 1,164 | 6.42 (3.31 / 1.85 / 1.27) | 3.24 | 0.036 |
+| g-stand | 523 | 1,249 | 6.95 (3.64 / 2.01 / 1.31) | 3.64 | 0.054 |
+| g-photo | 625 | 1,549 | 6.95 (3.53 / 2.02 / 1.41) | 4.35 | 0.058 |
+| g-msaaoff | 311 | 977 | 11.06 (5.94 / 3.33 / 1.79) | 3.44 | 0.087 |
+| g-race2x | 800 | 1,499 | 5.69 (2.96 / 1.48 / 1.25) | 4.55 | 0.067 |
+| g-race2x30 | 799 | 1,514 | 6.63 (3.54 / 1.70 / 1.39) | 5.30 | 0.123 |
+
+- **The decoder pays 3.2-5.3 ms a frame**, about 1.3 to 2 times its whole work without
+  the compare (2.3-2.6 ms in the benchmark: second step). The start of a run is the largest part:
+  a copy of the whole register file (80 KB) as the base of the template's view, and the key over
+  the list's static words; the draws' part is the registers-written check's bookkeeping (it was
+  0.5-0.9 us a run without it, 1.4-3.3 us now), the end compares the whole file again. That is the
+  price of comparing everything a run could change; a replay needs none of it (it checks the
+  generation, not the key, and writes instead of comparing). These runs shared the PC with other
+  games, and the times are wall-clock times on the decoder thread, so they include its waits for
+  the CPU: the first version measured 1.9-4.2 ms a frame in the same scenes.
+- **The game's render thread pays 0.04-0.12 ms a frame** (the plan's limit for this step is 0.1
+  ms): a lock and a lookup per RunCommandBuffer call (0.07-0.18 us), and the conversions, 4-49 ms
+  in a whole session, at the lists' first runs. The game's code is the same as in the first
+  version's runs, which measured 0.03-0.05 ms in the scenes they shared (0.073 ms in the shorter
+  `scene_msaa=2x` run at 30 fps, whose 0.123 here is the only one above the limit): the hook's
+  clock is wall-clock time on a loaded PC. Whether the hook stays within 0.1 ms with the PC to
+  itself was not measured here; the worst single frame of a load was not measured either.
+- **The frame rate, timed [M]:** the built-in benchmark, each run alone on the PC (no other game,
+  the benchmark lock held), uncapped, `gpu_split_command_processor` on (this PC's default), three
+  rounds in a rotated order, frame times and the decoder thread's CPU time over the same window
+  of each run (game at this branch, `923db1b5`, plugin ReIGlue `c34ef49`; main: the game at main
+  `1e651936` and ReIGlue main `18fa1cc`, built the same way):
+
+  | Binaries | Benchmark fps (three rounds) | Mean | Decoder thread, ms a frame | Recorder thread, ms a frame |
+  | --- | --- | ---: | ---: | ---: |
+  | main | 173.2, 143.5, 163.1 | 159.9 | 2.62 | 4.83 |
+  | this branch, `native_lists=off` | 176.0, 153.7, 156.0 | 161.9 | 2.63 | 4.84 |
+  | this branch, `native_lists=shadow` | 102.4, 93.3, 86.6 | 94.1 | 8.27 | 8.00 |
+
+  **Off is within the noise of main:** +1.2% fps and +0.3% decoder time, where the rounds of the
+  same binaries spread by about 4% around their mean either side (143.5-173.2 fps for main
+  alone). **Shadow is a test mode, and it costs:** -41% fps in the benchmark and 3.2 times the
+  decoder's time a frame (the compare beside every list run, above), so it is for these
+  measurements and the replay's checks, never for play.
+
+**Off costs nothing measurable [M]** (the timing above), and the instructions it adds are these.
+With `native_lists=off` the game sends no registry packet, and the plugin's registry is never
+made: each seam in the command processor is a test of a null pointer (the write paths' seams too:
+`fh1_list_reader_` is null outside a compared run), plus what the compiler lays out around it
+(below: `ExecuteIndirectBuffer` runs about 8 instructions more per indirect buffer). Shown by
+comparing the binaries, function by function, with main (the game at main's tree, ReIGlue main
+`18fa1cc`) built the same way (instructions compared with addresses, call targets and padding
+taken out, `objdump -d`):
+
+| | Functions | The same | Changed | Added |
+| --- | ---: | ---: | --- | ---: |
+| Game | 85,620 / 85,678 | 85,611 | the hooks of RunCommandBuffer (`sub_824469B0`) and of the track's and the procedural models' scene pass (`sub_82466418`, `sub_82447B70`): each gains a load of the switch's state and two compares before its old body (6 instructions); one more instance of each of the three functions a string switch's definition makes (the new switch's) | 58: `native_lists.cpp`, the converter, `EmitHostPacket`, and the hooks of `sub_82D19210` and `sub_82D19668` |
+| GPU plugin | 4,426 / 4,468 | 4,410 | the seams: `ExecuteIndirectBuffer`, `ExecutePacketType3` (two draw lines), `_NOP`, `_IM_LOAD`, `_XE_SWAP`, `Shutdown`, the constructor (the two new members); the write paths' seams (below): `PacketWriteRegister`, `PacketWriteRegistersFromMem`, `WriteRegisterRangeFromRing`, `_COND_WRITE`, and the three packet handlers `Fh1WritePlainRangeFromRing` is inlined into (`ExecutePacketType0`, `_SET_CONSTANT`, `_SET_CONSTANT2`); and two that only moved: `std::vector<uint32_t>::operator=`, which the plugin imported and now has a copy of, and a table address in the Vulkan swap's lambda added with `or` instead of `add` | 42: `fh1_native_list.cpp` and what it instantiates |
+
+The game row is the first round's (game `7e9f53bc` against main's tree; its 6 instructions for
+the scene pass hooks and its plain view of the two new hooks were too low, see the check at the
+merged heads below). The fixes after the
+reviews changed, in the game, only `native_lists.cpp`'s own functions (`OnRun`, `Register`) and
+the fixup dispatcher's hook (`sub_82D19210`), whose path with the switch off is the same
+instructions as before (the load of the switch's state, two compares, the call of the original);
+the other differences between those two builds are main's (merged).
+
+**Again at the merged heads, an independent check [M]** (game `923db1b5` against main
+`1e651936`, plugin `c34ef49` against `18fa1cc`), the path with the switch off, instruction by
+instruction:
+
+- **Game:** the RunCommandBuffer hook (`sub_824469B0`) runs 6 instructions more (the switch's
+  state loaded, two compares, two branches). The scene pass hooks run more than that: the track's
+  (`TrackDrawPass`, `sub_82466418`) 26 and the procedural models' (`ProceduralDrawPass`,
+  `sub_82447B70`) 18, as the compiler reads guest words there with four byte loads instead of a
+  load and a `bswap` and the hooks lost their tail calls. `sub_82D19210` (the fixup dispatcher)
+  and `sub_82D19668` (the unload) are plain functions on main; here each is a hook that tests the
+  switch and calls the original, about 20-23 instructions more per call (a frame of five saved
+  registers and the call). All are a few instructions per call of functions called at most a
+  few thousand times a frame; the timing shows none of it.
+- **GPU plugin:** `ExecuteIndirectBuffer` about 8 instructions more per indirect buffer (one more
+  saved register, its two arguments kept for the lookup, the registry's null test before the loop
+  and the result's test after it); the write paths, the NOP, IM_LOAD and swap handlers main's plus
+  the test and a branch never taken.
+- **aarch64** (the plugin's `command_processor.cpp` compiled for `aarch64-linux-gnu` with the
+  same flags, main and this branch; CI also builds the whole SDK on aarch64 at the pin): it
+  compiles, and there the off path is not only a test: `ExecuteIndirectBuffer` saves one register
+  pair more (4 to 5 `stp`/`ldp`), `_SET_CONSTANT` one more (2 to 3) and `_SET_CONSTANT2` two more
+  (2 to 4), since clang has no `preserve_most` there; the other functions keep main's frame and add
+  the test (9-26 instructions more by count, mostly the cold blocks). Not timed on an aarch64 host.
+
+**The write paths' seams, instruction by instruction [M].** These are the decoder's hottest
+functions: every register write and range of the PM4 stream goes through them, and with
+`gpu_split_command_processor` off (the default below six cores, where the decoder limits the
+frame rate) `PacketWriteRegister` is on main four instructions (`cmp record_split_; je; mov; jmp
+[vtable]`). The first fix round's seams (an inline null test whose call kept its arguments live)
+cost more than the test: the compiler saved and restored registers on every call, so that path
+became about 21 instructions (five pushes, moves, the test, moves, four pops, the tail jump), and
+`Fh1WritePlainRangeFromRing` saved seven registers instead of four, before its ring-room check.
+Now the call is out of line and cold (`Fh1ListNoteWrites`, with clang's `preserve_most` on
+x86-64, hidden so it is a direct call, never through the PLT), `PacketWriteRegister`'s unsplit
+path hands a write made during a run to a cold function as a tail call, the split paths test
+after their first counter (so the compiler does not hoist the load above the split test), and
+`Fh1WritePlainRangeFromRing` is main's again (its three call sites test the run and hand a range
+to a cold function). Compared with main, registers' names taken out too (a renaming is no
+difference):
+
+| Function | Main, switch off | First fix round (`6191326`) | Now |
+| --- | --- | --- | --- |
+| `PacketWriteRegister`, unsplit | 4 instructions | about 21 (registers saved and restored) | main's 4 + `cmp fh1_list_reader_, 0` + `jne` (never taken) |
+| `PacketWriteRegister`, split | | arguments moved into saved registers | main's + the test and branch |
+| `PacketWriteRegistersFromMem` (each path), `WriteRegisterRangeFromRing`, `_COND_WRITE` | | 3-7 moves and the test | main's + the test and branch |
+| `Fh1WritePlainRangeFromRing` | 92 instructions, 4 registers saved after the ring-room check | 7 saved, before the check | the same as main |
+| `ExecutePacketType0`, `_SET_CONSTANT`, `_SET_CONSTANT2` (the plain range inlined) | | the same pattern inlined | main's + the test and branch; the cold call and the backend's fallback call (a range that is not plain) laid out at the end, and in `ExecutePacketType0` the one-register write loop's exit now jumps over that fallback (one jump once per such packet, one fewer for the fallback) |
+
+The cold blocks only run with a run open (`native_lists=shadow`).
+
+**Render test [M]:** `tools/render_test.py check` against the stored baselines, each run in a
+fresh work folder (cold caches), with main's binaries (the game at main's tree, ReIGlue main
+`18fa1cc`) beside this step's, interleaved over one hour while other games ran on the PC:
+
+| Run (start) | Binaries | Scenes passing | Failing (structure difference / tolerance) |
+| --- | --- | ---: | --- |
+| main1 (15:52) | main | 6 of 6 | none (photo mode 0.0128 / 0.016) |
+| off1 (15:54) | this step, `native_lists=off` | 2 of 6 | cockpit 0.0083 / 0.003, freeroam_dawn 0.0276 / 0.01, freeroam_midday 0.0415 / 0.005, photo mode 0.0620 / 0.016 |
+| shadow1 (15:57) | this step, `shadow` | 6 of 6 | none |
+| main2 (16:00) | main | 2 of 6 | cockpit 0.0086, freeroam_dawn 0.0201, freeroam_midday 0.0232, photo mode 0.0306 |
+| off2 (16:22) | `off` | 4 of 6 | freeroam_midday 0.0058, photo mode 0.0195 |
+| shadow2 (16:25) | `shadow` | 6 of 6 | none |
+| main3 (16:28) | main | 6 of 6 | none (title 0.0148 / 0.015) |
+| off3 (16:42) | `off` | 2 of 6 | cockpit 0.0042, freeroam_dawn 0.0140, freeroam_midday 0.0155, photo mode 0.0260 |
+| shadow3 (16:45) | `shadow` | 6 of 6 | none |
+| off4 (16:48) | `off` | 2 of 6 | cockpit 0.0090, freeroam_dawn 0.0246, freeroam_midday 0.0264, photo mode 0.0425 |
+| main4 (16:50) | main | 2 of 6 | cockpit 0.0121, freeroam_dawn 0.0271, freeroam_midday 0.0368, photo mode 0.0557 |
+
+Main's binaries fail the same four scenes, by the same amounts and in the same way as `off`
+(mostly the foliage over the whole frame and a traffic car in the distance; not the player's
+car), and in the same windows (main2 while another of this step's games was
+loading, main4 right after off4): on this PC the test's spread is wider than its tolerances,
+whichever binaries run, so it does not tell `off` from main. That `off` is main is shown by the
+binary comparison above, not by this test. All three `shadow` runs passed; why shadow mode's
+slower decoder lands inside the tolerances more often than main was not looked into. The first
+version's single runs (6 of 6 each) are no evidence either way.
+
+**Plan questions closed here:** 8 (the load hook: not needed; a list is converted at its first
+run, from a retiled copy when it is untiled, and the unload is `sub_82D19668`), 9 (above). The
+plan's row 3 asked for 0 static-hash mismatches (0), 100% of runs at registered addresses hit (all
+model lists were registered at their first call; no lookup check failed) and a render thread cost
+of at most 0.1 ms a frame (0.04-0.09 ms in seven of the eight scene runs, 0.12 in the shorter
+`scene_msaa=2x` run on a loaded PC where the first version measured 0.07 with the same game code:
+above).
+
+**Left for the fourth step** (shadow mode only; with the switch off none of it runs):
+
+- **Templates are never freed.** The plugin keeps every template it was sent until exit
+  (0.2-2.2 M words, up to 8.7 MB, in these sessions), the game its key map (one small entry per
+  key: a few MB even for all 51,633 of Colorado's keys). Freeing a template needs both sides to
+  agree that its id is dead (a count of the lists bound to it on each side, and a tile replay of
+  an old define must not bring it back after its ring memory was reused), which is the replay's
+  protocol work. Until then the plugin caps what it keeps at 16 M words (64 MB, seven times the
+  most measured) and counts a define past it.
+- **A define the ring has no room for** converts its list again at the next call, until the
+  plugin has acknowledged enough of the ring (`ring full`, 0 in every run; it costs conversion
+  time only). A template that can never fit is refused (`too-large`), not retried. Replay keeps
+  the converted template instead.
+- **The binding's command buffer header and patch table are read from guest memory at every
+  run,** and the model's unload frees that memory before the drop is decoded. On x86 that cannot
+  fault (a guest page is at least a host page there, so freed guest memory stays mapped); on a
+  host with 16 KB pages (the aarch64 work) a freed 4 KB page can become inaccessible, and a buffer
+  of the same address and length run before the drop would read it. Before `native_lists` runs
+  on such a host: check the binding's pages before reading, or hold the free until the drop is
+  decoded.
+- **The seqlock's fences** (release around the fixup in the game, acquire around the slots and
+  before the list end's read in the plugin) and the acknowledgement's release and acquire have
+  only run on x86, where they only hold the compiler back; on aarch64 they are what orders the
+  reads (CI builds them there; not run).
+
+**Still open:** the static-word change of the second step was not met, so the fallback for it is
+shown by the unit test only; a real 16-car race; the GTX 1650 Ti (not run in this step); the
+render thread's hook in shadow mode on a quiet PC; the off path timed on an aarch64 host. For the
+fourth step, in the game's scene pass hooks: the guest word loads (four byte loads where a load
+and a `bswap` would do) and the lost tail calls. Next: replay (the plan's step 4), which reuses this registry and the generations, and
+whose double-run check can reuse this compare.
+
 ## Tools
 
 The M0 tools are build options: off, the game and the SDK are the same as without them.
@@ -1007,7 +1493,8 @@ has any of it:
   the call names by physical address. The first time a command buffer is seen, its header is
   classified and a model list is converted (`native_list.h`) from a copy, with its flags in the
   files' form; every later call compares the masks and flags with that first look and the live
-  list's key with the template's. The fixup dispatcher (`sub_82D19210`), `sub_82D10908` and
+  list's key with the template's. The fixup dispatcher (`sub_82D19210`, whose hook is
+  `native_lists.cpp`'s: it calls the trace's `FORZA_LIST_TRACE_FIXUP`), `sub_82D10908` and
   `sub_82CE9258` are hooked to count their calls by type or caller, and D3D's command buffer clone
   (`sub_82AA8220`) and memcpy (`sub_82B3A7E0`) to tell who wrote a command buffer that is not a
   file list when it first runs. It costs every RunCommandBuffer call (a lookup and a hash of the

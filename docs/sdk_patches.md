@@ -987,3 +987,204 @@ from a Big Shot's start to its end, next to the front buffers' readback range
 (`FORZA_BIGSHOT_LAYER=0` leaves the layers as they come). With the flag off nothing changes.
 [rendering.md](rendering.md#pictures-at-three-quarters-of-their-size-at-a-1080p-output-879) has the
 trace and what was checked.
+
+## ReIGlue 1100: a device loss tells the draw from the work recorded before it (#913)
+
+The breadcrumb after a guest draw (0438) is written once the draw and everything recorded before
+it has finished. The "unfinished" draw of a report therefore stands for the draw and for the work
+the emulator recorded since the draw before: a new render pass, render target transfers, texture
+loads, barriers. Both draws named on the Vega APU of #551 and #913 were car paint draws, and the
+log could not say which of the two the GPU hung on.
+
+With `gpu_device_lost_setup_breadcrumbs` on (off by default, read at start; Advanced > Log >
+Detailed GPU reset report in the launcher), 1100 counts the commands written to the deferred
+command buffer's main stream between two guest draws by kind: render pass begins and ends, draws,
+dispatches, barriers, copies, attachment clears, query commands, conditional rendering, hoist
+points (the hoisted uploads run there) and upscaling passes. The draw command itself is not
+counted. The trail keeps the counts with the draw's shader modifications and render pass key, in
+an array of its own. A draw with such work also gets a second `VK_AMD_buffer_marker` right before
+its draw command (offset 8, bottom of the pipe), written once that work has finished. A loss logs a
+second line (see
+[rendering.md](rendering.md#device-lost-which-draw-the-gpu-was-on-551)) that says whether the GPU
+finished that work. It gives no verdict where the markers cannot prove one: when the last finished
+draw is in another submission (the presenter's work on the queue in between is not counted), and
+on NVIDIA's checkpoints.
+
+With the setting off nothing of this is recorded. The command buffer tests its two flags with one
+16-bit compare where main tested one flag and the stream (2 instructions instead of 7 on x86-64),
+`Trail::Record` is main's, and IssueDraw tests the setting twice a draw; a loss then logs a line
+that names the setting. The checks on RADV and the cost are in rendering.md;
+`tools/test_device_lost_trail.cpp` covers the trail and the line.
+
+## ReIGlue 1110: memory read once more after a release is dropped when allocated again (ReIGlue #64)
+
+The GPU's copy of guest memory holds a page as up to date once it uploads it, and a write watch on
+the page tells it when the CPU changes it. A watch can only be armed on a page a heap holds and
+the guest may write. A block released while a frame still queued reads it was uploaded again and
+held as up to date with no watch; once the block was allocated again, nothing reported the writes
+to it and the GPU drew the old bytes for whatever the game put there (#895: other textures' texels
+on an FM4 circuit). The same for a page the game held read-only and later made writable.
+
+With 1110 an allocation of physical memory drops the GPU's copy of the pages it gives new contents
+(pages committed again keep theirs, and what the GPU wrote there), and a protection change that
+makes pages writable drops it as it already did for watched pages, whether or not a page was
+watched. Requests, uploads, allocations and protection changes cost the same within the noise; in
+a render test run the game made 69 committing allocations and 95 writable protection changes.
+ReIGlue's `tests/shared_memory_watch_test.cpp` plays the release, late read, allocation and write
+against the real guest memory. The calls #895 added after its chunk allocations (`fm4_track.cpp`,
+`fixed_gpu_heap.cpp`: `EnablePhysicalMemoryAccessCallbacks`, then `TriggerPhysicalMemoryCallbacks`)
+now repeat what the allocation does and can go.
+
+## ReIGlue 1120: pictures at render scale 2 without comb edges (#905)
+
+With a draw resolution scale, the copy of a resolve to guest memory (`readback_resolve`,
+`IssueCopy_ReadbackResolvePath`) first downscales the scaled resolve to the guest's size
+(`resolve_downscale.cs.glsl`). The scaled resolve stores each 16-byte guest quad (four 32-bit
+pixels of a row) as scale_x * scale_y 16-byte host quads, a column of scale_y of them after the
+other, which is how the scaled texture loads, the car thumbnails' box filter (0149) and 1000 read
+it. The downscale's point sample read guest pixel i's host pixels as one contiguous block from
+i * scale_x * scale_y instead, which is another pixel whenever scale_y is above 1. At render scale
+2, guest columns 4k and 4k+1 took host column 8k (rows 2y and 2y+1), and 4k+2 and 4k+3 host column
+8k+4. So every picture the game reads on the CPU at render scale 2 or a 1440p output had comb
+edges: a saved photo and its thumbnail, a Big Shot's tiles, a replay movie's frames. At a 1080p
+output with SMAA or FSR 3, the pictures in the scene layer had them too, such as a Big Shot. The
+pictures 1000 copies from the fractional raster did not.
+
+1120 addresses the host quads in the point sample (and in its centre variant,
+`readback_resolve_half_pixel_offset`) at every pixel size. Unsigned 8:8:8:8 and 2:10:10:10 color
+copies also take the box filter the car thumbnails have: each guest pixel is the average of its host
+pixels, as 1000 does on the fractional raster for both formats. The photo and its thumbnail are
+8:8:8:8; the front buffers a Big Shot reads its tiles from and the replay movie's frames are
+2:10:10:10. So a picture at a 1440p output is made the same way as one at a 1080p output. With
+`vulkan_readback_box_filter=false` (default on) the copy takes one host pixel instead. That setting
+is for comparisons; car thumbnails keep the average either way. Signed or integer values, an 8in64
+or 8in128 swap, other formats and depth keep point sampling. At render scale 1 no
+downscale runs (the copy is a plain buffer copy), so nothing changes there. Direct3D 12's copy of
+the shader had the same addressing; 1140 (below) fixes it (#962).
+
+`tools/test_vulkan_thumbnail_readback.py` now checks the point and centre samples too: 81 of 81
+cases with 1120, 45 of 81 with the shader before (27 of 27 box filter cases with both).
+[rendering.md](rendering.md#comb-edges-at-render-scale-2-905) has the pictures measured in the
+game.
+
+## ReIGlue 1130: a gear survives a lever that misreads for a moment with the clutch up (#952)
+
+With *Gears need the clutch* (`wheel_shifter_clutch`) a gear the clutch did not let in is neutral
+(`EngageGear`). In a gear with the clutch let out, a read of the lever that showed another gear took
+the car to neutral at once, and once the lever was back in its slot that was a new gear for
+`EngageGear`, which the clutch had to let in: the car stayed in neutral until the clutch went down
+again. A read of no gear was already carried for `wheel_shifter_neutral_ms` (400 ms, 0404), except
+with that setting at 0. A TH8S player (#952, *Gear follows the lever's slot* on, threshold 0.5)
+reports the car dropping to neutral when the clutch comes out fully.
+
+1130 (`EngageLeverGear`, `src/input/wheel/wheel_gear_request.h`): with the clutch needed and below
+its threshold, an engaged gear is left only once the lever has read something else for
+`kLeverSettleMs` (50 ms); a read that is back in the slot sooner keeps the gear. While a change is
+pending, the gear carried through neutral is the engaged one, so a misread gear never engages when
+the clutch goes down with the lever in neutral (the rule a clutch-rejected slot already had), and
+only for what is left of the hold since the lever left its slot, so a lever that sits in neutral
+and now and then reads another gear is neutral after the hold and the 50 ms. It only delays leaving
+a gear: a real move to neutral with the clutch up is neutral 50 ms after the hold through neutral
+ends, a shift with the clutch down or with the setting off is taken at once, and nothing engages
+without the clutch. A lever that reads no gear for longer than the hold and 50 ms is still neutral:
+that is the lever out of its slot.
+
+The driver also logs the lever: every change of what it read or the gear it gave, in both modes of
+`wheel_shifter_follow_slot`, `Wheel: H-pattern lever 3, gear 3, clutch 0.00`, the first 1000 lines
+per wheel. Before, *Gear follows the lever's slot* logged no request, and the gear changes stop
+after 16, so a player's log showed nothing of the lever.
+
+Tests: `forza-recomp/tests/wheel_gear_request_test.cpp` (the lever polled 240 times a second). With
+ReIGlue before 1130 these fail: a one-read misread of 2nd, 4th, 5th or reverse in 3rd with the clutch
+out, another gear for 30 ms, and a one-read neutral with `wheel_shifter_neutral_ms` 0; all keep 3rd
+now. These pass before and after: a one-read neutral with the hold at 400; a lever to neutral; 3 > 4
+without the clutch, then the clutch; 3 > 4 with it; neutral at once with the clutch down and the hold
+at 0; and a lever in neutral that reads 4th once every 100 ms, which is neutral after the hold and
+engages nothing when the clutch then goes down. ReIGlue's `tests/wheel_gear_transit_test.cpp` has
+the same cases.
+
+## ReIGlue 1140: the same on Direct3D 12 (#962)
+
+With `gpu_backend = "d3d12"` (ReIGlue's Direct3D 12 backend, not ReGPU), the copy to guest memory
+at a render scale downscales with its own copy of the shader, `resolve_downscale.cs.hlsl`, compiled
+to DXBC (`bytecode/d3d12_5_1/resolve_downscale_cs.h`). It had the same contiguous-block addressing,
+so the same pictures had the same comb edges. 1140 ports 1120 to it: the point and centre samples
+address the host quads at every pixel size, and unsigned 8:8:8:8 and 2:10:10:10 color copies take
+the box filter under the same condition and constant bits as on Vulkan.
+`d3d12_readback_box_filter=false` (default on) takes one host pixel instead, for comparisons. The
+copy also reads the scaled resolve from the written extent's first tile, as Vulkan does, instead of
+from the base of the resolve's range. The two differ for an 8- or 16-bit copy whose first tile is
+off the base's coarser granularity and for a copy to a slice other than 0. FH1's 32-bit pictures
+have the two equal. Render scale 1 runs no downscale and is unchanged.
+
+The DXBC comes from FXC 10.0.26100 (`/T cs_5_1 /E main /O3 /all_resources_bound /Qstrip_reflect
+/Qstrip_debug /Qstrip_priv`), formatted with the repository's clang-format. The same command
+rebuilds the old header byte for byte. The HLSL, and the DXBC itself run on Direct3D 12 through
+vkd3d-proton, pass all of 1120's layout cases (scales 1 to 4 and 7 for 32-bit pixels). The
+pictures in the game on Direct3D 12 are in
+[rendering.md](rendering.md#direct3d-12-962).
+
+## ReIGlue 1150: the stick deadzones leave a racing wheel alone (#952)
+
+The input system applied *Left stick deadzone* and *Right stick deadzone*
+(`left_stick_deadzone_percentage`, `right_stick_deadzone_percentage`, Controls > Controller) to
+every controller's state, the wheel's too. The wheel driver sends the H-pattern gear on the right
+stick X (-1 reverse, 0 neutral, 1 to 7) and the clutch on the right stick Y, and the deadzone is
+radial: it takes the stick's angle from both axes and scales against the range the device's
+capabilities report, for the wheel's right stick X the top gear times 256 (1536 with six gears).
+With the clutch fully up (right Y 0) the angle is 0, the whole deadzone lies on X, and a forward
+gear of a few units fell inside it: the game was sent 0, neutral. The slightest clutch turns the
+angle to almost 90 degrees and lets the gear through; reverse, being negative, always passed.
+So with any right stick deadzone set the car fell to neutral the moment the clutch came fully up,
+with or without *Gears need the clutch*, and with *Clutch pedal* off no forward gear engaged at
+all; the gear's "no request" (10, with *Gear follows the lever's slot* off and out of focus) became
+a neutral request too. That is what a G923 player reports on v0.4.1 (#952), and their log shows the
+driver holding the gear the whole time (`Wheel: H-pattern lever 1, gear 1, clutch 1.00` and no
+change after it); the log does not record the deadzone settings. The left stick deadzone zeroed
+small steering to the right the same way (the radial deadzone only works on positive values, for
+pads too, a separate matter; with 900-degree steering the wheel reports a range of 900, so it was
+negligible there).
+
+1150 applies the deadzones to the gamepads' merged state only. A wheel's state (a device of
+subtype `XINPUT_DEVSUBTYPE_WHEEL`) is merged in after them as it is, so a gamepad next to the
+wheel keeps its deadzone and the wheel's gear survives the merge. The deadzones scale against a
+gamepad's ranges, no longer the wheel's when it was the first device (a pad plugged in while the
+user is already connected still keeps the ranges read when the user connected, as before). Test:
+`tests/unit/input/input_assignment_test.cpp` in ReIGlue: with both deadzones at 0.1, a wheel's
+gears 1, 3, 6 and reverse with the clutch up, and 3rd with the clutch just touched, reach the game
+as they are, and so does the no-request value; next to it a pad's drifting right stick inside its
+own 10 percent is still zeroed. The forward gears and the steering fail without 1150.
+
+## ReIGlue 1160: the stick deadzones zero a stick drifting left or down too
+
+*Left stick deadzone* and *Right stick deadzone* (`left_stick_deadzone_percentage`,
+`right_stick_deadzone_percentage`, Controls > Controller) only worked on positive values. The
+deadzone is radial: it takes the stick's angle and gives each axis a cutoff of the angle's cosine
+(X) or sine (Y) times the radius, and an axis inside its cutoff is sent as 0. The cutoffs were
+signed, so for a stick left or down the cutoff was negative and no value fell inside it. A pad
+drifting left or down reached the game as it was, while the same drift right or up was zeroed, and
+a drift off both axes kept its negative one: with a deadzone of 0.1, (300, -300) became (0, -300)
+and (-300, -300) passed unchanged. Drift is why a player sets a deadzone.
+
+1160 takes the cutoffs unsigned. Inside the radius both axes are zeroed in every direction; outside
+it the stick passes through unchanged, as before (no rescaling, so the stick still steps from 0 to
+the radius at the edge). The radius is the same as before: the stick's range as the pad's
+capabilities report it, edge to edge (0xFFFF from the SDL driver, 0xFFC0 from XInput for a 360
+pad), times the setting, so 0.1 covers about the first 20 percent of the travel from the centre,
+and from about 0.5 up even a full push straight along an axis is zeroed. The default 0 changes
+nothing, and a racing wheel is still left alone (1150). The launcher's tooltips for the two
+settings now say what the fraction is of.
+
+The game has deadzones of its own, kept in the player's profile (`ControllerAdvancedOptions`, with
+the defaults in `media/profileschema/ForzaProfile.sch`): steering 0.24 inside and 0.95 outside,
+throttle 0.15 and 0.90, brake 0.15 and 0.95, clutch and handbrake 0.10 and 1.00 (the wheel has its
+own set, `WheelAdvancedOptions`, steering 0.01 inside). They apply on top of these settings, to
+what the game makes of the sticks and triggers: with the defaults a small drift of the steering is
+already lost in the game's 24 percent, so the stick deadzones here matter most for what that set
+does not name, such as the right stick's camera, and for the menus (not checked in the game's code
+input by input).
+
+Test: `tests/unit/input/input_assignment_test.cpp` in ReIGlue, with both deadzones at 0.1 and the
+ranges 0x7FFF, 0xFFC0 and 0xFFFF: every 45 degrees at 0.6 and 1.5 times the radius, small drifts
+off both axes with a negative one, and the ends of the range (-32768 among them), on both sticks.
+Without 1160, 72 of its 435 checks fail, every one inside the radius with a negative axis.

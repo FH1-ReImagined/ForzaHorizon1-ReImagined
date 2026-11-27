@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Validate RGBA8 thumbnail filtering using physical 16-byte resolve quads."""
+"""Validate the resolve downscale of 32-bit pixels (point, centre and the RGBA8 box filter) using
+physical 16-byte resolve quads."""
 from pathlib import Path
 import sys, re, struct, json
 
 import argparse
-parser = argparse.ArgumentParser(description="Test embedded thumbnail SPIR-V against independently encoded scaled resolve quads. Requires Python vulkan; no game assets.")
+parser = argparse.ArgumentParser(description="Test the embedded resolve downscale SPIR-V against independently encoded scaled resolve quads. Requires Python vulkan; no game assets.")
 parser.add_argument("--header", required=True, type=Path)
 parser.add_argument("--original-control", action="store_true", help="Require at least one failure from the pre-fix shader")
 args = parser.parse_args()
@@ -40,7 +41,9 @@ for label in ['shader']:
     words = [int(x, 16) for x in re.findall(r'0x[0-9a-fA-F]+', header[header.index('{', header.index('const uint32_t')):])]
     code = struct.pack('<' + 'I' * len(words), *words)
     module = v.vkCreateShaderModule(device, v.VkShaderModuleCreateInfo(codeSize=len(code), pCode=code), None)
-    pipeline = v.vkCreateComputePipelines(device, v.VK_NULL_HANDLE, 1, [v.VkComputePipelineCreateInfo(stage=v.VkPipelineShaderStageCreateInfo(stage=v.VK_SHADER_STAGE_COMPUTE_BIT, module=module, pName='main'), layout=pipeline_layout)], None)[0]
+    # Kept in a variable: a temporary stage structure can be freed before the call reads it.
+    stage = v.VkPipelineShaderStageCreateInfo(stage=v.VK_SHADER_STAGE_COMPUTE_BIT, module=module, pName='main')
+    pipeline = v.vkCreateComputePipelines(device, v.VK_NULL_HANDLE, 1, [v.VkComputePipelineCreateInfo(stage=stage, layout=pipeline_layout)], None)[0]
     passed = failed = filtered_failed = 0
     for sx in [1, 2, 3]:
         for sy in [1, 2, 3]:
@@ -60,11 +63,16 @@ for label in ['shader']:
                                 sample = y * sx + x % sx
                                 packed.append(values[pixel * samples + sample])
                 source_data = b'\xee' * offset + struct.pack('<' + 'I' * len(packed), *packed)
-                for mode in [2]:
+                # Modes: 0 the top-left sample, 1 the centre one (sample (sx/2, sy/2)), 2 the
+                # RGBA8 box filter (the average of all samples).
+                for mode in [0, 1, 2]:
                     expected = []
                     for pixel in range(tiles * 1024):
                         block = values[pixel * samples:(pixel + 1) * samples]
-                        word = sum(((sum((w >> shift) & 255 for w in block) + samples // 2) // samples) << shift for shift in [0, 8, 16, 24])
+                        if mode == 2:
+                            word = sum(((sum((w >> shift) & 255 for w in block) + samples // 2) // samples) << shift for shift in [0, 8, 16, 24])
+                        else:
+                            word = block[(sy // 2) * sx + sx // 2 if mode == 1 and samples > 1 else 0]
                         expected.append(word)
                     expected_data = struct.pack('<' + 'I' * len(expected), *expected) + b'\xcd' * 64
                     src = buffer(source_data)

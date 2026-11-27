@@ -6,6 +6,7 @@ import http.server
 import json
 import os
 import secrets
+import shutil
 import sys
 import tempfile
 import threading
@@ -977,6 +978,14 @@ class RealWindow(unittest.TestCase):
             time.sleep(0.01)
         return until()
 
+    def remove_when_quiet(self, folder):
+        """Qt WebEngine's own threads can still be writing into the profile's folder after the
+        profile is gone: the folder goes once they are done."""
+        def gone():
+            shutil.rmtree(folder, ignore_errors=True)
+            return not folder.exists()
+        self.assertTrue(self.spin(gone), "%s stayed" % folder)
+
     def run_js(self, view, script):
         out = []
         view.page.runJavaScript(script, 0, out.append)
@@ -985,9 +994,9 @@ class RealWindow(unittest.TestCase):
 
     def test_the_window(self):
         wv = web_view_module()
-        root = tempfile.TemporaryDirectory()
-        self.addCleanup(root.cleanup)
-        storage = Path(root.name) / "web-account"
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(self.remove_when_quiet, root)
+        storage = root / "web-account"
         opened = []
         with mock.patch.object(wv, "open_in_browser", side_effect=lambda url: opened.append(
                 url if isinstance(url, str) else url.toString()) or False):   # no browser opens
@@ -1037,7 +1046,10 @@ class RealWindow(unittest.TestCase):
             view.deleteLater()
             self.assertTrue(storage.is_dir())
             # "Sign out of the website in the launcher", then the window again in the same session
-            self.assertTrue(wv.forget(storage))
+            # Qt WebEngine's own threads can still be writing into the folder when the profile is
+            # gone (the folder is then not empty for rmtree): forget() leaves its marker and says
+            # False, and says True once they are done.
+            self.assertTrue(self.spin(lambda: wv.forget(storage)), "the profile's folder stayed")
             again = wv.create(self.site, None, storage)
             self.addCleanup(again.close_down)
             loaded = []

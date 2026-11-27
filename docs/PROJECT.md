@@ -111,6 +111,12 @@ run here and says why), the last 30 lines of a failing check's log, full logs in
 | launcher | the launcher as a frozen build runs it (foreign `LD_LIBRARY_PATH`, #53): AES helper, default.xex and facades out of the disc image (`--iso`, default `HorizonISO/*.iso`) |
 | ci | `--ci`: `gh workflow run release.yml` (artifacts only) and wait for it; prints the run id |
 
+The boot, server and render games run from a copy of the build folder (hard links) with
+`tools/prerelease_forza.toml` as their `forza.toml`, scratch XDG folders and offline unless the
+check runs its own server (#846, `tools/prerelease_game.sh`): the build folder's `forza.toml`
+(the player's settings when they play from that build) is never read, moved or changed, so a
+release run on a PC that also plays from that build needs nothing set aside.
+
 Leaderboard screens, Windows and Steam Deck are not scripted: a hand run in the VM / on the device.
 
 ## Hard rules
@@ -123,6 +129,102 @@ Leaderboard screens, Windows and Steam Deck are not scripted: a hand run in the 
   (the run scripts refuse with less than 10 GB available); kill by PID.
 
 ## Status log
+
+- 2026-11-24: **Paint job detail 2x no longer crashes the game after the Race Central cutscene
+  (#787, #779).** Reproduced with a copy of the paint job test save set to the Yellow wristband
+  with 230 XP (the launcher's save editor values): fast travel to Race Central, X, the Green
+  Wristband cutscene. On main at 2x the game stopped as it ends, when it draws the player's paint
+  job again, exactly as in #779: guest 4 (the capacity stop), `r29=0x01000000`, heap 0x21
+  (`r30=83396AF0`) at 50.3 of its 61 MB, the same chain `82D83798 82AA4B48 82CEB1DC ... 82D535C4`
+  (the 2048x2048 `LivRenderTexture`). #916's overflow served blocks up to one 8 MB chunk only.
+  Now a block over that gets a chunk of its own, its size rounded up to whole 8 MB, from a second
+  pool (`fixed_gpu_heap.h` `Overflow`) so small blocks never cut it up; both pools share the 64 MB.
+  Three things were needed, each seen in game: (1) the large blocks are handed out again as soon
+  as they come back, best fit: the paint job takes and frees 16 MB and 22,413,312 bytes twice
+  within a second, and with the 2-second reuse delay of the small blocks every one took a new
+  chunk and the fourth found the cap; the chunks stay allocated and watched, so this is what the
+  game's own heap does; (2) blocks aligned to 64 KB: the 16 MB saved layout (`sub_82D4E7D0`, the
+  one photo mode loads) asks for it and stopped the game next; (3) room for that alignment in a
+  new chunk, since the guest's physical heap at 0xE0000000 gives chunks one page before a 64 KB
+  boundary (`E7F2F000`; its physical address is the boundary). The arena gained the alignment, best fit and a reuse delay per pool
+  (`fm4_stream_textures.h`; the FM4 streamed textures keep first fit and the delay). Checked
+  (TU4, Linux, the edited save, 2x): the cutscene played, the wristband is Green ("Going Green"),
+  the overflow held two chunks (16 + 24 MB, all blocks back within a second), the Amsoil decal
+  is on the car when driving and photo mode's copy loads the saved layout; at Console the same
+  steps used no overflow. Tests in `tests/fixed_gpu_heap_test.cpp`. The base game build has no
+  overflow at all (it is TU4 only), so the Paint job detail tooltip says 2x can still crash there.
+
+- 2026-11-23: **A repainted or replaced paint job file loads in the same session, and the
+  driving paint job is no longer left empty after a failed factory colour (#959, follow-ups of
+  #922).** The game's paint job cache (TU4 `0x8357C0B8`, disc `0x8348695C`: a critical section,
+  then a vector of resources at +28/+32 searched by key in TU4 `sub_82D4C2C0`) is weak: a resource
+  leaves it only when its last reference goes (`sub_825AC6A8`, while flag 0x40 of byte +42 says it
+  is listed), so a failed one that a car in the garage still holds is handed back for every request
+  of its key: the factory colour asked for again after a failed factory colour came back as the
+  same failed resource, which is why #922's fallback left the driving paint job empty then. The
+  fallback now takes the failed resource out of the cache first (erased as `sub_825AC6A8` erases
+  one, and its listed flag cleared so its last Release destroys it; its holders keep it), so the
+  factory colour is a new resource, and a factory
+  colour that fails is taken out and made once more. A remembered row's file is now compared by its
+  size and contents (the size only for a file over 1 MB or one that can't be read), read again
+  from the disk: the file system keeps the size an entry had when it
+  was first looked up, so a valid file put in place of the bad one outside the game, or rewritten no
+  longer than before, kept the bad file's size and the row its factory colour (diagnosed: the entry
+  said 600 bytes for a 1188-byte file). A changed file is handed to the game's path again (any
+  failed load of it taken out of the cache), and at Get In a failed file that is there is loaded once more, on its
+  first failure in the session and whenever it changed since, and used when it loads (its failing branch ran in game; the override
+  caught every change first). The empty driving paint job is left only when
+  the row can't be read (the game's own fresh path returns nothing then too) or the second factory
+  colour fails too (a type-0 paint job fails only when its 256-byte block can't be allocated). A
+  row that comes to name another file than the one that failed (an editor row naming another
+  garage id's file, then repainted) keeps the factory colour until the game restarts. All
+  13 callers of TU4 `sub_82D5D538` (disc `sub_82C9C440`) were checked in both builds; six read the
+  handle without a null test (TU4 `824BD834`, `8254AE70`, `8255B65C`, `826FDA18`, `82844D50`,
+  `82940FC8`, and their disc twins), and `sub_82D5D6C8`, which several call next, reads it too.
+  Checked (TU4, a local switch that makes a car's first factory colour and its first remake count
+  as failed): Get In from Car Select, drive, photo mode and a photo, change car from My Cars twice
+  and back, all with the remade factory colour; with every factory colour forced to fail (the
+  empty slot) the same steps also ran without a fault. A row naming a bad 1188-byte file: factory
+  colour, then the file replaced by a valid one of the same size during the session: Get In loads
+  the new paint job; repainted in the paint shop (a 516-byte file): Get In with the new paint.
+
+- 2026-11-23: **A garage car whose paint job can't be loaded gets its factory paint when it
+  becomes the current car instead of closing the game (#922).** A player's Mazda MX-5 Superlight
+  (added with the save editor) closed the game at Get In Car, from Car Select and from View Car,
+  with "read of guest 0x98", lr `82D57C0C` (TU4). Making a garage car the current car (TU4
+  `sub_825E7720`, disc `sub_825718D8`; also the current car when free roam loads) turns the paint
+  job handle the car's description keeps (a `CCarLiveryResource`) into its driving variant (TU4
+  `sub_82D5D538`, type 6, flags 0x80000, call at `825E77D8`); TU4 `sub_825E78A0` (disc
+  `sub_82571A58`, call at `825E7960`) does the same from a career object. That needs the paint
+  job loaded; `sub_82D0CAD0` returns nothing when its load failed (state byte +40 == 6) and the
+  caller reads field +0x90 of nothing. A paint job is the factory colour (`LiveryFileName` '') or a
+  file of the profile (`Liveries\<garage id>.liv`, the key's name at +0x44 is
+  `<profile xuid>:\Liveries\<id>.liv`). The game's fresh path (TU4 `sub_825B7FA0`) only falls back
+  to the factory colour (`825B8134`, `sub_82D55428`) for a paint job already failed in the cache; a
+  new load of the file is queued and fails later. Reproduced with copies of golden-save-tu4 (TU4,
+  Linux, offline): a copy of the editor's MX-5 row with `LiveryFileName` naming a file that isn't
+  there closed the game at Get In Car with the player's fault and the player's chain from Car
+  Select (`82789160 827BCDDC 827C0C4C ...`) and from View Car (`82715968 82720604 ...`); a 0-byte
+  file did the same, and so did the current car's row naming a missing file as free roam loaded.
+  The save editor writes `LiveryFileName` ''; painting its MX-5 in the paint shop writes
+  `Liveries\51.liv` and the row names it, and that car gets in with its paint. How the player's
+  row came to name a file that fails is not known. `src/hooks/car_livery_fallback.cpp` looks at
+  those two calls only when the handle's paint job failed (the game's WaitForLoad, disc
+  `sub_82412688`): it makes the factory colour itself (disc `sub_82C94398` with the row's CarId and
+  DefaultManufacturerColorIndex) and releases the handle. It clears the row's `LiveryFileName`
+  (the game's own `UPDATE %s SET LiveryFileName='' WHERE Id=%u`, confirmed by a second query) only
+  when the file is not in the profile or is empty; a file that is there but fails (a bad header)
+  stays named, and while the row holds the same car and the file the same contents the fresh path
+  (disc `sub_82547EB8`) gives that row the factory colour instead of queueing the file again
+  (without that, Get In on such a row led to a loading screen that never ended); a repaint or a
+  replaced file loads again (#959). Every other case runs the game's code unchanged
+  (`tests/car_livery_fallback_test.cpp`). Checked (TU4): missing and 0-byte rows get in with the
+  factory paint and the saved row stops naming the file; a row naming a 600-byte bad file gets the
+  factory paint, the session goes on and the saved row still names it; a row naming another car's
+  file loads with that paint; the current car naming a missing or a bad file loads into free roam
+  with its factory colour; the seven unicorns get in from Car Select (the MX-5 also from View Car)
+  with no warning; a factory-colour paint job forced to fail (a local test switch) gets in with the
+  factory paint and drives.
 
 - 2026-11-15: **Changing cars from the Native pause menu no longer stops the game (#857).**
   Both player logs stop on purpose in the memory manager's allocation loop (TU4 `sub_82423000`):

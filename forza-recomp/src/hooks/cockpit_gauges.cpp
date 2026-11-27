@@ -29,6 +29,7 @@
 #include "../debug/d3d_trace.h"
 #include "../debug/list_trace.h"
 #include "native_device.h"
+#include "native_lists.h"
 #include "../platform/cockpit_gauges.h"
 #include "../platform/guest_addr.h"
 #include "../platform/guest_memory.h"
@@ -152,6 +153,8 @@ extern "C" REX_FUNC(DrawModelNow) {
   FORZA_D3D_TRACE_SCOPE(DrawModelNow);  // RunCommandBuffer in the D3D trace
   FORZA_LIST_TRACE_RUN();               // and in the list trace
 #if FORZA_TU4
+  // M4: a model list registered with the GPU plugin before it runs (native_lists.cpp).
+  if (forza::native_lists::Active()) forza::native_lists::OnRun(ctx, base);
   // A D3D flush point of the native renderer's host device layer (native_device.cpp).
   forza::native_device::FlushScope native_flush(forza::native_device::kPointRunCommandBuffer,
                                                 ctx, base);

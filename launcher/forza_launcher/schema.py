@@ -273,7 +273,8 @@ add("livery_bake_scale", "Paint job detail", "Display", "choice", 1,
     "where small decals and text blur. 2x draws it at 2048x2048. It costs about 50 MB more of the "
     "game's memory and some graphics memory for each car with a paint job (in single player only "
     "yours); cars without one cost nothing. Photos keep the game's size (photo mode draws the paint "
-    "job uncompressed). See docs/graphics-detail.md.",
+    "job uncompressed). Without Title Update 4, 2x can crash the game after the Race Central "
+    "wristband cutscene. See docs/graphics-detail.md.",
     "World detail",
     choices=[(1, "Console"), (2, "2x")], restart=True)
 add("world_shadow_filter", "Shadow softness", "Display", "choice", "console",
@@ -366,9 +367,15 @@ add("mnk_passthrough", "Raw keyboard to the game", "Controls", "bool", False,
 add("vibration", "Controller vibration", "Controls", "bool", True, "", "Controller")
 add("guide_button", "Guide button pass-through", "Controls", "bool", False, "", "Controller")
 add("left_stick_deadzone_percentage", "Left stick deadzone", "Controls", "float", 0.0,
-    "Fraction of the stick's range, 0 to 1.", "Controller", lo=0, hi=1, step=0.01)
+    "The stick reads as centred within this fraction of its full range (edge to edge), in every "
+    "direction: 0.1 is about the first 20 percent of its travel from the centre. Gamepads only: "
+    "a racing wheel is not affected.",
+    "Controller", lo=0, hi=1, step=0.01)
 add("right_stick_deadzone_percentage", "Right stick deadzone", "Controls", "float", 0.0,
-    "Fraction of the stick's range, 0 to 1.", "Controller", lo=0, hi=1, step=0.01)
+    "The stick reads as centred within this fraction of its full range (edge to edge), in every "
+    "direction: 0.1 is about the first 20 percent of its travel from the centre. Gamepads only: "
+    "a racing wheel is not affected.",
+    "Controller", lo=0, hi=1, step=0.01)
 add("input_backend", "Input backend", "Controls", "choice", "sdl",
     "SDL works with any pad; XInput is Windows only.", "Controller",
     choices=[("sdl", "SDL"), ("xinput", "XInput")])
@@ -704,6 +711,12 @@ add("log_noisy", "Noisy logging", "Advanced", "bool", False,
     "High-frequency log messages.", "Log")
 add("log_flush_interval", "Log flush interval (s)", "Advanced", "int", 0,
     "0 flushes at exit only.", "Log", lo=0, hi=60, restart=True)
+# ReIGlue 1100 (#913): the marker before a draw's own work; off in the SDK too (its GPU time).
+add("gpu_device_lost_setup_breadcrumbs", "Detailed GPU reset report", "Advanced", "bool", False,
+    "For a game that stops with a GPU reset (\"device lost\" in forza.log): on, the log of the "
+    "next reset also says whether the graphics card stopped in a draw or in the work before it. "
+    "AMD graphics cards with Vulkan only. Costs a little GPU time, so leave it off unless a bug "
+    "report asks for it. Applies on the next game launch.", "Log", restart=True)
 add("vulkan_device", "Vulkan device", "Advanced", "int", -1,
     "-1 picks the best GPU. Use another index on multi-GPU systems.", "GPU", lo=-1, hi=16,
     restart=True)

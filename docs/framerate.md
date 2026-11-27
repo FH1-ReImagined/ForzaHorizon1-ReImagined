@@ -169,7 +169,9 @@ rate when twice is past the SDK's limit (480 Hz with patch 0037, 240 without). A
 (the log warns), as it does when the Graphics menu saves: 60 Hz left from a 30 fps setup ran
 `frame_rate = 60` at 30 fps until a graphics setting was saved (#756). At 30 an explicit
 `video_mode_refresh_rate` stays (the frame rate is then that rate over two). The frame stats' `ontarget` uses the same target. Test switches:
-`FORZA_FRAME_TIME=game` (the millisecond frame time), `FORZA_RENDER_SYNC=0` (no render sync,
+`FORZA_FRAME_TIME=game` (the millisecond frame time), `FORZA_FRAME_TIME=fixed` (every frame's
+dt is 1/`frame_rate` however long it took, away from 30; the CSV is flushed every line and its
+time column stays real time: the render tests' game time, #960), `FORZA_RENDER_SYNC=0` (no render sync,
 below), `FORZA_VBLANK_DIVIDER=1|2|3`, `FORZA_PRESENT_PACING=0` (20 and 40 fps, below),
 `FORZA_FRAMETIME_LOG=1`, `FORZA_FRAMETIME_CSV=<path>` (per frame: time, dt, the game's ms, on
 target, the player's car position).
