@@ -357,6 +357,8 @@ released import took every FM4 car under FM4's id whose id and MediaName FH1's d
 whose stock engine's id is not another engine's in FH1 (`Converter.released`); those cars keep the
 tire and get the rally tire at level 5 as well. The cars it never had (the copies of FH1's traffic
 cars, and those whose engine the id table moves) get no level-4 tire.
+**Mods → Drag tires** gives every car, the imported ones too, a drag tire of its own
+([drag-tires.md](drag-tires.md)).
 
 ### Strings
 
@@ -709,8 +711,6 @@ Windows, the 0.3.7 release runtime, a copy of a save, offline.
 - The 2011 Leaf, an electric car without an engine row ([above](#fh1s-traffic-cars-841)).
 - The rest of #924: the launcher moving a save's cars and parts to the ids the table gives them
   (`renumbered`), and FH2 and Fast & Furious as sources to import from.
-- A drag tire for every car, as an option. FM4's own drag tire is kept only on the cars the
-  released import had ([above](#rally-parts-924)).
 
 ## Credits
 
