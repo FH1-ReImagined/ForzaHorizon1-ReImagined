@@ -201,6 +201,16 @@ class TwinConverter(FakeConverter):
         return {1365: (51365, "NIS_5_Leaf_11", None)}
 
 
+class RallyConverter(FakeConverter):
+    """#924: the tool's report says what rally parts it added (with or without the Rally Expansion)."""
+    rally = {"tires": 1, "suspension": 1, "gearbox": 1, "cars": 1}
+
+    def run(self, ids, progress=None, cancelled=lambda: False):
+        report = super().run(ids, progress, cancelled)
+        report["rally"] = self.rally
+        return report
+
+
 class _Setup:
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -234,6 +244,20 @@ class Fm4ImportTests(_Setup, unittest.TestCase):
         self.assertIn("2 could not be converted", msg)
         self.assertEqual(FakeConverter.runs, [[1119]])
         self.assertIn("NIS_Leaf_11: an electric car without an engine row", fm4cars.status(self.cfg)["skipped"])
+
+    def test_the_message_names_the_rally_parts(self):
+        """#924: the player is told how many cars have rally parts; they come with or without FH1's
+        Rally Expansion, so nothing tells the player to import again for them."""
+        msg = fm4cars.build(self.cfg, self.disc1, None, converter=RallyConverter)
+        self.assertIn("1 of them have rally parts.", msg)
+        self.assertNotIn("Rally Expansion", msg)
+        self.assertEqual(fm4cars.status(self.cfg)["rally"]["cars"], 1)
+        self.assertNotIn("rally parts", self.build())  # a report without the key (an older tool): nothing said
+
+    def test_no_rally_parts_says_nothing(self):
+        """#924: an import of only electric or hybrid cars has no rally parts; it says nothing of them."""
+        none = type("NoRally", (RallyConverter,), {"rally": {"tires": 0, "suspension": 0, "gearbox": 0, "cars": 0}})
+        self.assertNotIn("rally parts", fm4cars.build(self.cfg, self.disc1, None, converter=none))
 
     def test_publishes_the_mod_enabled_last_and_removes_it(self):
         msg = self.build()

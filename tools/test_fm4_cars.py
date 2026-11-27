@@ -669,6 +669,181 @@ class TrafficTwinTests(unittest.TestCase):
         self.assertFalse(fm4_cars.electric_only(bare, 1365))  # no motor tables
 
 
+class RallyPartsTests(unittest.TestCase):
+    """#924: the imported cars get rally parts, as FH1's own cars have them and as Forza Imported
+    DLC Maker gives FM4 cars: level-5 rally tires from the level-3 tire, a level-4 rally suspension
+    scaled from the car's own, a level-4 rally gearbox for each drivetrain FH1 lacks. Electric cars
+    and hybrids get none. FM4's level-4 drag tire stays on the cars the released import had."""
+
+    def dbs(self):
+        fm4, fh1 = sqlite3.connect(":memory:"), sqlite3.connect(":memory:")
+        self.addCleanup(fm4.close)
+        self.addCleanup(fh1.close)
+        gears = ", ".join("GearRatio%d REAL" % n for n in range(1, 9))
+        for db in (fm4, fh1):
+            db.execute("create table Data_Car (Id INTEGER, MediaName TEXT)")
+            db.execute("create table List_UpgradeTireCompound (Id INTEGER, Ordinal INT, Level INT, IsStock INT, "
+                       "TireCompoundID INT, Price INT, MassDiff REAL)")
+            db.execute("create table List_UpgradeSpringDamper (Id INTEGER, Ordinal INT, Level INT, MassDiff REAL, "
+                       "Price INT, IsStock INT, FrontSpringDamperPhysicsID INT, RearSpringDamperPhysicsID INT)")
+            db.execute("create table List_SpringDamperPhysics (SpringDamperPhysicsID INTEGER, Ordinal INT, "
+                       "DefRideHeight REAL, MinRideHeight REAL, MaxRideHeight REAL, DefSpringRate REAL, "
+                       "DefDampenBumpRate REAL, DefDampenReboundRate REAL, BumpstopStiffness REAL)")
+            db.execute("create table List_UpgradeCarBody (Id INTEGER, Ordinal INT, Level INT, IsStock INT, CarBodyID INT)")
+            db.execute("create table Data_CarBody (Id INTEGER, ModelFrontStockRideHeight REAL, ModelRearStockRideHeight REAL)")
+            db.execute("create table List_UpgradeDrivetrain (Id INTEGER, Ordinal INT, Level INT, DrivetrainID INT)")
+            db.execute("create table Data_Drivetrain (DrivetrainID INTEGER)")
+            db.execute("create table List_UpgradeDrivetrainTransmission (Id INTEGER, DrivetrainID INT, Level INT, "
+                       "IsStock INT, FinalDriveRatio REAL, NumGears INT, %s, Price INT)" % gears)
+            db.execute("create table List_UpgradeMotor (Id INTEGER, Ordinal INT, MotorID INT)")
+            # Ford's shared drivetrain 504: FH1's, with FH1's own rally gearbox (504004)
+            db.execute("insert into Data_Drivetrain values (504)")
+            db.executemany("insert into List_UpgradeDrivetrainTransmission (Id, DrivetrainID, Level, IsStock, Price) "
+                           "values (?,?,?,?,?)", [(504000, 504, 0, 1, 0), (504003, 504, 3, 0, 3000)])
+        fh1.execute("insert into List_UpgradeDrivetrainTransmission (Id, DrivetrainID, Level, IsStock, Price) "
+                    "values (504004, 504, 4, 0, 6200)")
+        # 300: a car with level-1 and level-3 springs; 302: level 3 only; 301: a hybrid
+        for car in (300, 301, 302):
+            fm4.execute("insert into Data_Car values (?, ?)", (car, "CAR_%d" % car))
+            fm4.executemany("insert into List_UpgradeTireCompound values (?,?,?,?,?,?,?)", [
+                (car * 1000, car, 0, 1, 4, 0, 0.0), (car * 1000 + 3, car, 3, 0, 8, 4000, -2.0),
+                (car * 1000 + 4, car, 4, 0, 9, 3000, -1.0)])  # FM4's drag tire
+            fm4.execute("insert into List_UpgradeCarBody values (?,?,0,1,?)", (car * 1000, car, car * 1000))
+            fm4.execute("insert into Data_CarBody values (?, 0.15, 0.16)", (car * 1000,))
+            fm4.execute("insert into List_UpgradeSpringDamper values (?,?,3,-10.0,2500,0,?,?)",
+                        (car * 1000 + 3, car, car * 1000 + 3, car * 1000 + 103))
+            fm4.executemany("insert into List_SpringDamperPhysics values (?,?,0.12,0.1,0.2,?,1.0,1.0,40.0)", [
+                (car * 1000 + 3, car, 100.0), (car * 1000 + 103, car, 90.0)])
+            fm4.execute("insert into List_UpgradeDrivetrain values (?,?,0,?)", (car * 1000, car, 901 if car == 301 else 900))
+        fm4.execute("insert into List_UpgradeSpringDamper values (300001, 300, 1, 0.0, 500, 0, 300001, 300101)")
+        fm4.executemany("insert into List_SpringDamperPhysics values (?,300,0.13,0.1,0.2,?,1.0,1.0,40.0)",
+                        [(300001, 50.0), (300101, 40.0)])
+        fm4.execute("insert into List_UpgradeDrivetrain values (300001, 300, 1, 504)")  # a swap to FH1's drivetrain
+        fm4.execute("insert into List_UpgradeMotor values (301000, 301, 3)")
+        fm4.executemany("insert into Data_Drivetrain values (?)", [(900,), (901,)])
+        fm4.executemany("insert into List_UpgradeDrivetrainTransmission (Id, DrivetrainID, Level, IsStock, Price) "
+                        "values (?,?,?,?,?)", [(900000, 900, 0, 1, 0), (900003, 900, 3, 0, 3500),
+                                               (901000, 901, 0, 1, 0), (901003, 901, 3, 0, 3500)])
+        return fm4, fh1
+
+    def rows(self, change=None, released=None):
+        fm4, fh1 = self.dbs()
+        if change:
+            change(fm4)
+        with mock.patch.object(fm4_cars, "Retune", _NoRetune):
+            db = fm4_cars.Database(fm4, fh1, released=released)
+        db.collect([300, 301, 302])
+        counts = db.rally_parts([300, 301, 302])
+        report = {}
+        rows = db.finish(report)
+        self.assertNotIn("conflicts", report)
+        return counts, {t: {r[fm4_cars.columns(fh1, t)[0]]: r for r in rs} for t, rs in rows.items()}
+
+    def test_rally_parts(self):
+        counts, rows = self.rows()
+        self.assertEqual(counts, {"tires": 2, "suspension": 2, "gearbox": 1, "cars": 2})
+        tires = rows["List_UpgradeTireCompound"]
+        # rally tires from the level-3 tire (its mass); cars the released import never had get no
+        # drag tire
+        self.assertEqual(tires[300005], {"Id": 300005, "Ordinal": 300, "Level": 5, "IsStock": 0, "TireCompoundID": 9,
+                                         "Price": 10000, "MassDiff": -2.0})
+        self.assertNotIn(300004, tires)
+        self.assertIn(302005, tires)
+        # the hybrid gets no rally part (and, never released here, no drag tire either)
+        self.assertEqual(sorted(k for k in tires if k // 1000 == 301), [301000, 301003])
+        self.assertNotIn(301004, rows["List_UpgradeSpringDamper"])
+        spring = rows["List_UpgradeSpringDamper"][300004]
+        self.assertEqual((spring["Level"], spring["IsStock"], spring["Price"], spring["FrontSpringDamperPhysicsID"],
+                          spring["RearSpringDamperPhysicsID"]), (4, 0, 2500, 300004, 300104))
+        self.assertAlmostEqual(spring["MassDiff"], -3.0)
+        front, rear = rows["List_SpringDamperPhysics"][300004], rows["List_SpringDamperPhysics"][300104]
+        # the springs from the level-1 ones, the dampers from the springs, the ride height from the body's
+        self.assertEqual((front["DefSpringRate"], rear["DefSpringRate"]), (32.45, 25.96))
+        self.assertEqual((front["DefDampenBumpRate"], front["DefDampenReboundRate"]), (4.8318, 2.7615))
+        self.assertEqual((front["DefRideHeight"], rear["DefRideHeight"], front["MaxRideHeight"]), (0.1749, 0.1866, 0.1749))
+        self.assertEqual((front["BumpstopStiffness"], front["MinRideHeight"], front["Ordinal"]), (80.0, 0.1, 300))
+        # without level-1 springs: from the level-3 ones (29.14 = 100 x 0.2914, 21.186 = 90 x 0.2354)
+        self.assertEqual((rows["List_SpringDamperPhysics"][302004]["DefSpringRate"],
+                          rows["List_SpringDamperPhysics"][302104]["DefSpringRate"]), (29.14, 21.186))
+        box = rows["List_UpgradeDrivetrainTransmission"]
+        gearbox = box[900004]
+        self.assertEqual({k: gearbox[k] for k in fm4_cars.RALLY_GEARBOX}, fm4_cars.RALLY_GEARBOX)
+        self.assertEqual((gearbox["Level"], gearbox["IsStock"], gearbox["Price"], gearbox["DrivetrainID"]), (4, 0, 3500, 900))
+        # none for the hybrid's drivetrain, none of ours for FH1's (it has its own)
+        self.assertNotIn(901004, box)
+        self.assertNotIn(504004, box)
+
+    def test_a_body_out_of_line_with_its_suspension(self):
+        """A car whose body's ride height is far below its own suspension's (FM4's Cayman R: 0.06 m
+        against 0.15 m) would get a rally suspension lower than its stock one, below the race
+        suspension's lowest: its ride height comes from the stock suspension's instead, and is
+        never below the lowest (all of FH1's own rally rows are in their range)."""
+        def change(fm4):
+            fm4.execute("update Data_CarBody set ModelFrontStockRideHeight=0.05 where Id in (300000, 302000)")
+            fm4.execute("update List_UpgradeSpringDamper set IsStock=1 where Id=300001")  # 300's stock springs
+            fm4.execute("update List_UpgradeSpringDamper set IsStock=1 where Id=302003")  # a race car's: level 3
+            fm4.execute("update List_SpringDamperPhysics set DefRideHeight=0.08 where SpringDamperPhysicsID=300001")
+        _, rows = self.rows(change)
+        phys = rows["List_SpringDamperPhysics"]
+        self.assertEqual((phys[302004]["DefRideHeight"], phys[302004]["MaxRideHeight"]), (0.1399, 0.1399))  # 0.12 x 1.166
+        self.assertEqual(phys[302104]["DefRideHeight"], 0.1866)  # the rear's body height is in line
+        self.assertEqual((phys[300004]["DefRideHeight"], phys[300004]["MaxRideHeight"]), (0.1, 0.1))  # 0.0933: the lowest
+
+    def test_fm4s_drag_tire_is_left_out_of_new_cars(self):
+        """FM4's level-4 drag tire is left out of a car the released import never had: FH1's own
+        cars have none, nor do Forza Imported DLC Maker's FM4 cars. A stock one would be kept."""
+        fm4, fh1 = self.dbs()
+        fm4.execute("update List_UpgradeTireCompound set IsStock=1 where Id=302004")
+        with mock.patch.object(fm4_cars, "Retune", _NoRetune):
+            db = fm4_cars.Database(fm4, fh1)
+        db.collect([300, 301, 302])
+        tires = sorted(r["Id"] for r in db.finish({})["List_UpgradeTireCompound"])
+        self.assertEqual(tires, [300000, 300003, 301000, 301003, 302000, 302003, 302004])
+
+    def test_released_cars_keep_fm4s_drag_tire(self):
+        """A car the released import had keeps FM4's level-4 tire (a save can have it fitted, and a
+        car whose fitted part's row is missing does not load), and gets the rally tire as well,
+        from its level-3 tire; the hybrid keeps it too but gets no rally part. A car it never had
+        (302 here) loses it."""
+        counts, rows = self.rows(released={300, 301})
+        self.assertEqual(counts, {"tires": 2, "suspension": 2, "gearbox": 1, "cars": 2})
+        tires = rows["List_UpgradeTireCompound"]
+        self.assertEqual(tires[300004], {"Id": 300004, "Ordinal": 300, "Level": 4, "IsStock": 0, "TireCompoundID": 9,
+                                         "Price": 3000, "MassDiff": -1.0})
+        self.assertEqual(tires[300005], {"Id": 300005, "Ordinal": 300, "Level": 5, "IsStock": 0, "TireCompoundID": 9,
+                                         "Price": 10000, "MassDiff": -2.0})
+        self.assertEqual(sorted(k for k in tires if k // 1000 == 301), [301000, 301003, 301004])
+        self.assertEqual(sorted(k for k in tires if k // 1000 == 302), [302000, 302003, 302005])
+
+    def test_released_cars(self):
+        """Converter.released: the cars ReImagined's released import took under FM4's id: not a
+        copy of FH1's traffic car, nor a car whose id or MediaName FH1 has, nor one whose stock
+        engine's id is another engine's in FH1 (the id table moves some of those now). An installed
+        FH1 DLC pack's car with the same id or MediaName does not matter (the 2013 Vipers keep
+        the level-4 tire with or without the pack)."""
+        fm4, fh1 = sqlite3.connect(":memory:"), sqlite3.connect(":memory:")
+        self.addCleanup(fm4.close)
+        self.addCleanup(fh1.close)
+        for db in (fm4, fh1):
+            db.execute("create table Data_Car (Id INTEGER, MediaName TEXT)")
+            db.execute("create table Data_Engine (EngineID INTEGER, MediaName TEXT)")
+        fm4.execute("create table List_UpgradeEngine (Id INTEGER, Ordinal INT, EngineID INT, IsStock INT)")
+        fm4.executemany("insert into Data_Car values (?,?)", [(300, "CAR_300"), (301, "CAR_301"), (302, "CAR_302"),
+                                                             (303, "FH1_CAR"), (282, "VW_Beetle_04"),
+                                                             (304, "CAR_304"), (305, "DLC_CAR")])
+        fm4.executemany("insert into Data_Engine values (?,?)", [(10, "ENG_A"), (11, "ENG_B")])
+        fm4.executemany("insert into List_UpgradeEngine values (?,?,?,?)",
+                        [(300000, 300, 10, 1), (301000, 301, 11, 1), (302000, 302, 10, 0), (302001, 302, 11, 0),
+                         (304000, 304, 10, 1), (305000, 305, 10, 1)])
+        fh1.executemany("insert into Data_Car values (?,?)", [(1, "fh1_car"), (302, "OTHER")])
+        fh1.execute("insert into Data_Engine values (11, 'FH1_ENGINE')")
+        conv = mock.Mock(fm4db=fm4, fh1db=fh1)
+        conv.twins.return_value = {282: (55282, "VW_5_Beetle_04")}
+        conv.fh1.dlc_car_names.return_value = ({"dlc_car"}, {304})
+        released = [c for c in (300, 301, 302, 303, 282, 304, 305) if fm4_cars.Converter.released(conv, c)]
+        self.assertEqual(released, [300, 304, 305])
+
+
 class LogoTests(unittest.TestCase):
     """#710: the logos of a make FH1 lacks come from FM4 (Renault's tile was black); FH1's own
     logos are not replaced."""

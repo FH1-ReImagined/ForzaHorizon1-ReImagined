@@ -9,6 +9,7 @@ player's PC from their discs and stay there.
   - [What the import accepts](#what-the-import-accepts)
   - [FM4 DLC](#fm4-dlc)
 - [What a converted car is made of](#what-a-converted-car-is-made-of)
+  - [Rally parts](#rally-parts-924)
   - [The id table](#the-id-table-924)
 - [physicsdefinition.bin](#physicsdefinitionbin)
 - [FH1's handling retune](#fh1s-handling-retune)
@@ -33,7 +34,9 @@ player's PC from their discs and stay there.
    and PT Cruiser GT, the 2010 Taurus SHO, the 2011 Prius) come in as cars of their own; FH1's
    traffic cars stay as they are ([how](#fh1s-traffic-cars-841)). Every car takes its id from one
    table, the same for every player, so a car has the same id on every game it is imported into
-   ([the id table](#the-id-table-924)).
+   ([the id table](#the-id-table-924)). The cars also get FH1's rally tires, suspension and
+   transmission in **Custom Upgrade** ([rally parts](#rally-parts-924)), with or without FH1's
+   Rally Expansion.
 
 ### What the import accepts
 
@@ -296,6 +299,65 @@ game (the patches are looked up under `game:\media\db\patch\`, where the mod arc
 the game then answers `IsCarInstalled(id) = 0` for the new cars and the Autoshow leaves them
 out. With the cars in the database the game loads, it answers 1 and they are listed.
 
+### Rally parts (#924)
+
+FH1's rally parts are a tire compound, a suspension and a transmission. FH1's own cars have them
+(190 of each in the title update's database), and so do the Rally Expansion's 16 cars. The
+import gives its cars the same three (`Database.rally_parts`), with or without the Rally Expansion
+(its DLC offer 1600). It uses the recipe Forza Imported DLC Maker gives FM4 cars, measured there on
+the Rally Expansion's cars:
+
+| Part | Rows | Made from |
+|---|---|---|
+| Rally Tire Compound | `List_UpgradeTireCompound`, level 5, compound 9, 10,000 Cr, key car id × 1000 + 5 | the car's level-3 tire with those values |
+| rally suspension | `List_UpgradeSpringDamper` level 4 (car id × 1000 + 4), with its own `List_SpringDamperPhysics` rows (car id × 1000 + 4 and + 104) | the level-3 suspension, with 0.3 of its mass. The spring rate is the level-1 spring's × 0.649 (without one, the level-3 spring's × 0.2914 front, × 0.2354 rear). The dampers are 0.1489 (bump) and 0.0851 (rebound) of the spring rate, the bump stop 80. The ride height is the stock body's × 1.166 (below) |
+| rally transmission | `List_UpgradeDrivetrainTransmission` level 4, key drivetrain id × 1000 + 4 | the level-3 transmission with a final drive of 4.4 and gear ratios 3.3 to 0.825, for each of the cars' drivetrains that FH1 lacks. A drivetrain FH1 has keeps FH1's rows, which have their own |
+
+FH1's own 190 cars bear the recipe out:
+- Their rally springs are 0.649 of the level-1 ones (the median, front).
+- Their dampers are 0.1489 and 0.0851 of the spring rate on all 380 rows.
+- Their bump stop is 80, and their suspension's mass is 0.3 of level 3's (the median).
+- 160 of their 190 transmissions have those ratios.
+
+FH1's rally suspensions raise the car: their ride height is 1.2 times the stock suspension's,
+and 1.2 times the stock body's (the medians), and never outside their range. Some of FM4's body
+rows are out of line with their own suspension. The Cayman R's body says 0.06 m, its stock springs
+0.15 m: the recipe's rally suspension would lower it, below its race suspension's lowest. So where
+the body's ride height gives less than the race suspension's lowest (26 cars, most of them race
+cars such as the R8 LMS), the stock suspension's ride height × 1.166 is used instead, and a rally
+ride height is never below the lowest.
+
+Over all 524 cars an import of FM4's discs and 16 DLC packs offers, 519 get all three parts. Their
+rally ride height is 1.166 times their stock suspension's (the median; 1.165 to 1.166 for 80 of
+them in 100).
+
+Some cars get no rally parts:
+- An electric car or a hybrid (one with a motor row) gets none, as in Forza Imported DLC Maker:
+  the Tesla Roadster, the CR-Z, the Prius, the CT200h and the Volt.
+
+The game's car view (`Restrictions_Data_Car`, `src/platform/car_view.h`) decides which cars can
+rally. A car counts when it has a level-4 springs row, a level-5 tire row and a level-4
+transmission on one of its drivetrains (`CouldRally`), and it is a rally car when all three are
+stock (`IsRally`). The view finds the rows by the car's `ModelId`, which is its id. A car the id
+table renumbers takes its new id there too: the Cayman R's FM4 1541 is FH1's Explorer's.
+
+The rally parts come with or without the Rally Expansion. Rows that came and went with it would
+break saves: a player who imports with it, fits the rally tire, then imports again without it (a
+reinstall, another PC) would have a car whose fitted part has no row, and such a car does not load
+(the game gives another car). The rows are made from the car's own rows and fixed values, none of
+them from the expansion, and FH1's own cars have theirs in the title update's database, expansion
+or not.
+
+FM4's level-4 tire is its drag tire (compound 9). FH1's own cars have none: their tires stop at
+level 3, apart from the rally tire at level 5. Forza Imported DLC Maker leaves it out too. The
+import leaves it out only of the cars ReImagined's released import never had
+(`Database._drop_drag_tires`): that import gave every car it took FM4's level-4 tire (key car id ×
+1000 + 4), so a save can have it fitted, and a car whose fitted tire has no row does not load. The
+released import took every FM4 car under FM4's id whose id and MediaName FH1's database lacks and
+whose stock engine's id is not another engine's in FH1 (`Converter.released`); those cars keep the
+tire and get the rally tire at level 5 as well. The cars it never had (the copies of FH1's traffic
+cars, and those whose engine the id table moves) get no level-4 tire.
+
 ### Strings
 
 A car's names are `"_&N"` references; `N & 0xFFFF` is the string's key in the table
@@ -443,7 +505,7 @@ u32 NumCollisionShapes, each: u32 ShapeType and
 
 ## FH1's handling retune
 
-FH1 retuned every car it took from FM4. The tyre compounds (37% more grip) are global tables a
+FH1 retuned every car it took from FM4. The tire compounds (37% more grip) are global tables a
 converted car shares with FH1's own. The per-car values that changed are mapped from FM4's
 value with a least-squares fit over the cars both games have (107, same id and `MediaName`),
 computed on the player's PC from their two databases:
@@ -646,8 +708,9 @@ Windows, the 0.3.7 release runtime, a copy of a save, offline.
   liveries, events, tracks and achievements are not.
 - The 2011 Leaf, an electric car without an engine row ([above](#fh1s-traffic-cars-841)).
 - The rest of #924: the launcher moving a save's cars and parts to the ids the table gives them
-  (`renumbered`), FH2 and Fast & Furious as sources to import from, and the rally parts Forza
-  Imported DLC Maker gives FM4 cars.
+  (`renumbered`), and FH2 and Fast & Furious as sources to import from.
+- A drag tire for every car, as an option. FM4's own drag tire is kept only on the cars the
+  released import had ([above](#rally-parts-924)).
 
 ## Credits
 
