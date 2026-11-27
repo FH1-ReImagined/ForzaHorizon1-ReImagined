@@ -254,6 +254,11 @@ class Fm4ImportTests(_Setup, unittest.TestCase):
         self.assertEqual(fm4cars.status(self.cfg)["rally"]["cars"], 1)
         self.assertNotIn("rally parts", self.build())  # a report without the key (an older tool): nothing said
 
+    def test_no_rally_parts_says_nothing(self):
+        """#924: an import of only electric or hybrid cars has no rally parts; it says nothing of them."""
+        none = type("NoRally", (RallyConverter,), {"rally": {"tires": 0, "suspension": 0, "gearbox": 0, "cars": 0}})
+        self.assertNotIn("rally parts", fm4cars.build(self.cfg, self.disc1, None, converter=none))
+
     def test_publishes_the_mod_enabled_last_and_removes_it(self):
         msg = self.build()
         self.assertIn("Added 1", msg)
