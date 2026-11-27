@@ -398,6 +398,11 @@ class Fm1(Base):
         out = fm4tracks.fm1_folder(image, ["FM1Rio"], self.t / "fm1work2")
         self.assertEqual((out / "media" / "cabs" / "Mega.ca2").read_bytes(), b"ca2")
         self.assertEqual((out / "media" / "Tracks" / "Rio" / "QuickPreview1.col").read_bytes(), b"col")
+        # as with a folder, an FM1-only circuit without its collision is not offered
+        no_col = iso(self.t / "fm1c.iso", {"default.xbe": b"XBEH", "media/Tracks/Rio/QuickPreview1.xb2": b"rio",
+                                           "media/Tracks/tsukuba/QuickPreview1.xb2": b"xb2",
+                                           "media/cabs/Mega.ca2": b"ca2"}, offset=0x18300000)
+        self.assertEqual(fm4tracks.fm1_circuits(no_col), ["Tsukuba"])
 
     def test_stages_from_a_disc_image(self):
         calls = []
@@ -628,6 +633,51 @@ class Ui(Base):
         self.assertTrue(dialog.go.isEnabled())
         small = self.own(ChooseCircuits(None, disc, set(), 1000))
         self.assertFalse(small.go.isEnabled())  # not enough room
+
+    def test_fm1_only_circuits_reach_the_choice(self):
+        """FM1-only circuits (fm1_tracks.OWN_CIRCUITS) are not on FM4's Disc 1: they are offered once
+        Disc 1 has the drawing donors (FM1_TEMPLATES)."""
+        from PySide6.QtWidgets import QDialog
+        from forza_launcher.ui import fm4_tracks as ui
+        (self.disc / "Media" / "tracks" / "Tsukuba" / "Ribbon_00").mkdir(parents=True)
+        (self.disc / "Media" / "tracks" / "Tsukuba" / "bin.zip").write_bytes(b"x" * 1000)
+        page = mock.Mock()
+        page._game_running.return_value = False
+        card = self.own(ui.Fm4TracksCard(self.cfg, page))
+        seen = []
+
+        class Choice:
+            def __init__(self, parent, disc, have, free, fm1=None):
+                seen.append(fm1)
+
+            def exec(self):
+                return QDialog.Rejected
+
+        for found, offered in ((["Tsukuba", "FM1Tokyo"], ["Tsukuba", "FM1Tokyo"]),
+                               (["FM1Tokyo"], ["FM1Tokyo"]), (["RoadAmerica", "FM1Rio"], ["FM1Rio"])):
+            card.task = mock.Mock()
+            card.disc = fm4tracks.open_disc(str(self.disc), self.t / "work")
+            card.fm1 = ("fm1", found)
+            with mock.patch.object(ui, "ChooseCircuits", Choice):
+                card._read_done(True, "")
+            self.assertEqual(seen.pop(), offered)
+        # without a drawing donor, nothing is offered
+        shutil.rmtree(self.disc / "Media" / "tracks" / "Tsukuba")
+        card.task = mock.Mock()
+        card.disc = fm4tracks.open_disc(str(self.disc), self.t / "work")
+        card.fm1 = ("fm1", ["FM1Tokyo"])
+        with mock.patch.object(ui, "ChooseCircuits", Choice):
+            card._read_done(True, "")
+        self.assertEqual(seen, [])
+        self.assertIn("lacks Tsukuba", card.message.text())
+        # the dialog names both kinds
+        disc = fm4tracks.open_disc(str(self.disc), self.t / "work")
+        dialog = self.own(ui.ChooseCircuits(None, disc, set(), 10 << 30, ["Suzuka", "FM1Tokyo"]))
+        self.assertEqual([dialog.list.item(i).text().split("   ")[0] for i in range(dialog.list.count())],
+                         ["Suzuka", "Tokyo"])
+        intro = dialog.findChildren(ui.QLabel)[0].text()
+        self.assertIn("1 circuit(s) FM4's Disc 1 also has", intro)
+        self.assertIn("1 circuit(s) only FM1 has", intro)
 
 
 if __name__ == "__main__":

@@ -30,9 +30,17 @@ class ChooseCircuits(QDialog):
                      "this PC (under a minute for most) and takes about 3 times its size on the disc. "
                      "Imported ones are replaced.")
         else:
-            intro = (f"Forza Motorsport (2005) and your FM4 Disc 1 share {len(fm1)} circuit(s). Each is drawn "
-                     "with FM1's own scenery on FM4's collision, AI line and lap timing, and replaces an FM4 "
-                     "import of the same circuit.")
+            own = set(fm4tracks._fm1_own())
+            shared = sum(c not in own for c in fm1)
+            parts = []
+            if shared:
+                parts.append(f"{shared} circuit(s) FM4's Disc 1 also has are drawn with FM1's own scenery on "
+                             "FM4's collision, AI line and lap timing, and replace an FM4 import of the same "
+                             "circuit.")
+            if len(fm1) - shared:
+                parts.append(f"{len(fm1) - shared} circuit(s) only FM1 has use FM1's own scenery, collision, "
+                             "AI line, grid and lap, with drawing data from Disc 1's Tsukuba and Suzuka.")
+            intro = f"Forza Motorsport (2005) has {len(fm1)} circuit(s) to import. " + " ".join(parts)
         lay.addWidget(label(intro, "muted"))
         self.list = QListWidget()
         for folder in circuits:
@@ -298,7 +306,8 @@ class Fm4TracksCard(QWidget):
         have = {i["key"] for i in fm4tracks.installed(self.cfg)}
         fm1_dir, fm1 = self.fm1 or (None, None)
         if fm1 is not None:
-            fm1 = [c for c in fm1 if c in self.disc.circuits]
+            own = fm4tracks._fm1_own()  # FM1-only: no FM4 folder of their own, Disc 1's FM1_TEMPLATES only
+            fm1 = [c for c in fm1 if c in self.disc.circuits or c in own]
             missing = [t for t in fm4tracks.FM1_TEMPLATES if t not in self.disc.circuits]
             if not fm1 or missing:
                 self._drop_work()

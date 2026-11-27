@@ -527,6 +527,9 @@ def _fm1_image_tracks(image) -> dict:
             if (len(parts) == 4 and parts[0].lower() == "media" and parts[1].lower() == "tracks"
                     and parts[3].lower() == "quickpreview1.xb2"):
                 out[parts[2].lower()] = "/".join(parts[:3])
+            if (len(parts) == 4 and parts[0].lower() == "media" and parts[1].lower() == "tracks"
+                    and parts[3].lower() == "quickpreview1.col"):  # FM1-only circuits' collision
+                out["/".join(parts).lower()] = "/".join(parts)
             if "/".join(parts).lower() == MEGA_IN_IMAGE:  # the FM1-only circuits' grid and lap
                 out[MEGA_IN_IMAGE] = "/".join(parts)
         return out
@@ -579,7 +582,8 @@ def fm1_circuits(fm1_dir) -> list:
                                 "circuits under media/Tracks.")
         found = [c for c, (f1, _) in fm1_tracks.CIRCUITS.items() if f1.lower() in have]
         if MEGA_IN_IMAGE in have:
-            found += [c for c, own in fm1_tracks.OWN_CIRCUITS.items() if own[0].lower() in have]
+            found += [c for c, own in fm1_tracks.OWN_CIRCUITS.items()
+                      if own[0].lower() in have and f"media/tracks/{own[0].lower()}/quickpreview1.col" in have]
         if not found:
             raise Fm4TrackError(f"{Path(fm1_dir).name} has none of the circuits the import knows "
                                 f"({', '.join(display_name(c) for c in fm1_tracks.CIRCUITS)}).")
