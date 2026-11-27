@@ -818,8 +818,9 @@ class RallyPartsTests(unittest.TestCase):
     def test_released_cars(self):
         """Converter.released: the cars ReImagined's released import took under FM4's id: not a
         copy of FH1's traffic car, nor a car whose id or MediaName FH1 has, nor one whose stock
-        engine's id is another engine's in FH1 (the id table moves some of those now), nor one
-        whose id or MediaName an installed DLC pack's car has (main left those out)."""
+        engine's id is another engine's in FH1 (the id table moves some of those now). An installed
+        FH1 DLC pack's car with the same id or MediaName does not matter (the 2013 Vipers keep
+        the level-4 tire with or without the pack)."""
         fm4, fh1 = sqlite3.connect(":memory:"), sqlite3.connect(":memory:")
         self.addCleanup(fm4.close)
         self.addCleanup(fh1.close)
@@ -840,7 +841,7 @@ class RallyPartsTests(unittest.TestCase):
         conv.twins.return_value = {282: (55282, "VW_5_Beetle_04")}
         conv.fh1.dlc_car_names.return_value = ({"dlc_car"}, {304})
         released = [c for c in (300, 301, 302, 303, 282, 304, 305) if fm4_cars.Converter.released(conv, c)]
-        self.assertEqual(released, [300])
+        self.assertEqual(released, [300, 304, 305])
 
 
 class LogoTests(unittest.TestCase):

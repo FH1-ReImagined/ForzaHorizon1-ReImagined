@@ -1273,7 +1273,7 @@ def _build(cfg, tools, target, backup, work, disc1, disc2, progress, cancelled, 
     n, skipped = len(info["cars"]), len(info["skipped"])
     more = f" {skipped} could not be converted (see the mod's {MARKER})." if skipped else ""
     rally = report.get("rally")
-    if rally:
+    if rally and rally.get("cars"):
         # with or without the Rally Expansion: a fitted part keeps its row on the next import (#924)
         more += f" {rally['cars']} of them have rally parts."
     from_dlc = ""

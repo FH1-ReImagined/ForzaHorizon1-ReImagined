@@ -2118,21 +2118,18 @@ class Converter:
 
     def released(self, cid):
         """True when ReImagined's released FM4 import (before the id table, #924) could have had
-        this car: it took every FM4 car under FM4's id whose id and MediaName FH1's database and
-        the installed DLC packs' cars lack (so no copy of a traffic car, #841, nor the 2013 Viper
-        pack's two cars whose ids an FH1 DLC car has) and whose stock engine's id is not another
-        engine's in FH1 (the id table moves some of those engines now). Such a car keeps FM4's
-        level-4 tire (Database._drop_drag_tires): a save can have it fitted."""
+        this car: it took every FM4 car under FM4's id whose id and MediaName FH1's database lacks
+        (so no copy of a traffic car, #841) and whose stock engine's id is not another engine's in
+        FH1 (the id table moves some of those engines now). Such a car keeps FM4's level-4 tire
+        (Database._drop_drag_tires): a save can have it fitted. The installed FH1 DLC is not
+        checked, so the set does not depend on it: the 2013 Viper pack's two cars (1606, 1637)
+        keep the tire with or without that pack (a row no save uses does no harm, a missing one
+        stops a fitted car loading)."""
         if cid in self.twins():
             return False
         name = self.fm4db.execute("select MediaName from Data_Car where Id=?", (cid,)).fetchone()
         low = str(name[0] if name else "").lower()
         if self.fh1db.execute("select 1 from Data_Car where Id=? or lower(MediaName)=?", (cid, low)).fetchone():
-            return False
-        if "_dlc_cars" not in self.__dict__:
-            self.__dict__["_dlc_cars"] = self.fh1.dlc_car_names()
-        dlc_names, dlc_ids = self.__dict__["_dlc_cars"]
-        if cid in dlc_ids or low in dlc_names:
             return False
         try:
             stock = self.fm4db.execute("select EngineID from List_UpgradeEngine where Ordinal=? and IsStock",
