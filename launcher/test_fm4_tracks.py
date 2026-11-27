@@ -231,8 +231,10 @@ class Import(Base):
     def test_the_lap_line_and_the_laps(self):
         self.build()
         lap = (fm4tracks.store(self.cfg) / "suzuka" / "lap.txt").read_text().splitlines()
-        self.assertEqual(lap[:4], ["name Suzuka", "length 5809.0", "splits 0.2500 0.5000 0.7500", "points 8"])
-        self.assertEqual(lap[4], "0.00 11.00 0.00")  # FM4's (x, y, z) as FH1's (x, z + 1, y)
+        # the test's line is a straight 200 m (its ends far apart): a start and a finish, not a lap
+        self.assertEqual(lap[:5], ["name Suzuka", "length 5809.0", "splits 0.2500 0.5000 0.7500", "open 1",
+                                   "points 8"])
+        self.assertEqual(lap[5], "0.00 11.00 0.00")  # FM4's (x, y, z) as FH1's (x, z + 1, y)
         # the game's laps file: one JSON object a line, a broken line skipped
         laps = fm4tracks.store(self.cfg) / "laps" / "suzuka.jsonl"
         laps.parent.mkdir(parents=True)
@@ -294,6 +296,131 @@ class Import(Base):
             fm4tracks.run_tool([sys.executable, "-c", "print('reading'); raise SystemExit('no PVS')"],
                                dict(os.environ), lambda _l: None, lambda: False)
         self.assertIn("no PVS", str(e.exception))
+
+
+class Fm1(Base):
+    """Import FM1 tracks (#930): Forza Motorsport's (2005) circuits laid out as FM4 ones by
+    tools/fm1_tracks.py, then converted as FM4's are."""
+
+    def setUp(self):
+        super().setUp()
+        for name in ("Tsukuba",):
+            (self.disc / "Media" / "tracks" / name / "Ribbon_00").mkdir(parents=True)
+            (self.disc / "Media" / "tracks" / name / "bin.zip").write_bytes(b"x" * 1000)
+        geo(self.disc / "Media" / "AI" / "Tracks" / "tsukuba_00.geo", [(0, 0, 10), (0, 100, 10)] + [(0, 200, 10)] * 6)
+        self.fm1 = self.t / "Forza Motorsport"
+        (self.fm1 / "media" / "Tracks" / "tsukuba").mkdir(parents=True)
+        (self.fm1 / "media" / "Tracks" / "tsukuba" / "QuickPreview1.xb2").write_bytes(b"xb2")
+        (self.fm1 / "media" / "Tracks" / "Rio").mkdir()
+
+    def stand_in(self, calls):
+        convert = fake_converter(calls)
+
+        def run(cmd, env, on_line, cancelled, cwd=None):
+            if Path(cmd[1]).name != "fm1_tracks.py":
+                return convert(cmd, env, on_line, cancelled, cwd)
+            calls.append((cmd, env))
+            _, fm1, disc, folder, out = cmd[2:7]
+            out = Path(out)
+            (out / "Media" / "tracks" / folder / "Ribbon_00").mkdir(parents=True)
+            (out / "Media" / "tracks" / folder / "bin.zip").write_bytes(b"FM1")
+            shutil.copytree(Path(disc) / "Media" / "db", out / "Media" / "db")
+            shutil.copytree(Path(disc) / "Media" / "AI", out / "Media" / "AI")
+        return run
+
+    def test_lists_the_fm1_circuits(self):
+        self.assertEqual(fm4tracks.fm1_circuits(self.fm1), ["Tsukuba"])
+        with self.assertRaises(fm4tracks.Fm4TrackError) as e:
+            fm4tracks.fm1_circuits(self.disc)       # FM4's disc: tracks, but none of FM1's
+        self.assertIn("none of the circuits", str(e.exception))
+        with self.assertRaises(fm4tracks.Fm4TrackError) as e:
+            fm4tracks.fm1_circuits(self.t / "game" / "media" / "cars")
+        self.assertIn("media/Tracks", str(e.exception))
+
+    def test_lists_fm1_only_circuits_with_their_own_data(self):
+        tokyo = self.fm1 / "media" / "Tracks" / "Tokyo"
+        tokyo.mkdir(parents=True)
+        (tokyo / "QuickPreview1.xb2").write_bytes(b"xb2")
+        (tokyo / "QuickPreview1.col").write_bytes(b"col")
+        self.assertEqual(fm4tracks.fm1_circuits(self.fm1), ["Tsukuba"])     # no Mega.ca2: no grid or lap
+        (self.fm1 / "media" / "cabs").mkdir()
+        (self.fm1 / "media" / "cabs" / "Mega.ca2").write_bytes(b"ca2")
+        self.assertEqual(fm4tracks.fm1_circuits(self.fm1), ["Tsukuba", "FM1Tokyo"])
+        self.assertEqual(fm4tracks.display_name("FM1Tokyo"), "Tokyo")
+
+    def test_stages_then_converts_as_an_fm4_circuit(self):
+        calls = []
+        disc = fm4tracks.open_disc(str(self.disc), self.t / "work")
+        with mock.patch.object(fm4tracks, "tool_command", lambda s, *a: ["python", s] + [str(x) for x in a]):
+            msg = fm4tracks.build(self.cfg, disc, ["Tsukuba"], runner=self.stand_in(calls), fm1_dir=self.fm1)
+        self.assertIn("Tsukuba (FM1)", msg)
+        self.assertEqual([Path(c[0][1]).name for c in calls], ["fm1_tracks.py", "fm4_track_mod.py", "fm4_pvs.py"])
+        stage = calls[0][0]
+        self.assertEqual(stage[2:6], ["stage", str(self.fm1), str(self.disc), "Tsukuba"])
+        # FM4's converter reads the laid-out circuit, not the disc
+        mod_cmd, env = calls[1]
+        self.assertEqual(Path(mod_cmd[2]), Path(stage[6]) / "Media" / "tracks" / "Tsukuba")
+        self.assertEqual(env["FM4_DISC"], stage[6])
+        info = fm4tracks.find(self.cfg, "tsukuba")
+        self.assertEqual((info["name"], info["source"]), ("Tsukuba (FM1)", "FM1"))
+        self.assertEqual(info["spawn"], "0.0,11.0,-15.0,0.000,1.000")
+        self.assertIn(("tsukuba", "Tsukuba (FM1) (experimental)"), fm4tracks.choices(self.cfg))
+        self.assertFalse(list(fm4tracks.store(self.cfg).glob(".work-*")))
+
+    def fm1_image(self):
+        """FM1's disc as a full original Xbox image: the game partition at XGD1's offset."""
+        from test_fm4_import import iso
+        files = {"default.xbe": b"XBEH",
+                 "media/Tracks/tsukuba/QuickPreview1.xb2": b"xb2",
+                 "media/Tracks/tsukuba/tsukuba.xpr": b"TEX" * 100,
+                 "media/Tracks/Rio/QuickPreview1.xb2": b"rio"}
+        return iso(self.t / "fm1.iso", files, offset=0x18300000)
+
+    def test_lists_the_circuits_of_a_disc_image(self):
+        image = self.fm1_image()
+        self.assertEqual(fm4tracks.fm1_circuits(image), ["Tsukuba"])
+        out = fm4tracks.fm1_folder(image, ["Tsukuba"], self.t / "fm1work")
+        self.assertEqual((out / "media" / "Tracks" / "tsukuba" / "tsukuba.xpr").read_bytes(), b"TEX" * 100)
+        self.assertFalse((out / "media" / "Tracks" / "Rio").exists())  # only the chosen circuits
+        self.assertEqual(fm4tracks.fm1_folder(self.fm1, ["Tsukuba"], self.t / "fm1work"), self.fm1)
+        bad = self.t / "not.iso"
+        bad.write_bytes(b"\0" * 0x20000)
+        with self.assertRaises(fm4tracks.Fm4TrackError) as e:
+            fm4tracks.fm1_circuits(bad)
+        self.assertIn("not.iso", str(e.exception))
+
+    def test_an_image_with_fm1s_database_offers_its_own_circuits(self):
+        from test_fm4_import import iso
+        image = iso(self.t / "fm1b.iso", {"default.xbe": b"XBEH", "media/Tracks/Rio/QuickPreview1.xb2": b"rio",
+                                          "media/Tracks/Rio/QuickPreview1.col": b"col",
+                                          "media/cabs/Mega.ca2": b"ca2"}, offset=0x18300000)
+        self.assertEqual(fm4tracks.fm1_circuits(image), ["FM1Rio"])
+        out = fm4tracks.fm1_folder(image, ["FM1Rio"], self.t / "fm1work2")
+        self.assertEqual((out / "media" / "cabs" / "Mega.ca2").read_bytes(), b"ca2")
+        self.assertEqual((out / "media" / "Tracks" / "Rio" / "QuickPreview1.col").read_bytes(), b"col")
+        # as with a folder, an FM1-only circuit without its collision is not offered
+        no_col = iso(self.t / "fm1c.iso", {"default.xbe": b"XBEH", "media/Tracks/Rio/QuickPreview1.xb2": b"rio",
+                                           "media/Tracks/tsukuba/QuickPreview1.xb2": b"xb2",
+                                           "media/cabs/Mega.ca2": b"ca2"}, offset=0x18300000)
+        self.assertEqual(fm4tracks.fm1_circuits(no_col), ["Tsukuba"])
+
+    def test_stages_from_a_disc_image(self):
+        calls = []
+        image = self.fm1_image()
+        disc = fm4tracks.open_disc(str(self.disc), self.t / "work")
+        with mock.patch.object(fm4tracks, "tool_command", lambda s, *a: ["python", s] + [str(x) for x in a]):
+            msg = fm4tracks.build(self.cfg, disc, ["Tsukuba"], runner=self.stand_in(calls), fm1_dir=image)
+        self.assertIn("Tsukuba (FM1)", msg)
+        stage = calls[0][0]
+        self.assertEqual(Path(stage[3]).name, "fm1")  # the circuit's folder read from the image
+        self.assertFalse(list(fm4tracks.store(self.cfg).glob(".work-*")))
+
+    def test_needs_the_template_circuits(self):
+        shutil.rmtree(self.disc / "Media" / "tracks" / "Suzuka")
+        disc = fm4tracks.open_disc(str(self.disc), self.t / "work")
+        with self.assertRaises(fm4tracks.Fm4TrackError) as e:
+            fm4tracks.build(self.cfg, disc, ["Tsukuba"], runner=self.stand_in([]), fm1_dir=self.fm1)
+        self.assertIn("Suzuka", str(e.exception))
 
 
 class Start(Base):
@@ -506,6 +633,51 @@ class Ui(Base):
         self.assertTrue(dialog.go.isEnabled())
         small = self.own(ChooseCircuits(None, disc, set(), 1000))
         self.assertFalse(small.go.isEnabled())  # not enough room
+
+    def test_fm1_only_circuits_reach_the_choice(self):
+        """FM1-only circuits (fm1_tracks.OWN_CIRCUITS) are not on FM4's Disc 1: they are offered once
+        Disc 1 has the drawing donors (FM1_TEMPLATES)."""
+        from PySide6.QtWidgets import QDialog
+        from forza_launcher.ui import fm4_tracks as ui
+        (self.disc / "Media" / "tracks" / "Tsukuba" / "Ribbon_00").mkdir(parents=True)
+        (self.disc / "Media" / "tracks" / "Tsukuba" / "bin.zip").write_bytes(b"x" * 1000)
+        page = mock.Mock()
+        page._game_running.return_value = False
+        card = self.own(ui.Fm4TracksCard(self.cfg, page))
+        seen = []
+
+        class Choice:
+            def __init__(self, parent, disc, have, free, fm1=None):
+                seen.append(fm1)
+
+            def exec(self):
+                return QDialog.Rejected
+
+        for found, offered in ((["Tsukuba", "FM1Tokyo"], ["Tsukuba", "FM1Tokyo"]),
+                               (["FM1Tokyo"], ["FM1Tokyo"]), (["RoadAmerica", "FM1Rio"], ["FM1Rio"])):
+            card.task = mock.Mock()
+            card.disc = fm4tracks.open_disc(str(self.disc), self.t / "work")
+            card.fm1 = ("fm1", found)
+            with mock.patch.object(ui, "ChooseCircuits", Choice):
+                card._read_done(True, "")
+            self.assertEqual(seen.pop(), offered)
+        # without a drawing donor, nothing is offered
+        shutil.rmtree(self.disc / "Media" / "tracks" / "Tsukuba")
+        card.task = mock.Mock()
+        card.disc = fm4tracks.open_disc(str(self.disc), self.t / "work")
+        card.fm1 = ("fm1", ["FM1Tokyo"])
+        with mock.patch.object(ui, "ChooseCircuits", Choice):
+            card._read_done(True, "")
+        self.assertEqual(seen, [])
+        self.assertIn("lacks Tsukuba", card.message.text())
+        # the dialog names both kinds
+        disc = fm4tracks.open_disc(str(self.disc), self.t / "work")
+        dialog = self.own(ui.ChooseCircuits(None, disc, set(), 10 << 30, ["Suzuka", "FM1Tokyo"]))
+        self.assertEqual([dialog.list.item(i).text().split("   ")[0] for i in range(dialog.list.count())],
+                         ["Suzuka", "Tokyo"])
+        intro = dialog.findChildren(ui.QLabel)[0].text()
+        self.assertIn("1 circuit(s) FM4's Disc 1 also has", intro)
+        self.assertIn("1 circuit(s) only FM1 has", intro)
 
 
 if __name__ == "__main__":

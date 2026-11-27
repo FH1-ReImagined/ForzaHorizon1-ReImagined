@@ -72,6 +72,10 @@ NAMES = {
     "MapleValley": "Maple Valley", "Nurburgring": "Nürburgring Nordschleife",
     "NurburgringF1": "Nürburgring GP", "RoadAmerica": "Road America", "RoadAtlanta": "Road Atlanta",
     "SunsetInfield": "Sunset Peninsula", "TopGear": "Top Gear Test Track",
+    # FM1-only circuits (tools/fm1_tracks.py OWN_CIRCUITS), staged under names of their own
+    "FM1Fujimi": "Fujimi Kaido Hill Climb", "FM1Tokyo": "Tokyo", "FM1NewYork": "New York",
+    "FM1PacificShipyards": "Pacific Shipyards", "FM1Rio": "Rio de Janeiro", "FM1AlpineRing": "Alpine Ring",
+    "FM1BlueMountains": "Blue Mountains", "FM1RoadAtlanta": "Road Atlanta", "FM1TestTrack": "Test Track",
 }
 NOT_CIRCUITS = re.compile(r"(?i)^(homespace\d*|ui.*)$")  # FM4's garage sets and menu scenes
 
@@ -89,6 +93,13 @@ EXPERIMENTAL_SHORT = ("Experimental: free driving and timed laps on the circuit 
 
 # Disc 1's files the converter reads besides the circuits' folders.
 DISC1_COMMON = ("default.xex", "Media/db", "Media/physics", "Media/AI/Tracks")
+
+# Forza Motorsport (2005, original Xbox) circuits (#930, tools/fm1_tracks.py): FM1's visuals on FM4's
+# collision, AI lines and names of the same circuit. Their models take the drawing data (command
+# buffers) of FM4 models from these circuits, so Disc 1 must have them.
+FM1_TEMPLATES = ("Tsukuba", "Suzuka")
+FM1_SUFFIX = " (FM1)"
+MEGA_IN_IMAGE = "media/cabs/mega.ca2"  # FM1's database archive: the FM1-only circuits' grid and lap
 
 
 class Fm4TrackError(Fm4Error):
@@ -183,7 +194,8 @@ def select(cfg, key: str):
 
 def choices(cfg) -> list:
     """[(key, label)] for the picker: Colorado first."""
-    return [(DEFAULT, COLORADO)] + [(i["key"], f"{i['name']} (FM4, experimental)") for i in installed(cfg)]
+    return [(DEFAULT, COLORADO)] + [(i["key"], f"{i['name']} (experimental)" if i.get("source") == "FM1"
+                                     else f"{i['name']} (FM4, experimental)") for i in installed(cfg)]
 
 
 def remove(cfg, key: str):
@@ -500,11 +512,111 @@ def estimate(disc: Disc, names) -> tuple:
     return kept, kept + (max(sizes) * 7 if sizes else 0)
 
 
-def build(cfg, disc: Disc, names, progress=lambda f, text: None, cancelled=lambda: False, runner=run_tool):
+def _fm1_image_tracks(image) -> dict:
+    """{FM1 folder name, lower case: its path in the image} of the circuits an FM1 disc image
+    (the original Xbox's XGD1, or a plain XDVDFS image: tools/xiso_extract.py) holds."""
+    import xiso_extract
+    try:
+        iso = xiso_extract.open_iso(image)
+    except (OSError, xiso_extract.IsoError) as e:
+        raise Fm4TrackError(f"{Path(image).name} could not be read as a disc image: {e}") from None
+    try:
+        out = {}
+        for e in iso.entries():
+            parts = e.path.replace("\\", "/").split("/")
+            if (len(parts) == 4 and parts[0].lower() == "media" and parts[1].lower() == "tracks"
+                    and parts[3].lower() == "quickpreview1.xb2"):
+                out[parts[2].lower()] = "/".join(parts[:3])
+            if (len(parts) == 4 and parts[0].lower() == "media" and parts[1].lower() == "tracks"
+                    and parts[3].lower() == "quickpreview1.col"):  # FM1-only circuits' collision
+                out["/".join(parts).lower()] = "/".join(parts)
+            if "/".join(parts).lower() == MEGA_IN_IMAGE:  # the FM1-only circuits' grid and lap
+                out[MEGA_IN_IMAGE] = "/".join(parts)
+        return out
+    except xiso_extract.IsoError as e:
+        raise Fm4TrackError(f"{Path(image).name}: {e}") from None
+    finally:
+        iso.close()
+
+
+def fm1_folder(fm1_choice, names, work: Path, progress=lambda d, t, n: None, cancelled=lambda: False) -> Path:
+    """The FM1 disc's folder for the circuits `names` (FM4 folder names): the chosen folder, or
+    those circuits' folders read from the chosen disc image into work/fm1."""
+    choice = Path(fm1_choice)
+    if not choice.is_file():
+        return choice
+    paths.ensure_tools_importable()
+    import fm1_tracks
+    import xiso_extract
+    have = _fm1_image_tracks(choice)
+    folders = {n: (fm1_tracks.CIRCUITS.get(n) or fm1_tracks.OWN_CIRCUITS.get(n) or ("",))[0].lower() for n in names}
+    wanted = [have[f] for f in folders.values() if f in have]
+    if any(n in fm1_tracks.OWN_CIRCUITS for n in names):  # their grid, cameras and lap: the database archive
+        wanted.append("media/cabs/Mega.ca2")
+    out = work / "fm1"
+    iso = xiso_extract.open_iso(choice)
+    try:
+        fm4cars._extract(iso, out, wanted, "Reading FM1's disc: ", progress, cancelled)
+    finally:
+        iso.close()
+    return out
+
+
+def _fm1_own() -> dict:
+    """tools/fm1_tracks.py OWN_CIRCUITS: FM1 circuits FM4 has no collision of, made from FM1's own"""
+    paths.ensure_tools_importable()
+    import fm1_tracks
+    return fm1_tracks.OWN_CIRCUITS
+
+
+def fm1_circuits(fm1_dir) -> list:
+    """The circuits of Forza Motorsport's (2005, original Xbox) disc that can be imported, by FM4
+    folder name (tools/fm1_tracks.py CIRCUITS): fm1_dir is the disc's folder or its disc image.
+    Raises Fm4TrackError in plain words when it is not that disc."""
+    paths.ensure_tools_importable()
+    import fm1_tracks
+    if Path(fm1_dir).is_file():
+        have = _fm1_image_tracks(fm1_dir)
+        if not have:
+            raise Fm4TrackError(f"{Path(fm1_dir).name} is not Forza Motorsport's disc image: it has no "
+                                "circuits under media/Tracks.")
+        found = [c for c, (f1, _) in fm1_tracks.CIRCUITS.items() if f1.lower() in have]
+        if MEGA_IN_IMAGE in have:
+            found += [c for c, own in fm1_tracks.OWN_CIRCUITS.items()
+                      if own[0].lower() in have and f"media/tracks/{own[0].lower()}/quickpreview1.col" in have]
+        if not found:
+            raise Fm4TrackError(f"{Path(fm1_dir).name} has none of the circuits the import knows "
+                                f"({', '.join(display_name(c) for c in fm1_tracks.CIRCUITS)}).")
+        return found
+    tracks = fm1_tracks.fm1_tracks_dir(str(fm1_dir))
+    if not tracks:
+        raise Fm4TrackError(f"{Path(fm1_dir).name} is not Forza Motorsport's disc: it has no media/Tracks folder. "
+                            "Choose the original Xbox game's disc image, or the folder with its disc's files.")
+    found = [c for c, (f1, _) in fm1_tracks.CIRCUITS.items() if fm1_tracks.find_ci(tracks, f1, "QuickPreview1.xb2")]
+    if fm1_tracks.find_ci(str(fm1_dir), "media", "cabs", "Mega.ca2"):  # FM1-only circuits: their grid and lap
+        found += [c for c, own in fm1_tracks.OWN_CIRCUITS.items()
+                  if fm1_tracks.find_ci(tracks, own[0], "QuickPreview1.xb2")
+                  and fm1_tracks.find_ci(tracks, own[0], "QuickPreview1.col")]
+    if not found:
+        raise Fm4TrackError(f"{Path(fm1_dir).name} has none of the circuits the import knows "
+                            f"({', '.join(display_name(c) for c in fm1_tracks.CIRCUITS)}).")
+    return found
+
+
+def build(cfg, disc: Disc, names, progress=lambda f, text: None, cancelled=lambda: False, runner=run_tool,
+          fm1_dir=None):
     """Converts and installs the circuits `names` (FM4 folder names) of `disc`. A circuit imported
-    before is replaced once its new conversion is complete. Returns a message for the player."""
+    before is replaced once its new conversion is complete. Returns a message for the player.
+    fm1_dir: Forza Motorsport's (2005) disc folder or disc image: the circuits are FM1's (#930), laid out as FM4
+    ones by tools/fm1_tracks.py with FM4's collision, AI lines and names for them, and replace an
+    FM4 import of the same circuit."""
     if not names:
         raise Fm4TrackError("Choose at least one circuit.")
+    if fm1_dir is not None:
+        missing = [t for t in FM1_TEMPLATES if t not in disc.circuits]
+        if missing:
+            raise Fm4TrackError(f"FM1 circuits take FM4 models' drawing data from {' and '.join(missing)}, "
+                                "which this Disc 1 does not have.")
     game = Path(cfg.game_files())
     if not (game / "default.xex").is_file() or not (game / "media" / "zipmanifest.xml").is_file():
         raise Fm4TrackError("FH1's game files are not set up yet: open Setup first.")
@@ -520,7 +632,8 @@ def build(cfg, disc: Disc, names, progress=lambda f, text: None, cancelled=lambd
         if old.is_dir() and not old.is_symlink():
             fm4cars._remove(old)
     work = Path(tempfile.mkdtemp(prefix=".work-", dir=root))
-    steps = len(names) * 3 + 1
+    per = 4 if fm1_dir is not None else 3
+    steps = len(names) * per + 1
     done = [0]
 
     def step(text, inner=0.0):
@@ -528,19 +641,33 @@ def build(cfg, disc: Disc, names, progress=lambda f, text: None, cancelled=lambd
 
     imported, failed = [], []
     try:
-        src = disc.folder(names, lambda d, t, n: step(n, d / t if t else 0), cancelled)
+        own = set(_fm1_own()) if fm1_dir is not None else set()
+        wanted = ([n for n in names if n not in own]  # FM1-only circuits have no FM4 folder
+                  + ([t for t in FM1_TEMPLATES if t not in names] if fm1_dir is not None else []))
+        src = disc.folder(wanted, lambda d, t, n: step(n, d / t if t else 0), cancelled)
+        if fm1_dir is not None:  # a disc image: the chosen circuits' folders are read from it
+            fm1_dir = fm1_folder(fm1_dir, names, work, lambda d, t, n: step(n, d / t if t else 0), cancelled)
         done[0] = 1
         for folder in names:
             if cancelled():
                 raise Cancelled()
-            name = display_name(folder)
+            name = display_name(folder) + (FM1_SUFFIX if fm1_dir is not None else "")
 
             def circuit_step(k, text, name=name):  # k: converter steps finished with this line
                 done[0] += k
                 step(f"{name}: {text}")
+            staged = work / (key_of(folder) + "-fm1")
             try:
-                _build_one(cfg, src, folder, game, Path(update), work / key_of(folder), name,
-                           circuit_step, cancelled, runner)
+                circuit_src, source = src, "FM4"
+                if fm1_dir is not None:
+                    # FM1's visuals in an FM4-disc-shaped folder, with FM4's files for the circuit
+                    circuit_step(0, "laying out FM1's circuit")
+                    runner(tool_command("fm1_tracks.py", "stage", fm1_dir, src, folder, staged),
+                           _tool_env(), lambda line: circuit_step(0, line[:120]), cancelled)
+                    circuit_step(1, "laid out")
+                    circuit_src, source = staged, "FM1"
+                _build_one(cfg, circuit_src, folder, game, Path(update), work / key_of(folder), name,
+                           circuit_step, cancelled, runner, source)
                 imported.append(name)
             except Fm4TrackError as e:
                 failed.append(f"{name}: {e}")
@@ -548,19 +675,22 @@ def build(cfg, disc: Disc, names, progress=lambda f, text: None, cancelled=lambd
                 raise
             finally:
                 shutil.rmtree(work / key_of(folder), ignore_errors=True)
-            done[0] = 1 + 3 * (names.index(folder) + 1)
+                shutil.rmtree(staged, ignore_errors=True)
+            done[0] = 1 + per * (names.index(folder) + 1)
     finally:
         fm4cars._remove(work)  # when a program still holds a file of it, the next import deletes it
     if not imported:
         raise Fm4TrackError("No circuit could be imported. " + " ".join(failed[:3]))
-    msg = (f"Imported {len(imported)} Forza Motorsport 4 circuit(s): {', '.join(imported)}. Choose one "
+    game_name = "Forza Motorsport (2005)" if fm1_dir is not None else "Forza Motorsport 4"
+    msg = (f"Imported {len(imported)} {game_name} circuit(s): {', '.join(imported)}. Choose one "
            "on the Play page to drive it (experimental).")
     if failed:
         msg += f" {len(failed)} could not be converted: " + "; ".join(failed[:3])
     return msg
 
 
-def _build_one(cfg, disc_root: Path, folder, game: Path, update: Path, work: Path, name, step, cancelled, runner):
+def _build_one(cfg, disc_root: Path, folder, game: Path, update: Path, work: Path, name, step, cancelled, runner,
+               source="FM4"):
     key = key_of(folder)
     track_src = fm4cars._find_ci(disc_root, "Media", "tracks", folder)
     db = fm4cars._find_ci(disc_root, "Media", "db", "gamedb.slt")
@@ -618,7 +748,7 @@ def _build_one(cfg, disc_root: Path, folder, game: Path, update: Path, work: Pat
     ribbon = free_roam_ribbon(track_src)
     spawn = spawn_of(disc_root, folder, ribbon)
     _ensure_festival_node(dest, spawn)
-    info = {"format": FORMAT, "key": key, "folder": folder, "name": name, "ribbon": ribbon,
+    info = {"format": FORMAT, "key": key, "folder": folder, "name": name, "source": source, "ribbon": ribbon,
             "spawn": spawn, "imported": time.strftime("%Y-%m-%d %H:%M"),
             "size": _tree_size(staged) + _tree_size(db_mod)}
     (staged / MARKER).write_text(json.dumps(info, ensure_ascii=False, indent=1), encoding="utf-8")

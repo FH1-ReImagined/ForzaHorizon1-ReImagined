@@ -191,7 +191,7 @@ void Handle(State& s, const Event& e, double now) {
       const auto& best = t.best_splits();
       double ref = size_t(e.index) < best.size() ? best[size_t(e.index)] : -1;
       if (ref < 0 && size_t(e.index) < s.line.splits.size())
-        ref = TimeAt(t.ghost(), s.line.splits[size_t(e.index)] * s.line.total);
+        ref = TimeAt(t.ghost(), s.line.splits[size_t(e.index)] * t.Course());
       if (ref > 0) delta = "  " + Signed(e.time - ref);
       Flash(s, now, "SECTOR " + std::to_string(e.index + 1) + "   " + Clock(e.time) + delta,
             "LAP " + std::to_string(t.lap()) + "   BEST " + Clock(t.best()), 3);

@@ -33,9 +33,11 @@ struct Line {
   std::vector<std::array<float, 3>> points;
   std::vector<float> along;                 // distance along the line at each point
   float total = 0;                          // the line's length round the lap
+  bool open = false;  // a start and a finish, not a lap (FM1's hill climb, Pacific Shipyards)
 };
 
-// lap.txt: "name ...", "length m", "splits a b ...", "points n", then n lines "x y z".
+// lap.txt: "name ...", "length m", "splits a b ...", ["open 1",] "points n", then n lines "x y z".
+// An open line's total runs from its first point to its last (not back round).
 inline bool Parse(std::string_view text, Line& line) {
   line = Line{};
   size_t at = 0, want = 0;
@@ -56,6 +58,7 @@ inline bool Parse(std::string_view text, Line& line) {
     const std::string key = row.substr(0, space);
     const std::string value = space == std::string::npos ? "" : row.substr(space + 1);
     if (key == "name") line.name = value;
+    else if (key == "open") line.open = value != "0";
     else if (key == "length") line.length = std::strtof(value.c_str(), nullptr);
     else if (key == "splits") {
       const char* p = value.c_str();
@@ -74,6 +77,7 @@ inline bool Parse(std::string_view text, Line& line) {
   float d = 0;
   for (size_t i = 0; i < line.points.size(); ++i) {
     line.along[i] = d;
+    if (line.open && i + 1 == line.points.size()) break;
     const auto& a = line.points[i];
     const auto& b = line.points[(i + 1) % line.points.size()];
     d += std::sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]));
@@ -161,6 +165,7 @@ class Timer {
   static constexpr float kJump = 150.0f;   // metres along the line in one update: a teleport
   static constexpr size_t kWindow = 120;   // points searched either side of the last one
   static constexpr float kSampleEvery = 5.0f;  // metres along the line between trace samples
+  static constexpr float kGate = 5.0f;     // an open line's start and finish, metres in from its ends
 
   explicit Timer(const Line& line) : line_(line) {}
 
@@ -195,50 +200,33 @@ class Timer {
     s_ = s;
     if (!had) return {};
     float ds = s - prev;
+    if (line_.open) {
+      // a start and a finish: the run starts kGate metres past the first point, the car going
+      // forwards, and counts kGate metres before the last after every sector end in order
+      if (std::fabs(ds) > kJump) return End("the car jumped along the track");
+      if (!timing_) {
+        if (prev < kGate && s >= kGate && ds > 0) return Begin(t, s, pos, Kind::kStarted);
+        return {};
+      }
+      const float finish = Course() - kGate;
+      if (prev < finish && s >= finish && ds > 0) {
+        Event e = next_split_ == line_.splits.size() ? Finish(t, pos) : Event{};
+        End("");
+        if (e.kind == Kind::kNone) { e.kind = Kind::kEnded; e.why = "a sector was missed"; }
+        return e;
+      }
+      return Progress(t, s, prev, ds, pos);
+    }
     const bool forward_wrap = ds < -line_.total / 2, backward_wrap = ds > line_.total / 2;
     if (forward_wrap) ds += line_.total;
     if (backward_wrap) ds -= line_.total;
     if (std::fabs(ds) > kJump) return End("the car jumped along the track");
     if (backward_wrap) return End("wrong way over the start line");
     if (forward_wrap) {
-      Event e;
-      if (timing_ && next_split_ == line_.splits.size()) {
-        e.kind = Kind::kLap;
-        e.index = lap_;
-        e.time = t - lap_start_;
-        e.best = best_ < 0 || e.time < best_;
-        last_ = e.time;
-        last_splits_ = splits_;
-        if (e.best) {
-          best_ = e.time;
-          best_splits_ = splits_;
-          trace_.push_back({line_.total, float(e.time), pos[0], pos[1], pos[2]});
-          ghost_ = trace_;
-        }
-      } else {
-        e.kind = Kind::kStarted;
-      }
-      timing_ = true;
-      lap_ = e.kind == Kind::kLap ? lap_ + 1 : 1;
-      lap_start_ = t;
-      next_split_ = 0;
-      splits_.clear();
-      trace_.clear();
-      trace_.push_back({s, 0.0f, pos[0], pos[1], pos[2]});
-      return e;
+      Event e = timing_ && next_split_ == line_.splits.size() ? Finish(t, pos) : Event{};
+      return Begin(t, s, pos, e.kind == Kind::kLap ? Kind::kLap : Kind::kStarted, e);
     }
-    if (timing_ && (trace_.empty() || s - trace_.back().along >= kSampleEvery) && ds > 0)
-      trace_.push_back({s, float(t - lap_start_), pos[0], pos[1], pos[2]});
-    if (timing_ && next_split_ < line_.splits.size()) {
-      const float at = line_.splits[next_split_] * line_.total;
-      if (prev < at && s >= at && ds > 0) {
-        splits_.push_back(t - lap_start_);
-        Event e{Kind::kSplit, int(next_split_), splits_.back()};
-        ++next_split_;
-        return e;
-      }
-    }
-    return {};
+    return Progress(t, s, prev, ds, pos);
   }
 
   // The game's rewind, a reload: the lap so far stops counting.
@@ -271,7 +259,61 @@ class Timer {
   float along() const { return s_; }
   bool on_line() const { return found_; }  // the car was on the line at the last update
 
+  // Metres from the start to the finish: round the line; on an open line the database's
+  // length when that is shorter (Pacific Shipyards' road spline runs 360 m on past the
+  // barrier its course ends at: 6880 m of line, 6520 m of course)
+  float Course() const {
+    return line_.open && line_.length > 0 && line_.length < line_.total ? line_.length : line_.total;
+  }
+
  private:
+
+  // The lap (or run) just done, all its sectors passed: its time, a best one's trace the ghost.
+  Event Finish(double t, const float pos[3]) {
+    Event e;
+    e.kind = Kind::kLap;
+    e.index = lap_;
+    e.time = t - lap_start_;
+    e.best = best_ < 0 || e.time < best_;
+    last_ = e.time;
+    last_splits_ = splits_;
+    if (e.best) {
+      best_ = e.time;
+      best_splits_ = splits_;
+      trace_.push_back({line_.total, float(e.time), pos[0], pos[1], pos[2]});
+      ghost_ = trace_;
+    }
+    return e;
+  }
+  // A lap starts at `t` (after the lap `done`, when there is one).
+  Event Begin(double t, float s, const float pos[3], Kind kind, Event done = {}) {
+    Event e = kind == Kind::kLap ? done : Event{};
+    e.kind = kind;
+    timing_ = true;
+    lap_ = kind == Kind::kLap ? lap_ + 1 : (line_.open ? lap_ + 1 : 1);
+    lap_start_ = t;
+    next_split_ = 0;
+    splits_.clear();
+    trace_.clear();
+    trace_.push_back({s, 0.0f, pos[0], pos[1], pos[2]});
+    return e;
+  }
+  // On along the lap: its trace, and a sector's end when the car passes it.
+  Event Progress(double t, float s, float prev, float ds, const float pos[3]) {
+    if (timing_ && (trace_.empty() || s - trace_.back().along >= kSampleEvery) && ds > 0)
+      trace_.push_back({s, float(t - lap_start_), pos[0], pos[1], pos[2]});
+    if (timing_ && next_split_ < line_.splits.size()) {
+      const float at = line_.splits[next_split_] * Course();
+      if (prev < at && s >= at && ds > 0) {
+        splits_.push_back(t - lap_start_);
+        Event e{Kind::kSplit, int(next_split_), splits_.back()};
+        ++next_split_;
+        return e;
+      }
+    }
+    return {};
+  }
+
   Event End(const char* why) {
     const bool was = timing_;
     timing_ = false;
@@ -342,10 +384,13 @@ class Guide {
     if (n < 2 || !(line_.total > 0) || !(along >= 0)) return -1;
     if (set_) {
       float left = target_ - along;  // metres on to the destination, the way the lap runs
-      if (left < 0) left += line_.total;
+      if (left < 0 && !line_.open) left += line_.total;
       if (left > ahead() - every() && left < ahead() + every()) return -1;
+      if (line_.open && target_ >= line_.along.back() && left >= 0) return -1;  // the finish
     }
-    const float want = std::fmod(along + ahead(), line_.total);
+    // an open line's destination stops at its end
+    const float want = line_.open ? std::min(along + ahead(), line_.along.back())
+                                  : std::fmod(along + ahead(), line_.total);
     const auto it = std::lower_bound(line_.along.begin(), line_.along.end(), want);
     const size_t first = it == line_.along.end() ? 0 : size_t(it - line_.along.begin());
     // on to the next point clear of a crossing, within half a step (else the point as it is)

@@ -39,6 +39,32 @@ game behave exactly as before.
 The list on the Mods page shows the imported circuits with their size, the date and your best
 lap.
 
+### Forza Motorsport (2005) circuits
+
+**Import FM1 tracks…**, next to **Import FM4 tracks…**, draws fifteen circuits of the original Xbox
+Forza Motorsport (#930). **Tsukuba**, **Road America**, **Silverstone**, **Maple Valley**,
+**Laguna Seca** and **Sunset Peninsula** have FM1's scenery on FM4's ground. **Tokyo**, **New
+York**, **Rio de Janeiro**, **Alpine Ring**, **Blue Mountains**, **Pacific Shipyards**, the
+**Fujimi Kaido Hill Climb**, and FM1's own **Road Atlanta** and **Test Track** are FM1's alone,
+with FM1's
+own collision, grid, sectors and lap line, under names of their own (they do not replace an FM4
+import); Pacific Shipyards and Fujimi run from a start to a finish, and the timer times a run
+from one to the other. For the first six, FM1
+built them in the coordinates FM4 kept, so the import uses FM4's collision, AI line, grid and lap
+timing for each and only the scenery is FM1's. It needs:
+
+- **your own Forza Motorsport (2005) disc**: its disc image (`.iso`, a full dump or a rebuilt
+  one), or a folder with its files (the folder with `media/Tracks`). Only the chosen circuits'
+  folders are read from an image;
+- **your FM4 Disc 1**, which must have the circuit and also Tsukuba and Suzuka (their FM4 models
+  lend the drawing data the FM1 scenery is drawn with).
+
+Choose the FM1 disc image or folder, then Disc 1, then the circuits. An FM1 circuit replaces an FM4 import of
+the same circuit (they share its name in the game): import it again from **Import FM4 tracks…**
+to go back. It shows as **Tsukuba (FM1)** and so on. Not there yet: FM1's sky, power lines, light
+that varies across a single tree (each tree has one shade), and Tsukuba's pond has not been
+checked in game. [modding/fm1-tracks.md](modding/fm1-tracks.md) describes the conversion.
+
 ## Driving a circuit
 
 Once a circuit is imported, the **Play** page shows **Drive in**: **FH1's Colorado (default)**,

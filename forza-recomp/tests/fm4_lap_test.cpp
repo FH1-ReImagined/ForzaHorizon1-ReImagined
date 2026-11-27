@@ -280,6 +280,54 @@ int main() {
     }
     CHECK(sets >= 17 && sets <= 20);
   }
+  {
+    // an open line (FM1's hill climb): half the ring, a start and a finish, timed once a run
+    std::string text = "name Half\nopen 1\nsplits 0.5\npoints 300\n";
+    for (int i = 0; i < 300; ++i) {
+      const double a = M_PI * i / 299;
+      char row[64];
+      std::snprintf(row, sizeof row, "%.3f 5 %.3f\n", 200 * std::cos(a), 200 * std::sin(a));
+      text += row;
+    }
+    Line half;
+    CHECK(Parse(text, half));
+    CHECK(half.open);
+    CHECK(std::fabs(half.total - M_PI * 200) < 1);          // not back round to the start
+    Timer timer(half);
+    Drive d(timer);
+    d.angle = -0.05;                                          // 10 m before the start
+    d.Go(0.5, 20);
+    CHECK(d.Count(Kind::kStarted) == 0);
+    d.Go(40, 20);                                             // 628 m at 20 m/s: past the finish
+    CHECK(d.Count(Kind::kStarted) == 1);
+    CHECK(d.Count(Kind::kSplit) == 1);
+    CHECK(d.Count(Kind::kLap) == 1);
+    for (const auto& e : d.events)
+      if (e.kind == Kind::kLap) CHECK(std::fabs(e.time - (M_PI * 200 - 10) / 20) < 0.2);
+    CHECK(!timer.timing());
+    CHECK(std::fabs(timer.best() - (M_PI * 200 - 10) / 20) < 0.2);
+    // back to the start (a teleport) and a second run: no lap counted on the way back
+    d.angle = -0.05;
+    d.Go(0.1, 0);
+    d.Go(40, 25);
+    CHECK(d.Count(Kind::kLap) == 2);
+    CHECK(timer.lap() == 2);
+    CHECK(std::fabs(timer.best() - (M_PI * 200 - 10) / 25) < 0.2);
+    // the guide's destination stops at the finish
+    Guide guide(half);
+    const int i = guide.Next(half.total - 100);
+    CHECK(i == int(half.points.size()) - 1);
+    // a course shorter than its line (the database's length): finished there
+    Line shorter;
+    CHECK(Parse("length 400\n" + text, shorter));
+    Timer t2(shorter);
+    Drive d2(t2);
+    d2.angle = -0.05;
+    d2.Go(40, 20);
+    CHECK(d2.Count(Kind::kLap) == 1);
+    for (const auto& e : d2.events)
+      if (e.kind == Kind::kLap) CHECK(std::fabs(e.time - (400 - 10) / 20.0) < 0.2);
+  }
   if (failures) {
     std::fprintf(stderr, "%d check(s) failed\n", failures);
     return 1;

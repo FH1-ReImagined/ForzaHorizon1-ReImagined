@@ -60,6 +60,13 @@ class Timing(unittest.TestCase):
         self.assertEqual(rows[2], "splits 0.3333 0.6667")  # thirds
         self.assertIsNone(fm4_timing.build(self.disc, "Other", 0))
 
+    def test_an_open_line_has_a_start_and_a_finish(self):
+        write_geo(os.path.join(self.disc, "Media", "AI", "Tracks", "hill_00.geo"),
+                  [(0.0, float(y), 50.0) for y in range(0, 1000, 20)])
+        rows = fm4_timing.build(self.disc, "Hill", 0).splitlines()
+        self.assertEqual(rows[3:5], ["open 1", "points 50"])
+        self.assertNotIn("open 1", fm4_timing.build(self.disc, "Ring", 0))
+
     def test_another_layout_falls_back_to_the_first_line(self):
         self.assertEqual(fm4_timing.geo_path(self.disc, "Ring", 3)[-11:], "ring_00.geo")
 

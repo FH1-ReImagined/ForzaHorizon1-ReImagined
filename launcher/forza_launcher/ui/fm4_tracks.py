@@ -19,16 +19,31 @@ EXPERIMENTAL_TAG = "Experimental"
 class ChooseCircuits(QDialog):
     """Which of Disc 1's circuits to import, with the space they take."""
 
-    def __init__(self, parent, disc, have, free):
+    def __init__(self, parent, disc, have, free, fm1=None):
         super().__init__(parent)
         self.disc, self.free = disc, free
-        self.setWindowTitle("Import FM4 tracks")
+        circuits = disc.circuits if fm1 is None else fm1
+        self.setWindowTitle("Import FM4 tracks" if fm1 is None else "Import FM1 tracks")
         lay = QVBoxLayout(self)
-        lay.addWidget(label(f"Your Forza Motorsport 4 Disc 1 has {len(disc.circuits)} circuits. Each is "
-                            "converted on this PC (under a minute for most) and takes about 3 times its "
-                            "size on the disc. Imported ones are replaced.", "muted"))
+        if fm1 is None:
+            intro = (f"Your Forza Motorsport 4 Disc 1 has {len(disc.circuits)} circuits. Each is converted on "
+                     "this PC (under a minute for most) and takes about 3 times its size on the disc. "
+                     "Imported ones are replaced.")
+        else:
+            own = set(fm4tracks._fm1_own())
+            shared = sum(c not in own for c in fm1)
+            parts = []
+            if shared:
+                parts.append(f"{shared} circuit(s) FM4's Disc 1 also has are drawn with FM1's own scenery on "
+                             "FM4's collision, AI line and lap timing, and replace an FM4 import of the same "
+                             "circuit.")
+            if len(fm1) - shared:
+                parts.append(f"{len(fm1) - shared} circuit(s) only FM1 has use FM1's own scenery, collision, "
+                             "AI line, grid and lap, with drawing data from Disc 1's Tsukuba and Suzuka.")
+            intro = f"Forza Motorsport (2005) has {len(fm1)} circuit(s) to import. " + " ".join(parts)
+        lay.addWidget(label(intro, "muted"))
         self.list = QListWidget()
-        for folder in disc.circuits:
+        for folder in circuits:
             kept, _ = fm4tracks.estimate(disc, [folder])
             name = fm4tracks.display_name(folder)
             text = f"{name}   (about {fm4tracks.size_text(kept)})"
@@ -37,7 +52,8 @@ class ChooseCircuits(QDialog):
             item = QListWidgetItem(text)
             item.setData(Qt.UserRole, folder)
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            item.setCheckState(Qt.Checked if folder == "Suzuka" and "suzuka" not in have else Qt.Unchecked)
+            first = "Suzuka" if fm1 is None else circuits[0]
+            item.setCheckState(Qt.Checked if folder == first and first.lower() not in have else Qt.Unchecked)
             self.list.addItem(item)
         self.list.itemChanged.connect(self._changed)
         lay.addWidget(self.list, 1)
@@ -89,6 +105,7 @@ class Fm4TracksCard(QWidget):
         self.task = None
         self.disc = None
         self.work = None
+        self.fm1 = None          # (Forza Motorsport's disc folder or image, its circuits) for Import FM1 tracks
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         c, cl = card(spacing=10)
@@ -114,6 +131,14 @@ class Fm4TracksCard(QWidget):
         self.import_button = QPushButton("Import FM4 tracks…")
         self.import_button.clicked.connect(self._import)
         row.addWidget(self.import_button)
+        self.fm1_button = QPushButton("Import FM1 tracks…")
+        self.fm1_button.setToolTip("Tsukuba, Road America, Silverstone, Maple Valley, Laguna Seca, Sunset "
+                                   "Peninsula, Tokyo, New York, Rio, Alpine Ring, Blue Mountains, Pacific "
+                                   "Shipyards, Fujimi Kaido, Road Atlanta and the Test Track from the "
+                                   "original Xbox "
+                                   "Forza Motorsport (2005): needs its disc image or files and FM4's Disc 1.")
+        self.fm1_button.clicked.connect(self._import_fm1)
+        row.addWidget(self.fm1_button)
         self.remove_button = QPushButton("Remove circuit")
         self.remove_button.clicked.connect(self._remove)
         row.addWidget(self.remove_button)
@@ -150,6 +175,7 @@ class Fm4TracksCard(QWidget):
     def _buttons(self):
         idle = self.task is None
         self.import_button.setEnabled(idle)
+        self.fm1_button.setEnabled(idle)
         self.remove_button.setEnabled(idle and bool(self.table.selectedItems()))
         self.remove_button.setVisible(self.table.rowCount() > 0)
 
@@ -206,7 +232,40 @@ class Fm4TracksCard(QWidget):
             shutil.rmtree(self.work, ignore_errors=True)
         self.work, self.disc = None, None
 
-    def _import(self):
+    def _import_fm1(self):
+        """FM1's circuits: Forza Motorsport's (2005) disc image or folder, then FM4's Disc 1 (its collision, AI
+        lines and names for the same circuits)"""
+        if self.page._game_running():
+            self.message.setText("Close the game before importing circuits.")
+            return
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+        title = "Forza Motorsport (2005) disc"
+        ask = QMessageBox(self)
+        ask.setWindowTitle(title)
+        ask.setText(f"{title}: a disc image (.iso), or a folder with the disc's files?")
+        image = ask.addButton("Disc image…", QMessageBox.AcceptRole)
+        folder = ask.addButton("Folder…", QMessageBox.AcceptRole)
+        ask.addButton("Cancel", QMessageBox.RejectRole)
+        ask.exec()
+        if ask.clickedButton() is image:
+            fm1_dir, _ = QFileDialog.getOpenFileName(self, title, str(Path.home()),
+                                                     "Disc images (*.iso *.xiso *.img *.bin);;All files (*)")
+        elif ask.clickedButton() is folder:
+            fm1_dir = QFileDialog.getExistingDirectory(self, title, str(Path.home()))
+        else:
+            return
+        if not fm1_dir:
+            return
+        try:
+            self.fm1 = (fm1_dir, fm4tracks.fm1_circuits(fm1_dir))
+        except fm4tracks.Fm4Error as e:
+            self.message.setText(str(e))
+            return
+        self._import(fm1=True)
+
+    def _import(self, fm1=False):
+        if not fm1:
+            self.fm1 = None
         if self.page._game_running():
             self.message.setText("Close the game before importing circuits.")
             return
@@ -245,21 +304,33 @@ class Fm4TracksCard(QWidget):
         except OSError:
             free = None
         have = {i["key"] for i in fm4tracks.installed(self.cfg)}
-        dialog = ChooseCircuits(self, self.disc, have, free)
+        fm1_dir, fm1 = self.fm1 or (None, None)
+        if fm1 is not None:
+            own = fm4tracks._fm1_own()  # FM1-only: no FM4 folder of their own, Disc 1's FM1_TEMPLATES only
+            fm1 = [c for c in fm1 if c in self.disc.circuits or c in own]
+            missing = [t for t in fm4tracks.FM1_TEMPLATES if t not in self.disc.circuits]
+            if not fm1 or missing:
+                self._drop_work()
+                self.refresh()
+                self.message.setText("This Disc 1 lacks " + (" and ".join(missing) if missing else
+                                     "the FM1 circuits") + ", which FM1 tracks need.")
+                return
+        dialog = ChooseCircuits(self, self.disc, have, free, fm1)
         if dialog.exec() != QDialog.Accepted or not dialog.chosen():
             self._drop_work()
             self.refresh()
             return
         names, disc = dialog.chosen(), self.disc
+        what = "FM1" if fm1 is not None else "FM4"
 
         def job(task):
             try:
                 return fm4tracks.build(self.cfg, disc, names, lambda f, text: task.progress.emit(f, text),
-                                       task.cancelled)
+                                       task.cancelled, fm1_dir=fm1_dir)
             except (OSError, ValueError) as exc:
                 from ..installer import InstallError
-                raise InstallError(f"Import FM4 tracks stopped: {exc}") from exc
-        self._start(job, "import FM4 tracks", f"Converting {len(names)} circuit(s)… Circuits imported "
+                raise InstallError(f"Import {what} tracks stopped: {exc}") from exc
+        self._start(job, f"import {what} tracks", f"Converting {len(names)} circuit(s)… Circuits imported "
                     "before stay until each new one is complete.", self._build_done)
 
     def _build_done(self, ok, message):

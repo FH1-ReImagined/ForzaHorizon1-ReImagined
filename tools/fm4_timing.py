@@ -31,6 +31,10 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fm4_spawn  # noqa: E402
 
+# metres between an AI line's ends from which it is a start and a finish, not a lap (and five of
+# its usual steps between points: a coarse line round a lap has long ones)
+OPEN_GAP = 100.0
+
 
 def _find_ci(root, *parts):
     p = root
@@ -91,7 +95,12 @@ def build(disc, folder, ribbon, name=None):
     if not splits:
         splits = [1 / 3, 2 / 3]
     lines = [f"name {name or folder}", f"length {float(length):.1f}",
-             "splits " + " ".join(f"{s:.4f}" for s in splits), f"points {len(points)}"]
+             "splits " + " ".join(f"{s:.4f}" for s in splits)]
+    steps = sorted(math.dist(a, b) for a, b in zip(points, points[1:]))
+    gap = math.dist(points[0], points[-1])
+    if gap > OPEN_GAP and gap > 5 * steps[len(steps) // 2]:
+        lines.append("open 1")  # a start and a finish (FM1's hill climb, Pacific Shipyards), not a lap
+    lines.append(f"points {len(points)}")
     lines += [f"{x:.2f} {y:.2f} {z:.2f}" for x, y, z in points]
     return "\n".join(lines) + "\n"
 
